@@ -807,6 +807,13 @@ pub fn roc_builtins_list_slack_unique(list_bytes: ?[*]u8, list_len: usize, list_
     return list.listSlackUnique(l, roc_ops);
 }
 
+/// Wrapper: listOwnedUnique(RocList, *RocOps) -> U64: one when element
+/// overwrites may run in place without any further ownership check.
+pub fn roc_builtins_list_owned_unique(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) u64 {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    return list.listOwnedUnique(l, roc_ops);
+}
+
 /// Wrapper: listAppendSublist(RocList, RocList src, start, len, alignment, element_width, ..., *RocOps) -> RocList.
 /// The source list is borrowed: only copied elements gain references. The
 /// update mode is forwarded to the destination's uniqueness check; `.InPlace`

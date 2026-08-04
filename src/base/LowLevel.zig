@@ -65,6 +65,8 @@ pub const LowLevel = enum(u16) {
     list_append_sublist,
     list_append_le_bytes,
     list_slack_unique,
+    list_owned_unique,
+    list_set_in_place_unsafe,
     list_with_capacity,
     list_drop_at,
     list_sublist,
@@ -905,6 +907,11 @@ pub const LowLevel = enum(u16) {
 
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
+            // Like `list_append_unsafe`: stores into a list the loop promotion
+            // pass proved uniquely owned, so there is nothing to check at
+            // runtime. The displaced element is released inside the builtin.
+            .list_set_in_place_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{2})),
+
             // Like `list_append_unsafe`: mutates a list the loop-append
             // promotion pass proved uniquely owned with enough capacity, so
             // there is nothing to check at runtime. Copied refcounted
@@ -1017,6 +1024,7 @@ pub const LowLevel = enum(u16) {
             .str_get_utf8_byte_unsafe,
             .list_len,
             .list_slack_unique,
+            .list_owned_unique,
             .bool_not,
             .dict_pseudo_seed,
             .hasher_finish,

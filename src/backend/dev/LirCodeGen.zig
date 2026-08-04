@@ -2137,6 +2137,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
+                .list_owned_unique => {
+                    // list_owned_unique(list) -> U64
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    {
+                        // wrap(list_bytes, list_len, list_cap, roc_ops)
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_owned_unique));
+                    }
+                    return try self.scalarRetReg();
+                },
                 .list_slack_unique => {
                     // list_slack_unique(list) -> U64
                     if (args.len != 1) unreachable;
@@ -3631,8 +3649,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     return .{ .stack = .{ .offset = result_offset } };
                 },
-                .list_set => {
-                    // list_set(list, index, element) -> List
+                .list_set, .list_set_in_place_unsafe => {
+                    // list_set(list, index, element) -> List; the unsafe
+                    // variant runs on a list the loop promotion pass proved
+                    // uniquely owned, so its ownership check is skipped.
                     if (args.len != 3) unreachable;
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const index_loc = try self.emitValueLocal(GuardedList.at(args, 1));
@@ -3683,7 +3703,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
                         if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                        try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
+                        if (ll.op == .list_set_in_place_unsafe) {
+                            try builder.addImmArg(@intFromEnum(builtins.utils.UpdateMode.InPlace));
+                        } else {
+                            try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
+                        }
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_set));

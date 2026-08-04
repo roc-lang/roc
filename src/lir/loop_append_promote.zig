@@ -88,6 +88,8 @@ const EdgeKind = enum {
     refresh_op,
     /// A matched range-within append: `target = list_append_range_within(source, start, count)`.
     range_append,
+    /// A matched element overwrite: `target = list_set(source, index, elem)`.
+    set_op,
     /// `set param := source` with initialize-join-param mode.
     param_write,
 };
@@ -373,7 +375,7 @@ const Pass = struct {
                     const arg_count = GuardedList.borrowLen(args);
                     const list_arg0 = arg_count > 0 and self.isListLocal(GuardedList.at(args, 0));
                     const rebinds = switch (assign.op) {
-                        .list_reserve, .list_append_unsafe, .list_append_range_within, .list_append_sublist, .list_append_le_bytes => true,
+                        .list_reserve, .list_append_unsafe, .list_append_range_within, .list_append_sublist, .list_append_le_bytes, .list_set => true,
                         else => false,
                     };
                     const read_ok = switch (assign.op) {
@@ -385,7 +387,13 @@ const Pass = struct {
                         // diamond of their own; zero-sized elements have no
                         // bytes to copy, so they keep the checked call.
                         const elem_size = self.layouts.builtinListAbi(self.store.getLocal(assign.target).layout_idx).elem_size;
-                        const kind: EdgeKind = if (assign.op == .list_append_range_within and elem_size != 0) .range_append else .refresh_op;
+                        const kind: EdgeKind = if (elem_size == 0)
+                            .refresh_op
+                        else switch (assign.op) {
+                            .list_append_range_within => .range_append,
+                            .list_set => .set_op,
+                            else => .refresh_op,
+                        };
                         try scan.edges.append(allocator, .{
                             .kind = kind,
                             .stmt = current,
@@ -680,7 +688,8 @@ const Pass = struct {
             }
         }
 
-        var append_count: u32 = 0;
+        var rewrite_site_count: u32 = 0;
+        var has_sets = false;
         var chain_params = std.AutoHashMap(LocalId, CFStmtId).init(allocator);
         defer chain_params.deinit();
         try chain_params.put(list_param, loop_stmt);
@@ -688,7 +697,11 @@ const Pass = struct {
         for (scan.edges.items) |edge| {
             if (!carriers.contains(edge.source)) continue;
             switch (edge.kind) {
-                .append_call => append_count += 1,
+                .append_call, .range_append => rewrite_site_count += 1,
+                .set_op => {
+                    rewrite_site_count += 1;
+                    has_sets = true;
+                },
                 .param_write => {
                     const owner = scan.param_join.get(edge.target) orelse return false;
                     try chain_params.put(edge.target, owner);
@@ -696,7 +709,7 @@ const Pass = struct {
                 else => {},
             }
         }
-        if (append_count == 0) return false;
+        if (rewrite_site_count == 0) return false;
 
         // A write-less entry (a parameter that doubles as a proc argument)
         // would leave the slack parameter uninitialized on that path.
@@ -720,16 +733,11 @@ const Pass = struct {
             }
         }
 
-        // Nested chain parameters may only be fed by carriers; a foreign list
-        // arriving at one would run under a slack computed for another value.
-        // The promoted loop's own parameter is the exception: its non-carrier
-        // writes are entry edges, which get a fresh slack computation.
-        for (scan.edges.items) |edge| {
-            if (edge.kind != .param_write) continue;
-            if (!chain_params.contains(edge.target)) continue;
-            if (carriers.contains(edge.source)) continue;
-            if (edge.target != list_param) return false;
-        }
+        // A chain parameter's non-carrier writes are entry edges: the wiring
+        // in `apply` measures the incoming list's slack fresh at each one, so
+        // a foreign value never runs under a slack computed for another list.
+        // This covers both the promoted loop's own parameter and any nested
+        // header a shape split introduced.
         // Writes to a chain parameter by any other set-local mode, or by a
         // direct assignment on some edge, leave paths with no place to hand
         // over a slack value.
@@ -775,7 +783,7 @@ const Pass = struct {
         }
 
         // Qualified: thread the slack.
-        try self.apply(scan, &carriers, &chain_params, max_join_id, new_locals);
+        try self.apply(scan, &carriers, &chain_params, has_sets, max_join_id, new_locals);
         return true;
     }
 
@@ -792,14 +800,19 @@ const Pass = struct {
         scan: *Scan,
         carriers: *std.AutoHashMap(LocalId, void),
         chain_params: *std.AutoHashMap(LocalId, CFStmtId),
+        has_sets: bool,
         max_join_id: *u32,
         new_locals: *std.ArrayList(LocalId),
     ) ResourceError!void {
         const allocator = self.store.allocator;
 
-        // One slack parameter per chain join.
+        // One slack parameter per chain join; chains containing element
+        // overwrites also carry an owned flag (one when the list uniquely
+        // owns a non-slice allocation, so a set may run in place).
         var slack_params = std.AutoHashMap(LocalId, LocalId).init(allocator);
         defer slack_params.deinit();
+        var owned_params = std.AutoHashMap(LocalId, LocalId).init(allocator);
+        defer owned_params.deinit();
         {
             var it = chain_params.iterator();
             while (it.next()) |entry| {
@@ -812,6 +825,11 @@ const Pass = struct {
                 defer params.deinit(allocator);
                 for (0..GuardedList.borrowLen(old_params)) |i| try params.append(allocator, GuardedList.at(old_params, i));
                 try params.append(allocator, slack_param);
+                if (has_sets) {
+                    const owned_param = try self.freshLocal(.u64, new_locals);
+                    try owned_params.put(entry.key_ptr.*, owned_param);
+                    try params.append(allocator, owned_param);
+                }
                 join_ptr.params = try self.store.addLocalSpan(params.items);
             }
         }
@@ -824,10 +842,13 @@ const Pass = struct {
         // through these edges, so the fixpoint resolves them all.
         var slack_of = std.AutoHashMap(LocalId, LocalId).init(allocator);
         defer slack_of.deinit();
+        var owned_of = std.AutoHashMap(LocalId, LocalId).init(allocator);
+        defer owned_of.deinit();
         {
             var it = chain_params.keyIterator();
             while (it.next()) |param| {
                 try slack_of.put(param.*, slack_params.get(param.*).?);
+                if (has_sets) try owned_of.put(param.*, owned_params.get(param.*).?);
             }
         }
 
@@ -836,6 +857,8 @@ const Pass = struct {
         // form of the slack's control-flow merge.
         var shared_slack = std.AutoHashMap(LocalId, LocalId).init(allocator);
         defer shared_slack.deinit();
+        var shared_owned = std.AutoHashMap(LocalId, LocalId).init(allocator);
+        defer shared_owned.deinit();
         {
             var def_counts = std.AutoHashMap(LocalId, u32).init(allocator);
             defer def_counts.deinit();
@@ -851,6 +874,11 @@ const Pass = struct {
                     const sx = try self.freshLocal(.u64, new_locals);
                     try shared_slack.put(entry.key_ptr.*, sx);
                     try slack_of.put(entry.key_ptr.*, sx);
+                    if (has_sets) {
+                        const ox = try self.freshLocal(.u64, new_locals);
+                        try shared_owned.put(entry.key_ptr.*, ox);
+                        try owned_of.put(entry.key_ptr.*, ox);
+                    }
                 }
             }
         }
@@ -867,19 +895,29 @@ const Pass = struct {
                 switch (edge.kind) {
                     .alias => {
                         const source_slack = slack_of.get(edge.source) orelse continue;
+                        const source_owned = if (has_sets) owned_of.get(edge.source) orelse continue else undefined;
                         if (shared_slack.get(edge.target)) |sx| {
                             // Materialize this definition's contribution to
                             // the shared slack right after the alias.
                             try rewritten.put(edge.stmt, {});
                             const alias = self.store.getCFStmt(edge.stmt).assign_ref;
+                            var next = alias.next;
+                            if (has_sets) {
+                                next = try self.store.addCFStmt(.{ .assign_ref = .{
+                                    .target = shared_owned.get(edge.target).?,
+                                    .op = .{ .local = source_owned },
+                                    .next = next,
+                                } });
+                            }
                             const copy = try self.store.addCFStmt(.{ .assign_ref = .{
                                 .target = sx,
                                 .op = .{ .local = source_slack },
-                                .next = alias.next,
+                                .next = next,
                             } });
                             self.store.getCFStmtPtr(edge.stmt).assign_ref.next = copy;
                         } else {
                             try slack_of.put(edge.target, source_slack);
+                            if (has_sets) try owned_of.put(edge.target, source_owned);
                         }
                         resolving = true;
                     },
@@ -887,28 +925,54 @@ const Pass = struct {
                         const slack_in = slack_of.get(edge.source) orelse continue;
                         try rewritten.put(edge.stmt, {});
                         const slack_out = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
-                        try self.rewriteAppendSite(edge, slack_in, slack_out, max_join_id, new_locals);
+                        const owned_out = try self.ownedOutFor(edge.target, has_sets, &shared_owned, new_locals);
+                        try self.rewriteAppendSite(edge, slack_in, slack_out, owned_out, max_join_id, new_locals);
                         try slack_of.put(edge.target, slack_out);
+                        if (owned_out) |flag| try owned_of.put(edge.target, flag);
                         resolving = true;
                     },
                     .range_append => {
                         const slack_in = slack_of.get(edge.source) orelse continue;
                         try rewritten.put(edge.stmt, {});
                         const slack_out = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
-                        try self.rewriteRangeAppendSite(edge, slack_in, slack_out, max_join_id, new_locals);
+                        const owned_out = try self.ownedOutFor(edge.target, has_sets, &shared_owned, new_locals);
+                        try self.rewriteRangeAppendSite(edge, slack_in, slack_out, owned_out, max_join_id, new_locals);
                         try slack_of.put(edge.target, slack_out);
+                        if (owned_out) |flag| try owned_of.put(edge.target, flag);
+                        resolving = true;
+                    },
+                    .set_op => {
+                        const slack_in = slack_of.get(edge.source) orelse continue;
+                        const owned_in = owned_of.get(edge.source) orelse continue;
+                        try rewritten.put(edge.stmt, {});
+                        const slack_out = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
+                        const owned_out = shared_owned.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
+                        try self.rewriteSetSite(edge, owned_in, owned_out, slack_in, slack_out, max_join_id, new_locals);
+                        try slack_of.put(edge.target, slack_out);
+                        try owned_of.put(edge.target, owned_out);
                         resolving = true;
                     },
                     .refresh_op => {
                         try rewritten.put(edge.stmt, {});
                         const assign = self.store.getCFStmt(edge.stmt).assign_low_level;
                         const slack_out = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
+                        var next = assign.next;
+                        if (try self.ownedOutFor(edge.target, has_sets, &shared_owned, new_locals)) |flag| {
+                            // Every kept list operation returns a uniquely
+                            // owned non-slice result.
+                            next = try self.store.addCFStmt(.{ .assign_literal = .{
+                                .target = flag,
+                                .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+                                .next = next,
+                            } });
+                            try owned_of.put(edge.target, flag);
+                        }
                         const recompute = try self.store.addCFStmt(.{ .assign_low_level = .{
                             .target = slack_out,
                             .op = .list_slack_unique,
                             .rc_effect = LowLevelOp.list_slack_unique.rcEffect(),
                             .args = try self.store.addLocalSpan(&.{edge.target}),
-                            .next = assign.next,
+                            .next = next,
                         } });
                         self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = recompute;
                         try slack_of.put(edge.target, slack_out);
@@ -931,7 +995,15 @@ const Pass = struct {
                 // Resolved by the fixpoint: every carrier's slack derives from
                 // a chain parameter.
                 const slack = slack_of.get(edge.source).?;
-                const forward = try self.store.addCFStmt(.{ .set_local = original });
+                var forward = try self.store.addCFStmt(.{ .set_local = original });
+                if (has_sets) {
+                    forward = try self.store.addCFStmt(.{ .set_local = .{
+                        .target = owned_params.get(edge.target).?,
+                        .value = owned_of.get(edge.source).?,
+                        .mode = .initialize_join_param,
+                        .next = forward,
+                    } });
+                }
                 self.store.getCFStmtPtr(edge.stmt).* = .{ .set_local = .{
                     .target = slack_param,
                     .value = slack,
@@ -941,7 +1013,23 @@ const Pass = struct {
             } else {
                 // Entry edge: measure the incoming list once.
                 const measured = try self.freshLocal(.u64, new_locals);
-                const forward = try self.store.addCFStmt(.{ .set_local = original });
+                var forward = try self.store.addCFStmt(.{ .set_local = original });
+                if (has_sets) {
+                    const measured_owned = try self.freshLocal(.u64, new_locals);
+                    forward = try self.store.addCFStmt(.{ .set_local = .{
+                        .target = owned_params.get(edge.target).?,
+                        .value = measured_owned,
+                        .mode = .initialize_join_param,
+                        .next = forward,
+                    } });
+                    forward = try self.store.addCFStmt(.{ .assign_low_level = .{
+                        .target = measured_owned,
+                        .op = .list_owned_unique,
+                        .rc_effect = LowLevelOp.list_owned_unique.rcEffect(),
+                        .args = try self.store.addLocalSpan(&.{edge.source}),
+                        .next = forward,
+                    } });
+                }
                 const write_slack = try self.store.addCFStmt(.{ .set_local = .{
                     .target = slack_param,
                     .value = measured,
@@ -959,6 +1047,89 @@ const Pass = struct {
         }
     }
 
+    /// The owned-flag local a chain-op definition of `target` must write, or
+    /// null when the chain threads no owned flag.
+    fn ownedOutFor(
+        self: *Pass,
+        target: LocalId,
+        has_sets: bool,
+        shared_owned: *const std.AutoHashMap(LocalId, LocalId),
+        new_locals: *std.ArrayList(LocalId),
+    ) ResourceError!?LocalId {
+        if (!has_sets) return null;
+        if (shared_owned.get(target)) |flag| return flag;
+        return try self.freshLocal(.u64, new_locals);
+    }
+
+    /// Rewrite `target = list_set(list, index, elem); next` into an
+    /// owned-guarded pair: the hot side stores in place with no ownership
+    /// check, the cold side keeps the checked call (which uniquifies).
+    /// Either way the result is uniquely owned and the capacity unchanged,
+    /// so the flag comes out one and the slack is carried through.
+    fn rewriteSetSite(
+        self: *Pass,
+        edge: Edge,
+        owned_in: LocalId,
+        owned_out: LocalId,
+        slack_in: LocalId,
+        slack_out: LocalId,
+        max_join_id: *u32,
+        new_locals: *std.ArrayList(LocalId),
+    ) ResourceError!void {
+        _ = new_locals;
+        const call = self.store.getCFStmt(edge.stmt).assign_low_level;
+
+        const join_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
+        max_join_id.* += 1;
+
+        // Merged continuation: both sides leave a uniquely owned list with
+        // the same spare capacity.
+        const slack_copy = try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = slack_out,
+            .op = .{ .local = slack_in },
+            .next = call.next,
+        } });
+        const owned_lit = try self.store.addCFStmt(.{ .assign_literal = .{
+            .target = owned_out,
+            .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+            .next = slack_copy,
+        } });
+
+        const hot_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const hot_set = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = call.target,
+            .op = .list_set_in_place_unsafe,
+            .rc_effect = LowLevelOp.list_set_in_place_unsafe.rcEffect(),
+            .args = call.args,
+            .next = hot_jump,
+        } });
+
+        const cold_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const cold_set = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = call.target,
+            .op = call.op,
+            .rc_effect = call.rc_effect,
+            .args = call.args,
+            .next = cold_jump,
+        } });
+
+        const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = hot_set }});
+        const dispatch = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = owned_in,
+            .branches = branches,
+            .default_branch = cold_set,
+            .default_is_cold = true,
+            .continuation = null,
+        } });
+
+        self.store.getCFStmtPtr(edge.stmt).* = .{ .join = .{
+            .id = join_id,
+            .params = try self.store.addLocalSpan(&.{}),
+            .body = owned_lit,
+            .remainder = dispatch,
+        } };
+    }
+
     /// Rewrite `target = append(list, elem); next` into the slack-guarded
     /// grow/fast diamond, returning the slack local valid for `target`.
     fn rewriteAppendSite(
@@ -966,6 +1137,7 @@ const Pass = struct {
         edge: Edge,
         slack_in: LocalId,
         slack_out: LocalId,
+        owned_out: ?LocalId,
         max_join_id: *u32,
         new_locals: *std.ArrayList(LocalId),
     ) ResourceError!void {
@@ -1082,10 +1254,19 @@ const Pass = struct {
         } });
 
         // The call statement becomes the whole construct in place.
+        var body = unsafe_append;
+        if (owned_out) |flag| {
+            // Both sides guarantee a uniquely owned non-slice list.
+            body = try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = flag,
+                .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+                .next = body,
+            } });
+        }
         self.store.getCFStmtPtr(edge.stmt).* = .{ .join = .{
             .id = join_id,
             .params = try self.store.addLocalSpan(&.{ merged_list, merged_slack }),
-            .body = unsafe_append,
+            .body = body,
             .remainder = one_lit,
         } };
     }
@@ -1104,6 +1285,7 @@ const Pass = struct {
         edge: Edge,
         slack_in: LocalId,
         slack_out: LocalId,
+        owned_out: ?LocalId,
         max_join_id: *u32,
         new_locals: *std.ArrayList(LocalId),
     ) ResourceError!void {
@@ -1203,10 +1385,19 @@ const Pass = struct {
         } });
 
         // The call statement becomes the whole construct in place.
+        var body = call.next;
+        if (owned_out) |flag| {
+            // Both sides guarantee a uniquely owned non-slice list.
+            body = try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = flag,
+                .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+                .next = body,
+            } });
+        }
         self.store.getCFStmtPtr(edge.stmt).* = .{ .join = .{
             .id = join_id,
             .params = try self.store.addLocalSpan(&.{}),
-            .body = call.next,
+            .body = body,
             .remainder = slop_lit,
         } };
     }

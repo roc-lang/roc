@@ -94,6 +94,7 @@ pub const BuiltinKind = enum {
     list_append_sublist,
     list_append_le_bytes,
     list_slack_unique,
+    list_owned_unique,
     list_drop_at,
     list_reserve,
     list_replace,

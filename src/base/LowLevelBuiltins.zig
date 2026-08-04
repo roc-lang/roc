@@ -212,6 +212,8 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .list_append_sublist => .list_append_sublist,
         .list_append_le_bytes => .list_append_le_bytes,
         .list_slack_unique => .list_slack_unique,
+        .list_owned_unique => .list_owned_unique,
+
         .list_prepend => .list_prepend,
         .list_sublist,
         .list_drop_first,
@@ -221,7 +223,7 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         => .list_sublist,
         .list_drop_at => .list_drop_at,
         .list_swap => .list_swap,
-        .list_set, .list_replace_unsafe => .list_replace,
+        .list_set, .list_replace_unsafe, .list_set_in_place_unsafe => .list_replace,
         .list_reserve => .list_reserve,
         .list_release_excess_capacity => .list_release_excess_capacity,
         .list_reverse => .list_reverse,

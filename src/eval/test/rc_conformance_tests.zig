@@ -575,8 +575,10 @@ const cases = [_]Case{
     .{
         // A self-append inside a promoted loop is rewritten by
         // `lir/loop_append_promote.zig` into a slack-guarded diamond whose hot
-        // side is `list_append_range_within_unsafe`.
-        .name = "loop self-appends promote to the unchecked range append",
+        // side is `list_append_range_within_unsafe`; an element overwrite on
+        // the same carried list is rewritten into an owned-guarded pair whose
+        // hot side is `list_set_in_place_unsafe`.
+        .name = "loop self-appends and sets promote to the unchecked variants",
         .source_kind = .module,
         .inline_wrappers = true,
         .source =
@@ -586,9 +588,10 @@ const cases = [_]Case{
         \\    var $acc = List.reserve(start, 64)
         \\    for _step in 0..<6 {
         \\        appended = $acc.append(7)
-        \\        $acc = match appended.append_range_within(0, 2) {
+        \\        stamped = appended.set(0, 9) ?? appended
+        \\        $acc = match stamped.append_range_within(0, 2) {
         \\            Ok(next) => next
-        \\            Err(_) => appended
+        \\            Err(_) => stamped
         \\        }
         \\    }
         \\    List.len($acc)

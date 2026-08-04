@@ -5294,6 +5294,12 @@ pub const Interpreter = struct {
                 val.write(u64, builtins.list.listSlackUnique(rl, &self.roc_ops));
                 break :blk val;
             },
+            .list_owned_unique => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, builtins.list.listOwnedUnique(rl, &self.roc_ops));
+                break :blk val;
+            },
             .list_get_unsafe => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const idx = args[1].read(u64);
@@ -5719,7 +5725,7 @@ pub const Interpreter = struct {
 
                 break :blk val;
             },
-            .list_set => blk: {
+            .list_set, .list_set_in_place_unsafe => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
                 if (info.width == 0) {
@@ -5737,7 +5743,7 @@ pub const Interpreter = struct {
                 // listReplace moves the old element into a scratch slot. list_set does not
                 // return that ownership unit, so release it after the replacement.
                 const old_elem = try self.allocAlignedBytes(info.width, layout_mod.RocAlignment.fromByteUnits(@intCast(info.alignment)));
-                const result = if (updateModeForArg0(ll.unique_args) == .InPlace)
+                const result = if (ll.op == .list_set_in_place_unsafe or updateModeForArg0(ll.unique_args) == .InPlace)
                     builtins.list.listReplaceInPlace(
                         self.valueToRocListForLayout(args[0], arg_layout),
                         args[1].read(u64),

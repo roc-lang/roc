@@ -3062,11 +3062,15 @@ pub const MonoLlvmCodeGen = struct {
             .list_append_sublist => try self.emitListAppendSublist(target, arg_locals, unique_args),
             .list_append_le_bytes => try self.emitListAppendLeBytes(target, arg_locals, unique_args),
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
+            .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
             .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
             .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
+            // The promotion pass proved arg0 uniquely owned: force the
+            // in-place update mode instead of consulting ARC's per-site bit.
+            .list_set_in_place_unsafe => try self.emitListSet(target, arg_locals, unique_args | 1),
             .list_replace_unsafe => try self.emitListReplaceUnsafe(target, arg_locals, unique_args),
             .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals, interchangeable),
             .list_map_cast_unsafe => try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(target).size, self.slot(target).alignment),
@@ -7941,6 +7945,14 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         const slack = try self.callBuiltin(builtinSymbol(LowLevelBuiltins.listOp(.list_slack_unique)), .i64, call_args.types.items, call_args.values.items);
         try self.storeIntToLayout(self.slot(target).ptr, slack, self.localLayout(target));
+    }
+
+    fn emitListOwnedUnique(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
+        defer call_args.deinit(self.allocator);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        const owned = try self.callBuiltin(builtinSymbol(LowLevelBuiltins.listOp(.list_owned_unique)), .i64, call_args.types.items, call_args.values.items);
+        try self.storeIntToLayout(self.slot(target).ptr, owned, self.localLayout(target));
     }
 
     fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {

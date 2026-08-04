@@ -777,9 +777,10 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .list_append_range_within_unsafe => null,
             .list_append_sublist => self.list_append_sublist_import,
             .list_append_le_bytes => self.list_append_le_bytes_import,
-            // The host-import test mode never calls this builtin: its code
-            // path emits a zero-slack constant instead.
+            // The host-import test mode never calls these builtins: their
+            // code paths emit constants (zero slack / not owned) instead.
             .list_slack_unique => null,
+            .list_owned_unique => null,
             .list_drop_at => self.list_drop_at_import,
             .list_reserve => self.list_reserve_import,
             .list_replace => self.list_replace_import,
@@ -12181,6 +12182,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // the real builtin.
             try self.generateLLListSlackUnique(args);
         },
+        .list_owned_unique => {
+            // list_owned_unique(list) -> U64, same host-import reasoning as
+            // list_slack_unique: never owned there, so sets stay checked.
+            try self.generateLLListOwnedUnique(args);
+        },
         .list_append_le_bytes => {
             // list_append_le_bytes(list, value, count) -> extended list
             try self.generateLLListAppendLeBytes(args, ll.unique_args);
@@ -12196,6 +12202,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // list_set(list, index, value) -> list with value at index
         .list_set => {
             try self.generateLLListSet(args, ll.ret_layout, ll.unique_args);
+        },
+        // The promotion pass proved arg0 uniquely owned: force the in-place
+        // update mode instead of consulting ARC's per-site bit.
+        .list_set_in_place_unsafe => {
+            try self.generateLLListSet(args, ll.ret_layout, ll.unique_args | 1);
         },
         // list_reserve(list, capacity) -> list with at least that capacity
         .list_reserve => {
@@ -18648,6 +18659,25 @@ fn generateLLListSlackUnique(self: *Self, args: anytype) Allocator.Error!void {
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_slack_unique)), null);
         },
         .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_slack_unique", .{}),
+    }
+}
+
+/// Generate LowLevel list_owned_unique: whether in-place overwrites are safe.
+fn generateLLListOwnedUnique(self: *Self, args: anytype) Allocator.Error!void {
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitI64Const(0);
+        },
+        .builtin_relocs => {
+            try self.emitProcLocal(GuardedList.at(args, 0));
+            const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(list_ptr);
+            const fields = try self.loadRocListFields(list_ptr);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_owned_unique)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_owned_unique", .{}),
     }
 }
 

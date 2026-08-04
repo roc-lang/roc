@@ -936,6 +936,18 @@ pub fn listAppendSublist(
 /// ownership or capacity check: capacity minus length when this list uniquely
 /// owns a non-slice allocation, and zero otherwise (so the caller's next
 /// append takes the checked path, which clones or grows as needed).
+/// One when this list uniquely owns a non-slice allocation, so element
+/// overwrites may skip their per-call ownership check; zero otherwise.
+pub fn listOwnedUnique(
+    list: RocList,
+    roc_ops: *RocOps,
+) callconv(.c) u64 {
+    if (list.isSeamlessSlice()) return 0;
+    if (list.bytes == null) return 0;
+    if (!list.isUnique(roc_ops)) return 0;
+    return 1;
+}
+
 pub fn listSlackUnique(
     list: RocList,
     roc_ops: *RocOps,
