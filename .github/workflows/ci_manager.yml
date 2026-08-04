@@ -445,8 +445,92 @@ jobs:
           name: minici-${{ matrix.shard }}
           path: zig-out/minici/
 
+  # The only aarch64 Linux job that runs on a PR. Deliberately not a MiniCI
+  # shard: the `ubuntu-24.04-arm` entries above are commented out because
+  # hosted arm64 runners lose network mid-`build-ci` at full parallelism, and
+  # that is a property of `build-ci` compiling ~13 artifacts through LLVM at
+  # once. This builds one binary and one host lib, so it stays clear of the
+  # failure those entries were disabled for.
+  #
+  # What it covers: `roc` picking a target on its own, on aarch64 Linux, for a
+  # program that then has to run. That combination had no coverage anywhere,
+  # and it broke the day host-CPU detection landed -- the AT_HWCAP lookup
+  # answered 0 in a libc-linked binary, so `roc` read the machine as `.v1`,
+  # chose arm64v1musl, and every platform rejected it with UNSUPPORTED TARGET.
+  # A published nightly shipped that. See the twin job in ci_zig.yml, which
+  # gives the same check to the daily Nightly Gate.
+  arm64-linux-hello-world:
+    needs: check-changes
+    if: needs.check-changes.outputs.zig == 'true'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.16.0
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by the setup action's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
+      # `-f` because the LLVM version on the runner image is not this job's to
+      # depend on; there being no llvm-config to remove is fine.
+      - name: delete llvm-config
+        run: sudo rm -f /usr/lib/llvm-18/bin/llvm-config
+
+      # `build-release` rather than a plain `zig build`, so this runs the binary
+      # shape that ships: musl, and pinned to the aarch64 baseline CPU by
+      # getReleaseTargetQuery. That pin is precisely why the compiler cannot
+      # read its own CPU features out of `builtin.cpu` and has to ask the
+      # machine at runtime.
+      - name: build release roc
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-release
+          retry_count: 3
+
+      # The fx platform ships `crt1.o` and `libc.a` for each target but builds
+      # `libhost.a`, so the arm64musl inputs dir is incomplete until this runs.
+      - name: build the fx platform host
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-test-hosts -Dplatform=fx
+          retry_count: 3
+
+      - name: Print CPU model
+        run: lscpu | grep "Model name"
+
+      - name: run hello_world.roc
+        run: |
+          set -euo pipefail
+
+          # No `--target`: the compiler choosing it is the thing under test.
+          # A wrong choice fails here rather than silently building something
+          # this machine cannot run.
+          output="$(./zig-out/bin/roc test/fx/hello_world.roc)"
+          echo "$output"
+
+          if [ "$output" != "Hello, world!" ]; then
+            echo "Expected 'Hello, world!' but got '$output'."
+            exit 1
+          fi
+
   finish:
-    needs: [check-changes, zig-minici-build, zig-minici]
+    needs: [check-changes, zig-minici-build, zig-minici, arm64-linux-hello-world]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -463,6 +547,10 @@ jobs:
             fi
             if [[ "${{ needs.zig-minici.result }}" != "success" ]]; then
               echo "zig-minici failed."
+              exit 1
+            fi
+            if [[ "${{ needs.arm64-linux-hello-world.result }}" != "success" ]]; then
+              echo "arm64-linux-hello-world failed."
               exit 1
             fi
           fi
