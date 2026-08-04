@@ -7382,7 +7382,14 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
             // Which default platform a target gets follows from its OS and
             // architecture, which a `v1` target shares with its default twin.
             return switch (requested.defaultCpuTarget()) {
-                .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
+                .x64mac,
+                .arm64mac,
+                .x64win,
+                .arm64win,
+                .x64freebsd,
+                .x64openbsd,
+                .x64netbsd,
+                => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
                 else => echo_platform.build_platform_main_source,
             };
@@ -7392,7 +7399,7 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     }
 
     return switch (RocTarget.detectNative().toOsTag()) {
-        .macos, .windows => echo_platform.build_c_platform_main_source,
+        .macos, .windows, .freebsd, .openbsd, .netbsd => echo_platform.build_c_platform_main_source,
         else => echo_platform.build_platform_main_source,
     };
 }
