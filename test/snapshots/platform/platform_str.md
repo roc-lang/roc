@@ -94,7 +94,7 @@ processString : Str -> Str
 (can-ir
 	(d-let
 		(p-assign (ident "processString"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))

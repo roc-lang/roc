@@ -2133,7 +2133,7 @@ expect {
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "qux"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -2208,7 +2208,7 @@ expect {
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-let
 					(p-assign (ident "qux"))
-					(e-anno-only))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "tuple"))
 					(e-runtime-error (tag "erroneous_value_expr")))
@@ -2376,7 +2376,7 @@ expect {
 			(ty-record)))
 	(d-let
 		(p-assign (ident "tuple"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "pf.Stdout")

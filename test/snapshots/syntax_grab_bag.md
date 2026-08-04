@@ -2254,7 +2254,7 @@ expect {
 			(ty-record)))
 	(d-let
 		(p-assign (ident "tuple"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "pf.Stdout")

@@ -2674,7 +2674,7 @@ expect {
 (can-ir
 	(d-let
 		(p-assign (ident "line"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-tuple
 				(ty-malformed)
@@ -2694,7 +2694,7 @@ expect {
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -2728,7 +2728,7 @@ expect {
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-parens
@@ -2739,7 +2739,7 @@ expect {
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "y"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-record)))
 	(d-let
@@ -2747,7 +2747,7 @@ expect {
 		(e-empty_record))
 	(d-let
 		(p-assign (ident "t"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "pf.Stdout")

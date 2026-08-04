@@ -88,7 +88,7 @@ Foo := [Whatever].{
 			(ty-lookup (name "Foo") (local))))
 	(d-let
 		(p-assign (ident "Foo.middle"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "Foo") (local))))
 	(d-let

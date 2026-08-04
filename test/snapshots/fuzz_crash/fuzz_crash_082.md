@@ -122,12 +122,12 @@ o = || {
 (can-ir
 	(d-let
 		(p-assign (ident "i"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "d"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-rigid-var (name "i"))))
 	(d-let

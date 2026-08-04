@@ -96,7 +96,7 @@ multiplyInts : I64, I64 -> I64
 (can-ir
 	(d-let
 		(p-assign (ident "multiplyInts"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

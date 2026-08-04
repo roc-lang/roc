@@ -48,7 +48,7 @@ x : {
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-record))))
 ~~~
