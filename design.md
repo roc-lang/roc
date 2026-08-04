@@ -6014,13 +6014,25 @@ that disagree on either would make a later free reconstruct the wrong
 allocation pointer.
 
 The decision has a compile-time half and a runtime half. `List.map`'s body
-in Builtin.roc matches on the `list_map_can_reuse` primitive, whose runtime
-meaning is "uniquely owned and not a seamless slice" — a slice's buffer
-points into the middle of an allocation whose header bookkeeping covers the
-whole allocation, so a unique slice still copies. At direct LIR lowering,
-where layouts exist, the primitive lowers to a constant 0 whenever the
-layouts are not interchangeable (or the optimization is off), so the
-runtime check never runs for a pair it could corrupt.
+in Builtin.roc first calls the consuming `list_map_prepare_reuse` primitive,
+then matches on `list_map_can_reuse` for the returned list. The prepare
+primitive is an ownership-only identity: its LIR `RcEffect` consumes the input
+list and declares that the result aliases that consumed ownership unit, while
+its runtime implementation only copies the list handle. This forces ARC to
+preserve every later use before the transfer. The subsequent reuse query can
+therefore observe the refcount only after all live ownership units are present;
+leaving the query on the original, unconsumed argument would allow ARC to move
+a preservation retain after that observation and incorrectly report a shared
+buffer as unique.
+
+The runtime meaning of `list_map_can_reuse` is "uniquely owned and not a
+seamless slice" — a slice's buffer points into the middle of an allocation
+whose header bookkeeping covers the whole allocation, so a unique slice still
+copies. At direct LIR lowering, where layouts exist, the primitive lowers to a
+constant 0 whenever the layouts are not interchangeable (or the optimization
+is off), so the runtime check never runs for a pair it could corrupt.
+Target-independent LIR carries this eligibility for both pointer widths and
+each backend resolves the bit for its target.
 
 The in-place branch itself is dropped before it reaches LIR whenever the
 item layouts are not interchangeable or the optimization is disabled

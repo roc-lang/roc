@@ -1831,6 +1831,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     result_loc = try self.stabilize(result_loc);
                     return result_loc;
                 },
+                .list_map_prepare_reuse => {
+                    // Ownership-only identity; binding the result supplies any
+                    // storage stabilization the target needs.
+                    std.debug.assert(args.len == 1);
+                    return self.emitValueLocal(GuardedList.at(args, 0));
+                },
                 .list_map_can_reuse => {
                     // list_map_can_reuse(list, transform) -> U8; only the list is inspected.
                     std.debug.assert(args.len == 2);

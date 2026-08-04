@@ -4169,10 +4169,11 @@ Builtin :: [].{
 		## ```
 		map : List(a), (a -> b) -> List(b)
 		map = |list, transform| {
-			match list_map_can_reuse(list, transform) {
+			prepared_list = list_map_prepare_reuse(list)
+			match list_map_can_reuse(prepared_list, transform) {
 				1 => {
-					len = list.len()
-					var $out = list_map_cast_unsafe(list)
+					len = prepared_list.len()
+					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
 					while $index < len {
 						item = list_map_extract_unsafe($out, $index)
@@ -4182,8 +4183,8 @@ Builtin :: [].{
 					$out
 				}
 				_ => {
-					var $new_list = List.with_capacity(list.len())
-					for item in list {
+					var $new_list = List.with_capacity(prepared_list.len())
+					for item in prepared_list {
 						$new_list = list_append_unsafe($new_list, transform(item))
 					}
 					$new_list
@@ -22595,8 +22596,12 @@ str_drop_first_bytes_unsafe = |s, count| {
 	}
 }
 
+# Implemented by the compiler. Moves the input list's ownership into the
+# returned list before List.map tests whether it can reuse the allocation.
+list_map_prepare_reuse : List(input) -> List(input)
+
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
-# the input list's allocation for its output: the input and output item
+# the prepared list's allocation for its output: the input and output item
 # layouts are interchangeable, and at runtime the list is uniquely owned and
 # not a seamless slice. Lowered to a constant 0 when the layouts are not
 # interchangeable, which lets lowering drop the in-place branch entirely.

@@ -11586,6 +11586,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             }
         },
 
+        .list_map_prepare_reuse => {
+            // Ownership-only identity; binding the result stabilizes the
+            // composite value in the target's storage.
+            try self.emitProcLocal(GuardedList.at(args, 0));
+        },
+
         .list_map_can_reuse => {
             // On a width where the element layouts are not interchangeable, the
             // in-place branch is statically dead, so the result is a constant 0
