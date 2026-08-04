@@ -168,11 +168,13 @@ my @categories = (
         # translation's answer instead of an open instantiation node, so the
         # import REPLACES instNode work rather than adding a read of solved
         # state. It deletes with the graph, whose relations it only constrains.
+        # A second $LOWER `importMono` is the same statement for ground
+        # dispatch callables.
         name    => 'logical-graph-import',
         exempt  => [],
         patterns => [
             { label => 'importMono', re => qr/\bimportMono\b/,
-              counts => { $SOLVE => 15, $LOWER => 22 } },
+              counts => { $SOLVE => 15, $LOWER => 23 } },
         ],
     },
     {

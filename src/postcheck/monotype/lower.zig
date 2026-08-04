@@ -27158,7 +27158,26 @@ const BodyContext = struct {
         if (function.args.len != operands.len) {
             Common.invariant("checked dispatch plan arity differs from its function type");
         }
-        const fn_node = try self.instNode(source_fn_ty);
+        // A ground dispatch callable with no expected return is born final,
+        // exactly as a ground direct call's is: the plan instantiates as a
+        // constant of directed translation's answer, and the relations below
+        // constrain against its components.
+        const fn_node = fn_node: {
+            born_final: {
+                if (expected_ret_node != null) break :born_final;
+                const rehearsal = self.builder.rehearsal orelse break :born_final;
+                if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) break :born_final;
+                const address = self.typeAddress(source_fn_ty);
+                const final_ty = (rehearsal.typeForCheckedAuthoritativeOrUnstated(
+                    .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+                    self.callee_context,
+                    rehearsal.innermostRequestEdge(),
+                ) catch break :born_final) orelse break :born_final;
+                census.bump("dispatch_callable_born_final");
+                break :fn_node try self.graph.importMono(final_ty);
+            }
+            break :fn_node try self.instNode(source_fn_ty);
+        };
         const fn_graph = switch (self.graph.content(fn_node)) {
             .func => |func| func,
             else => Common.invariant("checked dispatch plan had a non-function instantiation node"),

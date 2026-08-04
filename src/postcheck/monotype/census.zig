@@ -570,6 +570,7 @@ pub const Census = struct {
     request_born_final_blocked_variable: Counter = Counter.init(0),
     request_born_final_blocked_evidence: Counter = Counter.init(0),
     request_callable_born_final: Counter = Counter.init(0),
+    dispatch_callable_born_final: Counter = Counter.init(0),
     value_parity_agree: Counter = Counter.init(0),
     value_parity_eql_not_digest: Counter = Counter.init(0),
     value_parity_diverge: Counter = Counter.init(0),
