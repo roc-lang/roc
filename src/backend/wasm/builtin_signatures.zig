@@ -91,6 +91,7 @@ pub const BuiltinKind = enum {
     list_concat,
     list_append_range_within,
     list_append_range_within_unsafe,
+    list_copy_range_within,
     list_append_sublist,
     list_append_le_bytes,
     list_slack_unique,

@@ -785,6 +785,59 @@ pub fn listAppendRangeWithinUnsafe(
     return output;
 }
 
+/// Copy `count` elements within the list from `src_index` onward to
+/// `dest_index` onward, overwriting the destination range. The caller has
+/// already verified both whole ranges lie inside the list. The ranges may
+/// overlap; every source element is read as it was before any destination
+/// element was overwritten, like a memmove.
+pub fn listCopyRangeWithin(
+    list: RocList,
+    dest_index_u64: u64,
+    src_index_u64: u64,
+    count_u64: u64,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const dest_index: usize = @intCast(dest_index_u64);
+    const src_index: usize = @intCast(src_index_u64);
+    const count: usize = @intCast(count_u64);
+    if (count == 0 or element_width == 0 or dest_index == src_index) return list;
+
+    const output = list.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
+    const base = output.bytes.?;
+
+    if (elements_refcounted) {
+        // Retain every copied element before releasing any overwritten one,
+        // so an element present in both ranges never reaches a zero count
+        // mid-copy. The overwritten elements must be released before the
+        // move clobbers their bytes.
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            inc(inc_context, base + (src_index + i) * element_width);
+        }
+        i = 0;
+        while (i < count) : (i += 1) {
+            dec(dec_context, base + (dest_index + i) * element_width);
+        }
+    }
+
+    const total = count * element_width;
+    const src = base[src_index * element_width ..][0..total];
+    const dest = base[dest_index * element_width ..][0..total];
+    if (dest_index < src_index) {
+        std.mem.copyForwards(u8, dest, src);
+    } else {
+        std.mem.copyBackwards(u8, dest, src);
+    }
+    return output;
+}
+
 /// The copy-and-lengthen half of a range-within append. The capacity for the
 /// range plus the overshoot scratch is already reserved.
 inline fn appendRangeWithinCore(

@@ -63,7 +63,6 @@ const GuardedList = LirStore.GuardedList;
 const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
 const JoinPointId = LIR.JoinPointId;
-const LowLevelOp = LIR.LowLevel;
 
 /// Allocation failure raised while proving and rewriting.
 pub const ResourceError = Allocator.Error;

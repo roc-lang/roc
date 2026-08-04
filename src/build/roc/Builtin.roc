@@ -4014,6 +4014,35 @@ Builtin :: [].{
 			}
 		}
 
+		## Copy `count` items within this list, from `src_index` onward to
+		## `dest_index` onward, overwriting what was there. The ranges may
+		## overlap; the result is as if every source item were read before any
+		## destination item were overwritten.
+		##
+		## Returns `Err(OutOfBounds)` unless both whole ranges lie inside the
+		## list, except that a zero `count` copies nothing.
+		## ```roc
+		## expect [1, 2, 3, 4].copy_range_within(2, 0, 2) == Ok([1, 2, 1, 2])
+		##
+		## expect [1, 2, 3, 4].copy_range_within(0, 1, 3) == Ok([2, 3, 4, 4])
+		##
+		## expect [1, 2, 3].copy_range_within(2, 0, 2) == Err(OutOfBounds)
+		## ```
+		copy_range_within : List(a), U64, U64, U64 -> Try(List(a), [OutOfBounds, ..])
+		copy_range_within = |list, dest_index, src_index, count| {
+			len = List.len(list)
+			# Compare each start against a limit rather than subtracting from it;
+			# wrapping is safe because the first check has already ruled out
+			# `count > len`.
+			if count == 0 {
+				Ok(list)
+			} else if count > len or dest_index > len.minus_wrap(count) or src_index > len.minus_wrap(count) {
+				Err(OutOfBounds)
+			} else {
+				Ok(list_copy_range_within(list, dest_index, src_index, count))
+			}
+		}
+
 		## Append a range of another list to this one, without building the
 		## sublist as its own list first. Out-of-bounds ranges are clamped
 		## exactly as [List.sublist] clamps them, producing a shorter or empty
@@ -22677,6 +22706,11 @@ list_reserve : List(item), U64 -> List(item)
 # itself beginning at start, reading through freshly appended items. The
 # caller has already verified start is in bounds and count is nonzero.
 list_append_range_within : List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Copies count items within the list from
+# src_index onward to dest_index onward; the caller has already verified both
+# ranges lie inside the list. Overlap behaves like a memmove.
+list_copy_range_within : List(item), U64, U64, U64 -> List(item)
 
 # Implemented by the compiler. Appends len items of src beginning at start.
 # The caller has already clamped the range to src's length.

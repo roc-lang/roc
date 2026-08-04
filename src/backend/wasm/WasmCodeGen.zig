@@ -474,6 +474,7 @@ float_from_str_import: ?u32 = null,
 list_append_unsafe_import: ?u32 = null,
 list_concat_import: ?u32 = null,
 list_append_range_within_import: ?u32 = null,
+list_copy_range_within_import: ?u32 = null,
 list_append_sublist_import: ?u32 = null,
 list_append_le_bytes_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
@@ -770,6 +771,7 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .list_append_unsafe => self.list_append_unsafe_import,
             .list_concat => self.list_concat_import,
             .list_append_range_within => self.list_append_range_within_import,
+            .list_copy_range_within => self.list_copy_range_within_import,
             // The host-import test mode never reaches the unsafe variant:
             // list_slack_unique answers zero there, so promoted appends
             // always take the checked path; its codegen calls the checked
@@ -1924,6 +1926,10 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     // roc_list_append_range_within(list_ptr, elem_width, alignment, start, count, result_ptr)
     const list_append_range_within_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i64, .i32 }, &.{});
     self.list_append_range_within_import = try self.module.addImport("env", "roc_list_append_range_within", list_append_range_within_type);
+
+    // roc_list_copy_range_within(list_ptr, elem_width, alignment, dest_index, src_index, count, result_ptr)
+    const list_copy_range_within_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i64, .i64, .i32 }, &.{});
+    self.list_copy_range_within_import = try self.module.addImport("env", "roc_list_copy_range_within", list_copy_range_within_type);
 
     // roc_list_append_sublist(list_ptr, src_ptr, elem_width, alignment, start, len, result_ptr)
     const list_append_sublist_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i64, .i64, .i32 }, &.{});
@@ -12171,6 +12177,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_append_range_within(list, start, count) -> extended list
             try self.generateLLListAppendRangeWithin(args, ll.ret_layout, ll.unique_args);
         },
+        .list_copy_range_within => {
+            // list_copy_range_within(list, dest_index, src_index, count) -> same-length list
+            try self.generateLLListCopyRangeWithin(args, ll.ret_layout);
+        },
         .list_append_sublist => {
             // list_append_sublist(list, src, start, len) -> extended list
             try self.generateLLListAppendSublist(args, ll.ret_layout, ll.unique_args);
@@ -18573,6 +18583,61 @@ fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layou
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), null);
         },
         .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_range_within", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
+/// Generate LowLevel list_copy_range_within: copy elements within the list,
+/// overwriting the destination range, with both ranges already validated.
+fn generateLLListCopyRangeWithin(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListCopyRangeWithin.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+
+    const dest_local = try self.materializeListIndex(GuardedList.at(args, 1));
+    const src_local = try self.materializeListIndex(GuardedList.at(args, 2));
+    const count_local = try self.materializeListIndex(GuardedList.at(args, 3));
+
+    if (elem_size == 0) {
+        // Copying zero-sized elements within the list changes nothing.
+        try self.emitLocalGet(list_ptr);
+        return;
+    }
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(dest_local);
+            try self.emitLocalGet(src_local);
+            try self.emitLocalGet(count_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_copy_range_within)), self.list_copy_range_within_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(dest_local);
+            try self.emitLocalGet(src_local);
+            try self.emitLocalGet(count_local);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_copy_range_within)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_copy_range_within", .{}),
     }
     try self.emitFpOffset(result_offset);
 }

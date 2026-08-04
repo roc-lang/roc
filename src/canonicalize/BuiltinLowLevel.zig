@@ -317,6 +317,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_append_range_within")) |ident| {
         try low_level_map.put(ident, .list_append_range_within);
     }
+    if (env.common.findIdent("list_copy_range_within")) |ident| {
+        try low_level_map.put(ident, .list_copy_range_within);
+    }
     if (env.common.findIdent("list_append_sublist")) |ident| {
         try low_level_map.put(ident, .list_append_sublist);
     }

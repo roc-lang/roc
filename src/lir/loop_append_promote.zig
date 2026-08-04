@@ -375,7 +375,7 @@ const Pass = struct {
                     const arg_count = GuardedList.borrowLen(args);
                     const list_arg0 = arg_count > 0 and self.isListLocal(GuardedList.at(args, 0));
                     const rebinds = switch (assign.op) {
-                        .list_reserve, .list_append_unsafe, .list_append_range_within, .list_append_sublist, .list_append_le_bytes, .list_set => true,
+                        .list_reserve, .list_append_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_sublist, .list_append_le_bytes, .list_set => true,
                         else => false,
                     };
                     const read_ok = switch (assign.op) {

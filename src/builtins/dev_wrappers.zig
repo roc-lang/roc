@@ -240,6 +240,7 @@ const fromUtf8Lossy = str.fromUtf8Lossy;
 
 const listConcat = list.listConcat;
 const listAppendRangeWithin = list.listAppendRangeWithin;
+const listCopyRangeWithin = list.listCopyRangeWithin;
 const listAppendLeBytes = list.listAppendLeBytes;
 const listAppendSublist = list.listAppendSublist;
 const listPrepend = list.listPrepend;
@@ -782,6 +783,26 @@ pub fn roc_builtins_list_append_range_within(out: *RocList, list_bytes: ?[*]u8, 
         out.* = listAppendRangeWithin(l, start, count, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listAppendRangeWithin(l, start, count, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
+    }
+}
+
+/// Wrapper: listCopyRangeWithin(RocList, dest_index, src_index, count, alignment, element_width, ..., *RocOps) -> RocList.
+/// Both ranges are already validated by the caller; overlap behaves like a
+/// memmove.
+pub fn roc_builtins_list_copy_range_within(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, dest_index: u64, src_index: u64, count: u64, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listCopyRangeWithin(l, dest_index, src_index, count, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, roc_ops);
+    } else {
+        out.* = listCopyRangeWithin(l, dest_index, src_index, count, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
     }
 }
 

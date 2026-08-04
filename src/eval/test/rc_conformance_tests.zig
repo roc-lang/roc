@@ -534,6 +534,38 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "list range copies within, unique and shared inputs",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate", "a fourth list element long enough"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a fifth list element long enough to allocate", "a sixth list element long enough"],
+        \\    )
+        \\    # Unique receiver, forward overlap: source range [0, 3) lands at 1.
+        \\    unique_fwd = unique.copy_range_within(1, 0, 3).ok_or([])
+        \\    # Shared receiver clones; the originals in `holder` stay intact.
+        \\    shared_back = shared.copy_range_within(0, 1, 3).ok_or([])
+        \\    bytes : List(U8)
+        \\    bytes = List.concat([1, 2], [3, 4])
+        \\    swapped = bytes.copy_range_within(2, 0, 2).ok_or([])
+        \\    oob_len = match bytes.copy_range_within(3, 0, 2) {
+        \\        Ok(_) => 100
+        \\        Err(_) => 1
+        \\    }
+        \\    (swapped.get(2) ?? 0).to_u64()
+        \\        + oob_len
+        \\        + List.len(unique_fwd)
+        \\        + List.len(shared_back)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         .name = "list bulk appends, unique and shared inputs",
         .source =
         \\{
