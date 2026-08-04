@@ -3482,12 +3482,14 @@ BodyDraft data, are intentionally absent from durable specialization evidence, a
 must be attached when the real dispatch call lowers; declaration-only replay
 evidence can never be consumed by body emission.
 
-Within the specialization, each body instantiation context caches nodes by `(checked
-module id, checked type id)`. The address is the checked identity of the type
-variable/content in that body specialization. It is not a structural digest,
-source name, runtime layout, object symbol, or generated procedure id. Nodes
-begin unresolved. As relations are produced, explicit evidence from checked
-data unifies those nodes:
+Within the specialization, each body instantiation context has an exact fresh
+scope identity and caches nodes by `(scope id, checked module id, checked type
+id)`. The address is the checked identity of the type variable/content in that
+body specialization. It is not a structural digest, source name, runtime
+layout, object symbol, or generated procedure id. A child that needs independent
+generic cells receives a new scope identity; copying cells into that scope is
+explicit. Nodes begin unresolved. As relations are produced, explicit evidence
+from checked data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -3589,13 +3591,25 @@ strings, deriving names, inspecting layouts, or using incidental expression
 shape. It must also not attach a contextual monotype to a checked expression id
 as if that checked expression were a reusable runtime value.
 
-Type-only instantiation contexts do not materialize module-sized body tables.
+Type-only instantiation state is separate from operational body-lowering state.
+Creating a fresh checked-type instance swaps only its exact scope, checked-node
+cache, and nominal declaration-scope stack; it does not construct a parallel
+body-lowering context. Type-only instantiation contexts do not materialize
+module-sized body tables.
 The dense checked-binder-to-draft-local table is allocated only when a body
 actually installs its first binding. Checked string literals are shared by the
 specialization draft under the exact `(checked module id, checked literal id)`
 address, so child and call contexts neither allocate parallel literal tables nor
 append duplicate draft literals. Generated strings remain ordinary distinct
 draft entries because they have no checked literal identity.
+
+Checked roots explicitly record whether their graph contains identity
+variables. When that bit is false, lowering the checked root produces an
+immutable closed `TypeId`; instantiation imports that exact type into the graph,
+and the graph's exact `TypeId` import memo may reuse it across scope identities.
+When the bit is true, reuse across scope identities is forbidden and each scope
+instantiates fresh graph cells. This gate consumes checker-produced closure data
+and never attempts to infer closure from Monotype shape or runtime layout.
 
 This distinction matters most for lambdas and closures. Expression-position
 functions are checked templates. Lowering a lambda or closure at an expected

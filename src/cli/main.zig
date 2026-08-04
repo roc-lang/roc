@@ -14185,13 +14185,15 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [18]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [13]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [15]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
+        .{ .name = "Type instantiation scopes", .count = body.instantiation_scopes_created },
         .{ .name = "Checked node requests", .count = body.checked_node_requests },
         .{ .name = "Checked node cache hits", .count = body.checked_node_cache_hits },
         .{ .name = "Checked node cache misses", .count = body.checked_node_cache_misses },
+        .{ .name = "Closed checked-type imports", .count = body.closed_checked_node_imports },
         .{ .name = "Fresh checked node requests", .count = body.fresh_checked_node_requests },
         .{ .name = "Call expressions", .count = body.call_expressions },
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
@@ -14263,7 +14265,9 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.specialization.nested_misses = 102;
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.generated_private_nodes_visited = 202;
+    diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
+    diagnostics.body.closed_checked_node_imports = 304;
     diagnostics.body.nested_closures_prepared = 302;
 
     const specialization = monotypeSpecializationCounters(diagnostics);
@@ -14279,10 +14283,14 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 202), graph[15].count);
 
     const body = monotypeBodyCounters(diagnostics);
-    try std.testing.expectEqualStrings("Checked node cache hits", body[2].name);
-    try std.testing.expectEqual(@as(u64, 301), body[2].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[12].name);
-    try std.testing.expectEqual(@as(u64, 302), body[12].count);
+    try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);
+    try std.testing.expectEqual(@as(u64, 303), body[1].count);
+    try std.testing.expectEqualStrings("Checked node cache hits", body[3].name);
+    try std.testing.expectEqual(@as(u64, 301), body[3].count);
+    try std.testing.expectEqualStrings("Closed checked-type imports", body[5].name);
+    try std.testing.expectEqual(@as(u64, 304), body[5].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[14].name);
+    try std.testing.expectEqual(@as(u64, 302), body[14].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

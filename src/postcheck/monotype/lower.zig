@@ -346,9 +346,11 @@ pub const SpecializationCounters = specialize.Counters;
 pub const BodyDiagnostics = struct {
     graphs_created: u64 = 0,
     body_contexts_created: u64 = 0,
+    instantiation_scopes_created: u64 = 0,
     checked_node_requests: u64 = 0,
     checked_node_cache_hits: u64 = 0,
     checked_node_cache_misses: u64 = 0,
+    closed_checked_node_imports: u64 = 0,
     fresh_checked_node_requests: u64 = 0,
     call_expressions: u64 = 0,
     dispatch_expressions: u64 = 0,
@@ -1925,6 +1927,7 @@ const Builder = struct {
     target_usize: base.target.TargetUsize,
     timing: ?*Timing,
     symbols: Common.SymbolGen = .{},
+    next_instantiation_scope: u64 = 0,
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Exact inhabitation answers for sealed Monotype types. These types are
     /// immutable, so the structural walk is needed at most once per TypeId.
@@ -2130,6 +2133,16 @@ const Builder = struct {
         if (self.diagnostics) |diagnostics| {
             @field(diagnostics.body, field) += @intCast(amount);
         }
+    }
+
+    fn allocateInstantiationScope(self: *Builder) InstantiationScopeId {
+        if (self.next_instantiation_scope == std.math.maxInt(u64)) {
+            Common.invariant("Monotype instantiation scope identity exhausted");
+        }
+        const id: InstantiationScopeId = @enumFromInt(self.next_instantiation_scope);
+        self.next_instantiation_scope += 1;
+        self.countBodyDiagnostic("instantiation_scopes_created");
+        return id;
     }
 
     fn createGraph(self: *Builder) Allocator.Error!*InstGraph {
@@ -12109,6 +12122,34 @@ const InterfaceReplayState = struct {
     }
 };
 
+const InstantiationScopeId = enum(u64) { _ };
+
+/// The complete mutable state for one checked-type instantiation scope. Body
+/// lowering state remains on `BodyContext`; operations that only need a fresh
+/// type instantiation can swap this small state without constructing another
+/// body context.
+const TypeInstantiationContext = struct {
+    allocator: Allocator,
+    id: InstantiationScopeId,
+    node_map: std.AutoHashMap(CheckedTypeAddress, NodeId),
+    /// Innermost-last stack of nominal-instance instantiation scopes; see
+    /// instNominalBackingNode.
+    decl_scopes: std.ArrayList(*std.AutoHashMap(CheckedTypeAddress, NodeId)) = .empty,
+
+    fn init(allocator: Allocator, id: InstantiationScopeId) TypeInstantiationContext {
+        return .{
+            .allocator = allocator,
+            .id = id,
+            .node_map = std.AutoHashMap(CheckedTypeAddress, NodeId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *TypeInstantiationContext) void {
+        self.decl_scopes.deinit(self.allocator);
+        self.node_map.deinit();
+    }
+};
+
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
@@ -12140,13 +12181,10 @@ const BodyContext = struct {
     inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
     /// Draft body output owned by this specialization graph.
     draft: *BodyDraftStore,
-    /// Instantiation cache: checked types this context already cloned into the
-    /// graph. Separate per context so re-instantiating a generic signature at
-    /// another call site creates fresh nodes.
-    node_map: std.AutoHashMap(CheckedTypeAddress, NodeId),
-    /// Innermost-last stack of nominal-instance instantiation scopes; see
-    /// instNominalBackingNode.
-    decl_scopes: std.ArrayList(*std.AutoHashMap(CheckedTypeAddress, NodeId)) = .empty,
+    /// Checked-type cache and declaration-scope stack for this exact
+    /// instantiation identity. Separate contexts give generic signatures fresh
+    /// cells; checker-proved closed types may share immutable imports.
+    instantiation: TypeInstantiationContext,
     loop_contexts: std.ArrayList(LoopContext),
     /// Literal sub-patterns on non-builtin number types collected while
     /// lowering a match branch's pattern; each becomes an equality condition
@@ -12697,17 +12735,17 @@ const BodyContext = struct {
         graph: *InstGraph,
         draft: *BodyDraftStore,
     ) Allocator.Error!BodyContext {
-        var ctx = try initTypeOnly(allocator, builder, view, owner_template, graph, draft);
+        var ctx = try initBodyState(allocator, builder, view, owner_template, graph, draft);
         errdefer ctx.deinit();
         ctx.method_scope = method_scope;
         ctx.source_file_id = try draft.sourceFileIdFor(view.module_identity.module_idx, view.module_env.module_name);
         return ctx;
     }
 
-    /// Context for instantiating checked types into `graph` without lowering
-    /// any expressions: the module's string-literal table is never touched,
-    /// so it is not materialized. Expression lowering must use `init`.
-    fn initTypeOnly(
+    /// Construct the operational state for a body-lowering context. Dense
+    /// binder state remains lazy, and fresh type-only work uses
+    /// `TypeInstantiationContext` directly.
+    fn initBodyState(
         allocator: Allocator,
         builder: *Builder,
         view: ModuleView,
@@ -12737,7 +12775,7 @@ const BodyContext = struct {
             .draft = draft,
             .evidence = rootEvidence(owner_template, &.{}),
             .restore_evidence = rootEvidence(owner_template, &.{}),
-            .node_map = std.AutoHashMap(CheckedTypeAddress, NodeId).init(allocator),
+            .instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope()),
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
             .equality_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
@@ -12766,9 +12804,8 @@ const BodyContext = struct {
         self.equality_expansion_stack.deinit();
         self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
-        self.decl_scopes.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
-        self.node_map.deinit();
+        self.instantiation.deinit();
         self.local_proc_contexts.deinit();
         self.typed_binders.deinit();
         self.binders.deinit();
@@ -13981,9 +14018,9 @@ const BodyContext = struct {
         }
 
         if (copy_type_cells) {
-            var node_iter = self.node_map.iterator();
+            var node_iter = self.instantiation.node_map.iterator();
             while (node_iter.next()) |entry| {
-                try child.node_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                try child.instantiation.node_map.put(entry.key_ptr.*, entry.value_ptr.*);
             }
         }
 
@@ -15045,6 +15082,13 @@ const BodyContext = struct {
             return existing;
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
+        if (self.checkedTypeIsClosed(checked_ty)) {
+            const closed_ty = try self.builder.lowerType(self.view, checked_ty);
+            const imported = try self.graph.importMono(closed_ty);
+            try self.putScopedNode(address, imported);
+            self.builder.countBodyDiagnostic("closed_checked_node_imports");
+            return imported;
+        }
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
         try self.putScopedNode(address, placeholder);
         const built = try self.instNodeContent(checked_ty);
@@ -15056,35 +15100,31 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
         self.builder.countBodyDiagnostic("fresh_checked_node_requests");
-        var fresh = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self.builder,
-            self.view,
-            self.method_scope,
-            self.owner_template,
-            self.graph,
-            self.draft,
-        );
-        defer fresh.deinit();
-        return try fresh.instNode(checked_ty);
+        const previous = self.instantiation;
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope());
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous;
+        }
+        return try self.instNode(checked_ty);
     }
 
     fn scopedNode(self: *BodyContext, address: CheckedTypeAddress) ?NodeId {
-        var index = self.decl_scopes.items.len;
+        var index = self.instantiation.decl_scopes.items.len;
         while (index > 0) {
             index -= 1;
-            if (self.decl_scopes.items[index].get(address)) |existing| return existing;
+            if (self.instantiation.decl_scopes.items[index].get(address)) |existing| return existing;
         }
-        if (self.decl_scopes.items.len != 0) return null;
-        return self.node_map.get(address);
+        if (self.instantiation.decl_scopes.items.len != 0) return null;
+        return self.instantiation.node_map.get(address);
     }
 
     fn putScopedNode(self: *BodyContext, address: CheckedTypeAddress, node: NodeId) Allocator.Error!void {
-        if (self.decl_scopes.items.len != 0) {
-            try self.decl_scopes.items[self.decl_scopes.items.len - 1].put(address, node);
+        if (self.instantiation.decl_scopes.items.len != 0) {
+            try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(address, node);
             return;
         }
-        try self.node_map.put(address, node);
+        try self.instantiation.node_map.put(address, node);
     }
 
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
@@ -15279,12 +15319,16 @@ const BodyContext = struct {
         const backing = if (moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) backing: {
             break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
         } else backing: {
-            var source_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, source.view, self.method_scope, self.owner_template, self.graph, self.draft);
-            source_ctx.evidence = self.evidence;
-            defer source_ctx.deinit();
-            source_ctx.owner_context_fn_key = self.owner_context_fn_key;
-            source_ctx.current_fn_key = self.current_fn_key;
-            break :backing try source_ctx.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
+            const previous_view = self.view;
+            const previous_instantiation = self.instantiation;
+            self.view = source.view;
+            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope());
+            defer {
+                self.instantiation.deinit();
+                self.instantiation = previous_instantiation;
+                self.view = previous_view;
+            }
+            break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
         };
         try self.graph.unify(placeholder, backing);
         return placeholder;
@@ -15304,8 +15348,8 @@ const BodyContext = struct {
         for (formal_args, args) |formal, arg| {
             try scope.put(self.typeAddress(formal), arg);
         }
-        try self.decl_scopes.append(self.allocator, &scope);
-        defer _ = self.decl_scopes.pop();
+        try self.instantiation.decl_scopes.append(self.allocator, &scope);
+        defer _ = self.instantiation.decl_scopes.pop();
         return try self.instNode(declaration.backing);
     }
 
@@ -48291,6 +48335,26 @@ test "checked string literal cache is shared by exact module identity" {
     try std.testing.expectEqual(first, reused);
     try std.testing.expect(first != other_module);
     try std.testing.expectEqual(@as(usize, 2), draft.string_literals.items.len);
+}
+
+test "checked type instantiation scopes have exact isolated identities" {
+    var diagnostics: Diagnostics = .{};
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.diagnostics = &diagnostics;
+
+    var first = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope());
+    defer first.deinit();
+    var second = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope());
+    defer second.deinit();
+
+    try std.testing.expect(first.id != second.id);
+    const address: CheckedTypeAddress = .{ .module_bytes = [_]u8{7} ** 32, .type_id = 11 };
+    const node: NodeId = @enumFromInt(13);
+    try first.node_map.put(address, node);
+    try std.testing.expectEqual(@as(?NodeId, node), first.node_map.get(address));
+    try std.testing.expectEqual(@as(?NodeId, null), second.node_map.get(address));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
 }
 
 test "function context identity excludes draft local allocation ids" {
