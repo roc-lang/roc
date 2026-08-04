@@ -144,6 +144,15 @@ pub const GeneratedInstantiationRule = enum {
     /// requesting body's environment, must equal the callee scheme root emitted
     /// under the binding.
     iterator_dispatch_receiver,
+    /// A direct call to a compiler-owned iterator procedure — `List.iter`,
+    /// ranges, `Iter.custom` and the adapters — whose checked use site the
+    /// checker records ordinarily. The rule carries no binder mapping (the
+    /// site binds); it carries the MINT: the procedure decides the produced
+    /// kind, and the use's own formal argument types decide the components,
+    /// so the specialization's directed reads state the produced
+    /// representation without consulting the requesting graph
+    /// (reunify.md 10.2, 13.2e).
+    iterator_direct_call,
     /// A `where`-constrained method call: the checker resolved the dispatch to
     /// `constraint(depth, index)`, so the callee is chosen per specialization
     /// from the evidence chain and checking recorded no instantiation site for
@@ -244,6 +253,7 @@ pub const GeneratedInstantiationRule = enum {
             .constraint_dispatch_receiver,
             .structural_derivation_component,
             => true,
+            .iterator_direct_call,
             .inspect_component,
             .pattern_literal_equality,
             .set_literal_helper,
@@ -275,10 +285,13 @@ pub const GeneratedSource = struct {
     module_bytes: [32]u8,
     receiver: GeneratedReceiver,
     witness: GeneratedWitness,
-    /// For the iterator rule: which iterator procedure the callee is, which
+    /// For the iterator rules: which iterator procedure the callee is, which
     /// decides the minted representation's kind. The generating site knows it;
     /// nothing else can derive it (reunify.md 13.2e).
     procedure: ?checked.IteratorProcedureId = null,
+    /// For `Iter.custom`: the step-state formal's checked type at the use,
+    /// the second component the producer mints over.
+    state: ?checked.CheckedTypeId = null,
 };
 
 /// How many declared steps one rule's emitted path carries. A generated
@@ -782,6 +795,9 @@ const Frame = struct {
     env_ready: bool,
     /// Where this binding's residual materialization came from, if any.
     residual_origin: ResidualOrigin = .absent,
+    /// Retraction floor for representation inputs declared for this
+    /// specialization's lifetime, when no request scope was open to own them.
+    input_floor: ?usize = null,
 
     fn environment(self: *const Frame) ?*const direct_translate.BindingEnvironment {
         return self.chain.innermost();
@@ -1839,7 +1855,8 @@ pub const Rehearsal = struct {
         caller_owner_node: u32,
     ) ?usize {
         census.bump("iter_declare_attempt");
-        if (declared.rule != .iterator_dispatch_receiver) {
+        const direct_call = declared.rule == .iterator_direct_call;
+        if (declared.rule != .iterator_dispatch_receiver and !direct_call) {
             census.bump("iter_declare_not_iterator_rule");
             return null;
         }
@@ -1880,8 +1897,17 @@ pub const Rehearsal = struct {
         };
         census.bump("iter_declare_declared");
 
-        // The receiver's minted depth under the requesting binding decides this
-        // mint's depth; a chain past the cap runs forced-dynamic instead.
+        // A primary producer — a list, string, single value, range, or custom
+        // step becoming an iterator — mints at depth one over its own
+        // arguments: the value it iterates (and, for `Iter.custom`, its step
+        // state), each the use's formal type emitted under the requesting
+        // binding. An adapter instead mints over its receiver's existing
+        // representation: the receiver's minted depth decides this mint's
+        // depth, and a chain past the cap runs forced-dynamic.
+        const primary = direct_call and switch (kind) {
+            .list, .str, .single, .custom, .range_exclusive, .range_inclusive => true,
+            else => false,
+        };
         var depth: u8 = 0;
         var receiver: ?Type.TypeId = null;
         var reason: direct_translate.SkipReason = undefined;
@@ -1898,22 +1924,66 @@ pub const Rehearsal = struct {
                 else => {},
             }
         } else |_| {}
-        const components = self.pooledReceiverComponents(receiver);
 
-        const over_cap = depth >= max_minted_chain_depth;
-        const representation: direct_translate.ProducerRepresentation = if (over_cap) .{
-            .iterator_representation = .forced_dynamic,
-            .iterator_kind = .forced_dynamic,
-            .iterator_depth = 0,
-            .topology = topology,
-            .minting = .{ .callable_evidence = null },
-        } else .{
-            .iterator_representation = .minted,
-            .iterator_kind = kind,
-            .iterator_depth = depth + 1,
-            .topology = topology,
-            .minting = .{ .callable_evidence = null },
-            .components = components,
+        const representation: direct_translate.ProducerRepresentation = if (primary) primary: {
+            var primary_components: [2]Type.TypeId = undefined;
+            var count: usize = 0;
+            switch (kind) {
+                .range_exclusive, .range_inclusive => {},
+                else => {
+                    const value = receiver orelse {
+                        census.bump("iter_declare_primary_component_untranslated");
+                        return null;
+                    };
+                    primary_components[0] = value;
+                    count = 1;
+                    if (kind == .custom) {
+                        const state_ty = source.state orelse {
+                            census.bump("iter_declare_primary_state_missing");
+                            return null;
+                        };
+                        const state = self.translator.translateUnderEnvironment(
+                            caller,
+                            caller_env,
+                            caller_owner_node,
+                            state_ty,
+                            &reason,
+                        ) catch {
+                            census.bump("iter_declare_primary_component_untranslated");
+                            return null;
+                        };
+                        primary_components[1] = state;
+                        count = 2;
+                    }
+                },
+            }
+            const pooled = self.component_arena.allocator().alloc(Type.TypeId, count) catch return null;
+            @memcpy(pooled, primary_components[0..count]);
+            break :primary .{
+                .iterator_representation = .minted,
+                .iterator_kind = kind,
+                .iterator_depth = 1,
+                .topology = topology,
+                .minting = .{ .callable_evidence = null },
+                .components = pooled,
+            };
+        } else representation: {
+            const components = self.pooledReceiverComponents(receiver);
+            const over_cap = depth >= max_minted_chain_depth;
+            break :representation if (over_cap) .{
+                .iterator_representation = .forced_dynamic,
+                .iterator_kind = .forced_dynamic,
+                .iterator_depth = 0,
+                .topology = topology,
+                .minting = .{ .callable_evidence = null },
+            } else .{
+                .iterator_representation = .minted,
+                .iterator_kind = kind,
+                .iterator_depth = depth + 1,
+                .topology = topology,
+                .minting = .{ .callable_evidence = null },
+                .components = components,
+            };
         };
 
         const floor = self.translator.representationInputCount();
@@ -3675,6 +3745,9 @@ pub const Rehearsal = struct {
     }
 
     fn releaseFrame(self: *Rehearsal, frame: *Frame) void {
+        if (frame.input_floor) |floor| {
+            self.translator.truncateRepresentationInputs(floor);
+        }
         if (frame.trace) |trace| {
             trace.deinit();
             self.allocator.destroy(trace);
@@ -4016,6 +4089,23 @@ pub const Rehearsal = struct {
         if (binders.len == 0) {
             census.bump("rehearsal_env_resolved_without_binders");
             self.classifyEmptyBinders(defining, scheme, site.importedDefiningModule() != null);
+        }
+
+        // The mint the requesting edge's covering rule states for this
+        // specialization: declared for the frame's whole lifetime, so every
+        // directed read inside the body — the interface emissions below
+        // included — answers with the produced representation
+        // (reunify.md 10.2, 13.2e). The floor rides the frame unless an open
+        // request scope claimed it.
+        if (edge.covering_rule) |covering| {
+            frame.input_floor = self.declareIteratorProducerInput(
+                defining,
+                scheme,
+                covering,
+                caller_env,
+                caller_owner_node,
+            );
+            census.bump("rehearsal_frame_rule_declared");
         }
 
         // The two sides of this specialization's representation interface
@@ -7249,6 +7339,9 @@ test "only the declared rules that carry a checked receiver bind from one" {
     // names its missing datum on its enum member and in design.md, and binds
     // nothing until that datum reaches its generating site.
     const unbound = [_]GeneratedInstantiationRule{
+        // Carries the MINT for a direct iterator-procedure call, not a binder
+        // mapping: the call's ordinary checked use site binds.
+        .iterator_direct_call,
         .inspect_component,
         .pattern_literal_equality,
         .set_literal_helper,

@@ -420,9 +420,14 @@ const Emission = struct {
     }
 
     fn inputFor(self: *const Emission, address: PositionAddress) ?ProducerRepresentation {
+        // Latest declaration wins: declarations nest with the scopes that
+        // state them, so the innermost scope's statement for a position
+        // stands over an enclosing one's.
         const stated = self.active_inputs orelse self.inputs.items;
-        for (stated) |input| {
-            if (input.position.eql(address)) return input.representation;
+        var index = stated.len;
+        while (index > 0) {
+            index -= 1;
+            if (stated[index].position.eql(address)) return stated[index].representation;
         }
         return null;
     }

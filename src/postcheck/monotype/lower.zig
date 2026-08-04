@@ -27548,12 +27548,35 @@ const BodyContext = struct {
         }
         const record = self.view.resolved_refs.records[raw];
         const evidence = try self.evidenceForUseSite(record.expr);
-        // Debug/probe-only: name the requesting edge for the rehearsal. The use's
+        // A direct call to a compiler-owned iterator procedure states the mint
+        // it produces on its edge: the procedure decides the kind, and the
+        // use's own formal argument types name the components, so the
+        // specialization's directed reads answer with the produced
+        // representation (reunify.md 10.2, 13.2e).
+        const covering: ?spec_rehearsal.GeneratedEdge = covering: {
+            const procedure = self.iteratorProcedureForResolvedTarget(target) orelse break :covering null;
+            const function = switch (checkedPayload(self.view, source_fn_ty)) {
+                .function => |function| function,
+                else => break :covering null,
+            };
+            if (function.args.len == 0) break :covering null;
+            break :covering .{
+                .rule = .iterator_direct_call,
+                .source = .{
+                    .module_bytes = self.view.key.bytes,
+                    .receiver = .{ .checked_ty = function.args[0] },
+                    .witness = .{ .callable = source_fn_ty },
+                    .procedure = procedure,
+                    .state = if (function.args.len > 2) function.args[2] else null,
+                },
+            };
+        };
+        // Name the requesting edge for the rehearsal. The use's
         // checked expression is the `use_node` half of the edge identity the
         // instantiation site records, so it names the site whose
         // dense actuals bind the callee scheme (reunify.md sections 7.2, 9.1).
         if (self.builder.rehearsal) |rehearsal| {
-            rehearsal.openRequestEdge(self.view.key.bytes, record.expr, null);
+            rehearsal.openRequestEdge(self.view.key.bytes, record.expr, covering);
         }
         defer self.closeRequestEdge();
         return switch (record.ref) {
