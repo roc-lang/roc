@@ -651,6 +651,10 @@ pub const Evaluator = struct {
         for (0..branch_slice.len) |i| {
             const branch = GuardedList.at(branch_slice, i);
             if (!try self.bindPattern(frame, branch.pat, scrutinee)) continue;
+            const bindings = self.program.stmtSpan(branch.bindings);
+            for (0..bindings.len) |binding_index| {
+                try self.evalStmt(frame, GuardedList.at(bindings, binding_index));
+            }
             if (branch.guard) |guard_expr| {
                 const guard = try self.evalExpr(frame, guard_expr);
                 if (!truthy(guard)) continue;

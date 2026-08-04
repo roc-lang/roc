@@ -673,6 +673,7 @@ const Solver = struct {
                 const scrutinee_ty = try self.inferExpr(match.scrutinee);
                 for (self.lifted.branchSpan(match.branches)) |branch| {
                     try self.bindPattern(branch.pat, scrutinee_ty);
+                    for (self.lifted.stmtSpan(branch.bindings)) |binding| try self.inferStmt(binding);
                     if (branch.guard) |guard| _ = try self.inferExpr(guard);
                     _ = try self.expectExpr(branch.body, expected);
                 }

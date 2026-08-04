@@ -359,7 +359,7 @@ pub const ProgramView = struct {
         if (!self.exprIsListMapCanReuseOp(callee_body)) return null;
 
         for (self.branchSpan(branches_span)) |branch| {
-            if (branch.guard != null) return null;
+            if (branch.guard != null or branch.bindings.len != 0) return null;
             switch (self.pats[@intFromEnum(branch.pat)].data) {
                 .wildcard => return .{ .call_args = call.args, .zero_branch_body = branch.body },
                 .int_lit => |value| if (value.toI128() == 0) {
@@ -1271,7 +1271,7 @@ pub const Program = struct {
         const branches = self.branchSpan(branches_span);
         for (0..branches.len) |index| {
             const branch = GuardedList.at(branches, index);
-            if (branch.guard != null) return null;
+            if (branch.guard != null or branch.bindings.len != 0) return null;
             switch (self.pats.unsafeRawItemsForView()[@intFromEnum(branch.pat)].data) {
                 .wildcard => return .{ .call_args = call.args, .zero_branch_body = branch.body },
                 .int_lit => |value| if (value.toI128() == 0) {

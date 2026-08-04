@@ -1450,6 +1450,10 @@ const Pass = struct {
                 const branches = self.program.branchSpan(match.branches);
                 for (0..branches.len) |index| {
                     const branch = GuardedList.at(branches, index);
+                    const bindings = self.program.stmtSpan(branch.bindings);
+                    for (0..bindings.len) |binding_index| {
+                        try self.markArgUsesInStmt(fn_id, GuardedList.at(bindings, binding_index), changed);
+                    }
                     if (branch.guard) |guard| try self.markArgUsesInExpr(fn_id, guard, changed);
                     try self.markArgUsesInExpr(fn_id, branch.body, changed);
                 }
@@ -1670,6 +1674,7 @@ const Pass = struct {
     fn collectCallPatternsInBranchSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.Branch)) Allocator.Error!void {
         try walkSpanCloned(self.allocator, Ast.Branch, self.program.branchSpan(span), .{ .self = self, .owner = owner }, struct {
             fn visit(ctx: anytype, branch: Ast.Branch) Allocator.Error!void {
+                try ctx.self.collectCallPatternsInStmtSpan(ctx.owner, branch.bindings);
                 if (branch.guard) |guard| try ctx.self.collectCallPatternsInExpr(ctx.owner, guard);
                 try ctx.self.collectCallPatternsInExpr(ctx.owner, branch.body);
             }
@@ -1937,6 +1942,10 @@ const Pass = struct {
                 const branches = self.program.branchSpan(match.branches);
                 for (0..branches.len) |index| {
                     const branch = GuardedList.at(branches, index);
+                    const bindings = self.program.stmtSpan(branch.bindings);
+                    for (0..bindings.len) |binding_index| {
+                        if (self.stmtHasProjectableLoopResult(GuardedList.at(bindings, binding_index))) break :blk true;
+                    }
                     if (branch.guard) |guard| if (self.bodyHasProjectableLoopResult(guard)) break :blk true;
                     if (self.bodyHasProjectableLoopResult(branch.body)) break :blk true;
                 }
@@ -1948,6 +1957,15 @@ const Pass = struct {
             .join_point => |join_point| self.bodyHasProjectableLoopResult(join_point.body) or
                 self.bodyHasProjectableLoopResult(join_point.remainder),
             else => false,
+        };
+    }
+
+    fn stmtHasProjectableLoopResult(self: *Pass, stmt_id: Ast.StmtId) bool {
+        return switch (self.program.getStmt(stmt_id)) {
+            .let_ => |let_| self.bodyHasProjectableLoopResult(let_.value),
+            .expr, .expect, .dbg => |expr| self.bodyHasProjectableLoopResult(expr),
+            .return_ => |ret| self.bodyHasProjectableLoopResult(ret.value),
+            .uninitialized, .crash => false,
         };
     }
 
@@ -1995,6 +2013,10 @@ const Pass = struct {
                 const branches = self.program.branchSpan(match.branches);
                 for (0..branches.len) |index| {
                     const branch = GuardedList.at(branches, index);
+                    const bindings = self.program.stmtSpan(branch.bindings);
+                    for (0..bindings.len) |binding_index| {
+                        if (try self.stmtHasAggregateProjectableLoopResult(GuardedList.at(bindings, binding_index))) break :blk true;
+                    }
                     if (branch.guard) |guard| {
                         if (try self.bodyHasAggregateProjectableLoopResult(guard)) break :blk true;
                     }
@@ -2008,6 +2030,15 @@ const Pass = struct {
             .join_point => |join_point| try self.bodyHasAggregateProjectableLoopResult(join_point.body) or
                 try self.bodyHasAggregateProjectableLoopResult(join_point.remainder),
             else => false,
+        };
+    }
+
+    fn stmtHasAggregateProjectableLoopResult(self: *Pass, stmt_id: Ast.StmtId) Common.LowerError!bool {
+        return switch (self.program.getStmt(stmt_id)) {
+            .let_ => |let_| try self.bodyHasAggregateProjectableLoopResult(let_.value),
+            .expr, .expect, .dbg => |expr| try self.bodyHasAggregateProjectableLoopResult(expr),
+            .return_ => |ret| try self.bodyHasAggregateProjectableLoopResult(ret.value),
+            .uninitialized, .crash => false,
         };
     }
 
@@ -2360,7 +2391,7 @@ const Pass = struct {
         const branches = self.program.branchSpan(match.branches);
         for (0..branches.len) |branch_index| {
             const branch = GuardedList.at(branches, branch_index);
-            if (branch.guard != null) return null;
+            if (branch.guard != null or branch.bindings.len != 0) return null;
             const pat = self.program.getPat(branch.pat);
             const tag = switch (pat.data) {
                 .tag => |t| t,
@@ -2516,7 +2547,7 @@ const Pass = struct {
                 const branches = self.program.branchSpan(match.branches);
                 for (0..branches.len) |branch_index| {
                     const br = GuardedList.at(branches, branch_index);
-                    if (br.guard != null) return null;
+                    if (br.guard != null or br.bindings.len != 0) return null;
                     if (!try self.armBaseMatches(br.body, &base)) return null;
                 }
             },
@@ -2575,6 +2606,8 @@ const Pass = struct {
                 const branches = self.program.branchSpan(match.branches);
                 for (0..branches.len) |index| {
                     const branch = GuardedList.at(branches, index);
+                    const binding_proof = self.stmtSpanIsStructurallyWorkFree(branch.bindings, &budget);
+                    if (binding_proof != .proven) return binding_proof;
                     if (branch.guard) |guard| {
                         const guard_proof = self.exprIsStructurallyWorkFree(guard, &budget);
                         if (guard_proof != .proven) return guard_proof;
@@ -2645,6 +2678,21 @@ const Pass = struct {
         var proof = ProofStatus.proven;
         for (0..values.len) |index| {
             proof = proofAnd(proof, self.exprIsStructurallyWorkFree(GuardedList.at(values, index), budget));
+            if (proof == .disproven) return .disproven;
+        }
+        return proof;
+    }
+
+    fn stmtSpanIsStructurallyWorkFree(self: *Pass, span: Ast.Span(Ast.StmtId), budget: *u32) ProofStatus {
+        const statements = self.program.stmtSpan(span);
+        var proof = ProofStatus.proven;
+        for (0..statements.len) |index| {
+            const stmt_proof = switch (self.program.getStmt(GuardedList.at(statements, index))) {
+                .let_ => |let_| if (let_.recursive) .disproven else self.exprIsStructurallyWorkFree(let_.value, budget),
+                .uninitialized => .proven,
+                .expr, .expect, .dbg, .return_, .crash => .disproven,
+            };
+            proof = proofAnd(proof, stmt_proof);
             if (proof == .disproven) return .disproven;
         }
         return proof;
@@ -2775,7 +2823,7 @@ const Pass = struct {
         defer self.allocator.free(branches);
         for (0..source_branches.len) |index| {
             const source_branch = GuardedList.at(source_branches, index);
-            if (source_branch.guard != null) return null;
+            if (source_branch.guard != null or source_branch.bindings.len != 0) return null;
             const source_pat = self.program.getPat(source_branch.pat);
             const source_tag = switch (source_pat.data) {
                 .tag => |tag| tag,
@@ -2958,7 +3006,7 @@ const Pass = struct {
                 defer self.allocator.free(rewritten);
                 for (branches, 0..) |br, index| {
                     const arm = (try self.buildArmTail(br.body, base_local, carry_start, loop_parts)) orelse return null;
-                    rewritten[index] = .{ .pat = br.pat, .guard = br.guard, .body = arm };
+                    rewritten[index] = .{ .pat = br.pat, .bindings = br.bindings, .guard = br.guard, .body = arm };
                 }
                 return try self.program.addExpr(.{ .ty = loop_parts.value_ty, .data = .{ .match_ = .{
                     .scrutinee = match.scrutinee,
@@ -3119,7 +3167,7 @@ const Pass = struct {
                 var rewritten = try self.allocator.alloc(Ast.Branch, branches.len);
                 defer self.allocator.free(rewritten);
                 for (branches, 0..) |br, index| {
-                    if (br.guard != null) return null;
+                    if (br.guard != null or br.bindings.len != 0) return null;
                     const pat = (try self.clonePatFresh(br.pat, renames)) orelse return null;
                     const arm = (try self.cloneNewCarry(br.body, renames, loop_parts)) orelse return null;
                     rewritten[index] = .{ .pat = pat, .guard = null, .body = arm };
@@ -3266,7 +3314,7 @@ const Pass = struct {
                 var rewritten = try self.allocator.alloc(Ast.Branch, branches.len);
                 defer self.allocator.free(rewritten);
                 for (branches, 0..) |br, index| {
-                    if (br.guard != null) return null;
+                    if (br.guard != null or br.bindings.len != 0) return null;
                     const pat = (try self.clonePatFresh(br.pat, renames)) orelse return null;
                     const arm = (try self.cloneExprFresh(br.body, renames)) orelse return null;
                     rewritten[index] = .{ .pat = pat, .guard = null, .body = arm };
@@ -3606,6 +3654,7 @@ const Pass = struct {
     fn rewriteCallsInBranchSpan(self: *Pass, span: Ast.Span(Ast.Branch), done: []bool) Allocator.Error!void {
         try walkSpanCloned(self.allocator, Ast.Branch, self.program.branchSpan(span), .{ .self = self, .done = done }, struct {
             fn visit(ctx: anytype, branch: Ast.Branch) Allocator.Error!void {
+                try ctx.self.rewriteCallsInStmtSpan(branch.bindings, ctx.done);
                 if (branch.guard) |guard| try ctx.self.rewriteCallsInExpr(guard, ctx.done);
                 try ctx.self.rewriteCallsInExpr(branch.body, ctx.done);
             }
@@ -4581,6 +4630,7 @@ const Cloner = struct {
                 const change_start = ctx.self.subst.watermark();
                 defer ctx.self.subst.restore(change_start);
                 try ctx.self.shadowPatLocals(branch.pat);
+                try ctx.self.collectCallPatternsInStmtSpan(ctx.owner, branch.bindings);
                 if (branch.guard) |guard| try ctx.self.collectCallPatternsInExpr(ctx.owner, guard);
                 try ctx.self.collectCallPatternsInExpr(ctx.owner, branch.body);
             }
@@ -5880,6 +5930,7 @@ const Cloner = struct {
                 for (branches, 0..) |branch, index| {
                     const change_start = self.subst.watermark();
                     try self.shadowPatLocals(branch.pat);
+                    try self.shadowStmtSpanLocals(branch.bindings);
                     const body = (try self.cloneLetOfCaseArmBody(probe, dispatch, branch.body)) orelse {
                         self.subst.restore(change_start);
                         return null;
@@ -5887,6 +5938,7 @@ const Cloner = struct {
                     self.subst.restore(change_start);
                     rewritten[index] = .{
                         .pat = branch.pat,
+                        .bindings = branch.bindings,
                         .guard = branch.guard,
                         .body = body,
                     };
@@ -5973,6 +6025,7 @@ const Cloner = struct {
                     const args = [_]Ast.ExprId{branch.body};
                     rewritten[index] = .{
                         .pat = branch.pat,
+                        .bindings = branch.bindings,
                         .guard = branch.guard,
                         .body = try self.addExpr(.{ .ty = rest_ty, .data = .{ .jump = .{
                             .target = join_id,
@@ -6044,7 +6097,7 @@ const Cloner = struct {
             const joins = try arena.alloc(LetCaseJoin, branches.len);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
-                if (branch.guard != null) break :dispatch_split;
+                if (branch.guard != null or branch.bindings.len != 0) break :dispatch_split;
                 var binders: std.ArrayList(Ast.LocalId) = .empty;
                 if (!try self.collectPatBinders(branch.pat, arena, &binders)) break :dispatch_split;
                 joins[index] = .{
@@ -6099,6 +6152,7 @@ const Cloner = struct {
             }
             rewritten[index] = .{
                 .pat = branch.pat,
+                .bindings = branch.bindings,
                 .guard = null,
                 .body = try self.addExpr(.{ .ty = rest_ty, .data = .{ .jump = .{
                     .target = join.id,
@@ -7344,7 +7398,7 @@ const Cloner = struct {
                 .no_match => continue,
                 .match => {},
             }
-            if (branch.guard != null) return null;
+            if (branch.guard != null or branch.bindings.len != 0) return null;
 
             const change_start = self.subst.watermark();
             if (try self.bindPatToMatchValue(branch.pat, scrutinee, branch.body, bindings) == null) {
@@ -7903,7 +7957,7 @@ const Cloner = struct {
         const outer_branches = self.pass.program.branchSpan(outer_branches_span);
         for (0..outer_branches.len) |branch_index| {
             const branch = GuardedList.at(outer_branches, branch_index);
-            if (branch.guard != null) return null;
+            if (branch.guard != null or branch.bindings.len != 0) return null;
         }
 
         const branch_work = switch (scrutinee_data) {
@@ -7925,6 +7979,7 @@ const Cloner = struct {
                     var branch_bindings: BindingChain = .{};
                     const change_start = self.subst.watermark();
                     try self.shadowPatLocals(inner_branch.pat);
+                    try self.shadowStmtSpanLocals(inner_branch.bindings);
                     const inner_value = try self.cloneExprValueInto(inner_branch.body, &branch_bindings);
                     const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse {
                         self.subst.restore(change_start);
@@ -7932,6 +7987,7 @@ const Cloner = struct {
                     };
                     rewritten[index] = .{
                         .pat = inner_branch.pat,
+                        .bindings = inner_branch.bindings,
                         .guard = inner_branch.guard,
                         .body = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
                     };
@@ -8540,6 +8596,17 @@ const Cloner = struct {
         }
     }
 
+    fn shadowStmtSpanLocals(self: *Cloner, span: Ast.Span(Ast.StmtId)) Common.LowerError!void {
+        const statements = self.pass.program.stmtSpan(span);
+        for (0..statements.len) |index| {
+            switch (self.pass.program.getStmt(GuardedList.at(statements, index))) {
+                .let_ => |let_| try self.shadowPatLocals(let_.pat),
+                .uninitialized => |pat| try self.shadowPatLocals(pat),
+                else => {},
+            }
+        }
+    }
+
     fn markActiveRecursiveValuePat(self: *Cloner, pat_id: Ast.PatId) Allocator.Error!void {
         const pat = self.pass.program.getPat(pat_id);
         switch (pat.data) {
@@ -8809,6 +8876,20 @@ const Cloner = struct {
         return try self.pass.program.addExprSpan(values);
     }
 
+    fn cloneStmtSpan(self: *Cloner, span: Ast.Span(Ast.StmtId)) Common.LowerError!Ast.Span(Ast.StmtId) {
+        const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(span));
+        defer self.pass.allocator.free(source);
+
+        var values: std.ArrayList(Ast.StmtId) = .empty;
+        defer values.deinit(self.pass.allocator);
+        for (source) |stmt| {
+            const cloned = try self.cloneStmt(stmt);
+            try self.appendBindingStmts(cloned.bindings, &values);
+            if (cloned.stmt) |cloned_stmt| try values.append(self.pass.allocator, cloned_stmt);
+        }
+        return try self.pass.program.addStmtSpan(values.items);
+    }
+
     fn cloneCaptureOperandSpan(self: *Cloner, span: Ast.Span(Ast.CaptureOperand)) Common.LowerError!Ast.Span(Ast.CaptureOperand) {
         const source = try GuardedList.dupe(self.pass.allocator, Ast.CaptureOperand, self.pass.program.captureOperandSpan(span));
         defer self.pass.allocator.free(source);
@@ -8875,6 +8956,7 @@ const Cloner = struct {
             const pat = try self.clonePat(branch.pat, .bind_runtime);
             values[index] = .{
                 .pat = pat,
+                .bindings = try self.cloneStmtSpan(branch.bindings),
                 .guard = if (branch.guard) |guard| try self.cloneExpr(guard) else null,
                 .body = try self.cloneExpr(branch.body),
             };
@@ -9545,6 +9627,10 @@ const BodyLocalScope = struct {
                     var added: std.ArrayList(Ast.LocalId) = .empty;
                     defer added.deinit(self.allocator);
                     try self.bindPat(branch.pat, &added);
+                    const bindings = self.program.stmtSpan(branch.bindings);
+                    for (0..bindings.len) |binding_index| {
+                        try self.walkStmt(GuardedList.at(bindings, binding_index), &added);
+                    }
                     if (branch.guard) |guard| try self.walkExpr(guard);
                     try self.walkExpr(branch.body);
                     self.unbindAll(added.items);
@@ -9756,6 +9842,8 @@ const BodySizeCounter = struct {
                 const branches = self.program.branchSpan(match.branches);
                 for (0..branches.len) |index| {
                     const branch = GuardedList.at(branches, index);
+                    const bindings = self.program.stmtSpan(branch.bindings);
+                    for (0..bindings.len) |binding_index| self.countStmt(GuardedList.at(bindings, binding_index));
                     if (branch.guard) |guard| self.countExpr(guard);
                     self.countExpr(branch.body);
                 }
@@ -9945,6 +10033,10 @@ fn collectAllFnUsesInExpr(
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    collectAllFnUsesInStmt(program, GuardedList.at(bindings, binding_index), owner, uses);
+                }
                 if (branch.guard) |guard| collectAllFnUsesInExpr(program, guard, owner, uses);
                 collectAllFnUsesInExpr(program, branch.body, owner, uses);
             }
@@ -10049,6 +10141,10 @@ fn tailSelfCallSummary(program: *const Ast.Program, expr_id: Ast.ExprId, target:
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    if (stmtCallsFn(program, GuardedList.at(bindings, binding_index), target)) break :blk .{ .valid = false };
+                }
                 if (branch.guard) |guard| {
                     if (exprCallsFn(program, guard, target)) break :blk .{ .valid = false };
                 }
@@ -10146,6 +10242,10 @@ fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    if (stmtCallsFn(program, GuardedList.at(bindings, binding_index), fn_id)) break :blk true;
+                }
                 if (branch.guard) |guard| if (exprCallsFn(program, guard, fn_id)) break :blk true;
                 if (exprCallsFn(program, branch.body, fn_id)) break :blk true;
             }
@@ -10266,6 +10366,10 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    if (stmtContainsReturn(program, GuardedList.at(bindings, binding_index))) return true;
+                }
                 if (branch.guard) |guard| {
                     if (exprContainsReturn(program, guard)) return true;
                 }
@@ -10401,6 +10505,10 @@ fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId,
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    if (stmtContainsFreeLoopControl(program, GuardedList.at(bindings, binding_index), loop_depth)) return true;
+                }
                 if (branch.guard) |guard| {
                     if (exprContainsFreeLoopControl(program, guard, loop_depth)) return true;
                 }
@@ -10555,6 +10663,10 @@ fn collectTupleLocalDemandInExpr(
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    if (!collectTupleLocalDemandInStmt(program, local, GuardedList.at(bindings, binding_index), used)) break :blk false;
+                }
                 if (branch.guard) |guard| {
                     if (!collectTupleLocalDemandInExpr(program, local, guard, used)) break :blk false;
                 }
@@ -10718,6 +10830,10 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    count += localUseCountInStmt(program, local, GuardedList.at(bindings, binding_index));
+                }
                 if (branch.guard) |guard| count += localUseCountInExpr(program, local, guard);
                 count += localUseCountInExpr(program, local, branch.body);
             }

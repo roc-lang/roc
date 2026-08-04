@@ -601,6 +601,7 @@ pub const MappedProgramView = struct {
         }
         for (self.branches) |branch| {
             if (!self.patRefInBounds(branch.pat)) return false;
+            if (!self.stmtIdSpanInBounds(branch.bindings)) return false;
             if (branch.guard) |guard| {
                 if (!self.exprRefInBounds(guard)) return false;
             }
