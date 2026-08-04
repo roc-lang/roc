@@ -63,6 +63,25 @@ The machine/environment where the compiled Roc application will eventually execu
   - wasm32 target → runs in browser or wasm runtime
   - x64linux target → runs on x64 Linux machines
 
+## CPU Level
+
+Each of the machines above is a CPU as well as an OS and architecture, and Roc
+names two floors per architecture: `.default` and the `v1` baseline (see
+`CpuLevel`). The two are separate concerns from the six contexts above, and they
+interact in one place that is easy to get wrong.
+
+The Roc CLI is built for the architecture baseline so that one released binary
+runs on every CPU of its architecture. That makes `builtin.cpu` a statement
+about the **CLI Target**, not about the **CLI Runtime**: it cannot tell you
+whether the machine executing `roc` has AVX2. Only a runtime query can, which is
+what `host_cpu.zig` does.
+
+So anything generated to run on the CLI Runtime — compile-time execution,
+in-memory dev runs, and the Compilation Target chosen when the user passes no
+`--target` — takes its CPU level from `host_cpu.level()`. Anything generated for
+a Compilation Target the user named takes its level from that target, because
+the App Runtime is then someone else's machine.
+
 ## Key Relationships
 
 ```

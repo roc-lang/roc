@@ -193,7 +193,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     // Arena-owned so the path outlives the returned BuildEnv, which borrows it.
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.arena);
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.host_cpu.nativeTarget(), cwd, ctx.io.std_io);
     errdefer build_env.deinit();
 
     build_env.compiler_version = build_options.compiler_version;
@@ -479,6 +479,11 @@ const BuiltinsObjects = struct {
     const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins.o");
     const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins.o");
 
+    /// Cross-compilation target builtins (BSD targets)
+    const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_builtins.o");
+    const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_builtins.o");
+    const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_builtins.o");
+
     /// Extern-symbol-mode builtins: host operations are linker-resolved
     /// symbols (the symbol ABI) instead of RocOps vtable calls.
     const native_extern = if (builtin.is_test)
@@ -497,6 +502,9 @@ const BuiltinsObjects = struct {
     const arm64win_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins_extern.obj");
     const x64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins_extern.o");
     const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins_extern.o");
+    const x64freebsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_builtins_extern.o");
+    const x64openbsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_builtins_extern.o");
+    const x64netbsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_builtins_extern.o");
 
     /// Get the appropriate builtins object bytes for the given target
     ///
@@ -516,6 +524,9 @@ const BuiltinsObjects = struct {
             .arm64win => arm64win,
             .x64mac => x64mac,
             .arm64mac => arm64mac,
+            .x64freebsd => x64freebsd,
+            .x64openbsd => x64openbsd,
+            .x64netbsd => x64netbsd,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native,
         };
@@ -535,6 +546,9 @@ const BuiltinsObjects = struct {
             .arm64win => arm64win_extern,
             .x64mac => x64mac_extern,
             .arm64mac => arm64mac_extern,
+            .x64freebsd => x64freebsd_extern,
+            .x64openbsd => x64openbsd_extern,
+            .x64netbsd => x64netbsd_extern,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native_extern,
         };
@@ -567,6 +581,9 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
         const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/" ++ base_name ++ ".o");
         const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/" ++ base_name ++ ".obj");
         const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/" ++ base_name ++ ".obj");
+        const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/" ++ base_name ++ ".o");
+        const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/" ++ base_name ++ ".o");
+        const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/" ++ base_name ++ ".o");
 
         pub fn forTarget(requested: RocTarget) ?[]const u8 {
             const target = requested.defaultCpuTarget();
@@ -579,6 +596,9 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
                 .arm64mac => arm64mac,
                 .x64win => x64win,
                 .arm64win => arm64win,
+                .x64freebsd => x64freebsd,
+                .x64openbsd => x64openbsd,
+                .x64netbsd => x64netbsd,
                 else => null,
             };
         }
@@ -2266,7 +2286,9 @@ test "interpreter executable cache digest changes for platform host shim entrypo
 }
 
 fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget }!void {
-    const native_target = RocTarget.detectNative();
+    // Name the host by the CPU level it executes, so a target rejected only
+    // because this machine's CPU is older than it requires says so.
+    const native_target = roc_target.host_cpu.nativeTarget();
     try ctx.io.stderr().print(
         "Error: unsupported target for the default roc command: {s} cannot be executed on this host ({s}).\n\nUse `roc build --target={s}` to produce an artifact for that target.\n",
         .{ @tagName(target), @tagName(native_target), @tagName(target) },
@@ -3349,7 +3371,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
 fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
-    const native_target = RocTarget.detectNative();
+    const native_target = roc_target.host_cpu.nativeTarget();
     const default_target = defaultRunShimTarget(native_target);
     const selected_target = if (args.target) |target_str| blk: {
         const requested = RocTarget.fromString(target_str) orelse {
@@ -5290,22 +5312,27 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
     if (args.opt != .dev) return false;
     if (args.target != null) return true;
 
-    const native_target = RocTarget.detectNative();
+    const native_target = roc_target.host_cpu.nativeTarget();
     const default_target = defaultRunShimTarget(native_target);
     return devShimTargetCompatible(default_target, native_target) and
         default_target.toOsTag() == .linux and
         DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
 }
 
-/// Headerless default apps run on the freestanding default platform: raw
-/// syscalls, its own `_start`, and a machine-code shim that reaches the kernel
-/// directly. Nothing in the executable calls libc, so every Linux host links
-/// the same static musl-style executable no matter which libc it ships --
-/// matching what `llvmBuildLinkAbi` already does for `roc build`.
+/// The Linux target the headerless default app runs on, keeping the CPU level
+/// of the native target it came from.
+///
+/// Default apps run on the freestanding default platform: raw syscalls, its own
+/// `_start`, and a machine-code shim that reaches the kernel directly. Nothing
+/// in the executable calls libc, so every Linux host links the same static
+/// executable no matter which libc it ships -- matching what `llvmBuildLinkAbi`
+/// already does for `roc build`.
 fn defaultRunShimTarget(native: RocTarget) RocTarget {
     return switch (native) {
         .x64musl, .x64glibc, .x64linux => .x64musl,
         .arm64musl, .arm64glibc, .arm64linux => .arm64musl,
+        .x64v1musl, .x64v1glibc, .x64v1linux => .x64v1musl,
+        .arm64v1musl, .arm64v1glibc, .arm64v1linux => .arm64v1musl,
         else => native,
     };
 }
@@ -5592,13 +5619,15 @@ fn writeDevRunImageToSharedMemory(
         try readonly_data.appendSlice(ctx.gpa, internal_static_data);
         try readonly_data.appendSlice(ctx.gpa, static_strings.exports);
 
+        // This image executes in this process, so its instructions are held to
+        // what this machine's CPU runs rather than to the target's level.
         var codegen = try backend.HostLirCodeGen.init(
             ctx.gpa,
             store,
             layouts,
             static_strings.entries,
             .preserve,
-            .default,
+            roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
@@ -7450,7 +7479,7 @@ fn selectBuildPlatformTarget(
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
 ) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
-    return switch (target_selection.selectBuildTarget(targets_config, target_arg)) {
+    return switch (target_selection.selectBuildTarget(targets_config, target_arg, roc_target.host_cpu.level())) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
             renderValidationError(ctx, .{ .invalid_target = .{ .target_str = target_str } });
@@ -7473,11 +7502,18 @@ fn selectBuildPlatformTarget(
                 });
                 return error.UnsupportedTarget;
             }
-            const native_target = RocTarget.detectNative();
-            try ctx.io.stderr().print(
+            const native_target = roc_target.host_cpu.nativeTarget();
+            const stderr = ctx.io.stderr();
+            try stderr.print(
                 "Error: roc build requires --target or a platform target for wasm32 or the detected native host ({s}).\n",
                 .{@tagName(native_target)},
             );
+            if (native_target.cpuLevel() == .v1) {
+                try stderr.print(
+                    "\nThis machine's CPU does not run the instructions {s} uses, so building for\nthis machine means building for {s}.\n",
+                    .{ @tagName(native_target.defaultCpuTarget()), @tagName(native_target) },
+                );
+            }
             return error.UnsupportedTarget;
         },
         .not_runnable_on_host => unreachable,
@@ -7490,7 +7526,7 @@ fn selectRunPlatformTarget(
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
 ) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
-    return switch (target_selection.selectRunTarget(targets_config, target_arg)) {
+    return switch (target_selection.selectRunTarget(targets_config, target_arg, roc_target.host_cpu.level())) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
             const result = platform_validation.targets_validator.ValidationResult{
@@ -7519,7 +7555,7 @@ fn selectRunPlatformTarget(
                 });
                 return error.UnsupportedTarget;
             }
-            const native_target = RocTarget.detectNative();
+            const native_target = roc_target.host_cpu.nativeTarget();
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
                 native_target,
@@ -9479,7 +9515,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const target = selected.target;
     const link_type = selected.output;
 
-    const native_target = RocTarget.detectNative();
+    const native_target = roc_target.host_cpu.nativeTarget();
     if (target != native_target) {
         const stderr = ctx.io.stderr();
         try stderr.print("Error: The interpreter backend only supports building for the native target ({s}).\n\n", .{@tagName(native_target)});
