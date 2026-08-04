@@ -3333,6 +3333,173 @@ test "emitting one position twice yields one sealed encoding" {
     try testing.expect(try store.typeEql(&target_names, first, second));
 }
 
+// --- The draft layer (reunify.md sections 9.1, 10.6) ---
+//
+// A compound whose transitive children include a representation slot cannot
+// intern immediately: the slot may join after the compound is built, and an
+// immutable parent could not follow. Substitution builds a draft for exactly
+// that compound class; representation closure runs to fixpoint across a
+// dependency component; only then are drafts interned bottom-up into
+// immutable ids. No draft or slot identity survives past sealing.
+
+/// Section 9.1's reference to a type under construction. It is not
+/// permission for arbitrary represented content to masquerade under a
+/// logical key: draft and slot constructors stay private to the
+/// instantiator/representation layer.
+pub const ProvisionalType = union(enum) {
+    /// Immutable store id.
+    interned: TypeId,
+    /// Compound under construction; children may be drafts or slots.
+    draft: MonoDraftId,
+    /// One section 10.2 representation slot.
+    representation_slot: closure.RepresentationSlotId,
+};
+
+/// Dense id into one `MonoDraftStore`; it never outlives the sealing
+/// component that owns the store.
+pub const MonoDraftId = enum(u32) { _ };
+
+/// The compound shapes a draft models. Grown by need: a shape appears here
+/// when a production compound first carries a slot-holding child.
+pub const MonoDraftContent = union(enum) {
+    func: struct { args: []const ProvisionalType, ret: ProvisionalType },
+    list: ProvisionalType,
+};
+
+/// One compound under construction. The logical identity is eager (section
+/// 8.2): fixed at creation, checked again at sealing.
+pub const MonoDraft = struct {
+    /// Representation-erased identity digest of the compound.
+    logical: [32]u8,
+    content: MonoDraftContent,
+};
+
+/// Owns drafts for one sealing component and interns them bottom-up once
+/// every slot the component holds has sealed (section 10.6).
+pub const MonoDraftStore = struct {
+    allocator: Allocator,
+    drafts: std.ArrayList(MonoDraft),
+
+    pub fn init(allocator: Allocator) MonoDraftStore {
+        return .{ .allocator = allocator, .drafts = .empty };
+    }
+
+    pub fn deinit(self: *MonoDraftStore) void {
+        for (self.drafts.items) |draft| switch (draft.content) {
+            .func => |func| self.allocator.free(func.args),
+            .list => {},
+        };
+        self.drafts.deinit(self.allocator);
+    }
+
+    pub fn add(self: *MonoDraftStore, draft: MonoDraft) Allocator.Error!MonoDraftId {
+        const id: MonoDraftId = @enumFromInt(@as(u32, @intCast(self.drafts.items.len)));
+        try self.drafts.append(self.allocator, draft);
+        return id;
+    }
+
+    /// Seal one reference bottom-up: a slot takes the final type its sealed
+    /// class carries, a draft recurses child-first, and an interned id passes
+    /// through. Sealing cannot choose a default — a slot whose class carries
+    /// no final type is an invariant failure upstream, surfaced here as null
+    /// so the caller names it (section 10.6).
+    pub fn seal(
+        self: *const MonoDraftStore,
+        store: *MonoType.Store,
+        name_store: *const names.NameStore,
+        ref: ProvisionalType,
+        context: anytype,
+        slot_final: fn (@TypeOf(context), closure.RepresentationSlotId) ?TypeId,
+    ) Allocator.Error!?TypeId {
+        switch (ref) {
+            .interned => |ty| return ty,
+            .representation_slot => |slot| return slot_final(context, slot),
+            .draft => |draft_id| {
+                const draft = self.drafts.items[@intFromEnum(draft_id)];
+                switch (draft.content) {
+                    .func => |func| {
+                        const args = try self.allocator.alloc(TypeId, func.args.len);
+                        defer self.allocator.free(args);
+                        for (func.args, 0..) |arg, index| {
+                            args[index] = (try self.seal(store, name_store, arg, context, slot_final)) orelse return null;
+                        }
+                        const ret = (try self.seal(store, name_store, func.ret, context, slot_final)) orelse return null;
+                        return try store.internFunc(name_store, args, ret);
+                    },
+                    .list => |elem_ref| {
+                        const elem = (try self.seal(store, name_store, elem_ref, context, slot_final)) orelse return null;
+                        return try store.internList(name_store, elem);
+                    },
+                }
+            },
+        }
+    }
+};
+
+test "a draft over a sealed slot interns bottom-up" {
+    const allocator = testing.allocator;
+    var store = MonoType.Store.init(allocator);
+    defer store.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+
+    var drafts = MonoDraftStore.init(allocator);
+    defer drafts.deinit();
+
+    const item = try store.internPrimitive(&name_store, .u8);
+    const args = try allocator.dupe(ProvisionalType, &.{ProvisionalType{ .interned = item }});
+    const slot: closure.RepresentationSlotId = @enumFromInt(7);
+    const draft_id = try drafts.add(.{
+        .logical = [_]u8{0} ** 32,
+        .content = .{ .func = .{ .args = args, .ret = .{ .representation_slot = slot } } },
+    });
+
+    const SlotFinals = struct {
+        final_ty: TypeId,
+        fn final(self: @This(), asked: closure.RepresentationSlotId) ?TypeId {
+            return if (@intFromEnum(asked) == 7) self.final_ty else null;
+        }
+    };
+    const list_of_item = try store.internList(&name_store, item);
+    const sealed = (try drafts.seal(
+        &store,
+        &name_store,
+        .{ .draft = draft_id },
+        SlotFinals{ .final_ty = list_of_item },
+        SlotFinals.final,
+    )).?;
+    const sealed_fn = switch (store.get(sealed)) {
+        .func => |func| func,
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(list_of_item, sealed_fn.ret);
+}
+
+test "sealing declines where the slot finals state nothing" {
+    const allocator = testing.allocator;
+    var store = MonoType.Store.init(allocator);
+    defer store.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+
+    var drafts = MonoDraftStore.init(allocator);
+    defer drafts.deinit();
+
+    const draft_id = try drafts.add(.{
+        .logical = [_]u8{0} ** 32,
+        .content = .{ .list = .{ .representation_slot = @enumFromInt(3) } },
+    });
+    const SlotFinals = struct {
+        fn final(_: @This(), _: closure.RepresentationSlotId) ?TypeId {
+            return null;
+        }
+    };
+    try testing.expectEqual(
+        @as(?TypeId, null),
+        try drafts.seal(&store, &name_store, .{ .draft = draft_id }, SlotFinals{}, SlotFinals.final),
+    );
+}
+
 test "declarations are referenced" {
     testing.refAllDecls(@This());
 }
