@@ -3364,6 +3364,15 @@ pub const MonoDraftId = enum(u32) { _ };
 pub const MonoDraftContent = union(enum) {
     func: struct { args: []const ProvisionalType, ret: ProvisionalType },
     list: ProvisionalType,
+    named: struct {
+        named_type: MonoType.NamedType,
+        def: MonoType.TypeDef,
+        kind: MonoType.NamedKind,
+        builtin_owner: ?static_dispatch.BuiltinOwner,
+        args: []const ProvisionalType,
+        backing: ?struct { ty: ProvisionalType, use: MonoType.BackingUse, authority: MonoType.BackingAuthority },
+        declared_order: []const MonoType.DeclaredField,
+    },
 };
 
 /// One compound under construction. The logical identity is eager (section
@@ -3388,6 +3397,10 @@ pub const MonoDraftStore = struct {
         for (self.drafts.items) |draft| switch (draft.content) {
             .func => |func| self.allocator.free(func.args),
             .list => {},
+            .named => |named| {
+                self.allocator.free(named.args);
+                self.allocator.free(named.declared_order);
+            },
         };
         self.drafts.deinit(self.allocator);
     }
@@ -3429,6 +3442,27 @@ pub const MonoDraftStore = struct {
                     .list => |elem_ref| {
                         const elem = (try self.seal(store, name_store, elem_ref, context, slot_final)) orelse return null;
                         return try store.internList(name_store, elem);
+                    },
+                    .named => |named| {
+                        const args = try self.allocator.alloc(TypeId, named.args.len);
+                        defer self.allocator.free(args);
+                        for (named.args, 0..) |arg, index| {
+                            args[index] = (try self.seal(store, name_store, arg, context, slot_final)) orelse return null;
+                        }
+                        const backing: ?MonoType.NamedBacking = if (named.backing) |draft_backing| .{
+                            .ty = (try self.seal(store, name_store, draft_backing.ty, context, slot_final)) orelse return null,
+                            .use = draft_backing.use,
+                            .authority = draft_backing.authority,
+                        } else null;
+                        return try store.internNamed(name_store, .{
+                            .named_type = named.named_type,
+                            .def = named.def,
+                            .kind = named.kind,
+                            .builtin_owner = named.builtin_owner,
+                            .args = args,
+                            .backing = backing,
+                            .declared_order = named.declared_order,
+                        });
                     },
                 }
             },
