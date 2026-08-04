@@ -292,6 +292,9 @@ pub const GeneratedSource = struct {
     /// For `Iter.custom`: the step-state formal's checked type at the use,
     /// the second component the producer mints over.
     state: ?checked.CheckedTypeId = null,
+    /// The callable evidence the produced representation is minted under,
+    /// digested at the requesting site from the callable operand itself.
+    evidence: ?names.TypeDigest = null,
 };
 
 /// How many declared steps one rule's emitted path carries. A generated
@@ -387,6 +390,10 @@ pub const RequestEdge = struct {
     /// rule states where the binder values come from in the second case and is
     /// never consulted in the first.
     covering_rule: ?GeneratedEdge = null,
+    /// The enclosing producer's declared mint, captured while its frame was
+    /// live for a constructor edge that produces its caller's return; a
+    /// deferred specialization resolves after that frame pops.
+    adopted_mint: ?direct_translate.ProducerRepresentation = null,
     /// Where the translator's declared representation inputs stood when a
     /// callee under this scope declared its own; closing the scope retracts
     /// back to it, exactly as a generated scope does.
@@ -792,6 +799,11 @@ const Frame = struct {
     /// The requesting edge's instantiated root emitted under the CALLER's
     /// environment: the request context's side of the same interface.
     request_root: ?Type.TypeId,
+    /// The producer representation this frame's covering rule declared at its
+    /// scheme's return position, kept so the template body can restate it at
+    /// its own result position (the body's ids are instantiation-fresh, so the
+    /// declared return's address never names them).
+    ret_mint: ?direct_translate.ProducerRepresentation = null,
     env_ready: bool,
     /// Where this binding's residual materialization came from, if any.
     residual_origin: ResidualOrigin = .absent,
@@ -1299,6 +1311,9 @@ pub const Rehearsal = struct {
     /// must not move an earlier one — and resets only when every declaration
     /// has been retracted.
     component_arena: std.heap.ArenaAllocator,
+    /// The representation the most recent rule declaration stated for its
+    /// scheme's return, consumed by the frame that ran the declaration.
+    last_declared_mint: ?direct_translate.ProducerRepresentation = null,
     /// How many failed edge-to-site joins have been dumped in detail.
     nested_leaf_dumped: usize = 0,
     /// Positions the seam reported a divergence at, so whether each is a
@@ -1442,6 +1457,36 @@ pub const Rehearsal = struct {
     /// reservation claimed cannot be read by a later, unrelated request.
     /// Debug/probe-only: the innermost open request scope's checked edge, if it
     /// names one (reunify.md 13.2 2a).
+    /// The requesting context's own emission of the innermost open
+    /// specialization's instantiated callable, when its frame resolved one.
+    pub fn currentFrameRequestRoot(self: *const Rehearsal) ?Type.TypeId {
+        if (self.frames.items.len == 0) return null;
+        return self.frames.items[self.frames.items.len - 1].request_root;
+    }
+
+    /// Restate the innermost frame's declared return mint at the template
+    /// body's own result position: the body's checked ids are
+    /// instantiation-fresh, so the scheme return's address never names them,
+    /// while the result position produces the same representation. The frame
+    /// carries the retraction.
+    pub fn declareFrameRetMintAtBodyRoot(
+        self: *Rehearsal,
+        module_bytes: [32]u8,
+        body_ret_ty: checked.CheckedTypeId,
+    ) void {
+        if (self.disabled) return;
+        if (self.frames.items.len == 0) return;
+        const frame = &self.frames.items[self.frames.items.len - 1];
+        const mint = frame.ret_mint orelse return;
+        const floor = self.translator.representationInputCount();
+        self.translator.declareRepresentationInput(.{
+            .position = .{ .module_bytes = module_bytes, .type_id = @intFromEnum(body_ret_ty) },
+            .representation = mint,
+        }) catch return;
+        if (frame.input_floor == null) frame.input_floor = floor;
+        census.bump("rehearsal_body_root_mint_declared");
+    }
+
     pub fn innermostRequestEdge(self: *const Rehearsal) ?RequestEdgeName {
         if (self.disabled) return null;
         if (self.requests.items.len == 0) return null;
@@ -1741,12 +1786,24 @@ pub const Rehearsal = struct {
         covering_rule: ?GeneratedEdge,
     ) void {
         if (self.disabled) return;
-        const edge = RequestEdge{
+        var edge = RequestEdge{
             .module_bytes = module_bytes,
             .use_expr = use_expr,
             .covering_rule = covering_rule,
             .caller = self.captureCallerEnvironment(module_bytes),
         };
+        if (covering_rule) |covering| capture: {
+            const source = covering.source orelse break :capture;
+            if (source.procedure != .iter_from_step) break :capture;
+            var index = self.frames.items.len;
+            while (index > 0) {
+                index -= 1;
+                if (self.frames.items[index].ret_mint) |mint| {
+                    edge.adopted_mint = mint;
+                    break :capture;
+                }
+            }
+        }
         self.requests.append(self.allocator, .{ .checked = edge }) catch {
             self.releaseEdge(edge);
             self.fail();
@@ -1853,6 +1910,7 @@ pub const Rehearsal = struct {
         declared: GeneratedEdge,
         caller_env: ?*const direct_translate.BindingEnvironment,
         caller_owner_node: u32,
+        edge_adopted: ?direct_translate.ProducerRepresentation,
     ) ?usize {
         census.bump("iter_declare_attempt");
         if (declared.rule != .iterator_dispatch_receiver and declared.rule != .iterator_direct_call) {
@@ -1867,10 +1925,29 @@ pub const Rehearsal = struct {
             census.bump("iter_declare_no_procedure");
             return null;
         };
-        const kind = kindForIteratorProcedure(procedure) orelse {
+        // A constructor that mints nothing of its own produces exactly what
+        // its enclosing producer's return produces (the graph reads the same
+        // through its expected return), so it adopts the requesting frame's
+        // declared mint, already stamped with its recorded identity.
+        const adopted: ?direct_translate.ProducerRepresentation = adopted: {
+            if (kindForIteratorProcedure(procedure) != null) break :adopted null;
+            if (procedure != .iter_from_step) break :adopted null;
+            if (edge_adopted) |mint| break :adopted mint;
+            // The innermost requesting frame that declared a mint is the
+            // enclosing producer; a frame still being resolved carries none
+            // yet, so the walk skips it naturally.
+            var index = self.frames.items.len;
+            while (index > 0) {
+                index -= 1;
+                if (self.frames.items[index].ret_mint) |mint| break :adopted mint;
+            }
+            break :adopted null;
+        };
+        const kind = kindForIteratorProcedure(procedure) orelse (if (adopted) |mint| mint.iterator_kind else {
             census.bump("iter_declare_nonminting_procedure");
             return null;
-        };
+        });
+        if (adopted != null) census.bump("iter_declare_adopted_enclosing_mint");
         const function = switch (defining.view.payload(scheme.root)) {
             .function => |function| function,
             else => {
@@ -1924,7 +2001,7 @@ pub const Rehearsal = struct {
             }
         } else |_| {}
 
-        const representation: direct_translate.ProducerRepresentation = if (primary) primary: {
+        const representation: direct_translate.ProducerRepresentation = if (adopted) |mint| mint else if (primary) primary: {
             var primary_components: [2]Type.TypeId = undefined;
             var count: usize = 0;
             switch (kind) {
@@ -1963,7 +2040,7 @@ pub const Rehearsal = struct {
                 .iterator_kind = kind,
                 .iterator_depth = 1,
                 .topology = topology,
-                .minting = .{ .callable_evidence = null },
+                .minting = .{ .callable_evidence = source.evidence },
                 .components = pooled,
             };
         } else representation: {
@@ -1980,18 +2057,19 @@ pub const Rehearsal = struct {
                 .iterator_kind = kind,
                 .iterator_depth = depth + 1,
                 .topology = topology,
-                .minting = .{ .callable_evidence = null },
+                .minting = .{ .callable_evidence = source.evidence },
                 .components = components,
             };
         };
 
         // Two-phase identity for a mint the graph would digest: emit the
         // produced position once with the mint unstamped, digest that shape
-        // under the recorded producer-identity recipe, and declare the
-        // finished identity. `Iter.custom` mints under callable evidence the
-        // edge does not carry, so it stays unstamped here.
+        // under the recorded producer-identity recipe together with the
+        // callable evidence the edge carries, and declare the finished
+        // identity. A chain past the cap runs forced-dynamic, whose identity
+        // is its item's, so it stays unstamped here.
         var final_representation = representation;
-        if (primary and kind != .custom) two_phase: {
+        if (representation.iterator_representation == .minted and representation.generated == null) two_phase: {
             const callable_ty = switch (source.witness) {
                 .callable => |ty| ty,
                 else => break :two_phase,
@@ -2032,7 +2110,12 @@ pub const Rehearsal = struct {
             var hasher = std.crypto.hash.sha2.Sha256.init(.{});
             hasher.update("roc.generated_iterator.final_identity");
             hasher.update(&shape.bytes);
+            if (source.evidence) |evidence| {
+                hasher.update("callable_evidence");
+                hasher.update(&evidence.bytes);
+            }
             final_representation.generated = .{ .bytes = hasher.finalResult() };
+            final_representation.minting = null;
             census.bump("iter_declare_identity_stamped");
         }
 
@@ -2044,6 +2127,7 @@ pub const Rehearsal = struct {
             },
             .representation = final_representation,
         }) catch return null;
+        self.last_declared_mint = final_representation;
         // The requesting side reads its own return position, which the
         // callable witness names in the caller's module; the same minted
         // representation holds there.
@@ -2419,6 +2503,7 @@ pub const Rehearsal = struct {
                     declared_rule,
                     caller_env,
                     caller_owner_node,
+                    null,
                 ) else null,
             };
         }
@@ -2452,6 +2537,7 @@ pub const Rehearsal = struct {
                 declared,
                 caller_env,
                 caller_owner_node,
+                null,
             ),
         };
     }
@@ -2801,6 +2887,7 @@ pub const Rehearsal = struct {
             .chain = EnvironmentChain.none,
             .interface_root = null,
             .request_root = null,
+            .ret_mint = null,
             .env_ready = false,
         };
         self.resolveEnvironment(start, &frame);
@@ -4154,8 +4241,11 @@ pub const Rehearsal = struct {
                 covering,
                 caller_env,
                 caller_owner_node,
+                edge.adopted_mint,
             );
             census.bump("rehearsal_frame_rule_declared");
+        frame.ret_mint = self.last_declared_mint;
+        self.last_declared_mint = null;
         }
 
         // The two sides of this specialization's representation interface
@@ -4210,8 +4300,11 @@ pub const Rehearsal = struct {
             covering,
             if (edge.caller) |*captured| captured.environment() else null,
             if (edge.caller) |captured| captured.owner_node else checked.checked_residual_disposition_module_body_owner,
+            edge.adopted_mint,
         );
         if (frame.input_floor != null) census.bump("rehearsal_rule_path_mint_declared");
+        frame.ret_mint = self.last_declared_mint;
+        self.last_declared_mint = null;
         // A rule edge into a scheme with no binders has exactly one
         // instantiation; the ground path already resolves those exactly.
         if (scheme.gv_len == 0) {
@@ -4264,8 +4357,11 @@ pub const Rehearsal = struct {
             request.edge,
             if (request.caller) |*captured| captured.environment() else null,
             if (request.caller) |captured| captured.owner_node else checked.checked_residual_disposition_module_body_owner,
+            null,
         );
         if (frame.input_floor != null) census.bump("rehearsal_rule_path_mint_declared");
+        frame.ret_mint = self.last_declared_mint;
+        self.last_declared_mint = null;
         // A generated edge into a scheme with no binders has exactly one
         // instantiation; the ground path already resolves those exactly.
         if (scheme.gv_len == 0) {
@@ -4526,6 +4622,9 @@ pub const Rehearsal = struct {
         census.bump("rehearsal_env_resolved_edgeless_ground");
         noteEnvironmentScheme(scheme);
         frame.interface_root = self.emitQuietly(start.cursor, frame.environment(), scheme.owner_node, scheme.root);
+        // A ground scheme has exactly one instantiation, so the declared root
+        // emitted under the empty binding is the requested callable itself.
+        frame.request_root = frame.interface_root;
     }
 
     /// Bind a specialization whose requesting site names its callee scheme
@@ -4614,6 +4713,22 @@ pub const Rehearsal = struct {
             self.fail();
             return false;
         };
+        // The covering rule's mint is declared before either interface side
+        // is emitted, so both emissions carry the produced representation
+        // exactly as the same-module path's do (reunify.md 10.2, 13.2e).
+        if (edge.covering_rule) |covering| {
+            frame.input_floor = self.declareIteratorProducerInput(
+                start.cursor,
+                scheme,
+                covering,
+                caller_env,
+                caller_owner_node,
+                edge.adopted_mint,
+            );
+            frame.ret_mint = self.last_declared_mint;
+            self.last_declared_mint = null;
+            census.bump("rehearsal_frame_rule_declared");
+        }
         const declared = self.emitQuietly(start.cursor, chain.innermost(), scheme.owner_node, scheme.root);
         const requested = self.emitQuietly(caller, caller_env, caller_owner_node, site.instantiated_root);
         if (!self.witnessesAgree(declared, requested)) {
@@ -4633,6 +4748,15 @@ pub const Rehearsal = struct {
         census.bump("rehearsal_env_resolved_foreign_scheme");
         noteEnvironmentScheme(scheme);
         census.bump("rehearsal_env_parent_absent");
+
+        // Every producer representation the requesting context's emission
+        // carries is declared at the scheme's positions, exactly as on the
+        // same-module path.
+        if (frame.request_root) |requested_root| {
+            const deep_floor = self.declareSealedProducerInputsDeep(start.cursor.module_bytes, scheme.root, requested_root);
+            if (frame.input_floor == null) frame.input_floor = deep_floor;
+            census.bump("rehearsal_frame_request_deep_declared");
+        }
         return true;
     }
 

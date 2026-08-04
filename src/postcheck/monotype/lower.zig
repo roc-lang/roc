@@ -15909,18 +15909,11 @@ const BodyContext = struct {
     fn measureSpecRootParity(self: *BodyContext, checked_fn_root: checked.CheckedTypeId, request_fn_ty: Type.TypeId) void {
         if (comptime !census.enabled) return;
         const rehearsal = self.builder.rehearsal orelse return;
-        const address = self.typeAddress(checked_fn_root);
-        var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
-        const emitted = rehearsal.typeForCheckedPositionWithEdge(
-            .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
-            self.callee_context,
-            &binding,
-            rehearsal.innermostRequestEdge(),
-        ) catch {
-            census.bump("spec_root_parity_error");
-            return;
-        };
-        const directed = emitted orelse {
+        // The requesting context's own emission of this specialization's
+        // instantiated callable, resolved when its frame began from the
+        // claimed edge. An ambient innermost edge can belong to an unrelated
+        // deferred lowering, so only the frame's own emission answers here.
+        const directed = rehearsal.currentFrameRequestRoot() orelse {
             census.bump("spec_root_parity_declined");
             return;
         };
@@ -15935,6 +15928,13 @@ const BodyContext = struct {
         census.bump("spec_root_parity_diverge");
         if (types.typeEql(name_store, directed, request_fn_ty) catch false) {
             census.bump("spec_root_parity_eql_not_digest");
+            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+                std.debug.print("PARITY-EQL-ONLY checked_root={d}\n  directed: ", .{@intFromEnum(checked_fn_root)});
+                debugTypeSummary(types, name_store, directed, 0);
+                std.debug.print("\n  sealed:   ", .{});
+                debugTypeSummary(types, name_store, request_fn_ty, 0);
+                std.debug.print("\n", .{});
+            }
             return;
         }
         if (std.c.getenv("ROC_PARITY_TRACE") != null) {
@@ -15951,9 +15951,37 @@ const BodyContext = struct {
     }
 
     fn debugTypeSummary(types: *const Type.Store, name_store: *const names.NameStore, ty: Type.TypeId, depth: usize) void {
-        if (depth > 3) {
+        if (depth > 7) {
             std.debug.print("..", .{});
             return;
+        }
+        switch (types.get(ty)) {
+            .primitive => |primitive| {
+                std.debug.print("{s}", .{@tagName(primitive)});
+                return;
+            },
+            .tag_union => |span| {
+                std.debug.print("tu[", .{});
+                const tags = types.tagSpan(span);
+                const len = GuardedList.borrowLen(tags);
+                var index: usize = 0;
+                while (index < len) : (index += 1) {
+                    const tag = GuardedList.at(tags, index);
+                    if (index != 0) std.debug.print(" ", .{});
+                    std.debug.print("{s}(", .{name_store.tagLabelText(tag.name)});
+                    const payloads = types.span(tag.payloads);
+                    const plen = GuardedList.borrowLen(payloads);
+                    var pi: usize = 0;
+                    while (pi < plen) : (pi += 1) {
+                        if (pi != 0) std.debug.print(",", .{});
+                        debugTypeSummary(types, name_store, GuardedList.at(payloads, pi), depth + 1);
+                    }
+                    std.debug.print(")", .{});
+                }
+                std.debug.print("]", .{});
+                return;
+            },
+            else => {},
         }
         switch (types.get(ty)) {
             .named => |named| {
@@ -16583,10 +16611,15 @@ const BodyContext = struct {
                         };
                     },
                     .hosted_lambda => Common.invariant("hosted lambda template must lower through hosted metadata, not source lambda body"),
-                    else => .{
-                        .args = .empty(),
-                        .body = try self.lowerExprAtTypeCell(body.root_expr, ret_cell),
-                        .ret = ret_cell,
+                    else => direct: {
+                        if (self.builder.rehearsal) |rehearsal| {
+                            rehearsal.declareFrameRetMintAtBodyRoot(self.view.key.bytes, root.ty);
+                        }
+                        break :direct .{
+                            .args = .empty(),
+                            .body = try self.lowerExprAtTypeCell(body.root_expr, ret_cell),
+                            .ret = ret_cell,
+                        };
                     },
                 };
             },
@@ -17741,6 +17774,22 @@ const BodyContext = struct {
     ) Allocator.Error!LoweredTemplateBody {
         const fn_nodes = try self.graph.functionNodes(fn_node);
         if (fn_nodes.args.len != lambda.args.len) Common.invariant("lambda template arity differs from concrete function type");
+        // The template body's result position produces this specialization's
+        // declared return; its instantiation-fresh ids are named here, where
+        // the body is known, following the tail chain because a block and its
+        // final expression each carry their own id (reunify.md 10.2).
+        if (self.builder.rehearsal) |rehearsal| {
+            var tail = lambda.body;
+            var remaining: usize = 32;
+            while (remaining > 0) : (remaining -= 1) {
+                const tail_expr = self.view.bodies.expr(tail);
+                rehearsal.declareFrameRetMintAtBodyRoot(self.view.key.bytes, tail_expr.ty);
+                switch (tail_expr.data) {
+                    .block => |block| tail = block.final_expr,
+                    else => break,
+                }
+            }
+        }
 
         const lowered = try self.lowerLambdaArgsAndBodyAtCell(
             lambda_id,
@@ -26366,7 +26415,7 @@ const BodyContext = struct {
             if (self.resolvedTargetIsStrInspect(target)) {
                 const args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
                 if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
-                const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
+                const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node, call.args);
                 const captures = try self.directCallCaptureSpan(target);
                 return .{
                     .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
@@ -26378,7 +26427,7 @@ const BodyContext = struct {
                     } },
                 };
             }
-            const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
+            const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node, call.args);
             const callee_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
             const callee_fn_nodes = try self.graph.functionNodes(callee_fn_node);
             if (callee_fn_nodes.args.len != fn_nodes.args.len) {
@@ -27192,6 +27241,7 @@ const BodyContext = struct {
                             source_fn_ty,
                             self.view.types.rootKey(source_fn_ty),
                             fn_node,
+                            call.args,
                         );
                         const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
                         return (try self.graph.functionNodes(completed_fn_node)).ret;
@@ -27591,6 +27641,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
+        call_args: []const checked.CheckedExprId,
     ) Allocator.Error!DraftFnSlot {
         const raw = @intFromEnum(target);
         if (raw >= self.view.resolved_refs.records.len) {
@@ -27610,6 +27661,10 @@ const BodyContext = struct {
                 else => break :covering null,
             };
             if (function.args.len == 0) break :covering null;
+            const mint_evidence: ?names.TypeDigest = if (iteratorProcedureEvidenceIndex(procedure)) |index|
+                if (index < call_args.len) try self.callableArgumentEvidenceDigest(call_args[index]) else null
+            else
+                null;
             break :covering .{
                 .rule = .iterator_direct_call,
                 .source = .{
@@ -27618,6 +27673,7 @@ const BodyContext = struct {
                     .witness = .{ .callable = source_fn_ty },
                     .procedure = procedure,
                     .state = if (function.args.len > 2) function.args[2] else null,
+                    .evidence = mint_evidence,
                 },
             };
         };
@@ -33210,7 +33266,7 @@ const BodyContext = struct {
         if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(
             self.view.key.bytes,
             plan.expr,
-            self.dispatchPlanCoveringRule(plan) orelse self.iteratorProducerHint(lookup, plan),
+            self.dispatchPlanCoveringRule(plan) orelse try self.iteratorProducerHint(lookup, plan),
         );
         defer self.closeRequestEdge();
         const direct_key = ClosedDirectCallIdentity{
@@ -34072,7 +34128,7 @@ const BodyContext = struct {
             .target => |target_lookup| target_lookup,
             .structural => return null,
         };
-        const hint = self.iteratorProducerHint(lookup, plan) orelse return null;
+        const hint = (self.iteratorProducerHint(lookup, plan) catch return null) orelse return null;
         const floor = rehearsal.declareConsumerInputAt(
             .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
             hint,
@@ -34232,7 +34288,7 @@ const BodyContext = struct {
                     const bound = self.openDispatchTargetBinding(
                         lookup,
                         plan.expr,
-                        self.dispatchPlanCoveringRule(plan) orelse self.iteratorProducerHint(lookup, plan),
+                        self.dispatchPlanCoveringRule(plan) orelse try self.iteratorProducerHint(lookup, plan),
                     );
                     defer if (bound) {
                         if (self.builder.rehearsal) |rehearsal| rehearsal.closeCalleeBinding();
@@ -34814,12 +34870,31 @@ const BodyContext = struct {
     /// procedure, stated even where checking recorded a site: the site supplies
     /// the binder values, and this states the producer representation the
     /// procedure mints at its result (reunify.md 13.2e).
+    /// The operand a minting procedure digests callable evidence from, in the
+    /// use's own argument order; null for a procedure that mints without
+    /// callable evidence.
+    fn iteratorProcedureEvidenceIndex(procedure: checked.IteratorProcedureId) ?usize {
+        return switch (procedure) {
+            .iter_map, .iter_keep_if, .iter_drop_if => 1,
+            .iter_custom => 2,
+            else => null,
+        };
+    }
+
     fn iteratorProducerHint(
         self: *BodyContext,
         lookup: MethodLookup,
         plan: static_dispatch.StaticDispatchCallPlan,
-    ) ?spec_rehearsal.GeneratedEdge {
+    ) Allocator.Error!?spec_rehearsal.GeneratedEdge {
         const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
+        const operands = plan.argsSlice(self.view.static_dispatch_plans);
+        const mint_evidence: ?names.TypeDigest = if (iteratorProcedureEvidenceIndex(procedure)) |index|
+            if (index < operands.len) switch (operands[index]) {
+                .checked_expr => |expr| try self.callableArgumentEvidenceDigest(expr),
+                else => null,
+            } else null
+        else
+            null;
         return .{
             .rule = .iterator_dispatch_receiver,
             .source = .{
@@ -34827,6 +34902,7 @@ const BodyContext = struct {
                 .receiver = .{ .checked_ty = plan.dispatcher_ty },
                 .witness = .{ .callable = plan.callable_ty },
                 .procedure = procedure,
+                .evidence = mint_evidence,
             },
         };
     }
@@ -35895,7 +35971,7 @@ const BodyContext = struct {
         // and callable types. A target that is an iterator procedure instead
         // carries the producer hint, so the specialization it requests derives
         // its minted representation from this site's dispatcher and callable.
-        const covering_rule = self.dispatchPlanCoveringRule(plan) orelse self.iteratorProducerHint(lookup, plan);
+        const covering_rule = self.dispatchPlanCoveringRule(plan) orelse try self.iteratorProducerHint(lookup, plan);
         if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(self.view.key.bytes, plan.expr, covering_rule);
         defer self.closeRequestEdge();
         const contextual_lookup = try self.withLocalProcContext(lookup);
@@ -35933,7 +36009,7 @@ const BodyContext = struct {
         if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(
             self.view.key.bytes,
             plan.expr,
-            self.dispatchPlanCoveringRule(plan) orelse self.iteratorProducerHint(lookup, plan),
+            self.dispatchPlanCoveringRule(plan) orelse try self.iteratorProducerHint(lookup, plan),
         );
         defer self.closeRequestEdge();
         const contextual_lookup = try self.withLocalProcContext(lookup);
@@ -43765,6 +43841,7 @@ const BodyContext = struct {
                     source_fn_ty,
                     self.view.types.rootKey(source_fn_ty),
                     fn_node,
+                    call.args,
                 );
                 const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
                 break :blk (try self.graph.functionNodes(completed_fn_node)).ret;

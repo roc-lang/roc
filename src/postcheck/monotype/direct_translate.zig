@@ -818,8 +818,11 @@ pub const Translator = struct {
 
     /// Retract every representation input declared after `count` was read: the
     /// scoped counterpart of `clearRepresentationInputs`, for declarations tied
-    /// to a request scope's lifetime.
+    /// to a request scope's lifetime. A floor at or above the current count is
+    /// a no-op: a deeper scope already retracted past it, so everything the
+    /// floor covered is gone.
     pub fn truncateRepresentationInputs(self: *Translator, count: usize) void {
+        if (count >= self.emission.inputs.items.len) return;
         self.emission.inputs.shrinkRetainingCapacity(count);
     }
 
