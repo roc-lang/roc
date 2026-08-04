@@ -16006,6 +16006,33 @@ const BodyContext = struct {
     /// type under the binding the checker recorded for this specialization, with
     /// no logical solving: given a checked type and the active specialization,
     /// hand back the type at that position.
+    /// The directed answer for a pattern's checked position, with the node's
+    /// active type exactly where directed instantiation states none.
+    fn typeForCheckedPatternAtNode(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        node: NodeId,
+    ) Allocator.Error!Type.TypeId {
+        // The variable-headed class stays on the graph: a literal inside an
+        // unannotated generic local takes the nested scheme's actual, which
+        // no frame carries yet, and a directed read would default what the
+        // instantiation made concrete (reunify.md 13.2d, the literal-leaves
+        // rule).
+        switch (checkedPayload(self.view, checked_ty)) {
+            .flex, .rigid => return try self.activeTypeFromNode(node),
+            else => {},
+        }
+        if (self.builder.rehearsal) |rehearsal| {
+            const address = self.typeAddress(checked_ty);
+            if (try rehearsal.typeForCheckedAuthoritativeOrUnstated(
+                .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+                self.callee_context,
+                rehearsal.innermostRequestEdge(),
+            )) |final| return final;
+        }
+        return try self.activeTypeFromNode(node);
+    }
+
     fn typeForChecked(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         const rehearsal = self.builder.rehearsal orelse
             Common.invariant("body lowering read a checked type with no instantiation state");
@@ -47484,13 +47511,15 @@ const BodyContext = struct {
                 break :blk .{ .tuple = try self.addPatSpan(lowered) };
             },
             .numeral_literal => |num| blk: {
-                const ty = try self.activeTypeFromNode(node);
-                self.measureSeamRead(pattern.ty, ty);
+                // The literal pattern's type is directed instantiation's
+                // answer for its own checked position; a position stating no
+                // final stays on its node (reunify.md 13.2 2a; the seam here
+                // measured 1284/1284 agreement with zero absents).
+                const ty = try self.typeForCheckedPatternAtNode(pattern.ty, node);
                 break :blk try self.lowerNumeralLiteralPattern(num, ty);
             },
             .str_literal => |str| blk: {
-                const ty = try self.activeTypeFromNode(node);
-                self.measureSeamRead(pattern.ty, ty);
+                const ty = try self.typeForCheckedPatternAtNode(pattern.ty, node);
                 break :blk try self.lowerStringLiteralPattern(str, ty);
             },
             .str_interpolation => |str| try self.lowerStrPattern(str, try self.activeTypeFromNode(node)),
