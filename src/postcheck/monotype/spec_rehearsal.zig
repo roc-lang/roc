@@ -1423,6 +1423,13 @@ pub const Rehearsal = struct {
     /// The descriptor each iterator slot was created with, so sealing can see
     /// whether the closure moved it.
     slot_descriptors: std.AutoHashMapUnmanaged(u32, policy.NamedDescriptor),
+    /// The emitted type each slot was created for, so a class's final type is
+    /// readable after relations settle: the engine's classes carry
+    /// descriptors, not types, and do not enumerate members.
+    slot_types: std.AutoHashMapUnmanaged(u32, Type.TypeId),
+    /// The minted member's type per relation class, recorded at each relate:
+    /// the section 10.6 slot-finals the draft seal projects.
+    class_finals: std.AutoHashMapUnmanaged(u32, Type.TypeId),
     details: std.ArrayList(MismatchDetail),
     unresolved_details: std.ArrayList(UnresolvedDetail),
     /// One worked example per constraint-replay site that came out informative,
@@ -1464,6 +1471,8 @@ pub const Rehearsal = struct {
             .next_producer = 1,
             .slots = .empty,
             .slot_descriptors = .empty,
+            .slot_types = .empty,
+            .class_finals = .empty,
             .details = .empty,
             .unresolved_details = .empty,
             .unify_details = @splat(null),
@@ -1486,6 +1495,8 @@ pub const Rehearsal = struct {
         self.details.deinit(self.allocator);
         self.unresolved_details.deinit(self.allocator);
         self.slot_descriptors.deinit(self.allocator);
+        self.slot_types.deinit(self.allocator);
+        self.class_finals.deinit(self.allocator);
         self.slots.deinit(self.allocator);
         self.logical_tokens.deinit(self.allocator);
         var indexes = self.site_index.valueIterator();
@@ -7072,6 +7083,31 @@ pub const Rehearsal = struct {
     /// flow reach another with no value-flow relation between them. Two
     /// occurrences are joined only by an explicit relation; a back reference
     /// inside one occurrence stops at `max_slot_depth`.
+    /// Record the minted member's type for a slot's relation class, the
+    /// section 10.6 slot-final the draft seal projects. The recorded type is
+    /// the member whose sealed descriptor carries a mint; a class with no
+    /// minted member records nothing and its slots seal from their own
+    /// emitted types.
+    fn recordClassFinal(self: *Rehearsal, slot: closure.RepresentationSlotId) void {
+        const ty = self.slot_types.get(@intFromEnum(slot)) orelse return;
+        const named = switch (self.types.get(ty)) {
+            .named => |named| named,
+            else => return,
+        };
+        if (named.def.iterator_representation == .none) return;
+        const root = self.engine.find(slot);
+        self.class_finals.put(self.allocator, @intFromEnum(root), ty) catch {};
+    }
+
+    /// The final type a slot's relation class carries: the minted member's
+    /// recorded type, or the slot's own emitted type where the class carries
+    /// no mint. Null for a slot the rehearsal never emitted a type for.
+    pub fn slotFinal(self: *Rehearsal, slot: closure.RepresentationSlotId) ?Type.TypeId {
+        const root = self.engine.find(slot);
+        if (self.class_finals.get(@intFromEnum(root))) |final| return final;
+        return self.slot_types.get(@intFromEnum(slot));
+    }
+
     fn slotForEmitted(self: *Rehearsal, ty: Type.TypeId, depth: u32) ?closure.RepresentationSlotId {
         if (depth >= max_slot_depth) return null;
         const token = self.tokenFor(ty) orelse return null;
@@ -7081,6 +7117,7 @@ pub const Rehearsal = struct {
         if (shape == .iterator) {
             self.slot_descriptors.put(self.allocator, @intFromEnum(slot), shape.iterator.descriptor) catch return null;
         }
+        self.slot_types.put(self.allocator, @intFromEnum(slot), ty) catch return null;
         census.bump("rehearsal_slots_created");
         return slot;
     }
@@ -7145,6 +7182,8 @@ pub const Rehearsal = struct {
             else => return self.fail(),
         };
         census.bump("rehearsal_interface_relate_applied");
+        self.recordClassFinal(request_slot);
+        self.recordClassFinal(declared_slot);
     }
 
     /// Seal this specialization's slots (reunify.md section 10.6): every slot's
