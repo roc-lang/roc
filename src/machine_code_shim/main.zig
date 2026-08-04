@@ -77,9 +77,7 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
     VirtualProtectFailed,
 };
 
-const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError || error{
-    PageSizeQueryFailed,
-};
+const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError;
 
 var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
 var runtime_state: RuntimeState = undefined;

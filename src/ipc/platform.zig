@@ -521,32 +521,26 @@ pub fn unmapMemory(ptr: *anyopaque, size: usize) void {
 }
 
 fn unmapWindowsMemory(ptr: *anyopaque) void {
-    if (comptime is_windows) {
-        _ = windows.UnmapViewOfFile(ptr);
-    }
+    _ = windows.UnmapViewOfFile(ptr);
 }
 
 fn unmapLinuxMemory(ptr: *anyopaque, size: usize) void {
-    if (comptime builtin.os.tag == .linux) {
-        const errno = linux.errno(linux.munmap(@ptrCast(ptr), size));
-        if (errno != .SUCCESS) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("munmap failed with errno {t}", .{errno});
-            }
-            unreachable;
+    const errno = linux.errno(linux.munmap(@ptrCast(ptr), size));
+    if (errno != .SUCCESS) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("munmap failed with errno {t}", .{errno});
         }
+        unreachable;
     }
 }
 
 fn unmapPosixMemory(ptr: *anyopaque, size: usize) void {
-    if (comptime !is_windows and builtin.os.tag != .linux) {
-        const rc = posix.munmap(ptr, size);
-        if (rc != 0) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("munmap failed with errno {d}", .{std.c._errno().*});
-            }
-            unreachable;
+    const rc = posix.munmap(ptr, size);
+    if (rc != 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("munmap failed with errno {d}", .{std.c._errno().*});
         }
+        unreachable;
     }
 }
 
@@ -563,37 +557,31 @@ pub fn closeHandle(handle: Handle, is_owner: bool) void {
 }
 
 fn closeWindowsHandle(handle: Handle, is_owner: bool) void {
-    if (comptime is_windows) {
-        // On Windows, only the owner should close the handle
-        // Inherited handles belong to the parent process
-        if (is_owner) {
-            _ = windows.CloseHandle(handle);
-        }
+    // On Windows, only the owner should close the handle
+    // Inherited handles belong to the parent process
+    if (is_owner) {
+        _ = windows.CloseHandle(handle);
     }
 }
 
 fn closeLinuxHandle(handle: Handle) void {
-    if (comptime builtin.os.tag == .linux) {
-        // POSIX always closes the fd
-        const errno = linux.errno(linux.close(handle));
-        if (errno != .SUCCESS) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("close failed with errno {t}", .{errno});
-            }
-            unreachable;
+    // POSIX always closes the fd
+    const errno = linux.errno(linux.close(handle));
+    if (errno != .SUCCESS) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("close failed with errno {t}", .{errno});
         }
+        unreachable;
     }
 }
 
 fn closePosixHandle(handle: Handle) void {
-    if (comptime !is_windows and builtin.os.tag != .linux) {
-        // POSIX always closes the fd
-        const rc = posix.close(handle);
-        if (rc != 0) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("close failed with errno {d}", .{std.c._errno().*});
-            }
-            unreachable;
+    // POSIX always closes the fd
+    const rc = posix.close(handle);
+    if (rc != 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("close failed with errno {d}", .{std.c._errno().*});
         }
+        unreachable;
     }
 }

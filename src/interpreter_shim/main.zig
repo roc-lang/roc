@@ -44,10 +44,7 @@ const ShimError = error{
     OutOfMemory,
 };
 
-const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError || error{
-    PageSizeQueryFailed,
-    UnsupportedPlatform,
-};
+const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError;
 
 var runtime_state_initialized: bool = false;
 var runtime_state: RuntimeState = undefined;
