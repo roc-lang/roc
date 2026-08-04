@@ -3644,6 +3644,12 @@ than refilling an observed `TypeId`. The draft retains the graph node, not the
 snapshot id, and final sealing allocates fresh durable ids. Consequently no
 durable `TypeId` can change shape after a consumer has seen it.
 
+Snapshot invalidation is logically immediate but may be physically coalesced.
+A relation mutation marks the complete active-snapshot cache stale; the next
+inspection clears it once before performing any lookup. Multiple mutations with
+no intervening inspection therefore do not repeatedly clear the same cache, and
+no inspection may consume an entry produced before the most recent mutation.
+
 Interface-replay memo lookup has one narrower inspection operation. It may
 materialize an unresolved request as an immutable provisional scratch view,
 applying defaults in that view only. The digest is only a bucket index; exact

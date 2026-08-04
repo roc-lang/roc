@@ -316,6 +316,10 @@ pub const InstGraph = struct {
     /// Latest immutable snapshot for a root. Any relation mutation clears this
     /// cache; a subsequent inspection materializes a fresh snapshot.
     current_snapshots: std.AutoHashMap(NodeId, Type.TypeId),
+    /// Relation mutations only mark the snapshot cache stale. The next read
+    /// performs one exact global invalidation, coalescing mutation bursts that
+    /// do not inspect an intermediate graph state.
+    current_snapshots_dirty: bool,
     /// Reverse active-snapshot links, also the import memo: a Monotype already
     /// connected to this graph reuses its node instead of being copied.
     linked_type_nodes: std.AutoHashMap(Type.TypeId, NodeId),
@@ -352,6 +356,12 @@ pub const InstGraph = struct {
     /// slots proves that recursion grows the representation rather than merely
     /// recurring over a fixed iterator.
     recursive_argument_slots: std.ArrayList(NodeId),
+    /// Allocation-free scratch for exact generated-private containment walks.
+    /// Node ids are dense, so an epoch array replaces a fresh hash set on every
+    /// query while preserving cycle detection exactly.
+    generated_private_pending: std.ArrayList(NodeId),
+    generated_private_visit_epochs: std.ArrayList(u32),
+    generated_private_visit_epoch: u32,
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -373,6 +383,7 @@ pub const InstGraph = struct {
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
             .node_snapshots = std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .current_snapshots = std.AutoHashMap(NodeId, Type.TypeId).init(allocator),
+            .current_snapshots_dirty = false,
             .linked_type_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
             .imported_monos = std.AutoHashMap(NodeId, Type.TypeId).init(allocator),
             .row_exts = std.AutoHashMap(NodeId, NodeId).init(allocator),
@@ -381,6 +392,9 @@ pub const InstGraph = struct {
             .request_source_interfaces = std.AutoHashMap(NodeId, NodeId).init(allocator),
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
+            .generated_private_pending = .empty,
+            .generated_private_visit_epochs = .empty,
+            .generated_private_visit_epoch = 0,
         };
         return graph;
     }
@@ -421,6 +435,8 @@ pub const InstGraph = struct {
         self.request_source_interfaces.deinit();
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
+        self.generated_private_pending.deinit(allocator);
+        self.generated_private_visit_epochs.deinit(allocator);
         self.row_parents.deinit();
         self.row_exts.deinit();
         self.imported_monos.deinit();
@@ -1225,6 +1241,7 @@ pub const InstGraph = struct {
         try self.class_member_next.append(self.allocator, null);
         try self.class_member_head.append(self.allocator, id);
         try self.class_member_tail.append(self.allocator, id);
+        try self.generated_private_visit_epochs.append(self.allocator, 0);
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
@@ -1593,42 +1610,48 @@ pub const InstGraph = struct {
     /// opaque evidence at any structural depth.
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         self.countDiagnostic("generated_private_scans");
-        var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |raw_node| {
+        self.generated_private_pending.clearRetainingCapacity();
+        defer self.generated_private_pending.clearRetainingCapacity();
+        if (self.generated_private_visit_epoch == std.math.maxInt(u32)) {
+            @memset(self.generated_private_visit_epochs.items, 0);
+            self.generated_private_visit_epoch = 1;
+        } else {
+            self.generated_private_visit_epoch += 1;
+        }
+        const visit_epoch = self.generated_private_visit_epoch;
+        try self.generated_private_pending.append(self.allocator, root);
+        while (self.generated_private_pending.pop()) |raw_node| {
             const node = self.find(raw_node);
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
+            const node_index = @intFromEnum(node);
+            if (self.generated_private_visit_epochs.items[node_index] == visit_epoch) continue;
+            self.generated_private_visit_epochs.items[node_index] = visit_epoch;
             self.countDiagnostic("generated_private_nodes_visited");
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .list, .box => |child| try self.generated_private_pending.append(self.allocator, child),
+                .tuple => |items| try self.generated_private_pending.appendSlice(self.allocator, items),
                 .func => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
+                    try self.generated_private_pending.appendSlice(self.allocator, function.args);
+                    try self.generated_private_pending.append(self.allocator, function.ret);
                 },
                 .tag_union => |row| {
-                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
-                    try pending.append(self.allocator, row.ext);
+                    for (row.tags) |tag| try self.generated_private_pending.appendSlice(self.allocator, tag.payloads);
+                    try self.generated_private_pending.append(self.allocator, row.ext);
                 },
                 .record => |row| {
-                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
-                    try pending.append(self.allocator, row.ext);
+                    for (row.fields) |field| try self.generated_private_pending.append(self.allocator, field.ty);
+                    try self.generated_private_pending.append(self.allocator, row.ext);
                 },
                 .named => |named| {
                     if (named.backing) |backing| {
                         if (backing.authority == .generated_private) return true;
-                        try pending.append(self.allocator, backing.node);
+                        try self.generated_private_pending.append(self.allocator, backing.node);
                     }
-                    try pending.appendSlice(self.allocator, named.args);
+                    try self.generated_private_pending.appendSlice(self.allocator, named.args);
                     for (named.declared_order) |declared| switch (declared) {
                         .named => {},
-                        .padding => |padding| try pending.append(self.allocator, padding),
+                        .padding => |padding| try self.generated_private_pending.append(self.allocator, padding),
                     };
                 },
             }
@@ -2467,12 +2490,21 @@ pub const InstGraph = struct {
 
     /// A relation mutation invalidates every cached Type-shaped snapshot.
     /// Snapshots may contain the changed node at any structural depth, so
-    /// global invalidation is the exact dependency rule. Observed snapshots
-    /// remain immutable; the next inspection materializes new ids.
+    /// global invalidation is the exact dependency rule. Mutation bursts are
+    /// coalesced: the next inspection clears the cache once before reading it.
+    /// Observed snapshots remain immutable and valid as historical values.
     fn invalidateActiveSnapshots(self: *InstGraph, _: NodeId) void {
         self.countDiagnostic("active_snapshot_invalidations");
-        self.countDiagnosticBy("active_snapshot_entries_invalidated", self.current_snapshots.count());
+        if (!self.current_snapshots_dirty) {
+            self.countDiagnosticBy("active_snapshot_entries_invalidated", self.current_snapshots.count());
+            self.current_snapshots_dirty = true;
+        }
+    }
+
+    fn refreshActiveSnapshots(self: *InstGraph) void {
+        if (!self.current_snapshots_dirty) return;
         self.current_snapshots.clearRetainingCapacity();
+        self.current_snapshots_dirty = false;
     }
 
     /// Redirect `loser` into `winner`, moving row back references and
@@ -3678,6 +3710,7 @@ pub const InstGraph = struct {
         if (!try self.typeIsResolved(root)) {
             Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
         }
+        self.refreshActiveSnapshots();
         if (self.current_snapshots.get(root)) |current| {
             self.countDiagnostic("active_snapshot_cache_hits");
             return current;
@@ -5417,18 +5450,47 @@ test "relation mutation invalidates active snapshots before freezing" {
     defer graph.destroy();
 
     const resolved = try graph.newNode(.{ .primitive = .u64 });
-    _ = try graph.activeTypeViewForNode(resolved);
+    const before_mutation = try graph.activeTypeViewForNode(resolved);
     try std.testing.expect(graph.current_snapshots.count() != 0);
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     try graph.unify(resolved, unresolved);
 
     try std.testing.expect(graph.acceptsRelationMutation());
-    try std.testing.expectEqual(@as(usize, 0), graph.current_snapshots.count());
+    try std.testing.expect(graph.current_snapshots_dirty);
+
+    const after_mutation = try graph.activeTypeViewForNode(resolved);
+    try std.testing.expect(!graph.current_snapshots_dirty);
+    try std.testing.expect(graph.current_snapshots.count() != 0);
+    try std.testing.expect(before_mutation != after_mutation);
 
     try graph.freezeRelations();
 
     try std.testing.expectEqual(RelationState.frozen, graph.relation_state);
     try std.testing.expect(!graph.acceptsRelationMutation());
+}
+
+test "generated-private traversal scratch handles cycles and epoch rollover" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const Context = struct {
+        fn fill(_: @This(), reserved: NodeId) Allocator.Error!InstNode {
+            return .{ .box = reserved };
+        }
+    };
+    const recursive = try graph.addRecursiveNode(Context{}, Context.fill);
+    graph.generated_private_visit_epoch = std.math.maxInt(u32);
+    @memset(graph.generated_private_visit_epochs.items, std.math.maxInt(u32));
+
+    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
+    try std.testing.expectEqual(@as(u32, 1), graph.generated_private_visit_epoch);
 }
 
 test "final type sealing remains allowed after instantiation relations freeze" {
