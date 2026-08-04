@@ -8597,12 +8597,15 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
     defer alias_bindings.deinit(self.gpa);
     try self.collectForClauseAliasBindings(input, env, &alias_bindings);
 
-    var alias_substitutions = std.AutoHashMap(Var, Var).init(self.gpa);
-    defer alias_substitutions.deinit();
+    var alias_var_substitutions = std.AutoHashMap(Var, Var).init(self.gpa);
+    defer alias_var_substitutions.deinit();
+    var alias_source_substitutions = std.AutoHashMap(copy_import.AliasSource, Var).init(self.gpa);
+    defer alias_source_substitutions.deinit();
     for (alias_bindings.items) |binding| {
         const app_type_var = binding.app_type_var orelse continue;
-        try alias_substitutions.put(binding.platform_alias_var, app_type_var);
-        try alias_substitutions.put(binding.platform_identity_var, app_type_var);
+        try alias_var_substitutions.put(binding.platform_alias_var, app_type_var);
+        try alias_var_substitutions.put(binding.platform_identity_var, app_type_var);
+        try alias_source_substitutions.put(binding.platform_alias_source, app_type_var);
     }
 
     for (input.env.requires_types.items.items, 0..) |required_type, requires_idx| {
@@ -8612,7 +8615,8 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
             required_type,
             env,
             alias_bindings.items,
-            &alias_substitutions,
+            &alias_var_substitutions,
+            &alias_source_substitutions,
         )) orelse continue;
         var identity_vars_owned = true;
         defer if (identity_vars_owned) self.gpa.free(instantiated.identity_vars);
@@ -8694,7 +8698,8 @@ fn instantiatePlatformRequiredType(
     required_type: ModuleEnv.RequiredType,
     env: *Env,
     bindings: []const ForClauseAliasBinding,
-    alias_substitutions: *const std.AutoHashMap(Var, Var),
+    alias_var_substitutions: *const std.AutoHashMap(Var, Var),
+    alias_source_substitutions: *const std.AutoHashMap(copy_import.AliasSource, Var),
 ) std.mem.Allocator.Error!?InstantiatedRequirement {
     const declared_aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
     for (declared_aliases) |alias| {
@@ -8733,7 +8738,8 @@ fn instantiatePlatformRequiredType(
         ModuleEnv.varFrom(required_type.type_anno),
         input.env,
         required_type.region,
-        alias_substitutions,
+        alias_var_substitutions,
+        alias_source_substitutions,
     );
 
     // `copyVar` keyed `var_map` by the platform store's resolved vars — the
@@ -8757,7 +8763,7 @@ fn instantiatePlatformRequiredType(
     // the exact app declaration; every other identity must have been visited
     // and instantiated with the requirement root.
     for (platform_identity_vars, identity_vars) |platform_var, *slot_var| {
-        if (alias_substitutions.get(platform_var)) |app_type_var| {
+        if (alias_var_substitutions.get(platform_var)) |app_type_var| {
             const resolved_app_type = self.types.resolveVar(app_type_var).var_;
             if (builtin.mode == .Debug) {
                 std.debug.assert(self.types.resolveVar(slot_var.*).var_ == resolved_app_type);
@@ -8790,6 +8796,8 @@ const ForClauseAliasBinding = struct {
     /// Resolved platform-store roots replaced during cross-module copying.
     platform_alias_var: Var,
     platform_identity_var: Var,
+    /// Declaration identity shared by every application of this alias.
+    platform_alias_source: copy_import.AliasSource,
     app_type_var: ?Var,
 };
 
@@ -8830,7 +8838,25 @@ fn collectForClauseAliasBindings(
                     unreachable;
                 },
             };
-            const platform_alias_var = input.env.types.resolveVar(ModuleEnv.varFrom(alias.alias_stmt_idx)).var_;
+            const platform_alias_resolved = input.env.types.resolveVar(ModuleEnv.varFrom(alias.alias_stmt_idx));
+            const platform_alias = switch (platform_alias_resolved.desc.content) {
+                .alias => |resolved_alias| resolved_alias,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("platform requirement for-clause alias statement had no alias type", .{});
+                    }
+                    unreachable;
+                },
+            };
+            const platform_alias_source = copy_import.AliasSource{
+                .origin_module = platform_alias.origin_module,
+                .source_decl = platform_alias.source_decl.toOptional() orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("platform requirement for-clause alias had no source declaration", .{});
+                    }
+                    unreachable;
+                },
+            };
             const platform_identity_var = input.env.types.resolveVar(ModuleEnv.varFrom(alias_anno)).var_;
             const alias_ident = try self.copyPlatformIdent(input.env, alias.alias_name);
 
@@ -8845,8 +8871,9 @@ fn collectForClauseAliasBindings(
                 } });
                 try bindings.append(self.gpa, .{
                     .platform_alias_stmt_idx = alias.alias_stmt_idx,
-                    .platform_alias_var = platform_alias_var,
+                    .platform_alias_var = platform_alias_resolved.var_,
                     .platform_identity_var = platform_identity_var,
+                    .platform_alias_source = platform_alias_source,
                     .app_type_var = null,
                 });
                 continue;
@@ -8856,8 +8883,9 @@ fn collectForClauseAliasBindings(
             const app_type_var = try self.instantiateVar(ModuleEnv.varFrom(app_type_stmt), env, .{ .explicit = app_type_region });
             try bindings.append(self.gpa, .{
                 .platform_alias_stmt_idx = alias.alias_stmt_idx,
-                .platform_alias_var = platform_alias_var,
+                .platform_alias_var = platform_alias_resolved.var_,
                 .platform_identity_var = platform_identity_var,
+                .platform_alias_source = platform_alias_source,
                 .app_type_var = app_type_var,
             });
         }
@@ -17603,24 +17631,25 @@ fn resolveVarFromExternal(
 /// Copy a variable from another module into this module
 /// The ranks of all variables copied will be generalized
 fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEnv, mb_region: ?Region) std.mem.Allocator.Error!Var {
-    return self.copyVarWithSourceSubstitutions(other_module_var, other_module_env, mb_region, null);
+    return self.copyVarWithSourceSubstitutions(other_module_var, other_module_env, mb_region, null, null);
 }
 
-/// Copy a variable from another module, replacing exact source roots with
-/// existing destination roots before allocating any copied structure.
+/// Copy a variable from another module, replacing exact source roots and alias
+/// declaration occurrences with existing destination roots while traversing.
 fn copyVarWithSourceSubstitutions(
     self: *Self,
     other_module_var: Var,
     other_module_env: *const ModuleEnv,
     mb_region: ?Region,
-    source_substitutions: ?*const std.AutoHashMap(Var, Var),
+    source_var_substitutions: ?*const std.AutoHashMap(Var, Var),
+    source_alias_substitutions: ?*const std.AutoHashMap(copy_import.AliasSource, Var),
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // First, reset state
     self.var_map.clearRetainingCapacity();
-    if (source_substitutions) |substitutions| {
+    if (source_var_substitutions) |substitutions| {
         var iterator = substitutions.iterator();
         while (iterator.next()) |entry| {
             try self.var_map.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -17634,6 +17663,7 @@ fn copyVarWithSourceSubstitutions(
         self.types,
         other_module_var,
         &self.var_map,
+        source_alias_substitutions,
         other_module_env,
         self.cir,
         self.gpa,

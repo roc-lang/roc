@@ -39,11 +39,21 @@ const NominalType = types_mod.NominalType;
 /// destination roots and memoizes every newly copied root in the same map.
 const VarMapping = std.AutoHashMap(Var, Var);
 
+/// Explicit source declaration identity for alias substitutions performed
+/// while copying a type graph between module stores.
+pub const AliasSource = struct {
+    origin_module: base.ModuleIdentity.Idx,
+    source_decl: u32,
+};
+
+const AliasSourceMapping = std.AutoHashMap(AliasSource, Var);
+
 /// All state threaded through a single cross-module copy operation.
 const CopyContext = struct {
     source_store: *const TypesStore,
     dest_store: *TypesStore,
     var_mapping: *VarMapping,
+    alias_source_mapping: ?*const AliasSourceMapping,
     source_env: *const ModuleEnv,
     dest_env: *ModuleEnv,
     allocator: std.mem.Allocator,
@@ -77,7 +87,9 @@ const CopyContext = struct {
 
 /// Copy a type from one module's type store to another module's type store.
 /// Unmapped source roots receive fresh destination variables. Roots already in
-/// `var_mapping` are exact substitutions and are reused without copying.
+/// `var_mapping` are exact substitutions and are reused without copying. When
+/// `alias_source_mapping` is present, every alias carrying a matching explicit
+/// declaration identity resolves directly to that destination root.
 ///
 /// Imported identifiers are interned directly into the destination module's
 /// authoritative identifier store so all copied types in that module reference
@@ -88,6 +100,7 @@ pub fn copyVar(
     dest_store: *TypesStore,
     source_var: Var,
     var_mapping: *VarMapping,
+    alias_source_mapping: ?*const AliasSourceMapping,
     source_env: *const ModuleEnv,
     dest_env: *ModuleEnv,
     allocator: std.mem.Allocator,
@@ -96,6 +109,7 @@ pub fn copyVar(
         .source_store = source_store,
         .dest_store = dest_store,
         .var_mapping = var_mapping,
+        .alias_source_mapping = alias_source_mapping,
         .source_env = source_env,
         .dest_env = dest_env,
         .allocator = allocator,
@@ -108,6 +122,28 @@ fn copyVarCtx(ctx: *const CopyContext, source_var: Var) std.mem.Allocator.Error!
 
     if (ctx.var_mapping.get(resolved.var_)) |dest_var| {
         return dest_var;
+    }
+
+    if (resolved.desc.content == .alias) {
+        const source_alias = resolved.desc.content.alias;
+        if (source_alias.source_decl.toOptional()) |source_decl| {
+            const alias_source = AliasSource{
+                .origin_module = source_alias.origin_module,
+                .source_decl = source_decl,
+            };
+            if (if (ctx.alias_source_mapping) |mapping| mapping.get(alias_source) else null) |dest_var| {
+                // Memoize before visiting children so recursive source graphs
+                // terminate. The replacement drops the source alias payload,
+                // but its children must still be copied/memoized because they
+                // are independently recorded platform identity slots.
+                try ctx.var_mapping.put(resolved.var_, dest_var);
+                _ = try copyVarCtx(ctx, ctx.source_store.getAliasBackingVar(source_alias));
+                for (ctx.source_store.sliceAliasArgs(source_alias)) |arg_var| {
+                    _ = try copyVarCtx(ctx, arg_var);
+                }
+                return dest_var;
+            }
+        }
     }
 
     const placeholder_var = try ctx.dest_store.fresh();
@@ -397,6 +433,7 @@ pub fn ensureNominalDeclForStatement(
         .source_store = source_store,
         .dest_store = dest_store,
         .var_mapping = var_mapping,
+        .alias_source_mapping = null,
         .source_env = source_env,
         .dest_env = dest_env,
         .allocator = allocator,

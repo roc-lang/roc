@@ -2136,6 +2136,7 @@ fn copyIntoConsumer(consumer: *TestEnv, source: *DeclaringModule, var_: Var) std
         &consumer.module_env.types,
         var_,
         &var_mapping,
+        null,
         source.env,
         consumer.module_env,
         consumer.module_env.gpa,
@@ -2164,6 +2165,7 @@ test "cross-module copy substitutes exact source vars without conflating equal r
         &consumer.module_env.types,
         source_tuple,
         &var_mapping,
+        null,
         source.module_env,
         consumer.module_env,
         gpa,
@@ -2186,6 +2188,77 @@ test "cross-module copy substitutes exact source vars without conflating equal r
             consumer.module_env.types.resolveVar(copied_elems[1]).var_,
     );
     try std.testing.expect(consumer.module_env.types.resolveVar(copied_elems[1]).desc.content == .rigid);
+}
+
+test "cross-module copy substitutes every application of an explicit alias declaration" {
+    const gpa = std.testing.allocator;
+    var source = try TestEnv.init(gpa);
+    defer source.deinit();
+    var consumer = try TestEnv.init(gpa);
+    defer consumer.deinit();
+
+    const alias_ident = try source.module_env.insertIdent(Ident.for_text("State"));
+    const backing = try source.module_env.types.freshFromContent(.{ .rigid = Rigid.init(alias_ident) });
+    const arg = try source.module_env.types.freshFromContent(.{ .rigid = Rigid.init(alias_ident) });
+    const source_decl: u32 = 42;
+    const application = try source.module_env.types.freshFromContent(
+        try source.module_env.types.mkAliasWithSourceDecl(
+            .{ .ident_idx = alias_ident },
+            backing,
+            &.{arg},
+            source.module_env.selfModuleIdentity(),
+            source_decl,
+        ),
+    );
+    const other_origin = try source.module_env.internModuleIdentity(&([_]u8{0xA5} ** 32), Ident.Idx.NONE);
+    const unrelated_application = try source.module_env.types.freshFromContent(
+        try source.module_env.types.mkAliasWithSourceDecl(
+            .{ .ident_idx = alias_ident },
+            backing,
+            &.{arg},
+            other_origin,
+            source_decl,
+        ),
+    );
+
+    const replacement = try consumer.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    var var_mapping = std.AutoHashMap(Var, Var).init(gpa);
+    defer var_mapping.deinit();
+    var alias_source_mapping = std.AutoHashMap(copy_import.AliasSource, Var).init(gpa);
+    defer alias_source_mapping.deinit();
+    try alias_source_mapping.put(.{
+        .origin_module = source.module_env.selfModuleIdentity(),
+        .source_decl = source_decl,
+    }, replacement);
+
+    const copied = try copy_import.copyVar(
+        &source.module_env.types,
+        &consumer.module_env.types,
+        application,
+        &var_mapping,
+        &alias_source_mapping,
+        source.module_env,
+        consumer.module_env,
+        gpa,
+    );
+
+    try std.testing.expectEqual(replacement, copied);
+    try std.testing.expectEqual(replacement, var_mapping.get(application).?);
+    try std.testing.expect(var_mapping.contains(backing));
+    try std.testing.expect(var_mapping.contains(arg));
+
+    const unrelated_copy = try copy_import.copyVar(
+        &source.module_env.types,
+        &consumer.module_env.types,
+        unrelated_application,
+        &var_mapping,
+        &alias_source_mapping,
+        source.module_env,
+        consumer.module_env,
+        gpa,
+    );
+    try std.testing.expect(unrelated_copy != replacement);
+    try std.testing.expect(consumer.module_env.types.resolveVar(unrelated_copy).desc.content == .alias);
 }
 
 test "content identity: same module content reached as two envs unifies (two URLs / mirrors / vendored copies)" {
