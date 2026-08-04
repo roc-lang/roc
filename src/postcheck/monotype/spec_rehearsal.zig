@@ -5173,6 +5173,7 @@ pub const Rehearsal = struct {
         frame.owner_node = scheme.owner_node;
         frame.binders = binders;
         frame.env_ready = true;
+        frame.scheme_root_checked = @intFromEnum(scheme.root);
         frame.interface_root = declared;
         frame.request_root = requested;
         census.bump("rehearsal_env_resolved");
