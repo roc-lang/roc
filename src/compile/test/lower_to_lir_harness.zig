@@ -83,6 +83,9 @@ pub const LirLoweringOptions = struct {
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     list_in_place_map: bool = false,
     proc_debug_names: bool = false,
+    /// Receives the expression count of the lifted program handed to lambda-set
+    /// solving, for tests that assert on post-check program growth.
+    lifted_expr_count_out: ?*usize = null,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -277,6 +280,7 @@ fn lowerAppPathToLir(
             .inline_mode = opts.inline_mode,
             .list_in_place_map = opts.list_in_place_map,
             .proc_debug_names = opts.proc_debug_names,
+            .lifted_expr_count_out = opts.lifted_expr_count_out,
         },
     );
     defer lowered.deinit();
