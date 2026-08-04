@@ -171,7 +171,7 @@ const Builder = struct {
         // The checker explicitly records when it closes an otherwise
         // unresolved identity to `[]`. Encode the surviving union-find root so
         // every reference to that identity shares one checked type digest.
-        if (resolved.desc.empty_tag_union_is_default) {
+        if (resolved.desc.flags.empty_tag_union_is_default) {
             try self.writeIdentityVariable(
                 root,
                 "defaulted_empty_tag_union",

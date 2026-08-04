@@ -61,6 +61,8 @@ pub const TargetFormat = embedded_lld.Format;
 pub const TargetAbi = enum {
     musl,
     gnu,
+    /// No C runtime, startup objects, or program interpreter.
+    freestanding,
 
     /// Convert from RocTarget to TargetAbi
     pub fn fromRocTarget(target: RocTarget) TargetAbi {
@@ -569,7 +571,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             const target_abi = config.target_abi orelse if (builtin.target.abi == .musl) TargetAbi.musl else TargetAbi.gnu;
 
             switch (target_abi) {
-                .musl => {
+                .musl, .freestanding => {
                     if (is_shared_lib) {
                         // -static and -shared are mutually exclusive; a shared library
                         // is inherently a dynamic artifact even on musl targets.
@@ -743,6 +745,8 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 // Shared libraries have no program interpreter; the loading
                 // process's dynamic linker resolves them.
                 try args.append("-shared");
+            } else if (config.target_abi == .freestanding) {
+                try args.append("-static");
             } else {
                 const interpreter = roc_target.bsdProgramInterpreter(target_os) orelse
                     return LinkError.LinkFailed;
@@ -1398,6 +1402,34 @@ test "BSD shared libraries have no program interpreter" {
 
     _ = findArg(args.items, "-shared") orelse return error.MissingSharedFlag;
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-dynamic-linker"));
+}
+
+test "freestanding BSD executables have no program interpreter" {
+    const cases = [_]std.Target.Os.Tag{ .freebsd, .netbsd };
+
+    for (cases) |target_os| {
+        var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+        defer arena_instance.deinit();
+
+        var io = Io.create(std.testing.io);
+        var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+        ctx.initIo();
+        defer ctx.deinit();
+
+        const config = LinkConfig{
+            .target_format = .elf,
+            .target_abi = .freestanding,
+            .target_os = target_os,
+            .target_arch = .x86_64,
+            .output_path = "test_output",
+            .object_files = &.{"roc_default_platform.o"},
+        };
+
+        const args = try buildLinkArgs(&ctx, config);
+
+        _ = findArg(args.items, "-static") orelse return error.MissingStaticFlag;
+        try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-dynamic-linker"));
+    }
 }
 
 test "link error when LLVM not available" {

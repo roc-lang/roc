@@ -389,6 +389,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .closure = try self.mapLocal(s.closure),
                     .args = try self.mapLocalSpan(s.args),
+                    .arg_plan = s.arg_plan,
                     .reuse_closure = s.reuse_closure,
                     .reuse_source = try self.mapMaybeLocal(s.reuse_source),
                     .next = try self.cloneStmt(s.next),

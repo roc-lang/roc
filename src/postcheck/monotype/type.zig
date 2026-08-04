@@ -862,6 +862,10 @@ pub const Store = struct {
                 return cycleDigest(@intCast(position));
             }
         }
+        if (self.openNamedCyclePosition(name_store, self.get(ty), ctx.items[0..ctx.len])) |position| {
+            ctx.cycle_count += 1;
+            return cycleDigest(@intCast(position));
+        }
 
         const index = @intFromEnum(ty);
         switch (named_mode) {
@@ -1089,6 +1093,104 @@ pub const Store = struct {
         }
     }
 
+    /// Hash the fields that identify which named type this node is, excluding
+    /// its arguments and backing. Two nodes agreeing here and on their
+    /// arguments denote the same named type, because a named type's backing is
+    /// a function of its declaration and arguments.
+    fn writeNamedIdentityHead(
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        named: NamedContent,
+    ) void {
+        hasher.update(&named.named_type.module.bytes);
+        writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
+        writeOptionalU32(hasher, named.def.source_decl);
+        if (named.def.source_decl == null) {
+            writeBytes(hasher, name_store.typeNameText(named.def.type_name));
+        }
+        writeOptionalDigest(hasher, named.def.generated);
+        writeBytes(hasher, @tagName(named.def.iterator_representation));
+        writeBytes(hasher, @tagName(named.def.iterator_kind));
+        writeU32(hasher, named.def.iterator_depth);
+        writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
+        writeBytes(hasher, @tagName(named.kind));
+        if (named.builtin_owner) |owner| {
+            writeBytes(hasher, "builtin");
+            writeBytes(hasher, @tagName(owner));
+        } else {
+            writeBytes(hasher, "not-builtin");
+        }
+    }
+
+    fn namedIdentityHead(
+        name_store: *const names.NameStore,
+        named: NamedContent,
+    ) [32]u8 {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        writeNamedIdentityHead(name_store, &hasher, named);
+        return hasher.finalResult();
+    }
+
+    /// Whether two named nodes denote the same named type at the same
+    /// arguments. Equal argument ids already prove the arguments equal, so that
+    /// check runs first and settles the common case without hashing; arguments
+    /// whose ids differ are decided by their digests, which is the exact
+    /// comparison this store needs because it admits duplicate ids per type.
+    fn namedIdentityMatches(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        lhs: NamedContent,
+        rhs: NamedContent,
+        rhs_head: [32]u8,
+    ) bool {
+        const lhs_args = self.span(lhs.args);
+        const rhs_args = self.span(rhs.args);
+        if (lhs_args.len != rhs_args.len) return false;
+        if (!std.mem.eql(u8, &namedIdentityHead(name_store, lhs), &rhs_head)) return false;
+        for (0..lhs_args.len) |index| {
+            const lhs_arg = GuardedList.at(lhs_args, index);
+            const rhs_arg = GuardedList.at(rhs_args, index);
+            if (lhs_arg == rhs_arg) continue;
+            // Both sides digest through the uncached walk even when the caller
+            // is the cached one. The two walks hash by different constructions,
+            // so mixing them here would let the cached and uncached callers
+            // reach different fold decisions and disagree about which types are
+            // the same.
+            const lhs_digest = self.typeDigest(name_store, lhs_arg);
+            const rhs_digest = self.typeDigest(name_store, rhs_arg);
+            if (!std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes)) return false;
+        }
+        return true;
+    }
+
+    /// Position of an already-open named node denoting the same named type, if
+    /// any. Folding the walk here rather than only on id equality is what makes
+    /// a recursive type's digest independent of how deep its knot is tied: a
+    /// node whose recursive occurrence is a separate but equal node digests the
+    /// same as one whose occurrence is the node itself.
+    fn openNamedCyclePosition(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        node: Content,
+        open: []const TypeId,
+    ) ?usize {
+        const named = switch (node) {
+            .named => |named| named,
+            else => return null,
+        };
+        if (named.kind == .alias) return null;
+        const head = namedIdentityHead(name_store, named);
+        for (open, 0..) |open_ty, position| {
+            const open_named = switch (self.get(open_ty)) {
+                .named => |open_named| open_named,
+                else => continue,
+            };
+            if (open_named.kind == .alias) continue;
+            if (self.namedIdentityMatches(name_store, open_named, named, head)) return position;
+        }
+        return null;
+    }
+
     fn writeTypeDigest(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -1103,6 +1205,11 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(position));
                 return;
             }
+        }
+        if (self.openNamedCyclePosition(name_store, self.get(ty), visiting.items[0..visiting.len])) |position| {
+            writeBytes(hasher, "cycle");
+            writeU32(hasher, @intCast(position));
+            return;
         }
         if (visiting.len == digest_visiting_max) {
             // Deeper nesting than the stack tracks cannot contain an
@@ -2615,6 +2722,128 @@ test "monotype named type digest includes generic arguments" {
     const i64_digest = store.typeDigest(&name_store, named_i64);
     const str_digest = store.typeDigest(&name_store, named_str);
     try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
+}
+
+test "monotype recursive nominal digest ignores how deep the knot is tied" {
+    // A recursive nominal reached through independently lowered graphs can be
+    // built either knotted (its recursive occurrence is the node itself) or
+    // unrolled one step (its recursive occurrence is a separate, equal node).
+    // Both denote the same type, so both must digest the same: `sameType` in
+    // call-pattern specialization relies on the digest to prove a call and its
+    // callee share a representation, and declines to inline when it differs.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const type_name = try name_store.internTypeName("V");
+    const tag_name = try name_store.internTagLabel("Node");
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const u64_ty = try store.add(.{ .primitive = .u64 });
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+
+    const Context = struct {
+        store: *Store,
+        name_store: *names.NameStore,
+        module_identity: names.ModuleIdentityId,
+        type_name: names.TypeNameId,
+        tag_name: names.TagLabelId,
+        checked_ty: checked.CheckedTypeId,
+        arg: TypeId,
+
+        /// `V(U64) := [Node(List(V(U64)))]`, with `recursive_occurrence` standing
+        /// in for the nested `V(U64)`.
+        fn nominal(ctx: @This(), recursive_occurrence: TypeId) std.mem.Allocator.Error!Content {
+            const list_ty = try ctx.store.add(.{ .list = recursive_occurrence });
+            const backing = try ctx.store.add(.{ .tag_union = try ctx.store.addTagVariants(ctx.name_store, &.{.{
+                .name = ctx.tag_name,
+                .checked_name = ctx.tag_name,
+                .payloads = try ctx.store.addSpan(&.{list_ty}),
+            }}) });
+            return .{ .named = .{
+                .named_type = .{ .module = .{}, .ty = ctx.checked_ty },
+                .def = .{ .module = ctx.module_identity, .type_name = ctx.type_name },
+                .kind = .nominal,
+                .args = try ctx.store.addSpan(&.{ctx.arg}),
+                .backing = .{ .ty = backing, .use = .inspectable },
+            } };
+        }
+
+        fn fillKnotted(ctx: @This(), root: TypeId) std.mem.Allocator.Error!Content {
+            return try ctx.nominal(root);
+        }
+    };
+
+    const context = Context{
+        .store = &store,
+        .name_store = &name_store,
+        .module_identity = module_identity,
+        .type_name = type_name,
+        .tag_name = tag_name,
+        .checked_ty = checked_ty,
+        .arg = u64_ty,
+    };
+
+    const knotted = try store.addRecursive(context, Context.fillKnotted);
+    const unrolled = try store.add(try context.nominal(knotted));
+
+    try std.testing.expect(knotted != unrolled);
+    const knotted_digest = store.typeDigest(&name_store, knotted);
+    const unrolled_digest = store.typeDigest(&name_store, unrolled);
+    try std.testing.expectEqualSlices(u8, knotted_digest.bytes[0..], unrolled_digest.bytes[0..]);
+}
+
+test "monotype recursive nominal digest still separates different arguments" {
+    // The unrolling-insensitive fold keys on the nominal's declaration *and*
+    // arguments, so a non-uniformly recursive occurrence at different arguments
+    // must not be folded into its parent.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCE} ** 32));
+    const type_name = try name_store.internTypeName("V");
+    const tag_name = try name_store.internTagLabel("Node");
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const u64_ty = try store.add(.{ .primitive = .u64 });
+    const str_ty = try store.add(.{ .primitive = .str });
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+
+    const inner_args = try store.addSpan(&.{str_ty});
+    const inner_backing = try store.add(.{ .tag_union = try store.addTagVariants(&name_store, &.{.{
+        .name = tag_name,
+        .checked_name = tag_name,
+        .payloads = try store.addSpan(&.{u64_ty}),
+    }}) });
+    const inner = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = inner_args,
+        .backing = .{ .ty = inner_backing, .use = .inspectable },
+    } });
+
+    const outer_args = try store.addSpan(&.{u64_ty});
+    const outer_backing = try store.add(.{ .tag_union = try store.addTagVariants(&name_store, &.{.{
+        .name = tag_name,
+        .checked_name = tag_name,
+        .payloads = try store.addSpan(&.{inner}),
+    }}) });
+    const outer = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = outer_args,
+        .backing = .{ .ty = outer_backing, .use = .inspectable },
+    } });
+
+    const inner_digest = store.typeDigest(&name_store, inner);
+    const outer_digest = store.typeDigest(&name_store, outer);
+    try std.testing.expect(!std.mem.eql(u8, inner_digest.bytes[0..], outer_digest.bytes[0..]));
 }
 
 test "monotype store keeps function-containing shapes distinct" {

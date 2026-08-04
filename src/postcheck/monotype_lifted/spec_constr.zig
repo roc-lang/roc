@@ -6960,30 +6960,34 @@ const Cloner = struct {
             }
             try self.pass.ensureCallPatternForValues(callee, values);
 
+            // Every outcome below reads the argument values produced above
+            // rather than cloning the source arguments again: a second clone
+            // re-descends every argument, so a nested call chain (e.g. a long
+            // `+` sum, or a chain of builder-method calls) would clone each
+            // level twice and expand exponentially with depth. The reuse is
+            // also required for correctness when producing values with binding
+            // chains: those chains must be placed exactly once before the call.
             for (self.pass.plans[raw].specs.items) |spec| {
+                if (!callPatternMatchesValues(self.pass.program, spec.pattern, values)) continue;
+
                 var rewritten_args = std.ArrayList(Ast.ExprId).empty;
                 defer rewritten_args.deinit(self.pass.allocator);
                 var bindings: BindingChain = .{};
-
-                if (try self.appendClonedCallArgs(spec.pattern, args, &bindings, &rewritten_args)) {
-                    const specialized = try self.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
-                        .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls") },
-                        .args = try self.pass.program.addExprSpan(rewritten_args.items),
-                        .iterator_procedure = call.iterator_procedure,
-                        .captures = try self.cloneCaptureOperandSpan(call.captures),
-                        .is_cold = call.is_cold,
-                    } } });
-                    return try self.wrapBindings(bindings, specialized);
+                for (spec.pattern.args, values, analyzed) |shape, value, cloned| {
+                    bindings.appendChain(cloned.bindings);
+                    try self.appendExprsFromValue(shape, value, &rewritten_args);
                 }
+                const specialized = try self.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
+                    .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls") },
+                    .args = try self.pass.program.addExprSpan(rewritten_args.items),
+                    .iterator_procedure = call.iterator_procedure,
+                    .captures = try self.cloneCaptureOperandSpan(call.captures),
+                    .is_cold = call.is_cold,
+                } } });
+                return try self.wrapBindings(bindings, specialized);
             }
 
-            // No specialization matched, so the call stays residual. Reuse the
-            // argument values already produced above instead of re-cloning the
-            // source arguments: a second clone re-descends every argument, so a
-            // nested call chain (e.g. a long `+` sum) would clone each level
-            // twice and expand exponentially with depth. The reuse is also
-            // required for correctness when producing values with binding
-            // chains: those chains must be placed exactly once before the call.
+            // No specialization matched, so the call stays residual.
             const residual_args = try self.pass.allocator.alloc(Ast.ExprId, values.len);
             defer self.pass.allocator.free(residual_args);
             var bindings: BindingChain = .{};
@@ -7007,45 +7011,6 @@ const Cloner = struct {
             .captures = try self.cloneCaptureOperandSpan(call.captures),
             .is_cold = call.is_cold,
         } } });
-    }
-
-    fn appendClonedCallArgs(
-        self: *Cloner,
-        pattern: CallPattern,
-        args: []const Ast.ExprId,
-        bindings: *BindingChain,
-        out: *std.ArrayList(Ast.ExprId),
-    ) Common.LowerError!bool {
-        if (pattern.args.len != args.len) Common.invariant("call-pattern arity differed from direct call arity");
-        for (pattern.args, args) |shape, arg| {
-            if (!try self.appendClonedExprsForShape(shape, arg, bindings, out)) return false;
-        }
-        return true;
-    }
-
-    fn appendClonedExprsForShape(
-        self: *Cloner,
-        shape: Shape,
-        expr_id: Ast.ExprId,
-        bindings: *BindingChain,
-        out: *std.ArrayList(Ast.ExprId),
-    ) Common.LowerError!bool {
-        switch (shape) {
-            .any => {
-                try out.append(self.pass.allocator, try self.cloneExpr(expr_id));
-                return true;
-            },
-            else => {
-                const value = try self.valueForCallArg(expr_id, bindings);
-                if (!shapeMatchesValue(self.pass.program, shape, value)) return false;
-                try self.appendExprsFromValue(shape, value, out);
-                return true;
-            },
-        }
-    }
-
-    fn valueForCallArg(self: *Cloner, expr_id: Ast.ExprId, bindings: *BindingChain) Common.LowerError!Value {
-        return try self.cloneExprValueDemandingShapeInto(expr_id, bindings);
     }
 
     fn appendExprsFromValue(
@@ -11034,6 +10999,18 @@ fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
             break :blk true;
         },
     };
+}
+
+/// Whether one specialization's call pattern accepts a call's argument values.
+/// This reads the values the caller already cloned and takes no `Cloner`, so
+/// deciding a specialization cannot clone a source argument a second time and a
+/// rejected specialization costs nothing and leaves nothing behind.
+fn callPatternMatchesValues(program: *const Ast.Program, pattern: CallPattern, values: []const Value) bool {
+    if (pattern.args.len != values.len) Common.invariant("call-pattern arity differed from direct call arity");
+    for (pattern.args, values) |shape, value| {
+        if (!shapeMatchesValue(program, shape, value)) return false;
+    }
+    return true;
 }
 
 fn shapeMatchesValue(program: *const Ast.Program, shape: Shape, value: Value) bool {

@@ -68,7 +68,8 @@ pub const Constants = struct {
     /// 43: Checked type stores persist representatives and structural union ranks.
     /// 45: Where-clause owners persist rooted annotation ownership semantics.
     /// 46: Where alias declarations are their own statement kind.
-    pub const CACHE_VERSION = 46;
+    /// 47: Type descriptors carry the static-dispatch rejection marker.
+    pub const CACHE_VERSION = 47;
 };
 
 /// Configuration for the Roc cache system.

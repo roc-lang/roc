@@ -6698,7 +6698,13 @@ fn addMainExe(
         .linkage = .static,
     });
     configureBackend(machine_code_shim_lib, target);
-    roc_modules.addAll(machine_code_shim_lib);
+    // Only the modules the shim actually imports. The full compiler module set
+    // would put libc in the shim's dependency graph (the bundle module links
+    // zstd), and `link_libc` is resolved over the whole graph regardless of
+    // which modules are reachable from the root source file.
+    machine_code_shim_lib.root_module.addImport("backend", roc_modules.backend);
+    machine_code_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+    machine_code_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
     machine_code_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     machine_code_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     machine_code_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io_machine_code", .{
@@ -6709,6 +6715,11 @@ fn addMainExe(
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
     machine_code_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     machine_code_shim_lib.bundle_compiler_rt = true;
+    // On Linux the shim reaches the kernel directly, so the executables it is
+    // linked into need no libc. Declaring that here makes the Zig compiler
+    // enforce it: any new libc dependency in the shim's module graph becomes a
+    // compile error rather than an undefined symbol at the user's link step.
+    if (target.result.os.tag == .linux) machine_code_shim_lib.root_module.link_libc = false;
 
     var machine_code_shim_test_for_registry: ?*Step.Compile = null;
     if (add_machine_code_shim_test) {
@@ -6905,10 +6916,11 @@ fn addMainExe(
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
         if (!cross_is_wasm) {
-            const default_platform_root_source = if (cross_target.query.os_tag == .linux)
-                b.path("src/default_platform/linux_runtime.zig")
-            else
-                b.path("src/default_platform/c_runtime.zig");
+            const default_platform_root_source = switch (cross_target.query.os_tag orelse .freestanding) {
+                .linux => b.path("src/default_platform/linux_runtime.zig"),
+                .freebsd, .netbsd => b.path("src/default_platform/bsd_runtime.zig"),
+                else => b.path("src/default_platform/c_runtime.zig"),
+            };
 
             const default_platform_runtime_obj = b.addObject(.{
                 .name = b.fmt("roc_default_runtime_{s}", .{cross_target.name}),

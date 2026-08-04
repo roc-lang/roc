@@ -77,6 +77,10 @@ pub const TargetConfig = struct {
     /// so a differential harness can execute the Debug verifier's materialized
     /// Lambda Mono program. The slot receives a value only in Debug builds.
     debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
+    /// Receives the expression count of the lifted program handed to lambda-set
+    /// solving. Every later post-check stage walks that program in full, so the
+    /// count is the size measure a growth regression shows up in.
+    lifted_expr_count_out: ?*usize = null,
     /// Optional timing accumulator for the checked-to-LIR pipeline.
     timing: ?*Timing = null,
 };
@@ -517,6 +521,8 @@ pub fn lowerCheckedModulesToLir(
         try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
         if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
     }
+
+    if (target.lifted_expr_count_out) |slot| slot.* = lifted.exprCount();
 
     const lambda_solve_started_ns = if (target.timing) |timing| timing.start() else 0;
     const lifted_input = lifted;

@@ -338,6 +338,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
         try low_level_map.put(list_swap_unsafe_ident, .list_swap);
     }
+    if (env.common.findIdent("list_map_prepare_reuse")) |list_map_prepare_reuse_ident| {
+        try low_level_map.put(list_map_prepare_reuse_ident, .list_map_prepare_reuse);
+    }
     if (env.common.findIdent("list_map_can_reuse")) |list_map_can_reuse_ident| {
         try low_level_map.put(list_map_can_reuse_ident, .list_map_can_reuse);
     }
@@ -453,6 +456,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.from_bits", .{}, .f32_from_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.to_bits", .{}, .f64_to_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.from_bits", .{}, .f64_from_bits);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.to_attos", .{}, .dec_to_attos);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.from_attos", .{}, .dec_from_attos);
 
     // Numeric comparison operations (all numeric types)
     for (numeric_types) |num_type| {

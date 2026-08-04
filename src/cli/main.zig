@@ -124,7 +124,6 @@ comptime {
         std.testing.refAllDecls(@import("ReplSession.zig"));
     }
 }
-const libc_finder = @import("libc_finder.zig");
 const linker = @import("linker.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
@@ -249,7 +248,6 @@ const CliMainError =
     CliError ||
     Allocator.Error ||
     cli_args.ParseError ||
-    libc_finder.FindLibcError ||
     linker.LinkError ||
     bundle.BundleError ||
     unbundle.UnbundleError ||
@@ -953,7 +951,11 @@ pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_hand
     // integer on both platforms -- on Windows it is a HANDLE (a pointer), and
     // `ipc.coordination.parseHandle` turns the integer back into one.
     const handle_int = if (is_windows) @intFromPtr(shm_handle.fd) else shm_handle.fd;
-    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ handle_int, shm_handle.size });
+    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
+        handle_int,
+        shm_handle.size,
+        shm_handle.page_size,
+    });
     try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
     try fd_file.sync(ctx.io.std_io);
 }
@@ -1006,7 +1008,11 @@ pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_na
         // Note: We'll close this explicitly later, before spawning the child
 
         // Write shared memory info to file (POSIX only - Windows uses command line args)
-        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
+        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
+            shm_handle.fd,
+            shm_handle.size,
+            shm_handle.page_size,
+        });
 
         try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
 
@@ -1221,8 +1227,8 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     ctx.initIo(); // Must be called after ctx is at its final stack location
     defer ctx.deinit(); // deinit flushes I/O
 
-    try switch (parsed_args) {
-        .run => |run_args| {
+    (switch (parsed_args) {
+        .run => |run_args| run_blk: {
             if (std.mem.eql(u8, run_args.path, "main.roc")) {
                 std.Io.Dir.cwd().access(ctx.io.std_io, run_args.path, .{}) catch |err| switch (err) {
                     error.FileNotFound => {
@@ -1253,45 +1259,20 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
                 };
             }
 
-            rocRun(&ctx, run_args, args[0]) catch |err| switch (err) {
-                error.CliError => {
-                    // Problems already recorded in context, render them below
-                },
-                else => return err,
-            };
+            break :run_blk rocRun(&ctx, run_args, args[0]);
         },
         .check => |check_args| rocCheck(&ctx, check_args, args[0]),
-        .build => |build_args| rocBuild(&ctx, build_args, args[0]) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .build => |build_args| rocBuild(&ctx, build_args, args[0]),
         .bundle => |bundle_args| rocBundle(&ctx, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args, args[0]),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
-        .glue => |glue_args| rocGlue(&ctx, glue_args) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .glue => |glue_args| rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
-        .bump => |bump_args| rocBump(&ctx, bump_args) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
-        .install => |install_args| rocInstall(&ctx, install_args, args[0]) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .bump => |bump_args| rocBump(&ctx, bump_args),
+        .install => |install_args| rocInstall(&ctx, install_args, args[0]),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
@@ -1316,6 +1297,17 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
             };
             return error.InvalidArguments;
         },
+    }) catch |err| {
+        // Commands report by recording a problem and returning `CliError`, and
+        // a few print straight to stderr instead. Either way the user has been
+        // told something. An error that arrives here having produced no output
+        // at all is a compiler bug, and exiting 1 in silence hides it behind
+        // what looks like a crash, so name the error rather than let it pass.
+        if (ctx.io.bytesWritten() == 0 and !ctx.hasProblems()) {
+            ctx.addProblemIgnoreError(.{ .unreported_error = .{ .err_name = @errorName(err) } });
+        }
+        try ctx.renderProblemsTo(ctx.io.stderr());
+        return err;
     };
 
     // Render any problems accumulated during command execution
@@ -2151,31 +2143,13 @@ fn defaultRunCheckedHostIdentity(
     return hasher.finalResult();
 }
 
-fn defaultRunLinkInputsIdentity(
-    ctx: *CliCtx,
-    target: RocTarget,
-    libc_info: ?libc_finder.LibcInfo,
-) CliError!?[32]u8 {
+fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
     const runtime_bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-default-link-inputs-v2");
+    updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
     hasher.update(&bytesDigest(runtime_bytes));
-
-    if (libc_info) |info| {
-        updateHashBytes(&hasher, "libc");
-        updateHashBytes(&hasher, info.arch);
-        updateHashBytes(&hasher, info.dynamic_linker);
-        const dynamic_linker_digest = try fileContentsDigest(ctx, info.dynamic_linker);
-        hasher.update(&dynamic_linker_digest);
-        updateHashBytes(&hasher, info.lib_dir);
-        updateHashBytes(&hasher, info.libc_path);
-        const libc_digest = try fileContentsDigest(ctx, info.libc_path);
-        hasher.update(&libc_digest);
-    } else {
-        updateHashBytes(&hasher, "no-libc");
-    }
 
     return hasher.finalResult();
 }
@@ -3431,13 +3405,6 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             try rejectRunTargetNotExecutable(ctx, requested);
             unreachable;
         }
-        if (requested.isStatic()) {
-            try ctx.io.stderr().print(
-                "Error: shared-memory dev runs for headerless default apps require a dynamic Linux target; got {s}.\n",
-                .{@tagName(requested)},
-            );
-            return error.UnsupportedTarget;
-        }
         break :blk requested;
     } else default_target;
 
@@ -3518,17 +3485,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     const lowered = &lowered_result.lowered;
     const enable_debug = builtin.mode == .Debug;
     const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
-    const libc_info: ?libc_finder.LibcInfo = if (selected_target.isDynamic())
-        libc_finder.findLibc(ctx) catch |err| {
-            try ctx.io.stderr().print(
-                "Error: could not find system libc for shared-memory default app run: {}\n",
-                .{err},
-            );
-            return err;
-        }
-    else
-        null;
-    const link_inputs_identity = (try defaultRunLinkInputsIdentity(ctx, selected_target, libc_info)) orelse {
+    const link_inputs_identity = defaultRunLinkInputsIdentity(selected_target) orelse {
         return rejectRunTargetNotExecutable(ctx, selected_target);
     };
 
@@ -3594,18 +3551,9 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             shim_path,
             runtime_path,
         };
-        var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 5);
-        if (libc_info) |info| {
-            try extra_args.append("-dynamic-linker");
-            try extra_args.append(info.dynamic_linker);
-            try extra_args.append("-L");
-            try extra_args.append(info.lib_dir);
-            try extra_args.append("-lc");
-        }
-
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(selected_target.toOsTag()),
-            .target_abi = if (selected_target.isStatic()) .musl else .gnu,
+            .target_abi = llvmBuildLinkAbi(selected_target, true),
             .target_os = selected_target.toOsTag(),
             .target_arch = selected_target.toCpuArch(),
             .output_path = exe_path,
@@ -3613,7 +3561,6 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             .can_exit_early = false,
             .disable_output = false,
             .scratch_dir = temp_dir,
-            .extra_args = extra_args.items,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -4845,6 +4792,9 @@ pub const SharedMemoryHandle = struct {
     /// This may be much larger than `size` since the bump allocator reserves
     /// a large virtual address region upfront.
     mapped_size: usize,
+    /// The page size this process observed, published to the child so it does
+    /// not have to ask the OS itself. See `ipc.FdInfo.page_size`.
+    page_size: usize,
 };
 
 fn hotReloadHostChildHandle(handle: SharedMemoryHandle) SharedMemoryHandle {
@@ -4863,6 +4813,7 @@ test "hot reload host child maps the full shared-memory reservation" {
         .ptr = @as(*anyopaque, @ptrFromInt(0x5678)),
         .size = 4096,
         .mapped_size = 8192,
+        .page_size = 4096,
     };
 
     const child = hotReloadHostChildHandle(original);
@@ -4934,6 +4885,7 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
         .ptr = shm.base_ptr,
         .size = shm.getUsedSize(),
         .mapped_size = shm.total_size,
+        .page_size = shm.page_size,
     };
 }
 
@@ -5347,6 +5299,7 @@ fn sharedMemoryResult(
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
+            .page_size = shm.page_size,
         },
         .entrypoint_names = entrypoint_names,
         .hosted_symbols = hosted_symbols,
@@ -5389,14 +5342,20 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
         DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
 }
 
-/// The dynamically linked Linux target the headerless default app runs on,
-/// keeping the CPU level of the native target it came from.
+/// The Linux target the headerless default app runs on, keeping the CPU level
+/// of the native target it came from.
+///
+/// Default apps run on the freestanding default platform: raw syscalls, its own
+/// `_start`, and a machine-code shim that reaches the kernel directly. Nothing
+/// in the executable calls libc, so every Linux host links the same static
+/// executable no matter which libc it ships -- matching what `llvmBuildLinkAbi`
+/// already does for `roc build`.
 fn defaultRunShimTarget(native: RocTarget) RocTarget {
     return switch (native) {
-        .x64musl, .x64glibc, .x64linux => .x64linux,
-        .arm64musl, .arm64glibc, .arm64linux => .arm64linux,
-        .x64v1musl, .x64v1glibc, .x64v1linux => .x64v1linux,
-        .arm64v1musl, .arm64v1glibc, .arm64v1linux => .arm64v1linux,
+        .x64musl, .x64glibc, .x64linux => .x64musl,
+        .arm64musl, .arm64glibc, .arm64linux => .arm64musl,
+        .x64v1musl, .x64v1glibc, .x64v1linux => .x64v1musl,
+        .arm64v1musl, .arm64v1glibc, .arm64v1linux => .arm64v1musl,
         else => native,
     };
 }
@@ -5879,6 +5838,7 @@ fn publishDevRunImage(
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
+            .page_size = shm.page_size,
         });
         break :blk .{
             .generation = 1,
@@ -5911,6 +5871,7 @@ fn publishDevRunImage(
         .ptr = shm.base_ptr,
         .size = shm.getUsedSize(),
         .mapped_size = shm.total_size,
+        .page_size = shm.page_size,
     };
 }
 
@@ -7386,6 +7347,12 @@ fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMain
 fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
+    if (defaultBuildTarget(args).toOsTag() == .openbsd) {
+        return ctx.fail(.{ .unsupported_default_platform_target = .{
+            .target = "x64openbsd",
+        } });
+    }
+
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
@@ -7444,7 +7411,12 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
             // Which default platform a target gets follows from its OS and
             // architecture, which a `v1` target shares with its default twin.
             return switch (requested.defaultCpuTarget()) {
-                .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
+                .x64mac,
+                .arm64mac,
+                .x64win,
+                .arm64win,
+                .x64openbsd,
+                => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
                 else => echo_platform.build_platform_main_source,
             };
@@ -7454,9 +7426,16 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     }
 
     return switch (RocTarget.detectNative().toOsTag()) {
-        .macos, .windows => echo_platform.build_c_platform_main_source,
+        .macos, .windows, .openbsd => echo_platform.build_c_platform_main_source,
         else => echo_platform.build_platform_main_source,
     };
+}
+
+fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
+    if (args.target) |target_str| {
+        if (RocTarget.fromString(target_str)) |requested| return requested.defaultCpuTarget();
+    }
+    return RocTarget.detectNative().defaultCpuTarget();
 }
 
 /// Build using the dev backend to generate native machine code.
@@ -7745,8 +7724,12 @@ fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
 }
 
 fn llvmBuildLinkAbi(target: RocTarget, synthetic_default_platform: bool) linker.TargetAbi {
-    if (synthetic_default_platform and target.toOsTag() == .linux) {
-        return .musl;
+    if (synthetic_default_platform) {
+        return switch (target.toOsTag()) {
+            .linux => .musl,
+            .freebsd, .netbsd => .freestanding,
+            else => linker.TargetAbi.fromRocTarget(target),
+        };
     }
     return linker.TargetAbi.fromRocTarget(target);
 }

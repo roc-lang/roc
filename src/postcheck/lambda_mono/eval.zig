@@ -1346,6 +1346,7 @@ pub const Evaluator = struct {
             .list_release_excess_capacity,
             .list_split_first,
             .list_split_last,
+            .list_map_prepare_reuse,
             .list_map_can_reuse,
             => self.evalListOp(op, args, arg_types, result_ty),
 
@@ -2263,6 +2264,7 @@ pub const Evaluator = struct {
             .list_last => return try self.listFirstLast(result_ty, args[0].list, false),
             .list_split_first => return try self.listSplit(result_ty, args[0].list, true),
             .list_split_last => return try self.listSplit(result_ty, args[0].list, false),
+            .list_map_prepare_reuse => return args[0],
             .list_map_can_reuse => {
                 // In-place map reuse is disabled on the compared compile.
                 const prim = self.primitiveOf(result_ty) orelse .u8;

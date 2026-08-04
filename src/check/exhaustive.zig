@@ -1440,8 +1440,8 @@ fn isCtorPayloadTypeInhabitedHelp(
                 );
             },
             .record => |record| blk: {
-                const fields_slice = type_store.getRecordFieldsSlice(record.fields);
-                for (fields_slice.items(.var_)) |field_var| {
+                for (0..record.fields.count) |offset| {
+                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
                     if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
                         break :blk false;
                     }
@@ -1449,8 +1449,8 @@ fn isCtorPayloadTypeInhabitedHelp(
                 break :blk true;
             },
             .record_unbound => |fields| blk: {
-                const fields_slice = type_store.getRecordFieldsSlice(fields);
-                for (fields_slice.items(.var_)) |field_var| {
+                for (0..fields.count) |offset| {
+                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
                     if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
                         break :blk false;
                     }
@@ -1458,7 +1458,8 @@ fn isCtorPayloadTypeInhabitedHelp(
                 break :blk true;
             },
             .tuple => |tuple| blk: {
-                for (type_store.sliceVars(tuple.elems)) |elem_var| {
+                for (0..tuple.elems.count) |offset| {
+                    const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
                     if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, elem_var, seen)) {
                         break :blk false;
                     }
@@ -1483,10 +1484,11 @@ fn isCtorPayloadTagUnionInhabited(
     var current_ext = initial_tag_union.ext;
 
     while (true) {
-        const tags_slice = type_store.getTagsSlice(current_tags);
-        for (tags_slice.items(.args)) |args_range| {
+        for (0..current_tags.count) |tag_offset| {
+            const args_range = type_store.getTagAt(current_tags, @intCast(tag_offset)).args;
             var all_args_inhabited = true;
-            for (type_store.sliceVars(args_range)) |arg_var| {
+            for (0..args_range.count) |arg_offset| {
+                const arg_var = type_store.getVarAt(args_range, @intCast(arg_offset));
                 if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, arg_var, seen)) {
                     all_args_inhabited = false;
                     break;
@@ -1593,23 +1595,24 @@ fn collectCtorPayloadBlockersHelp(
                 );
             },
             .record => |record| {
-                const fields_slice = type_store.getRecordFieldsSlice(record.fields);
-                for (fields_slice.items(.var_)) |field_var| {
+                for (0..record.fields.count) |offset| {
+                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
                     }
                 }
             },
             .record_unbound => |fields| {
-                const fields_slice = type_store.getRecordFieldsSlice(fields);
-                for (fields_slice.items(.var_)) |field_var| {
+                for (0..fields.count) |offset| {
+                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
                     }
                 }
             },
             .tuple => |tuple| {
-                for (type_store.sliceVars(tuple.elems)) |elem_var| {
+                for (0..tuple.elems.count) |offset| {
+                    const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, elem_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, elem_var, out, seen);
                     }
@@ -1634,18 +1637,19 @@ fn collectCtorPayloadTagUnionBlockers(
     var current_ext = initial_tag_union.ext;
 
     while (true) {
-        const tags_slice = type_store.getTagsSlice(current_tags);
-        for (tags_slice.items(.args)) |args_range| {
-            const args = type_store.sliceVars(args_range);
+        for (0..current_tags.count) |tag_offset| {
+            const args_range = type_store.getTagAt(current_tags, @intCast(tag_offset)).args;
             var all_args_inhabited = true;
-            for (args) |arg_var| {
+            for (0..args_range.count) |arg_offset| {
+                const arg_var = type_store.getVarAt(args_range, @intCast(arg_offset));
                 if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, arg_var)) {
                     all_args_inhabited = false;
                     break;
                 }
             }
             if (!all_args_inhabited) {
-                for (args) |arg_var| {
+                for (0..args_range.count) |arg_offset| {
+                    const arg_var = type_store.getVarAt(args_range, @intCast(arg_offset));
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, arg_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, arg_var, out, seen);
                     }
@@ -1745,9 +1749,10 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
                 };
 
                 for (union_info.alternatives) |alt| {
-                    const arg_types = try getCtorArgTypes(allocator, type_store, builtin_idents, type_var, alt.tag_id);
+                    const arg_types = try getCtorArgTypes(type_store, builtin_idents, type_var, alt.tag_id);
                     var all_args_inhabited = true;
-                    for (arg_types) |arg_var| {
+                    for (0..arg_types.len()) |offset| {
+                        const arg_var = arg_types.get(type_store, offset);
                         if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                             allocator,
                             type_store,
@@ -1765,8 +1770,8 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
                 break :blk false;
             },
             .record => |record| blk: {
-                const fields_slice = type_store.getRecordFieldsSlice(record.fields);
-                for (fields_slice.items(.var_)) |field_var| {
+                for (0..record.fields.count) |offset| {
+                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                         allocator,
                         type_store,
@@ -1780,8 +1785,8 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
                 break :blk true;
             },
             .record_unbound => |fields| blk: {
-                const fields_slice = type_store.getRecordFieldsSlice(fields);
-                for (fields_slice.items(.var_)) |field_var| {
+                for (0..fields.count) |offset| {
+                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                         allocator,
                         type_store,
@@ -1795,7 +1800,8 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
                 break :blk true;
             },
             .tuple => |tuple| blk: {
-                for (type_store.sliceVars(tuple.elems)) |elem_var| {
+                for (0..tuple.elems.count) |offset| {
+                    const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                         allocator,
                         type_store,
@@ -1882,9 +1888,10 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
                 };
 
                 for (union_info.alternatives) |alt| {
-                    const arg_types = try getCtorArgTypes(allocator, type_store, builtin_idents, type_var, alt.tag_id);
+                    const arg_types = try getCtorArgTypes(type_store, builtin_idents, type_var, alt.tag_id);
                     var all_args_inhabited = true;
-                    for (arg_types) |arg_var| {
+                    for (0..arg_types.len()) |offset| {
+                        const arg_var = arg_types.get(type_store, offset);
                         if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                             allocator,
                             type_store,
@@ -1898,7 +1905,8 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
                     }
 
                     if (!all_args_inhabited) {
-                        for (arg_types) |arg_var| {
+                        for (0..arg_types.len()) |offset| {
+                            const arg_var = arg_types.get(type_store, offset);
                             if (!try isKnownAbsentCtorPayloadTypeInhabited(
                                 allocator,
                                 type_store,
@@ -1919,23 +1927,24 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
                 }
             },
             .record => |record| {
-                const fields_slice = type_store.getRecordFieldsSlice(record.fields);
-                for (fields_slice.items(.var_)) |field_var| {
+                for (0..record.fields.count) |offset| {
+                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
                     if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
                         try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
                     }
                 }
             },
             .record_unbound => |fields| {
-                const fields_slice = type_store.getRecordFieldsSlice(fields);
-                for (fields_slice.items(.var_)) |field_var| {
+                for (0..fields.count) |offset| {
+                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
                     if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
                         try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
                     }
                 }
             },
             .tuple => |tuple| {
-                for (type_store.sliceVars(tuple.elems)) |elem_var| {
+                for (0..tuple.elems.count) |offset| {
+                    const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
                     if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, elem_var)) {
                         try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, elem_var, out, seen);
                     }
@@ -2099,14 +2108,15 @@ fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) error{OutOfMemory}!bool
     }
 }
 
-fn areAllTypesInhabitedWithKnownEmpty(
+fn areAllCtorArgTypesInhabitedWithKnownEmpty(
     type_store: *TypeStore,
     builtin_idents: BuiltinIdents,
-    type_vars: []const Var,
+    arg_types: CtorArgTypes,
     known_empty_vars: []const Var,
 ) error{OutOfMemory}!bool {
-    for (type_vars) |type_var| {
-        if (!try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, type_var, known_empty_vars)) {
+    for (0..arg_types.len()) |offset| {
+        const arg_type = arg_types.get(type_store, offset);
+        if (!try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, arg_type, known_empty_vars)) {
             return false;
         }
     }
@@ -2144,11 +2154,12 @@ fn isSketchedPatternInhabited(
             const tag_id = findTagId(union_info, c.tag_name) orelse return error.TypeError;
 
             // Get the constructor's argument types
-            const arg_types = try getCtorArgTypes(allocator, type_store, builtin_idents, first_col_type, tag_id);
+            const arg_types = try getCtorArgTypes(type_store, builtin_idents, first_col_type, tag_id);
 
             // Check if any argument type is uninhabited
             const known_empty_vars = if (payload_vars_to_close) |vars| vars.items else &.{};
-            for (arg_types, 0..) |arg_type, i| {
+            for (0..arg_types.len()) |i| {
+                const arg_type = arg_types.get(type_store, i);
                 if (!try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, arg_type, known_empty_vars)) {
                     return false; // Uninhabited argument = uninhabited pattern
                 }
@@ -2284,8 +2295,9 @@ pub fn collectAbsentCtorPayloadBlockersForConstructedTags(
         const name = ctorNameIdent(alt.name) orelse continue;
         if (identSetContains(constructed_tags, name)) continue;
 
-        const arg_types = try getCtorArgTypes(allocator, type_store, builtin_idents, target_var, alt.tag_id);
-        for (arg_types) |arg_type| {
+        const arg_types = try getCtorArgTypes(type_store, builtin_idents, target_var, alt.tag_id);
+        for (0..arg_types.len()) |offset| {
+            const arg_type = arg_types.get(type_store, offset);
             if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, arg_type)) {
                 try collectKnownAbsentCtorPayloadBlockers(allocator, type_store, builtin_idents, arg_type, out);
             }
@@ -2300,7 +2312,32 @@ pub fn collectAbsentCtorPayloadBlockersForConstructedTags(
 /// IMPORTANT: This function follows extension chains to find the tag at the given index.
 /// Tag unions from unification may have tags split across the main union
 /// and its extension chain (e.g., [Normal, ..ext] where ext = [HasEmpty, ..]).
-fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var, tag_id: TagId) std.mem.Allocator.Error![]const Var {
+const CtorArgTypes = union(enum) {
+    vars: Var.SafeList.Range,
+    record_fields: types.RecordField.SafeMultiList.Range,
+    none,
+
+    fn len(self: CtorArgTypes) usize {
+        return switch (self) {
+            .vars => |range| range.count,
+            .record_fields => |range| range.count,
+            .none => 0,
+        };
+    }
+
+    /// Read one argument through the stable range each time. Opening a nominal
+    /// can append to the type store and relocate its side arrays, so recursive
+    /// exhaustiveness code must not retain borrowed slices into those arrays.
+    fn get(self: CtorArgTypes, type_store: *TypeStore, offset: usize) Var {
+        return switch (self) {
+            .vars => |range| type_store.getVarAt(range, @intCast(offset)),
+            .record_fields => |range| type_store.getRecordFieldAt(range, @intCast(offset)).var_,
+            .none => unreachable,
+        };
+    }
+};
+
+fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var, tag_id: TagId) std.mem.Allocator.Error!CtorArgTypes {
     const resolved = type_store.resolveVar(type_var);
     const content = resolved.desc.content;
 
@@ -2316,17 +2353,14 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, builtin
         defer seen_exts.deinit();
 
         while (true) {
-            const tags_slice = type_store.getTagsSlice(current_tags);
-            const tag_args = tags_slice.items(.args);
-
             // Check if the target index is in this level
-            if (target_idx < current_offset + tag_args.len) {
+            if (target_idx < current_offset + current_tags.count) {
                 const local_idx = target_idx - current_offset;
-                return type_store.sliceVars(tag_args[local_idx]);
+                return .{ .vars = type_store.getTagAt(current_tags, @intCast(local_idx)).args };
             }
 
             // Move to the extension
-            current_offset += tag_args.len;
+            current_offset += current_tags.count;
             const ext_resolved = type_store.resolveVar(current_ext);
             const ext_var = ext_resolved.var_;
 
@@ -2359,7 +2393,7 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, builtin
     switch (content) {
         .alias => |alias| {
             const backing_var = type_store.getAliasBackingVar(alias);
-            return try getCtorArgTypes(allocator, type_store, builtin_idents, backing_var, tag_id);
+            return try getCtorArgTypes(type_store, builtin_idents, backing_var, tag_id);
         },
         .structure => |flat_type| switch (flat_type) {
             .nominal_type => |nominal| {
@@ -2368,34 +2402,27 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, builtin
                 // substituted for its formals, so the constructor args it
                 // yields are the concrete payload types — no positional
                 // substitution needed.
-                const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse return &[_]Var{};
-                return try getCtorArgTypes(allocator, type_store, builtin_idents, backing_var, tag_id);
+                const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse return .none;
+                return try getCtorArgTypes(type_store, builtin_idents, backing_var, tag_id);
             },
             .tuple => |tuple| {
                 // Tuples are single-constructor types, return the element types
-                return type_store.sliceVars(tuple.elems);
+                return .{ .vars = tuple.elems };
             },
             .record => |record| {
                 // Records are single-constructor types, return the field types
-                return getRecordFieldTypes(type_store, record.fields);
+                return .{ .record_fields = record.fields };
             },
             .record_unbound => |fields| {
                 // Unbound records also have field types
-                return getRecordFieldTypes(type_store, fields);
+                return .{ .record_fields = fields };
             },
             else => {},
         },
         else => {},
     }
 
-    return &[_]Var{};
-}
-
-/// Get the field types from a Record type.
-/// Returns the Var for each field in the record.
-fn getRecordFieldTypes(type_store: *TypeStore, fields: types.RecordField.SafeMultiList.Range) []const Var {
-    const fields_slice = type_store.getRecordFieldsSlice(fields);
-    return fields_slice.items(.var_);
+    return .none;
 }
 
 /// Look up a record field's type by its name.
@@ -2531,21 +2558,23 @@ pub const ColumnTypes = struct {
         std.debug.assert(self.types.len > 0);
 
         // Look up the tag's payload types from types[0]
-        const payload_types = try getCtorArgTypes(allocator, self.type_store, self.builtin_idents, self.types[0], tag_id);
+        const payload_types = try getCtorArgTypes(self.type_store, self.builtin_idents, self.types[0], tag_id);
 
         // For tag unions, the arity should match exactly.
         // For records, the pattern might destructure fewer fields than the actual type has.
         // Currently, we don't handle records by field name, so return TypeError to skip
         // exhaustiveness checking in that case.
-        if (payload_types.len != expected_arity) {
+        if (payload_types.len() != expected_arity) {
             return error.TypeError;
         }
 
         // New types: [payload_types..., self.types[1...]...]
-        const new_types = try allocator.alloc(Var, payload_types.len + self.types.len - 1);
-        @memcpy(new_types[0..payload_types.len], payload_types);
+        const new_types = try allocator.alloc(Var, payload_types.len() + self.types.len - 1);
+        for (0..payload_types.len()) |offset| {
+            new_types[offset] = payload_types.get(self.type_store, offset);
+        }
         if (self.types.len > 1) {
-            @memcpy(new_types[payload_types.len..], self.types[1..]);
+            @memcpy(new_types[payload_types.len()..], self.types[1..]);
         }
 
         return .{ .types = new_types, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
@@ -3096,8 +3125,8 @@ fn recurseIntoAllCtors(
 ) PatternResolveError![]const Pattern {
     for (alternatives) |alt| {
         // Skip uninhabited constructors
-        const arg_types = try getCtorArgTypes(allocator, type_store, builtin_idents, first_col_type, alt.tag_id);
-        if (!try areAllTypesInhabitedWithKnownEmpty(type_store, builtin_idents, arg_types, payload_vars_to_close.items)) {
+        const arg_types = try getCtorArgTypes(type_store, builtin_idents, first_col_type, alt.tag_id);
+        if (!try areAllCtorArgTypesInhabitedWithKnownEmpty(type_store, builtin_idents, arg_types, payload_vars_to_close.items)) {
             continue;
         }
 
@@ -3228,8 +3257,8 @@ pub fn checkExhaustiveSketched(
             var all_inhabited_real_ctors_found = true;
             if (ctor_info.union_info.has_flex_extension or close_open_extension) {
                 for (real_alternatives) |alt| {
-                    const arg_types = try getCtorArgTypes(allocator, type_store, builtin_idents, first_col_type, alt.tag_id);
-                    if (!try areAllTypesInhabitedWithKnownEmpty(type_store, builtin_idents, arg_types, payload_vars_to_close.items)) {
+                    const arg_types = try getCtorArgTypes(type_store, builtin_idents, first_col_type, alt.tag_id);
+                    if (!try areAllCtorArgTypesInhabitedWithKnownEmpty(type_store, builtin_idents, arg_types, payload_vars_to_close.items)) {
                         continue;
                     }
 
@@ -3285,8 +3314,8 @@ pub fn checkExhaustiveSketched(
                     if (!found) {
                         // Skip uninhabited constructors - they don't need to be matched
                         // because no values of that constructor can exist.
-                        const arg_types = try getCtorArgTypes(allocator, type_store, builtin_idents, first_col_type, alt.tag_id);
-                        if (!try areAllTypesInhabitedWithKnownEmpty(type_store, builtin_idents, arg_types, payload_vars_to_close.items)) {
+                        const arg_types = try getCtorArgTypes(type_store, builtin_idents, first_col_type, alt.tag_id);
+                        if (!try areAllCtorArgTypesInhabitedWithKnownEmpty(type_store, builtin_idents, arg_types, payload_vars_to_close.items)) {
                             continue;
                         }
 
@@ -3620,9 +3649,10 @@ pub fn isUsefulSketched(
                                 }
 
                                 // This constructor is missing - check if it's inhabited
-                                const arg_types = try getCtorArgTypes(allocator, type_store, builtin_idents, first_col_type, alt.tag_id);
+                                const arg_types = try getCtorArgTypes(type_store, builtin_idents, first_col_type, alt.tag_id);
                                 var ctor_uninhabited = false;
-                                for (arg_types) |arg_type| {
+                                for (0..arg_types.len()) |offset| {
+                                    const arg_type = arg_types.get(type_store, offset);
                                     if (!try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, arg_type, payload_vars_to_close.items)) {
                                         ctor_uninhabited = true;
                                         break;
@@ -3648,8 +3678,8 @@ pub fn isUsefulSketched(
                     // All constructors covered - check each one
                     for (ctor_info.union_info.alternatives) |alt| {
                         // Skip uninhabited constructors
-                        const arg_types = try getCtorArgTypes(allocator, type_store, builtin_idents, first_col_type, alt.tag_id);
-                        if (!try areAllTypesInhabitedWithKnownEmpty(type_store, builtin_idents, arg_types, payload_vars_to_close.items)) {
+                        const arg_types = try getCtorArgTypes(type_store, builtin_idents, first_col_type, alt.tag_id);
+                        if (!try areAllCtorArgTypesInhabitedWithKnownEmpty(type_store, builtin_idents, arg_types, payload_vars_to_close.items)) {
                             continue;
                         }
 

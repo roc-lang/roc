@@ -1289,6 +1289,7 @@ test "tag reachability retains branches for erased call results" {
     const closure = try f.local(f.outer_layout);
     const result = try f.local(f.outer_layout);
     const disc = try f.local(.u16);
+    const arg_plan = try store.internErasedCallArgsPlan(&f.result.layouts, &.{});
 
     const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } });
     const bad = try store.addCFStmt(.{ .runtime_error = {} });
@@ -1306,6 +1307,7 @@ test "tag reachability retains branches for erased call results" {
         .target = result,
         .closure = closure,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .next = disc_read,
     } });
     const proc = try store.addProcSpec(.{
