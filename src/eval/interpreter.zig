@@ -6626,7 +6626,7 @@ pub const Interpreter = struct {
                 64 => val.write(f64, floatBinOp(f64, a.read(f64), b.read(f64), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float width {d}", .{bits}),
             },
-            .dec => val.write(i128, try self.decBinOp(a.read(i128), b.read(i128), op)),
+            .dec => val.write(i128, try self.decBinOp(a.read(i128), b.read(i128), op, checked_op)),
         }
         return val;
     }
@@ -7669,12 +7669,18 @@ pub const Interpreter = struct {
     }
 
     /// Dec (fixed-point i128 with 10^18 scale) binary operation.
-    fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp) Error!i128 {
+    fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp, checked_op: ?LIR.LowLevel) Error!i128 {
         return switch (op) {
             .add => av +% bv,
             .sub => av -% bv,
             .negate => -%av,
-            .abs => if (av < 0) -%av else av,
+            .abs => blk: {
+                if (checked_op != null and av == std.math.minInt(i128)) {
+                    const message = CheckedArithmetic.overflowMessageForLayout(checked_op.?, .dec) orelse unreachable;
+                    return self.triggerCrash(message);
+                }
+                break :blk if (av < 0) -%av else av;
+            },
             .abs_diff => if (av > bv) av -% bv else bv -% av,
             .mul => blk: {
                 const result = RocDec.mulWithOverflow(RocDec{ .num = av }, RocDec{ .num = bv });
