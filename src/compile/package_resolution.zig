@@ -1804,7 +1804,7 @@ pub const CtxFetcher = struct {
             if (!std.mem.endsWith(u8, entry.path, ".tmp")) continue;
             const info = self.fs.stat(entry.path) catch continue;
             const mtime = info.mtime_ns orelse continue;
-            if (now - mtime < stale_staging_ns) continue;
+            if (now - mtime <= stale_staging_ns) continue;
             self.fs.deleteTree(entry.path) catch {};
         }
     }
