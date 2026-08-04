@@ -850,6 +850,8 @@ const Frame = struct {
     /// kept so a mint the body produces can be emitted there after lowering.
     request_ret_module: [32]u8 = [_]u8{0} ** 32,
     request_ret_checked: ?u32 = null,
+    /// Why the edge supplied no binding, when it did not.
+    skip: ?std.meta.Tag(Rehearsal.EdgeSkip) = null,
     /// The call site this specialization was requested at, so a mint its own
     /// body produces in tail position can be recorded for that site's readers.
     use_key: ?RequestingSite = null,
@@ -1532,7 +1534,22 @@ pub const Rehearsal = struct {
     pub fn currentFrameRequestRootFinal(self: *Rehearsal) ?Type.TypeId {
         if (self.frames.items.len == 0) return null;
         const frame = &self.frames.items[self.frames.items.len - 1];
-        const start_root = frame.request_root orelse return null;
+        const start_root = frame.request_root orelse {
+            if (!frame.env_ready) {
+                census.bump("spec_root_declined_env_unready");
+                if (frame.skip) |skip| switch (skip) {
+                    .root_request => census.bump("spec_root_declined_root_request"),
+                    .generated_request => census.bump("spec_root_declined_generated_request"),
+                    .no_site => census.bump("spec_root_declined_no_site"),
+                    .site_ambiguous => census.bump("spec_root_declined_site_ambiguous"),
+                    .defining_module_differs => census.bump("spec_root_declined_module_differs"),
+                    .edge_unusable => census.bump("spec_root_declined_edge_unusable"),
+                };
+            } else {
+                census.bump("spec_root_declined_emission_null");
+            }
+            return null;
+        };
         const mint = frame.ret_mint orelse return start_root;
         const ret_checked = frame.request_ret_checked orelse return start_root;
         const start_function = switch (self.types.get(start_root)) {
@@ -4355,6 +4372,7 @@ pub const Rehearsal = struct {
     /// resolve is a named skip class, never an assumption.
     fn resolveEnvironment(self: *Rehearsal, start: SpecializationStart, frame: *Frame) void {
         const skip = self.resolveEnvironmentFromEdge(start, frame) orelse return;
+        frame.skip = skip;
         self.resolveGroundTemplateEnvironment(start, frame, skip);
     }
 
@@ -4830,8 +4848,10 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_generated_rule_witness_absent");
             return false;
         };
-        const left_digest = self.types.typeDigest(self.program_names, left);
-        const right_digest = self.types.typeDigest(self.program_names, right);
+        // As in `witnessesAgree`: the binding proof reads the
+        // representation-erased identity.
+        const left_digest = self.types.specializationDigest(self.program_names, left);
+        const right_digest = self.types.specializationDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) {
             outcome.witness_agrees += 1;
             census.bump("rehearsal_generated_rule_witness_agrees");
@@ -5070,8 +5090,12 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_foreign_witness_absent");
             return false;
         };
-        const left_digest = self.types.typeDigest(self.program_names, left);
-        const right_digest = self.types.typeDigest(self.program_names, right);
+        // The witness proves the binding produced the requested logical
+        // instantiation. Representation tiers are section 10 content that a
+        // producer legitimately settles on one side before the other, so the
+        // comparison reads the representation-erased identity.
+        const left_digest = self.types.specializationDigest(self.program_names, left);
+        const right_digest = self.types.specializationDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) {
             census.bump("rehearsal_foreign_witness_agrees");
             return true;
