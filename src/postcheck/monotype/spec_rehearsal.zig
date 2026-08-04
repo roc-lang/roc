@@ -281,6 +281,40 @@ pub const GeneratedEdge = struct {
 /// The checked data one generating site hands over: the module whose store holds
 /// its ids, the receiver the rule's binder mapping reads, and the exact
 /// structural witness the rule accepts its binding under.
+/// One requesting call site: the module and use expression a specialization
+/// was requested at.
+pub const RequestingSite = struct {
+    module_bytes: [32]u8,
+    use_expr: u32,
+};
+
+/// One producer feeding a request's receiver, named entirely in the
+/// requesting module's checked store: the producing expression's own type is
+/// the position its mint stands at, and `inner` is the producer feeding its
+/// receiver in turn. The chain gives each request instance its own derivation,
+/// so two uses of one interned checked type never share a mint.
+pub const ReceiverLink = struct {
+    /// The iterator procedure to derive from; null when `ready` already
+    /// carries the produced representation.
+    procedure: ?checked.IteratorProcedureId = null,
+    /// The representation the producing call's own specialization derived,
+    /// recorded under its use expression when that specialization resolved.
+    ready: ?direct_translate.ProducerRepresentation = null,
+    /// The producing call site, consulted when the chain is declared: the
+    /// producer's specialization may resolve after this link is built and
+    /// before any consumer reads it.
+    use_key: ?RequestingSite = null,
+    /// The producing expression's checked type: where the mint stands.
+    produced: checked.CheckedTypeId,
+    /// The producer's own receiver position.
+    receiver: checked.CheckedTypeId,
+    /// `Iter.custom`'s step-state formal.
+    state: ?checked.CheckedTypeId = null,
+    /// The callable evidence this link's mint is digested under.
+    evidence: ?names.TypeDigest = null,
+    inner: ?*const ReceiverLink = null,
+};
+
 pub const GeneratedSource = struct {
     module_bytes: [32]u8,
     receiver: GeneratedReceiver,
@@ -295,6 +329,8 @@ pub const GeneratedSource = struct {
     /// The callable evidence the produced representation is minted under,
     /// digested at the requesting site from the callable operand itself.
     evidence: ?names.TypeDigest = null,
+    /// The producers feeding this request's receiver, outermost first.
+    receiver_link: ?*const ReceiverLink = null,
 };
 
 /// How many declared steps one rule's emitted path carries. A generated
@@ -807,6 +843,16 @@ const Frame = struct {
     /// its own result position (the body's ids are instantiation-fresh, so the
     /// declared return's address never names them).
     ret_mint: ?direct_translate.ProducerRepresentation = null,
+    /// The use-mint entries recorded while this frame was the requesting
+    /// context, removed when it closes.
+    recorded_uses: std.ArrayList(RequestingSite) = .empty,
+    /// The call site this specialization was requested at, so a mint its own
+    /// body produces in tail position can be recorded for that site's readers.
+    use_key: ?RequestingSite = null,
+    /// The body's tail-position expressions, noted when the template body
+    /// starts lowering: a producer resolving at one of these produces this
+    /// specialization's own return.
+    body_tails: std.ArrayList(u32) = .empty,
     env_ready: bool,
     /// Where this binding's residual materialization came from, if any.
     residual_origin: ResidualOrigin = .absent,
@@ -1317,6 +1363,12 @@ pub const Rehearsal = struct {
     /// The representation the most recent rule declaration stated for its
     /// scheme's return, consumed by the frame that ran the declaration.
     last_declared_mint: ?direct_translate.ProducerRepresentation = null,
+    /// The produced representation each requesting use expression's
+    /// specialization derived, keyed per call site so two uses of one
+    /// interned checked type never share an entry. Entries are owned by the
+    /// frame that was requesting when the specialization resolved and are
+    /// removed when it closes.
+    use_mints: std.AutoHashMap(RequestingSite, direct_translate.ProducerRepresentation),
     /// How many failed edge-to-site joins have been dumped in detail.
     nested_leaf_dumped: usize = 0,
     /// Positions the seam reported a divergence at, so whether each is a
@@ -1385,6 +1437,7 @@ pub const Rehearsal = struct {
         self.* = .{
             .allocator = allocator,
             .component_arena = std.heap.ArenaAllocator.init(allocator),
+            .use_mints = std.AutoHashMap(RequestingSite, direct_translate.ProducerRepresentation).init(allocator),
             .types = types,
             .program_names = program_names,
             .translator = undefined,
@@ -1420,6 +1473,7 @@ pub const Rehearsal = struct {
         for (self.frames.items) |*frame| self.releaseFrame(frame);
         self.frames.deinit(self.allocator);
         self.component_arena.deinit();
+        self.use_mints.deinit();
         self.diverged_addresses.deinit(self.allocator);
         self.details.deinit(self.allocator);
         self.unresolved_details.deinit(self.allocator);
@@ -1987,153 +2041,28 @@ pub const Rehearsal = struct {
         };
         census.bump("iter_declare_declared");
 
-        // A primary producer — a list, string, single value, range, or custom
-        // step becoming an iterator — mints at depth one over its own
-        // arguments: the value it iterates (and, for `Iter.custom`, its step
-        // state), each the use's formal type emitted under the requesting
-        // binding. An adapter instead mints over its receiver's existing
-        // representation: the receiver's minted depth decides this mint's
-        // depth, and a chain past the cap runs forced-dynamic.
-        const primary = switch (kind) {
-            .list, .str, .single, .custom, .range_exclusive, .range_inclusive => true,
-            else => false,
-        };
-        var depth: u8 = 0;
-        var receiver: ?Type.TypeId = null;
-        var reason: direct_translate.SkipReason = undefined;
-        if (self.translator.translateUnderEnvironment(
-            caller,
-            caller_env,
-            caller_owner_node,
-            source.receiver.checked_ty,
-            &reason,
-        )) |receiver_ty| {
-            receiver = receiver_ty;
-            switch (self.types.get(receiver_ty)) {
-                .named => |named| depth = named.def.iterator_depth,
-                else => {},
-            }
-        } else |_| {}
-
-        const representation: direct_translate.ProducerRepresentation = if (adopted) |mint| mint else if (primary) primary: {
-            var primary_components: [2]Type.TypeId = undefined;
-            var count: usize = 0;
-            switch (kind) {
-                .range_exclusive, .range_inclusive => {},
-                else => {
-                    const value = receiver orelse {
-                        census.bump("iter_declare_primary_component_untranslated");
-                        return null;
-                    };
-                    primary_components[0] = value;
-                    count = 1;
-                    if (kind == .custom) {
-                        const state_ty = source.state orelse {
-                            census.bump("iter_declare_primary_state_missing");
-                            return null;
-                        };
-                        const state = self.translator.translateUnderEnvironment(
-                            caller,
-                            caller_env,
-                            caller_owner_node,
-                            state_ty,
-                            &reason,
-                        ) catch {
-                            census.bump("iter_declare_primary_component_untranslated");
-                            return null;
-                        };
-                        primary_components[1] = state;
-                        count = 2;
-                    }
-                },
-            }
-            const pooled = self.component_arena.allocator().alloc(Type.TypeId, count) catch return null;
-            @memcpy(pooled, primary_components[0..count]);
-            break :primary .{
-                .iterator_representation = .minted,
-                .iterator_kind = kind,
-                .iterator_depth = 1,
-                .topology = topology,
-                .minting = .{ .callable_evidence = source.evidence },
-                .components = pooled,
-            };
-        } else representation: {
-            const components = self.pooledReceiverComponents(receiver);
-            const over_cap = depth >= max_minted_chain_depth;
-            break :representation if (over_cap) .{
-                .iterator_representation = .forced_dynamic,
-                .iterator_kind = .forced_dynamic,
-                .iterator_depth = 0,
-                .topology = topology,
-                .minting = .{ .callable_evidence = null },
-            } else .{
-                .iterator_representation = .minted,
-                .iterator_kind = kind,
-                .iterator_depth = depth + 1,
-                .topology = topology,
-                .minting = .{ .callable_evidence = source.evidence },
-                .components = components,
-            };
-        };
-
-        // Two-phase identity for a mint the graph would digest: emit the
-        // produced position once with the mint unstamped, digest that shape
-        // under the recorded producer-identity recipe together with the
-        // callable evidence the edge carries, and declare the finished
-        // identity. A chain past the cap runs forced-dynamic, whose identity
-        // is its item's, so it stays unstamped here.
-        var final_representation = representation;
-        if (representation.iterator_representation == .minted and representation.generated == null) two_phase: {
-            const callable_ty = switch (source.witness) {
-                .callable => |ty| ty,
-                else => break :two_phase,
-            };
-            const caller_function = switch (caller.view.payload(callable_ty)) {
-                .function => |f| f,
-                else => break :two_phase,
-            };
-            const unstamped_floor = self.translator.representationInputCount();
-            self.translator.declareRepresentationInput(.{
-                .position = .{
-                    .module_bytes = source.module_bytes,
-                    .type_id = @intFromEnum(caller_function.ret),
-                },
-                .representation = representation,
-            }) catch break :two_phase;
-            var unstamped_reason: direct_translate.SkipReason = undefined;
-            const unstamped = self.translator.translateUnderEnvironment(
-                caller,
-                caller_env,
-                caller_owner_node,
-                caller_function.ret,
-                &unstamped_reason,
-            ) catch {
-                self.translator.truncateRepresentationInputs(unstamped_floor);
-                census.bump("iter_declare_identity_emit_failed");
-                break :two_phase;
-            };
-            self.translator.truncateRepresentationInputs(unstamped_floor);
-            switch (self.types.get(unstamped)) {
-                .named => {},
-                else => {
-                    census.bump("iter_declare_identity_not_named");
-                    break :two_phase;
-                },
-            }
-            const shape = self.types.typeDigest(self.program_names, unstamped);
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-            hasher.update("roc.generated_iterator.final_identity");
-            hasher.update(&shape.bytes);
-            if (source.evidence) |evidence| {
-                hasher.update("callable_evidence");
-                hasher.update(&evidence.bytes);
-            }
-            final_representation.generated = .{ .bytes = hasher.finalResult() };
-            final_representation.minting = null;
-            census.bump("iter_declare_identity_stamped");
-        }
-
         const floor = self.translator.representationInputCount();
+        self.declareReceiverChainInputs(caller, caller_env, caller_owner_node, source.receiver_link, topology);
+        const final_representation: direct_translate.ProducerRepresentation = if (adopted) |mint|
+            mint
+        else
+            self.deriveProducerMint(caller, caller_env, caller_owner_node, .{
+                .kind = kind,
+                .receiver_ty = source.receiver.checked_ty,
+                .state_ty = source.state,
+                .evidence = source.evidence,
+                .stamp_position = switch (source.witness) {
+                    .callable => |callable_ty| switch (caller.view.payload(callable_ty)) {
+                        .function => |f| f.ret,
+                        else => null,
+                    },
+                    .receiver_at_argument => null,
+                },
+            }, topology) orelse {
+                self.translator.truncateRepresentationInputs(floor);
+                return null;
+            };
+
         self.translator.declareRepresentationInput(.{
             .position = .{
                 .module_bytes = defining.module_bytes,
@@ -2192,6 +2121,288 @@ pub const Rehearsal = struct {
             }
         }
         return floor;
+    }
+
+    /// Note one tail-position expression of the innermost frame's template
+    /// body: a producer resolving at it produces the frame's own return.
+    pub fn noteBodyTail(self: *Rehearsal, module_bytes: [32]u8, expr_id: checked.CheckedExprId) void {
+        if (self.disabled) return;
+        if (self.frames.items.len == 0) return;
+        const frame = &self.frames.items[self.frames.items.len - 1];
+        if (!std.mem.eql(u8, &frame.env_module_bytes, &module_bytes)) return;
+        frame.body_tails.append(self.allocator, @intFromEnum(expr_id)) catch {};
+    }
+
+    /// Record the representation a use expression's specialization derived,
+    /// owned by the innermost frame (the requesting context at resolution
+    /// time). With no frame open the request came from a module's top level,
+    /// which instantiates exactly once, so the entry stands for the whole
+    /// rehearsal. A mint produced at the requesting frame's own body tail is
+    /// that frame's return: it becomes the frame's declared mint and is
+    /// recorded for the frame's own requesting site in turn, so a procedure
+    /// that produces by delegating hands the mint to its callers.
+    fn recordUseMint(
+        self: *Rehearsal,
+        module_bytes: [32]u8,
+        use_expr: checked.CheckedExprId,
+        mint: direct_translate.ProducerRepresentation,
+    ) void {
+        const key = RequestingSite{ .module_bytes = module_bytes, .use_expr = @intFromEnum(use_expr) };
+        self.use_mints.put(key, mint) catch return;
+        census.bump("rehearsal_use_mint_recorded");
+        if (self.frames.items.len == 0) return;
+        const owner = &self.frames.items[self.frames.items.len - 1];
+        owner.recorded_uses.append(self.allocator, key) catch {
+            _ = self.use_mints.remove(key);
+            return;
+        };
+        if (!std.mem.eql(u8, &owner.env_module_bytes, &module_bytes)) return;
+        for (owner.body_tails.items) |tail| {
+            if (tail != @intFromEnum(use_expr)) continue;
+            if (owner.ret_mint == null) owner.ret_mint = mint;
+            if (owner.use_key) |own_key| {
+                if (self.use_mints.get(own_key) == null) {
+                    self.use_mints.put(own_key, mint) catch return;
+                    // The reader sits in the frame's own requesting context,
+                    // which outlives the frame: the entry belongs to the frame
+                    // below it, and to the whole rehearsal when the request
+                    // came from a module's top level.
+                    if (self.frames.items.len >= 2) {
+                        const grandparent = &self.frames.items[self.frames.items.len - 2];
+                        grandparent.recorded_uses.append(self.allocator, own_key) catch {
+                            _ = self.use_mints.remove(own_key);
+                            return;
+                        };
+                    }
+                    census.bump("rehearsal_use_mint_propagated");
+                }
+            }
+            break;
+        }
+    }
+
+    /// The representation the specialization requested at this use expression
+    /// derived, when it resolved under a frame still open.
+    pub fn recordedUseMint(
+        self: *const Rehearsal,
+        module_bytes: [32]u8,
+        use_expr: checked.CheckedExprId,
+    ) ?direct_translate.ProducerRepresentation {
+        return self.use_mints.get(.{ .module_bytes = module_bytes, .use_expr = @intFromEnum(use_expr) });
+    }
+
+    /// Copy one receiver-chain link into rehearsal-owned storage, so the edge
+    /// carrying it outlives the requesting body context that built it.
+    pub fn poolReceiverLink(self: *Rehearsal, link: ReceiverLink) ?*const ReceiverLink {
+        const pooled = self.component_arena.allocator().create(ReceiverLink) catch return null;
+        pooled.* = link;
+        return pooled;
+    }
+
+    /// Declare each producer in a request's receiver chain at its own
+    /// produced position, innermost first, so every outer derivation's
+    /// receiver translation finds the mint the producer feeding it states.
+    /// The declarations live under the caller's floor and retract with it.
+    fn declareReceiverChainInputs(
+        self: *Rehearsal,
+        caller: direct_translate.ModuleCursor,
+        caller_env: ?*const direct_translate.BindingEnvironment,
+        caller_owner_node: u32,
+        link_opt: ?*const ReceiverLink,
+        topology: Type.IteratorTopology,
+    ) void {
+        const link = link_opt orelse return;
+        self.declareReceiverChainInputs(caller, caller_env, caller_owner_node, link.inner, topology);
+        const recorded: ?direct_translate.ProducerRepresentation = if (link.use_key) |key|
+            self.use_mints.get(key)
+        else
+            null;
+        const mint = link.ready orelse recorded orelse derive: {
+            const procedure = link.procedure orelse {
+                census.bump("iter_chain_link_underived");
+                return;
+            };
+            const kind = kindForIteratorProcedure(procedure) orelse return;
+            break :derive self.deriveProducerMint(caller, caller_env, caller_owner_node, .{
+                .kind = kind,
+                .receiver_ty = link.receiver,
+                .state_ty = link.state,
+                .evidence = link.evidence,
+                .stamp_position = link.produced,
+            }, topology) orelse {
+                census.bump("iter_chain_link_underived");
+                return;
+            };
+        };
+        self.translator.declareRepresentationInput(.{
+            .position = .{ .module_bytes = caller.module_bytes, .type_id = @intFromEnum(link.produced) },
+            .representation = mint,
+        }) catch return;
+        census.bump("iter_chain_link_declared");
+    }
+
+    /// What one producer mints over, named entirely in the requesting
+    /// module's checked store, so one derivation serves the edge's own
+    /// declaration and every producer feeding its receiver.
+    const ProducerMintSpec = struct {
+        kind: Type.IteratorKind,
+        /// The producer's receiver position: the value a primary iterates, or
+        /// the iterator an adapter minted over.
+        receiver_ty: checked.CheckedTypeId,
+        /// `Iter.custom`'s step-state formal.
+        state_ty: ?checked.CheckedTypeId = null,
+        /// The callable evidence the mint is digested under.
+        evidence: ?names.TypeDigest = null,
+        /// The caller-module position whose emission names the minted shape
+        /// for the recorded identity digest; null leaves the mint unstamped.
+        stamp_position: ?checked.CheckedTypeId = null,
+    };
+
+    /// Derive the representation one producer mints, from the requesting
+    /// context's own knowledge. A primary — a list, string, single value,
+    /// range, or custom step becoming an iterator — mints at depth one over
+    /// its own arguments: the value it iterates (and, for `Iter.custom`, its
+    /// step state), each the use's formal type emitted under the requesting
+    /// binding. An adapter instead mints over its receiver's existing
+    /// representation: the receiver's minted depth decides this mint's depth,
+    /// and a chain past the cap runs forced-dynamic. A minted result carries
+    /// the recorded identity: the produced position is emitted once with the
+    /// mint unstamped, and that shape is digested under the recorded
+    /// producer-identity recipe together with the callable evidence.
+    fn deriveProducerMint(
+        self: *Rehearsal,
+        caller: direct_translate.ModuleCursor,
+        caller_env: ?*const direct_translate.BindingEnvironment,
+        caller_owner_node: u32,
+        spec: ProducerMintSpec,
+        topology: Type.IteratorTopology,
+    ) ?direct_translate.ProducerRepresentation {
+        const primary = switch (spec.kind) {
+            .list, .str, .single, .custom, .range_exclusive, .range_inclusive => true,
+            else => false,
+        };
+        var depth: u8 = 0;
+        var receiver: ?Type.TypeId = null;
+        var reason: direct_translate.SkipReason = undefined;
+        if (self.translator.translateUnderEnvironment(
+            caller,
+            caller_env,
+            caller_owner_node,
+            spec.receiver_ty,
+            &reason,
+        )) |receiver_ty| {
+            receiver = receiver_ty;
+            switch (self.types.get(receiver_ty)) {
+                .named => |named| depth = named.def.iterator_depth,
+                else => {},
+            }
+        } else |_| {}
+
+        const representation: direct_translate.ProducerRepresentation = if (primary) primary: {
+            var primary_components: [2]Type.TypeId = undefined;
+            var count: usize = 0;
+            switch (spec.kind) {
+                .range_exclusive, .range_inclusive => {},
+                else => {
+                    const value = receiver orelse {
+                        census.bump("iter_declare_primary_component_untranslated");
+                        return null;
+                    };
+                    primary_components[0] = value;
+                    count = 1;
+                    if (spec.kind == .custom) {
+                        const state_ty = spec.state_ty orelse {
+                            census.bump("iter_declare_primary_state_missing");
+                            return null;
+                        };
+                        const state = self.translator.translateUnderEnvironment(
+                            caller,
+                            caller_env,
+                            caller_owner_node,
+                            state_ty,
+                            &reason,
+                        ) catch {
+                            census.bump("iter_declare_primary_component_untranslated");
+                            return null;
+                        };
+                        primary_components[1] = state;
+                        count = 2;
+                    }
+                },
+            }
+            const pooled = self.component_arena.allocator().alloc(Type.TypeId, count) catch return null;
+            @memcpy(pooled, primary_components[0..count]);
+            break :primary .{
+                .iterator_representation = .minted,
+                .iterator_kind = spec.kind,
+                .iterator_depth = 1,
+                .topology = topology,
+                .minting = .{ .callable_evidence = spec.evidence },
+                .components = pooled,
+            };
+        } else representation: {
+            const components = self.pooledReceiverComponents(receiver);
+            const over_cap = depth >= max_minted_chain_depth;
+            break :representation if (over_cap) .{
+                .iterator_representation = .forced_dynamic,
+                .iterator_kind = .forced_dynamic,
+                .iterator_depth = 0,
+                .topology = topology,
+                .minting = .{ .callable_evidence = null },
+            } else .{
+                .iterator_representation = .minted,
+                .iterator_kind = spec.kind,
+                .iterator_depth = depth + 1,
+                .topology = topology,
+                .minting = .{ .callable_evidence = spec.evidence },
+                .components = components,
+            };
+        };
+
+        var final_representation = representation;
+        if (representation.iterator_representation == .minted) two_phase: {
+            const stamp_position = spec.stamp_position orelse break :two_phase;
+            const unstamped_floor = self.translator.representationInputCount();
+            self.translator.declareRepresentationInput(.{
+                .position = .{
+                    .module_bytes = caller.module_bytes,
+                    .type_id = @intFromEnum(stamp_position),
+                },
+                .representation = representation,
+            }) catch break :two_phase;
+            var unstamped_reason: direct_translate.SkipReason = undefined;
+            const unstamped = self.translator.translateUnderEnvironment(
+                caller,
+                caller_env,
+                caller_owner_node,
+                stamp_position,
+                &unstamped_reason,
+            ) catch {
+                self.translator.truncateRepresentationInputs(unstamped_floor);
+                census.bump("iter_declare_identity_emit_failed");
+                break :two_phase;
+            };
+            self.translator.truncateRepresentationInputs(unstamped_floor);
+            switch (self.types.get(unstamped)) {
+                .named => {},
+                else => {
+                    census.bump("iter_declare_identity_not_named");
+                    break :two_phase;
+                },
+            }
+            const shape = self.types.typeDigest(self.program_names, unstamped);
+            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            hasher.update("roc.generated_iterator.final_identity");
+            hasher.update(&shape.bytes);
+            if (spec.evidence) |evidence| {
+                hasher.update("callable_evidence");
+                hasher.update(&evidence.bytes);
+            }
+            final_representation.generated = .{ .bytes = hasher.finalResult() };
+            final_representation.minting = null;
+            census.bump("iter_declare_identity_stamped");
+        }
+        return final_representation;
     }
 
     /// The minted components the receiver carries past its public item, pooled
@@ -3899,6 +4110,9 @@ pub const Rehearsal = struct {
         if (frame.input_floor) |floor| {
             self.translator.truncateRepresentationInputs(floor);
         }
+        for (frame.recorded_uses.items) |key| _ = self.use_mints.remove(key);
+        frame.recorded_uses.deinit(self.allocator);
+        frame.body_tails.deinit(self.allocator);
         if (frame.trace) |trace| {
             trace.deinit();
             self.allocator.destroy(trace);
@@ -4258,9 +4472,11 @@ pub const Rehearsal = struct {
                 edge.adopted_mint,
             );
             census.bump("rehearsal_frame_rule_declared");
-        frame.ret_mint = self.last_declared_mint;
-        self.last_declared_mint = null;
+            frame.ret_mint = self.last_declared_mint;
+            self.last_declared_mint = null;
+            if (frame.ret_mint) |mint| self.recordUseMint(edge.module_bytes, edge.use_expr, mint);
         }
+        frame.use_key = .{ .module_bytes = edge.module_bytes, .use_expr = @intFromEnum(edge.use_expr) };
 
         // The two sides of this specialization's representation interface
         // (reunify.md section 11.1): the callee's scheme root emitted under the
@@ -4319,6 +4535,8 @@ pub const Rehearsal = struct {
         if (frame.input_floor != null) census.bump("rehearsal_rule_path_mint_declared");
         frame.ret_mint = self.last_declared_mint;
         self.last_declared_mint = null;
+        if (frame.ret_mint) |mint| self.recordUseMint(edge.module_bytes, edge.use_expr, mint);
+        frame.use_key = .{ .module_bytes = edge.module_bytes, .use_expr = @intFromEnum(edge.use_expr) };
         // A rule edge into a scheme with no binders has exactly one
         // instantiation; the ground path already resolves those exactly.
         if (scheme.gv_len == 0) {
@@ -4741,8 +4959,10 @@ pub const Rehearsal = struct {
             );
             frame.ret_mint = self.last_declared_mint;
             self.last_declared_mint = null;
+            if (frame.ret_mint) |mint| self.recordUseMint(edge.module_bytes, edge.use_expr, mint);
             census.bump("rehearsal_frame_rule_declared");
         }
+        frame.use_key = .{ .module_bytes = edge.module_bytes, .use_expr = @intFromEnum(edge.use_expr) };
         const declared = self.emitQuietly(start.cursor, chain.innermost(), scheme.owner_node, scheme.root);
         const requested = self.emitQuietly(caller, caller_env, caller_owner_node, site.instantiated_root);
         if (!self.witnessesAgree(declared, requested)) {

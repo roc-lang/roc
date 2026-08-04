@@ -16614,6 +16614,7 @@ const BodyContext = struct {
                     else => direct: {
                         if (self.builder.rehearsal) |rehearsal| {
                             rehearsal.declareFrameRetMintAtBodyRoot(self.view.key.bytes, root.ty);
+                            rehearsal.noteBodyTail(self.view.key.bytes, body.root_expr);
                         }
                         break :direct .{
                             .args = .empty(),
@@ -17784,6 +17785,7 @@ const BodyContext = struct {
             while (remaining > 0) : (remaining -= 1) {
                 const tail_expr = self.view.bodies.expr(tail);
                 rehearsal.declareFrameRetMintAtBodyRoot(self.view.key.bytes, tail_expr.ty);
+                rehearsal.noteBodyTail(self.view.key.bytes, tail);
                 switch (tail_expr.data) {
                     .block => |block| tail = block.final_expr,
                     else => break,
@@ -27674,6 +27676,10 @@ const BodyContext = struct {
                     .procedure = procedure,
                     .state = if (function.args.len > 2) function.args[2] else null,
                     .evidence = mint_evidence,
+                    .receiver_link = if (call_args.len > 0)
+                        self.iteratorReceiverChainForExpr(call_args[0], max_receiver_chain_links)
+                    else
+                        null,
                 },
             };
         };
@@ -34881,6 +34887,90 @@ const BodyContext = struct {
         };
     }
 
+    /// The producers feeding one expression's value, outermost first: a
+    /// dispatch or direct call resolving to an iterator procedure names one
+    /// link, and its receiver operand names the next inward. Named entirely
+    /// from checked data, so each request instance derives its own mints.
+    fn iteratorReceiverChainForExpr(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        depth_budget: usize,
+    ) ?*const spec_rehearsal.ReceiverLink {
+        if (depth_budget == 0) return null;
+        const rehearsal = self.builder.rehearsal orelse return null;
+        const expr = self.view.bodies.expr(expr_id);
+        switch (expr.data) {
+            .dispatch_call => |maybe_plan| {
+                const plan_id = maybe_plan orelse return null;
+                const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+                const resolution = self.evidenceResolution(plan) orelse return null;
+                const lookup = switch (resolution) {
+                    .target => |target_lookup| target_lookup,
+                    .structural => return null,
+                };
+                const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse {
+                    // A plain procedure target mints through its own body,
+                    // whose specialization may lower after this chain is
+                    // built: the link names the call site, and the chain's
+                    // declaration reads what that site's specialization
+                    // recorded by then.
+                    return rehearsal.poolReceiverLink(.{
+                        .use_key = .{ .module_bytes = self.view.key.bytes, .use_expr = @intFromEnum(expr_id) },
+                        .produced = expr.ty,
+                        .receiver = expr.ty,
+                    });
+                };
+                const operands = plan.argsSlice(self.view.static_dispatch_plans);
+                const receiver_index = switch (plan.dispatcher) {
+                    .arg => |index| index,
+                    .type_only => return null,
+                };
+                if (receiver_index >= operands.len) return null;
+                const receiver_expr = switch (operands[receiver_index]) {
+                    .checked_expr => |operand_expr| operand_expr,
+                    else => return null,
+                };
+                const evidence: ?names.TypeDigest = if (iteratorProcedureEvidenceIndex(procedure)) |index|
+                    if (index < operands.len) switch (operands[index]) {
+                        .checked_expr => |operand_expr| self.callableArgumentEvidenceDigest(operand_expr) catch null,
+                        else => null,
+                    } else null
+                else
+                    null;
+                return rehearsal.poolReceiverLink(.{
+                    .procedure = procedure,
+                    .produced = expr.ty,
+                    .receiver = self.view.bodies.expr(receiver_expr).ty,
+                    .state = if (operands.len > 2) switch (operands[2]) {
+                        .checked_expr => |operand_expr| self.view.bodies.expr(operand_expr).ty,
+                        else => null,
+                    } else null,
+                    .evidence = evidence,
+                    .inner = self.iteratorReceiverChainForExpr(receiver_expr, depth_budget - 1),
+                });
+            },
+            .call => |call| {
+                const target = call.direct_target orelse return null;
+                const procedure = self.iteratorProcedureForResolvedTarget(target) orelse return null;
+                if (call.args.len == 0) return null;
+                const receiver_expr = call.args[0];
+                const evidence: ?names.TypeDigest = if (iteratorProcedureEvidenceIndex(procedure)) |index|
+                    if (index < call.args.len) (self.callableArgumentEvidenceDigest(call.args[index]) catch null) else null
+                else
+                    null;
+                return rehearsal.poolReceiverLink(.{
+                    .procedure = procedure,
+                    .produced = expr.ty,
+                    .receiver = self.view.bodies.expr(receiver_expr).ty,
+                    .state = if (call.args.len > 2) self.view.bodies.expr(call.args[2]).ty else null,
+                    .evidence = evidence,
+                    .inner = self.iteratorReceiverChainForExpr(receiver_expr, depth_budget - 1),
+                });
+            },
+            else => return null,
+        }
+    }
+
     fn iteratorProducerHint(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -34903,9 +34993,22 @@ const BodyContext = struct {
                 .witness = .{ .callable = plan.callable_ty },
                 .procedure = procedure,
                 .evidence = mint_evidence,
+                .receiver_link = receiver_link: {
+                    const receiver_index = switch (plan.dispatcher) {
+                        .arg => |index| index,
+                        .type_only => break :receiver_link null,
+                    };
+                    if (receiver_index >= operands.len) break :receiver_link null;
+                    break :receiver_link switch (operands[receiver_index]) {
+                        .checked_expr => |receiver_expr| self.iteratorReceiverChainForExpr(receiver_expr, max_receiver_chain_links),
+                        else => null,
+                    };
+                },
             },
         };
     }
+
+    const max_receiver_chain_links: usize = 16;
 
     fn dispatchPlanCoveringRule(
         self: *BodyContext,
