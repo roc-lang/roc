@@ -4099,7 +4099,12 @@ const MonoTypeNode = extern struct {
 The mutable instantiation graph may use union-find, row-extension links, and
 work queues while solving one specialization's interface and body relations.
 Its final output is an immutable `TypeId` in `MonoTypeStore`. After that point,
-the type node is never refilled.
+the type node is never refilled. Recursive groups may reserve type ids before
+their contents are available, but those slots are unpublished construction
+state: digest lookup and freezing are forbidden until every reserved slot has
+been filled. Filling a reserved slot publishes a new immutable node; it does
+not mutate any previously published node, so cached digests for unrelated
+published types remain valid.
 Rows are normalized once, with field and tag names in explicit sorted order,
 and the type digest is stored beside the node when the node is interned. Parent
 digests are computed from child digests, so structurally growing records and
