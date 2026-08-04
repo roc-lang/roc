@@ -182,7 +182,7 @@ fn certifyStoreWithWorkStats(
     diag: *Diagnostic,
     work_stats: ?*CertifierWorkStats,
 ) CertifyError!void {
-    try certifyProcAbiMetadata(store, layouts, diag);
+    try certifyProcAbiMetadata(allocator, store, layouts, diag);
 
     var rc_local = try allocator.alloc(bool, store.localCount());
     defer allocator.free(rc_local);
@@ -230,6 +230,7 @@ fn certifyStoreWithWorkStats(
 /// decrefed. Internal Roc-ABI destination variants may also carry the marker,
 /// so every non-null marker names a final erased-callable argument.
 fn certifyProcAbiMetadata(
+    allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     diag: *Diagnostic,
@@ -255,7 +256,14 @@ fn certifyProcAbiMetadata(
             }
         }
 
-        if (proc.abi != .erased_callable) continue;
+        if (proc.abi != .erased_callable) {
+            if (proc.erased_call_args != null) {
+                diag.context_proc = proc_id;
+                diag.set("proc={d}: ordinary Roc ABI proc carried an erased-call argument plan", .{proc_index});
+                return error.Certification;
+            }
+            continue;
+        }
         if (GuardedList.borrowLen(args) < 2) {
             diag.context_proc = proc_id;
             diag.set("proc={d}: erased-callable ABI requires trailing capture and reuse arguments", .{proc_index});
@@ -272,6 +280,66 @@ fn certifyProcAbiMetadata(
         if (proc.erased_reuse_arg == null) {
             diag.context_proc = proc_id;
             diag.set("proc={d}: erased-callable reuse argument must carry its ownership marker", .{proc_index});
+            return error.Certification;
+        }
+
+        const arg_plan = proc.erased_call_args orelse {
+            diag.context_proc = proc_id;
+            diag.set("proc={d}: erased-callable ABI proc lacks an argument plan", .{proc_index});
+            return error.Certification;
+        };
+        try certifyErasedCallArgsPlan(
+            allocator,
+            store,
+            layouts,
+            arg_plan,
+            proc.args,
+            GuardedList.borrowLen(args) - 2,
+            diag,
+        );
+    }
+}
+
+fn certifyErasedCallArgsPlan(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    plan_id: LIR.ErasedCallArgsPlanId,
+    args_span: LIR.LocalSpan,
+    explicit_count: usize,
+    diag: *Diagnostic,
+) CertifyError!void {
+    if (@intFromEnum(plan_id) >= store.erasedCallArgsPlanCount()) {
+        diag.set("erased-call argument plan index is out of bounds", .{});
+        return error.Certification;
+    }
+
+    const args = store.getLocalSpan(args_span);
+    if (explicit_count > GuardedList.borrowLen(args)) {
+        diag.set("erased-call argument plan has more fields than the argument span", .{});
+        return error.Certification;
+    }
+    const arg_layouts = try allocator.alloc(layout_mod.Idx, explicit_count);
+    defer allocator.free(arg_layouts);
+    for (0..explicit_count) |i| {
+        arg_layouts[i] = store.getLocal(GuardedList.at(args, i)).layout_idx;
+    }
+    const expected_offsets = try allocator.alloc(u32, explicit_count);
+    defer allocator.free(expected_offsets);
+    const expected = layout_mod.erased_call_abi.plan(layouts, arg_layouts, expected_offsets);
+
+    const actual = store.getErasedCallArgsPlan(plan_id);
+    const actual_offsets = store.getErasedCallArgOffsets(actual);
+    if (actual.size != expected.size or
+        actual.alignment != expected.alignment or
+        GuardedList.borrowLen(actual_offsets) != explicit_count)
+    {
+        diag.set("erased-call argument plan metrics do not match its arguments", .{});
+        return error.Certification;
+    }
+    for (expected_offsets, 0..) |expected_offset, i| {
+        if (GuardedList.at(actual_offsets, i) != expected_offset) {
+            diag.set("erased-call argument plan offset {d} does not match its argument", .{i});
             return error.Certification;
         }
     }
@@ -2097,6 +2165,17 @@ const Certifier = struct {
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_call_erased => |assign| {
+                    self.diag.context_proc = self.current_proc;
+                    self.diag.context_stmt = current;
+                    try certifyErasedCallArgsPlan(
+                        self.allocator,
+                        self.store,
+                        self.layouts,
+                        assign.arg_plan,
+                        assign.args,
+                        self.store.getLocalSpan(assign.args).len,
+                        self.diag,
+                    );
                     try self.noteProcLocal(assign.target);
                     try self.noteErasedOwnerDefinition(assign.target, null);
                     try self.noteProcLocal(assign.closure);
@@ -3781,7 +3860,7 @@ const CertifyTest = struct {
     }
 
     fn certifyProcAbiMetadataOnly(self: *CertifyTest) CertifyError!void {
-        return certifyProcAbiMetadata(&self.store, &self.layouts, &self.diag);
+        return certifyProcAbiMetadata(self.allocator, &self.store, &self.layouts, &self.diag);
     }
 };
 
@@ -3795,10 +3874,12 @@ test "certify accepts consistent erased-callable proc ABI metadata" {
         const reuse = try f.local(erased_callable);
         const result = try f.local(.i64);
         const body = try f.ret(result);
+        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
             .erased_reuse_arg = reuse,
+            .erased_call_args = arg_plan,
             .body = body,
             .ret_layout = .i64,
             .abi = .erased_callable,
@@ -3815,10 +3896,12 @@ test "certify accepts consistent erased-callable proc ABI metadata" {
         const capture = try f.local(.opaque_ptr);
         const reuse = try f.local(erased_callable);
         const body = try f.ret(reuse);
+        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
             .erased_reuse_arg = reuse,
+            .erased_call_args = arg_plan,
             .body = body,
             .ret_layout = erased_callable,
             .abi = .erased_callable,
@@ -3933,6 +4016,57 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
     }
 }
 
+test "certify rejects an erased-call argument plan that differs from the signature" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const first = try f.local(.u8);
+    const second = try f.local(.u64);
+    const capture = try f.local(.opaque_ptr);
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const reuse = try f.local(erased_callable);
+    const result = try f.local(.i64);
+    const body = try f.ret(result);
+    const wrong_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{ .u8, .u8 });
+    _ = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = try f.store.addLocalSpan(&.{ first, second, capture, reuse }),
+        .erased_reuse_arg = reuse,
+        .erased_call_args = wrong_plan,
+        .body = body,
+        .ret_layout = .i64,
+        .abi = .erased_callable,
+    });
+
+    try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "plan metrics do not match") != null);
+}
+
+test "certify rejects an erased call site whose argument plan differs" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const closure = try f.local(erased_callable);
+    const first = try f.local(.u8);
+    const second = try f.local(.u64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const args = try f.store.addLocalSpan(&.{ first, second });
+    const wrong_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{ .u8, .u8 });
+    const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .closure = closure,
+        .args = args,
+        .arg_plan = wrong_plan,
+        .next = ret,
+    } });
+    _ = try f.addProc(&.{ closure, first, second }, body, .i64);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "plan metrics do not match") != null);
+}
+
 test "unique-argument certification isolates shared locals between procedures" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -4045,10 +4179,12 @@ test "certify rejects inconsistent erased call reuse fields" {
         const closure = try f.local(erased_callable);
         const result = try f.local(erased_callable);
         const ret = try f.ret(result);
+        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
             .target = result,
             .closure = closure,
             .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
             .reuse_closure = true,
             .reuse_source = null,
             .next = ret,
@@ -4065,10 +4201,12 @@ test "certify rejects inconsistent erased call reuse fields" {
         const closure = try f.local(erased_callable);
         const result = try f.local(erased_callable);
         const ret = try f.ret(result);
+        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
             .target = result,
             .closure = closure,
             .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
             .reuse_closure = false,
             .reuse_source = closure,
             .next = ret,
@@ -4087,10 +4225,12 @@ test "certify accepts erased call reuse from a transparent outer owner" {
     const closure = try f.local(erased_callable);
     const result = try f.local(erased_callable);
     const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
     const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
         .closure = closure,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .reuse_closure = true,
         .reuse_source = owner,
         .next = ret,
@@ -4112,10 +4252,12 @@ test "certify rejects erased call reuse from a different allocation" {
     const unrelated = try f.local(erased_callable);
     const result = try f.local(erased_callable);
     const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
     const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
         .closure = closure,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .reuse_closure = true,
         .reuse_source = unrelated,
         .next = ret,

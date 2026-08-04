@@ -1948,19 +1948,18 @@ pub const MonoLlvmCodeGen = struct {
     fn unpackProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
         const params = self.store.getLocalSpan(proc.args);
         const explicit_count = try explicitProcParamCount(proc.abi, params.len);
-        const arg_layouts = try self.procArgLayouts(proc, .explicit);
-        defer self.allocator.free(arg_layouts);
-        const offsets = try self.computeArgOffsets(arg_layouts, true);
-        defer self.allocator.free(offsets);
-
         const args_ptr = self.args_ptr_arg orelse return error.CompilationFailed;
-        for (0..explicit_count) |i| {
-            const param = GuardedList.at(params, i);
-            const offset = offsets[i];
-            const param_slot = self.slot(param);
-            if (param_slot.size == 0) continue;
-            const src = try self.offsetPtr(args_ptr, offset);
-            try self.copyBytes(param_slot.ptr, src, param_slot.size, param_slot.alignment);
+        if (proc.abi == .erased_callable) {
+            const plan = self.store.getErasedCallArgsPlan(proc.erased_call_args orelse return error.CompilationFailed);
+            const offsets = self.store.getErasedCallArgOffsets(plan);
+            if (offsets.len != explicit_count) return error.CompilationFailed;
+            try self.unpackProcArgsAtOffsets(params, explicit_count, args_ptr, offsets);
+        } else {
+            const arg_layouts = try self.procArgLayouts(proc, .explicit);
+            defer self.allocator.free(arg_layouts);
+            const offsets = try self.computeArgOffsets(arg_layouts, true);
+            defer self.allocator.free(offsets);
+            try self.unpackProcArgsAtOffsets(params, explicit_count, args_ptr, offsets);
         }
 
         if (proc.abi == .erased_callable) {
@@ -1970,6 +1969,22 @@ pub const MonoLlvmCodeGen = struct {
             const reuse_param = GuardedList.at(params, params.len - 1);
             const reuse_ptr = self.reuse_ptr_arg orelse return error.CompilationFailed;
             try self.storePointer(self.slot(reuse_param).ptr, reuse_ptr);
+        }
+    }
+
+    fn unpackProcArgsAtOffsets(
+        self: *MonoLlvmCodeGen,
+        params: anytype,
+        explicit_count: usize,
+        args_ptr: LlvmBuilder.Value,
+        offsets: anytype,
+    ) Error!void {
+        for (0..explicit_count) |i| {
+            const param = GuardedList.at(params, i);
+            const param_slot = self.slot(param);
+            if (param_slot.size == 0) continue;
+            const src = try self.offsetPtr(args_ptr, GuardedList.at(offsets, i));
+            try self.copyBytes(param_slot.ptr, src, param_slot.size, param_slot.alignment);
         }
     }
 
@@ -2380,7 +2395,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_call_erased => |assign| {
-                try self.emitErasedCall(assign.target, assign.closure, assign.args, assign.reuse_closure);
+                try self.emitErasedCall(assign.target, assign.closure, assign.args, assign.arg_plan, assign.reuse_closure);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_packed_erased_fn => |assign| {
@@ -2607,7 +2622,14 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitErasedCall(self: *MonoLlvmCodeGen, target: LocalId, closure: LocalId, args: LocalSpan, reuse_closure: bool) Error!void {
+    fn emitErasedCall(
+        self: *MonoLlvmCodeGen,
+        target: LocalId,
+        closure: LocalId,
+        args: LocalSpan,
+        arg_plan: lir.LIR.ErasedCallArgsPlanId,
+        reuse_closure: bool,
+    ) Error!void {
         try self.prepareLocalWrite(target);
         try self.materializeLocalIfDeferred(closure);
         const builder = self.builder orelse return error.CompilationFailed;
@@ -2628,8 +2650,16 @@ pub const MonoLlvmCodeGen = struct {
         const args_buf = if (arg_locals.len == 0)
             builder.nullValue(ptr_ty) catch return error.OutOfMemory
         else blk: {
-            const buf = try self.allocHostedArgBuffer(arg_layouts);
-            try self.packSequentialArgsFromLocals(buf, arg_locals, arg_layouts);
+            const plan = self.store.getErasedCallArgsPlan(arg_plan);
+            const offsets = self.store.getErasedCallArgOffsets(plan);
+            if (offsets.len != arg_locals.len) return error.CompilationFailed;
+            const buf = try self.allocEntryBlockSlot(
+                .i8,
+                @max(plan.size, 1),
+                LlvmBuilder.Alignment.fromByteUnits(plan.alignment),
+                "erased_args",
+            );
+            try self.packErasedArgsFromLocals(buf, arg_locals, arg_layouts, offsets);
             break :blk buf;
         };
         const ret_ptr = if (self.slot(target).size == 0)
@@ -2990,6 +3020,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
             .list_replace_unsafe => try self.emitListReplaceUnsafe(target, arg_locals, unique_args),
+            .list_map_prepare_reuse => try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals, interchangeable),
             .list_map_cast_unsafe => try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
@@ -3073,6 +3104,7 @@ pub const MonoLlvmCodeGen = struct {
             .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str => try self.emitIntToStr(target, GuardedList.at(arg_locals, 0)),
             .f32_to_str, .f64_to_str => try self.emitFloatToStr(target, GuardedList.at(arg_locals, 0)),
             .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits => try self.emitFloatBitCast(target, op, GuardedList.at(arg_locals, 0)),
+            .dec_from_attos, .dec_to_attos => try self.emitDecAttosMove(target, GuardedList.at(arg_locals, 0)),
             .dec_to_str => try self.emitDecToStr(target, GuardedList.at(arg_locals, 0)),
             .num_to_str => try self.emitNumToStr(target, GuardedList.at(arg_locals, 0)),
             .box_box => try self.emitBoxBox(target, GuardedList.at(arg_locals, 0)),
@@ -4749,6 +4781,11 @@ pub const MonoLlvmCodeGen = struct {
                 builder.intValue(.i32, info.value_offset) catch return error.OutOfMemory,
             },
         );
+    }
+
+    fn emitDecAttosMove(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), value);
     }
 
     fn emitF64ToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -9358,19 +9395,6 @@ pub const MonoLlvmCodeGen = struct {
         return ptr;
     }
 
-    fn allocHostedArgBuffer(self: *MonoLlvmCodeGen, arg_layouts: []const layout.Idx) Error!LlvmBuilder.Value {
-        var total: u32 = 0;
-        for (arg_layouts) |arg_layout| {
-            const sa = self.sizeAlignOf(arg_layout);
-            total = std.mem.alignForward(u32, total, @intCast(@max(sa.alignment.toByteUnits(), 1)));
-            total += sa.size;
-        }
-        total = @max(total, 8);
-        const ptr = try self.allocEntryBlockSlot(.i8, total, LlvmBuilder.Alignment.fromByteUnits(16), "host_args");
-        try self.zeroBytes(ptr, total);
-        return ptr;
-    }
-
     fn copyEntrypointArgsToInternalBuffer(self: *MonoLlvmCodeGen, src_args: LlvmBuilder.Value, dst_args: LlvmBuilder.Value, arg_layouts: []const layout.Idx) Error!void {
         const offsets = try self.computeArgOffsets(arg_layouts, true);
         defer self.allocator.free(offsets);
@@ -9395,18 +9419,21 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn packSequentialArgsFromLocals(self: *MonoLlvmCodeGen, dst_args: LlvmBuilder.Value, arg_locals: anytype, arg_layouts: []const layout.Idx) Error!void {
-        var offset: u32 = 0;
+    fn packErasedArgsFromLocals(
+        self: *MonoLlvmCodeGen,
+        dst_args: LlvmBuilder.Value,
+        arg_locals: anytype,
+        arg_layouts: []const layout.Idx,
+        offsets: anytype,
+    ) Error!void {
         for (0..arg_locals.len) |i| {
             const arg = GuardedList.at(arg_locals, i);
             const arg_layout = arg_layouts[i];
             try self.materializeLocalIfDeferred(arg);
             const sa = self.sizeAlignOf(arg_layout);
-            offset = std.mem.alignForward(u32, offset, @intCast(@max(sa.alignment.toByteUnits(), 1)));
             if (sa.size > 0) {
-                try self.copyBytes(try self.offsetPtr(dst_args, offset), self.slot(arg).ptr, sa.size, self.alignmentForLayout(arg_layout));
+                try self.copyBytes(try self.offsetPtr(dst_args, GuardedList.at(offsets, i)), self.slot(arg).ptr, sa.size, self.alignmentForLayout(arg_layout));
             }
-            offset += sa.size;
         }
     }
 

@@ -2109,6 +2109,7 @@ fn statementDependsOnUnboundPlatformRequirement(
         .break_,
         .import_,
         .alias_decl,
+        .where_alias_decl,
         .nominal_decl,
         .type_anno,
         .type_var_alias,
@@ -5145,8 +5146,8 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             },
             .builtin,
             .external,
+            .pending,
             => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-            .pending => checkedArtifactInvariant("checked declaration template still contained pending lookup", .{}),
         },
         .apply => |apply| blk: {
             const actual_args = try checkedTypeIdsFromDeclarationAnnoSpan(
@@ -5203,6 +5204,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 },
                 .builtin,
                 .external,
+                .pending,
                 => {
                     const generic_root = try appendCheckedTypeRoot(
                         allocator,
@@ -5229,7 +5231,6 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                     }
                     break :blk result;
                 },
-                .pending => checkedArtifactInvariant("checked declaration template still contained pending apply", .{}),
             }
             if (actual_args_owned) {
                 allocator.free(actual_args);
@@ -5253,7 +5254,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
         },
         .tag,
         .malformed,
-        => checkedArtifactInvariant("nominal declaration annotation was not a valid checked template", .{}),
+        => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
     };
 }
 
@@ -6873,7 +6874,7 @@ const SourceTypeGraphFactsContext = struct {
         const resolved = types_store.resolveVar(root);
         std.debug.assert(resolved.var_ == root);
 
-        if (resolved.desc.empty_tag_union_is_default) {
+        if (resolved.desc.flags.empty_tag_union_is_default) {
             return .{ .contains_identity_variables = true };
         }
 
@@ -7012,7 +7013,7 @@ fn appendCheckedTypeRootWithRowDefault(
     // The checker explicitly marks an otherwise-unresolved identity when it
     // closes that identity to `[]`. Preserve the surviving root as a checked
     // variable and carry `[]` only as its row default.
-    if (resolved.desc.empty_tag_union_is_default) {
+    if (resolved.desc.flags.empty_tag_union_is_default) {
         if (active.get(resolved_var)) |id| {
             applyCheckedTypeRowDefault(store, id, row_default);
             return id;
@@ -7868,7 +7869,7 @@ test "checker marks exhaustiveness-defaulted empty payload provenance" {
     try std.testing.expectEqual(@as(usize, 2), args.len);
     const err_desc = test_env.module_env.types.resolveVar(args[1]).desc;
     try std.testing.expectEqual(types.Content{ .structure = .empty_tag_union }, err_desc.content);
-    try std.testing.expect(err_desc.empty_tag_union_is_default);
+    try std.testing.expect(err_desc.flags.empty_tag_union_is_default);
 }
 
 test "checked output retains defaulted identity inside parent function digest" {
@@ -8350,6 +8351,7 @@ pub const CheckedStatementData = union(enum) {
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
     alias_decl,
+    where_alias_decl,
     nominal_decl,
     type_anno,
     type_var_alias,
@@ -8785,6 +8787,7 @@ pub const StoredCheckedStatementData = union(enum) {
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
     alias_decl,
+    where_alias_decl,
     nominal_decl,
     type_anno,
     type_var_alias,
@@ -8978,6 +8981,7 @@ fn reconstructCheckedStatementData(pool_owner: anytype, stored: StoredCheckedSta
         .break_ => .break_,
         .import_ => .import_,
         .alias_decl => .alias_decl,
+        .where_alias_decl => .where_alias_decl,
         .nominal_decl => .nominal_decl,
         .type_anno => .type_anno,
         .type_var_alias => .type_var_alias,
@@ -9356,6 +9360,7 @@ const CheckedSourceNodes = struct {
                 .s_import,
                 .s_alias_decl,
                 .s_nominal_decl,
+                .s_where_alias_decl,
                 .s_type_anno,
                 .s_type_var_alias,
                 .s_expect,
@@ -9681,6 +9686,7 @@ const CheckedSourceNodes = struct {
             .s_import,
             .s_alias_decl,
             .s_nominal_decl,
+            .s_where_alias_decl,
             .s_type_anno,
             .s_type_var_alias,
             .s_runtime_error,
@@ -10307,6 +10313,7 @@ pub const CheckedBodyStore = struct {
             .break_ => .break_,
             .import_ => .import_,
             .alias_decl => .alias_decl,
+            .where_alias_decl => .where_alias_decl,
             .nominal_decl => .nominal_decl,
             .type_anno => .type_anno,
             .type_var_alias => .type_var_alias,
@@ -11239,6 +11246,7 @@ const CheckedBodyDiagnosticErrorScan = struct {
             .break_,
             .import_,
             .alias_decl,
+            .where_alias_decl,
             .nominal_decl,
             .type_anno,
             .type_var_alias,
@@ -11636,6 +11644,7 @@ fn checkedStatementDataDiverges(
         .pending,
         .import_,
         .alias_decl,
+        .where_alias_decl,
         .nominal_decl,
         .type_anno,
         .type_var_alias,
@@ -12326,6 +12335,7 @@ const CheckedBodyPayloadCopier = struct {
             } },
             .s_import => .import_,
             .s_alias_decl => .alias_decl,
+            .s_where_alias_decl => .where_alias_decl,
             .s_nominal_decl => .nominal_decl,
             .s_type_anno => .type_anno,
             .s_type_var_alias => .type_var_alias,
@@ -14761,8 +14771,6 @@ const EvidencePass = struct {
     value_use_by_node: std.AutoHashMap(u32, u32),
     /// dispatch_target record index by the discharged edge's raw fn var.
     target_by_fn_var: std.AutoHashMap(u32, u32),
-    /// Raw constraint function vars checking explicitly rejected.
-    rejected_static_dispatches: std.AutoHashMap(u32, void),
     /// Source node by checked expr (reverse of `exprIdForSource`).
     source_by_checked_expr: std.AutoHashMap(u32, u32),
     /// Generalized local VALUE decls (non-lambda exprs, e.g. an `if` choosing
@@ -14854,7 +14862,6 @@ const EvidencePass = struct {
             .types = module.typeStoreConst(),
             .value_use_by_node = std.AutoHashMap(u32, u32).init(allocator),
             .target_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
-            .rejected_static_dispatches = std.AutoHashMap(u32, void).init(allocator),
             .source_by_checked_expr = std.AutoHashMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = std.AutoHashMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = std.AutoHashMap(u32, u32).init(allocator),
@@ -14880,7 +14887,6 @@ const EvidencePass = struct {
         self.deferred_use_sites.deinit(self.allocator);
         self.value_use_by_node.deinit();
         self.target_by_fn_var.deinit();
-        self.rejected_static_dispatches.deinit();
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
@@ -15117,12 +15123,6 @@ const EvidencePass = struct {
 
     fn buildIndexes(self: *EvidencePass) Allocator.Error!void {
         const module_env = self.module.moduleEnvConst();
-        for (module_env.rejectedStaticDispatches()) |rejected| {
-            const entry = try self.rejected_static_dispatches.getOrPut(rejected.constraint_fn_var);
-            if (entry.found_existing) {
-                checkedArtifactInvariant("duplicate rejected static-dispatch obligation", .{});
-            }
-        }
         for (module_env.scheme_uses.items.items, 0..) |record, i| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
                 .value_use, .shared_value_use => {
@@ -15421,7 +15421,7 @@ const EvidencePass = struct {
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
         if (constraint_fn_var) |fn_var| {
-            if (self.rejected_static_dispatches.contains(@intFromEnum(fn_var))) return .checked_error;
+            if (self.types.varStaticDispatchRejected(fn_var)) return .checked_error;
         }
 
         const resolved = self.types.resolveVar(dispatcher_var);
@@ -16739,6 +16739,7 @@ const CheckedTemplateRefCollector = struct {
             .break_,
             .import_,
             .alias_decl,
+            .where_alias_decl,
             .nominal_decl,
             .type_anno,
             .type_var_alias,
@@ -17777,6 +17778,7 @@ const NestedProcSiteBuilder = struct {
                 try self.scanExpr(loop.body, owner, false);
             },
             .alias_decl,
+            .where_alias_decl,
             .nominal_decl,
             => try self.scanAttachedLocalProcedures(statement_id, owner),
             .pending,
@@ -21341,6 +21343,7 @@ pub const CompileTimeRootTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
         global_value_defs: []const CIR.Def.Idx,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
         checked_types: *const CheckedTypePublication,
@@ -21354,11 +21357,19 @@ pub const CompileTimeRootTable = struct {
             roots.deinit(allocator);
         }
 
+        var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
+        defer seen_source_names.deinit(allocator);
+
         const module_env = module.moduleEnvConst();
         for (global_value_defs) |def_idx| {
             const def = module.def(def_idx);
             if (topLevelDefSourceIdent(def) == null) continue;
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
+
+            const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
+            const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
+            if (seen_source_name.found_existing) continue;
+            seen_source_name.value_ptr.* = {};
 
             const source_ty = module.defType(def_idx);
             if (sourceTypeIsFunction(module, source_ty)) {
@@ -22264,6 +22275,7 @@ fn checkedStatementContainsExpr(
         .break_,
         .import_,
         .alias_decl,
+        .where_alias_decl,
         .nominal_decl,
         .type_anno,
         .type_var_alias,
@@ -22418,6 +22430,7 @@ fn checkedStatementContainsPattern(
         .break_,
         .import_,
         .alias_decl,
+        .where_alias_decl,
         .nominal_decl,
         .type_anno,
         .type_var_alias,
@@ -26507,7 +26520,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 55;
+    const serialized_layout_version: u32 = 56;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29217,7 +29230,9 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                 const where_clause = store.getWhereClause(@enumFromInt(raw_node_idx));
                 switch (where_clause) {
                     .w_method => |method| try visitor.method(method.method_name),
-                    .w_alias => |alias| try visitor.typeName(alias.alias_name),
+                    // The alias reference is a type-anno node of its own, and
+                    // is visited there.
+                    .w_alias => {},
                     .w_malformed => {},
                 }
             },
@@ -29480,6 +29495,7 @@ pub fn publishFromTypedModule(
     var compile_time_roots = try CompileTimeRootTable.fromModule(
         allocator,
         module,
+        &canonical_names,
         global_value_defs,
         inputs.hoisted_roots,
         &checked_type_publication,
@@ -30179,6 +30195,7 @@ fn expectProvidedExportKind(
     var compile_time_roots = try CompileTimeRootTable.fromModule(
         allocator,
         module,
+        &canonical_names,
         global_value_defs,
         &.{},
         &checked_type_publication,
@@ -31987,8 +32004,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xD8, 0xFE, 0x15, 0xB8, 0x63, 0xEB, 0x63, 0xC4, 0xE0, 0xB2, 0x9B, 0xFA, 0xD5, 0x79, 0x8E, 0x8E,
-        0x04, 0xFB, 0x47, 0xE7, 0xEF, 0x31, 0xBC, 0xA6, 0x41, 0x16, 0x36, 0x5F, 0x9F, 0x95, 0x9B, 0xA4,
+        0x31, 0x6A, 0x73, 0x89, 0xF6, 0x04, 0x2C, 0xDB, 0x7D, 0x2B, 0x67, 0x74, 0x7F, 0x25, 0xBD, 0x5B,
+        0xE3, 0xDE, 0x8F, 0xC0, 0x12, 0x1D, 0x1D, 0x17, 0xF8, 0x1C, 0x4A, 0x8B, 0x38, 0x25, 0x02, 0x33,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

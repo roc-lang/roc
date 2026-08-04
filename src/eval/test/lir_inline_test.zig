@@ -3689,6 +3689,18 @@ fn expectEscapingIterChainAllocatesNothing(source: []const u8) TestError!void {
     try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
 }
 
+test "issue 10348 nominal declaration with unbound annotation does not panic" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : {}
+        \\main = {}
+        \\M := { f : I }
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+}
+
 test "iter alloc static: iterator returned from a function is zero-alloc" {
     try expectEscapingIterChainAllocatesNothing(
         \\consume : Iter(U64) -> U64
@@ -7259,4 +7271,17 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.TypeCheckError, error.ParseError => {},
         else => return err,
     };
+}
+
+test "issue 10409 duplicate top-level value defs do not panic constant root lookup" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : {}
+        \\main = {}
+        \\x = ()
+        \\x = 0
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
 }

@@ -2141,6 +2141,17 @@ defaulted at a generalization boundary that narrows the definition's inferred
 type reports `LITERAL DEFAULTED` as a warning, not an error, worded per
 literal kind.
 
+A where alias (`a.Sortable : where [...]`) is a source-level abbreviation for a
+set of method constraints, not a type. Its declaration solves to its receiver: a
+rigid variable carrying the constraints it names. A signature that references
+one instantiates those constraints onto its own type variable, substituting the
+declaration's receiver and parameters by name, so the resulting constraint set
+is indistinguishable from one written out clause by clause. Nothing downstream
+of checking sees a where alias. Because a rigid variable's constraint set is
+fixed by the annotation that introduces it, a where alias constrains only its
+receiver; canonicalization rejects a constraint written against a parameter
+rather than emitting one that could never reach the applied argument.
+
 The checked module outputs normalized dispatch plans. A dispatch plan is a
 checked record, not lowered code:
 
@@ -3809,6 +3820,7 @@ const ExprData = union(enum) {
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
+    record_update: struct { base: ExprId, fields: Span(FieldExpr) },
     tag: TagExpr,
     nominal: ExprId,
 
@@ -3847,6 +3859,21 @@ const LambdaExpr = struct {
     source: FnTemplate,
 };
 ```
+
+`record` is a complete constructor: its field span contains every field in the
+expression type. `record_update` preserves the evaluated base and exactly the
+explicitly updated fields until LIR construction. This distinction is required
+while a Monotype solve group is open: the result type can gain fields from later
+constraints, so enumerating the current type shape and expanding an update at
+that point would permanently omit fields that the final closed type contains.
+Lambda Solved relates the base to the update result and checks each explicit
+field against the final record type. Direct LIR lowering evaluates the base
+once, reads all unchanged fields before evaluating update expressions, and
+writes the final fields in committed runtime order. A `record_update` may carry
+a structural, alias, or nominal record result type directly; unlike `record`,
+`tuple`, and `tag`, it is a base-preserving transformation rather than a fresh
+structural constructor that must be wrapped to construct a nominal value. No
+later stage reconstructs the base or missing fields from source syntax.
 
 `LoopExpr.params` and `LoopExpr.initial` have the same length. Each initial
 value has the type of the corresponding parameter. Every `continue_` reached
@@ -4314,13 +4341,31 @@ its plan:
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
-Checking records `checked_error` by the raw static-dispatch constraint function
-variable that owns the rejected edge. Rejection is not encoded by changing the
-constraint callable, its return, the dispatcher, or any operand to an erroneous
-type: those solver variables can be shared with independently valid producers.
-`EvidencePass.buildIndexes` loads `ModuleEnv.rejected_static_dispatches`; each
-static-dispatch plan lookup checks this map before resolving its receiver and
-must not infer rejection by inspecting a callable result type.
+Checking records `checked_error` on the equivalence class of the static-dispatch
+constraint function variable that owns the rejected edge, as the descriptor
+metadata bit `Descriptor.static_dispatch_rejected`. Rejection is not encoded by
+changing the constraint callable, its return, the dispatcher, or any operand to
+an erroneous type: those solver variables can be shared with independently valid
+producers. The marker is metadata about the class, not content, so `Store.union_`
+carries it across a merge and `Store.poisonOnMismatch` preserves it when it
+replaces content with `err`. A merge rejects the result if either side was
+rejected: two constraint callables only unify when they are the same function
+type carrying the same dispatch edge, so an edge checking rejected for one of
+them is rejected for every site that shares it.
+Instantiation and cross-module copies mint fresh, unrejected classes: a fresh
+edge is checked on its own terms.
+
+A raw variable index cannot carry this. Two dispatch sites record different raw
+variables for what unification later proves is one constraint callable, and a
+union-find root is not stable across later merges, so a raw-keyed set answers
+"rejected" for whichever occurrence happened to be recorded and misses every
+other member of the same class. `Check.markStaticDispatchFnRejected` sets the
+class bit and appends one durable `ModuleEnv.rejected_static_dispatches` record
+per newly rejected class; `Check.init` rehydrates those records onto their
+classes so re-checking an env already carrying them behaves like a fresh check.
+Every static-dispatch plan lookup — in the checker and in `EvidencePass` —
+asks the class before resolving its receiver, and must not infer rejection by
+inspecting a callable result type.
 
 An independently reported checking error may make a plan's receiver itself
 erroneous even when checking accepted that plan's dispatch (for example, a
@@ -4408,6 +4453,27 @@ defaultable arithmetic operators default to `Dec`, quote and interpolation
 literals default to `Str`, and every requirement on such a var resolves against
 the default owner during checking. Structural-capable requirements on other
 unpinnable vars resolve structurally; the rest are statically unreachable.
+
+Generalized rank is not evidence that an edge can pin a constrained var. A
+body-required `where` constraint may remain unresolved only while its receiver
+is in an explicit pinning frontier: reachable from a callable's exported
+arguments or result, from a lambda parameter whose call is still outside the
+checked body, or from an open literal whose deterministic defaulting pass will
+select the owner. Result-position pinning applies to generalized schemes whose
+body is evaluated per specialization; an already-evaluated, non-generalized
+value cannot gain an owner from a later use. A receiver that occurs only in a
+body-local result discarded directly or through local aliases is not in that
+frontier and is therefore statically unreachable during checking.
+
+A generalized constrained function instantiation is also an explicit pinning
+frontier for receivers reachable from that function's argument positions. This
+rule follows the instantiated function type recorded at the use; it does not
+infer reachability from generalized rank. It preserves nested generalized
+helpers whose temporary scheme copy is absent from an enclosing root, while a
+result-only receiver must still escape through the enclosing scheme interface.
+This frontier applies only when every receiver constraint is a copied `where`
+contract; any concrete-use constraint on the same receiver requires resolution
+at the current call.
 
 **Compiler-generated edges.** Structural derivations and builtin helpers call
 methods on component types with no checked instantiation record. For these,
@@ -4805,6 +4871,7 @@ const ExprData = union(enum) {
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
+    record_update: struct { base: ExprId, fields: Span(FieldExpr) },
     tag: TagExpr,
     nominal: ExprId,
 
@@ -5977,13 +6044,25 @@ that disagree on either would make a later free reconstruct the wrong
 allocation pointer.
 
 The decision has a compile-time half and a runtime half. `List.map`'s body
-in Builtin.roc matches on the `list_map_can_reuse` primitive, whose runtime
-meaning is "uniquely owned and not a seamless slice" — a slice's buffer
-points into the middle of an allocation whose header bookkeeping covers the
-whole allocation, so a unique slice still copies. At direct LIR lowering,
-where layouts exist, the primitive lowers to a constant 0 whenever the
-layouts are not interchangeable (or the optimization is off), so the
-runtime check never runs for a pair it could corrupt.
+in Builtin.roc first calls the consuming `list_map_prepare_reuse` primitive,
+then matches on `list_map_can_reuse` for the returned list. The prepare
+primitive is an ownership-only identity: its LIR `RcEffect` consumes the input
+list and declares that the result aliases that consumed ownership unit, while
+its runtime implementation only copies the list handle. This forces ARC to
+preserve every later use before the transfer. The subsequent reuse query can
+therefore observe the refcount only after all live ownership units are present;
+leaving the query on the original, unconsumed argument would allow ARC to move
+a preservation retain after that observation and incorrectly report a shared
+buffer as unique.
+
+The runtime meaning of `list_map_can_reuse` is "uniquely owned and not a
+seamless slice" — a slice's buffer points into the middle of an allocation
+whose header bookkeeping covers the whole allocation, so a unique slice still
+copies. At direct LIR lowering, where layouts exist, the primitive lowers to a
+constant 0 whenever the layouts are not interchangeable (or the optimization
+is off), so the runtime check never runs for a pair it could corrupt.
+Target-independent LIR carries this eligibility for both pointer widths and
+each backend resolves the bit for its target.
 
 The in-place branch itself is dropped before it reaches LIR whenever the
 item layouts are not interchangeable or the optimization is disabled
@@ -6112,6 +6191,16 @@ the fresh allocation path and decrefs the transferred reference; uniqueness
 affects only whether allocation can be avoided, never the ownership contract.
 Capture bytes needed to construct the result are snapshotted before an in-place
 overwrite.
+
+The packed arguments are one fixed-arity struct whose fields remain in source
+parameter order and use each runtime representation's natural alignment. The
+struct size is rounded up to its maximum field alignment. Post-check lowering
+computes and interns the exact field offsets, size, and alignment as an erased
+call argument plan. Every erased call and erased-callable procedure names such
+a plan, and LIR certification verifies that the plan exactly matches the call
+arguments or explicit procedure parameters. Backends consume these offsets
+directly for both packing and unpacking; they must not reorder arguments, round
+individual fields to backend-private slots, or reconstruct the plan.
 
 The direct LIR builder carries the current return destination while recursively
 lowering the selected aggregate or tag payload. That producer-authored context,

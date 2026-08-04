@@ -666,6 +666,10 @@ const Lowerer = struct {
             .list => |items| .{ .list = try self.lowerExprSpan(items) },
             .tuple => |items| .{ .tuple = try self.lowerExprSpan(items) },
             .record => |fields| .{ .record = try self.lowerFieldExprSpan(fields) },
+            .record_update => |update| .{ .record_update = .{
+                .base = try self.lowerExpr(update.base),
+                .fields = try self.lowerFieldExprSpan(update.fields),
+            } },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
                 .payloads = try self.lowerExprSpan(tag.payloads),

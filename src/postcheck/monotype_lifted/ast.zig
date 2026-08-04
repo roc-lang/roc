@@ -54,6 +54,8 @@ pub const ComptimeSiteKind = Mono.ComptimeSiteKind;
 pub const ComptimeSite = Mono.ComptimeSite;
 /// Record field expression entry.
 pub const FieldExpr = Mono.FieldExpr;
+/// Record update expression.
+pub const RecordUpdate = Mono.RecordUpdate;
 /// Keyed pre-lift function capture operand.
 pub const FnDefCapture = Mono.FnDefCapture;
 /// Keyed lifted capture operand (CaptureId + supplying expression).

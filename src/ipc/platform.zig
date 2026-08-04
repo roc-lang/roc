@@ -113,8 +113,15 @@ pub const windows = if (is_windows) struct {
     };
 } else struct {};
 
-/// POSIX shared memory functions
-pub const posix = if (!is_windows) struct {
+/// Linux performs every shared-memory operation through raw kernel syscalls
+/// rather than through libc. Executables that link no libc at all still map,
+/// protect, and unmap the compiler's shared-memory images: the default
+/// platform's freestanding runtime is one such executable, and so is any
+/// process that embeds the machine-code shim without a libc of its own.
+const linux = std.os.linux;
+
+/// POSIX shared memory functions, for the platforms that reach them through libc.
+pub const posix = if (!is_windows and builtin.os.tag != .linux) struct {
     // Note: mmap returns MAP_FAILED ((void*)-1) on error, NOT NULL
     // So we declare it as non-optional and check against MAP_FAILED
     pub extern "c" fn mmap(
@@ -154,8 +161,11 @@ pub const SharedMemoryError = error{
     OutOfMemory,
 };
 
+/// Errors raised while querying the system page size.
+pub const PageSizeError = error{ PageSizeQueryFailed, UnsupportedPlatform };
+
 /// Get the system's page size at runtime
-pub fn getSystemPageSize() error{ PageSizeQueryFailed, UnsupportedPlatform }!usize {
+pub fn getSystemPageSize() PageSizeError!usize {
     const page_size: usize = switch (builtin.os.tag) {
         .windows => blk: {
             var system_info: windows.SYSTEM_INFO = undefined;
@@ -227,12 +237,12 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
         },
         .linux => {
             // Use memfd_create for anonymous shared memory on Linux
-            const fd_raw = std.os.linux.memfd_create("roc_shm", std.os.linux.MFD.CLOEXEC);
+            const fd_raw = linux.memfd_create("roc_shm", linux.MFD.CLOEXEC);
             const fd = std.math.cast(std.posix.fd_t, fd_raw) orelse return error.MemfdCreateFailed;
 
             // Set the size of the shared memory
-            if (std.c.ftruncate(fd, @intCast(size)) != 0) {
-                _ = std.c.close(fd);
+            if (linux.errno(linux.ftruncate(fd, @intCast(size))) != .SUCCESS) {
+                _ = linux.close(fd);
                 return error.FtruncateFailed;
             }
 
@@ -406,7 +416,25 @@ fn mapMemoryWithLogging(
 
             return ptr.?;
         },
-        .linux, .macos, .freebsd, .openbsd, .netbsd => {
+        .linux => {
+            const rc = linux.mmap(
+                @ptrCast(base_addr),
+                size,
+                .{ .READ = true, .WRITE = true },
+                .{ .TYPE = .SHARED },
+                handle,
+                0,
+            );
+            const errno = linux.errno(rc);
+            if (errno != .SUCCESS) {
+                if (log_failure) {
+                    std.log.err("Linux: Failed to map shared memory (size: {}, fd: {}, errno: {t})", .{ size, handle, errno });
+                }
+                return error.MmapFailed;
+            }
+            return @ptrFromInt(rc);
+        },
+        .macos, .freebsd, .openbsd, .netbsd => {
             const ptr = posix.mmap(
                 base_addr,
                 size,
@@ -452,7 +480,15 @@ pub fn protectMappedMemory(
     if (len == 0) return;
 
     switch (builtin.os.tag) {
-        .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
+        .linux => {
+            const prot: linux.PROT = switch (protection) {
+                .read_write => .{ .READ = true, .WRITE = true },
+                .read_only => .{ .READ = true },
+                .read_execute => .{ .READ = true, .EXEC = true },
+            };
+            if (linux.errno(linux.mprotect(ptr, len, prot)) != .SUCCESS) return error.MprotectFailed;
+        },
+        .macos, .ios, .tvos, .watchos, .freebsd, .openbsd, .netbsd => {
             const prot: std.posix.PROT = switch (protection) {
                 .read_write => .{ .READ = true, .WRITE = true },
                 .read_only => .{ .READ = true },
@@ -477,28 +513,34 @@ pub fn protectMappedMemory(
 
 /// Unmap shared memory from the process address space
 pub fn unmapMemory(ptr: *anyopaque, size: usize) void {
-    if (comptime is_windows) {
-        unmapWindowsMemory(ptr);
-    } else {
-        unmapPosixMemory(ptr, size);
+    switch (comptime builtin.os.tag) {
+        .windows => unmapWindowsMemory(ptr),
+        .linux => unmapLinuxMemory(ptr, size),
+        else => unmapPosixMemory(ptr, size),
     }
 }
 
 fn unmapWindowsMemory(ptr: *anyopaque) void {
-    if (comptime is_windows) {
-        _ = windows.UnmapViewOfFile(ptr);
+    _ = windows.UnmapViewOfFile(ptr);
+}
+
+fn unmapLinuxMemory(ptr: *anyopaque, size: usize) void {
+    const errno = linux.errno(linux.munmap(@ptrCast(ptr), size));
+    if (errno != .SUCCESS) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("munmap failed with errno {t}", .{errno});
+        }
+        unreachable;
     }
 }
 
 fn unmapPosixMemory(ptr: *anyopaque, size: usize) void {
-    if (comptime !is_windows) {
-        const rc = posix.munmap(ptr, size);
-        if (rc != 0) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("munmap failed with errno {d}", .{std.c._errno().*});
-            }
-            unreachable;
+    const rc = posix.munmap(ptr, size);
+    if (rc != 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("munmap failed with errno {d}", .{std.c._errno().*});
         }
+        unreachable;
     }
 }
 
@@ -507,32 +549,39 @@ fn unmapPosixMemory(ptr: *anyopaque, size: usize) void {
 /// On POSIX: closes the file descriptor
 /// Note: Child processes on Windows should NOT close inherited handles
 pub fn closeHandle(handle: Handle, is_owner: bool) void {
-    if (comptime is_windows) {
-        closeWindowsHandle(handle, is_owner);
-    } else {
-        closePosixHandle(handle);
+    switch (comptime builtin.os.tag) {
+        .windows => closeWindowsHandle(handle, is_owner),
+        .linux => closeLinuxHandle(handle),
+        else => closePosixHandle(handle),
     }
 }
 
 fn closeWindowsHandle(handle: Handle, is_owner: bool) void {
-    if (comptime is_windows) {
-        // On Windows, only the owner should close the handle
-        // Inherited handles belong to the parent process
-        if (is_owner) {
-            _ = windows.CloseHandle(handle);
+    // On Windows, only the owner should close the handle
+    // Inherited handles belong to the parent process
+    if (is_owner) {
+        _ = windows.CloseHandle(handle);
+    }
+}
+
+fn closeLinuxHandle(handle: Handle) void {
+    // POSIX always closes the fd
+    const errno = linux.errno(linux.close(handle));
+    if (errno != .SUCCESS) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("close failed with errno {t}", .{errno});
         }
+        unreachable;
     }
 }
 
 fn closePosixHandle(handle: Handle) void {
-    if (comptime !is_windows) {
-        // POSIX always closes the fd
-        const rc = posix.close(handle);
-        if (rc != 0) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("close failed with errno {d}", .{std.c._errno().*});
-            }
-            unreachable;
+    // POSIX always closes the fd
+    const rc = posix.close(handle);
+    if (rc != 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("close failed with errno {d}", .{std.c._errno().*});
         }
+        unreachable;
     }
 }

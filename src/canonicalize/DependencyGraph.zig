@@ -602,7 +602,7 @@ const DemandAnalyzer = struct {
                 try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
             },
             .s_return => |ret| try walk.push(self.allocator, .{ .visit = ret.expr }),
-            .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
         }
     }
 
@@ -1128,7 +1128,7 @@ fn collectNameReferences(
                             try scratch_stack.append(allocator, loop_stmt.body);
                         },
                         .s_return => |ret| try scratch_stack.append(allocator, ret.expr),
-                        .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+                        .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
                     }
                 }
                 try scratch_stack.append(allocator, block.final_expr);

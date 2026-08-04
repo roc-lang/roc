@@ -2167,6 +2167,13 @@ pub const SyntaxChecker = struct {
                     }
                     continue;
                 },
+                .s_where_alias_decl => |decl| {
+                    if (extractSymbolFromTypeDecl(module_env, decl.header, stmt_idx, uri, &line_offsets, .interface)) |symbol| {
+                        self.logDebug(.build, "symbols: found where alias symbol '{s}'", .{symbol.name});
+                        try appendOwnedSymbol(allocator, &symbols, symbol);
+                    }
+                    continue;
+                },
                 else => {},
             }
 

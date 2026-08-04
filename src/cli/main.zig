@@ -124,7 +124,6 @@ comptime {
         std.testing.refAllDecls(@import("ReplSession.zig"));
     }
 }
-const libc_finder = @import("libc_finder.zig");
 const linker = @import("linker.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
@@ -194,7 +193,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     // Arena-owned so the path outlives the returned BuildEnv, which borrows it.
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.arena);
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.host_cpu.nativeTarget(), cwd, ctx.io.std_io);
     errdefer build_env.deinit();
 
     build_env.compiler_version = build_options.compiler_version;
@@ -249,7 +248,6 @@ const CliMainError =
     CliError ||
     Allocator.Error ||
     cli_args.ParseError ||
-    libc_finder.FindLibcError ||
     linker.LinkError ||
     bundle.BundleError ||
     unbundle.UnbundleError ||
@@ -481,6 +479,11 @@ const BuiltinsObjects = struct {
     const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins.o");
     const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins.o");
 
+    /// Cross-compilation target builtins (BSD targets)
+    const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_builtins.o");
+    const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_builtins.o");
+    const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_builtins.o");
+
     /// Extern-symbol-mode builtins: host operations are linker-resolved
     /// symbols (the symbol ABI) instead of RocOps vtable calls.
     const native_extern = if (builtin.is_test)
@@ -499,6 +502,9 @@ const BuiltinsObjects = struct {
     const arm64win_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins_extern.obj");
     const x64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins_extern.o");
     const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins_extern.o");
+    const x64freebsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_builtins_extern.o");
+    const x64openbsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_builtins_extern.o");
+    const x64netbsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_builtins_extern.o");
 
     /// Get the appropriate builtins object bytes for the given target
     ///
@@ -518,6 +524,9 @@ const BuiltinsObjects = struct {
             .arm64win => arm64win,
             .x64mac => x64mac,
             .arm64mac => arm64mac,
+            .x64freebsd => x64freebsd,
+            .x64openbsd => x64openbsd,
+            .x64netbsd => x64netbsd,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native,
         };
@@ -537,6 +546,9 @@ const BuiltinsObjects = struct {
             .arm64win => arm64win_extern,
             .x64mac => x64mac_extern,
             .arm64mac => arm64mac_extern,
+            .x64freebsd => x64freebsd_extern,
+            .x64openbsd => x64openbsd_extern,
+            .x64netbsd => x64netbsd_extern,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native_extern,
         };
@@ -569,6 +581,9 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
         const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/" ++ base_name ++ ".o");
         const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/" ++ base_name ++ ".obj");
         const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/" ++ base_name ++ ".obj");
+        const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/" ++ base_name ++ ".o");
+        const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/" ++ base_name ++ ".o");
+        const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/" ++ base_name ++ ".o");
 
         pub fn forTarget(requested: RocTarget) ?[]const u8 {
             const target = requested.defaultCpuTarget();
@@ -581,6 +596,9 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
                 .arm64mac => arm64mac,
                 .x64win => x64win,
                 .arm64win => arm64win,
+                .x64freebsd => x64freebsd,
+                .x64openbsd => x64openbsd,
+                .x64netbsd => x64netbsd,
                 else => null,
             };
         }
@@ -933,7 +951,11 @@ pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_hand
     // integer on both platforms -- on Windows it is a HANDLE (a pointer), and
     // `ipc.coordination.parseHandle` turns the integer back into one.
     const handle_int = if (is_windows) @intFromPtr(shm_handle.fd) else shm_handle.fd;
-    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ handle_int, shm_handle.size });
+    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
+        handle_int,
+        shm_handle.size,
+        shm_handle.page_size,
+    });
     try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
     try fd_file.sync(ctx.io.std_io);
 }
@@ -986,7 +1008,11 @@ pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_na
         // Note: We'll close this explicitly later, before spawning the child
 
         // Write shared memory info to file (POSIX only - Windows uses command line args)
-        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
+        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
+            shm_handle.fd,
+            shm_handle.size,
+            shm_handle.page_size,
+        });
 
         try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
 
@@ -1201,8 +1227,8 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     ctx.initIo(); // Must be called after ctx is at its final stack location
     defer ctx.deinit(); // deinit flushes I/O
 
-    try switch (parsed_args) {
-        .run => |run_args| {
+    (switch (parsed_args) {
+        .run => |run_args| run_blk: {
             if (std.mem.eql(u8, run_args.path, "main.roc")) {
                 std.Io.Dir.cwd().access(ctx.io.std_io, run_args.path, .{}) catch |err| switch (err) {
                     error.FileNotFound => {
@@ -1233,45 +1259,20 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
                 };
             }
 
-            rocRun(&ctx, run_args, args[0]) catch |err| switch (err) {
-                error.CliError => {
-                    // Problems already recorded in context, render them below
-                },
-                else => return err,
-            };
+            break :run_blk rocRun(&ctx, run_args, args[0]);
         },
         .check => |check_args| rocCheck(&ctx, check_args, args[0]),
-        .build => |build_args| rocBuild(&ctx, build_args, args[0]) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .build => |build_args| rocBuild(&ctx, build_args, args[0]),
         .bundle => |bundle_args| rocBundle(&ctx, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args, args[0]),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
-        .glue => |glue_args| rocGlue(&ctx, glue_args) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .glue => |glue_args| rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
-        .bump => |bump_args| rocBump(&ctx, bump_args) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
-        .install => |install_args| rocInstall(&ctx, install_args, args[0]) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .bump => |bump_args| rocBump(&ctx, bump_args),
+        .install => |install_args| rocInstall(&ctx, install_args, args[0]),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
@@ -1296,6 +1297,17 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
             };
             return error.InvalidArguments;
         },
+    }) catch |err| {
+        // Commands report by recording a problem and returning `CliError`, and
+        // a few print straight to stderr instead. Either way the user has been
+        // told something. An error that arrives here having produced no output
+        // at all is a compiler bug, and exiting 1 in silence hides it behind
+        // what looks like a crash, so name the error rather than let it pass.
+        if (ctx.io.bytesWritten() == 0 and !ctx.hasProblems()) {
+            ctx.addProblemIgnoreError(.{ .unreported_error = .{ .err_name = @errorName(err) } });
+        }
+        try ctx.renderProblemsTo(ctx.io.stderr());
+        return err;
     };
 
     // Render any problems accumulated during command execution
@@ -2131,31 +2143,13 @@ fn defaultRunCheckedHostIdentity(
     return hasher.finalResult();
 }
 
-fn defaultRunLinkInputsIdentity(
-    ctx: *CliCtx,
-    target: RocTarget,
-    libc_info: ?libc_finder.LibcInfo,
-) CliError!?[32]u8 {
+fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
     const runtime_bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-default-link-inputs-v2");
+    updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
     hasher.update(&bytesDigest(runtime_bytes));
-
-    if (libc_info) |info| {
-        updateHashBytes(&hasher, "libc");
-        updateHashBytes(&hasher, info.arch);
-        updateHashBytes(&hasher, info.dynamic_linker);
-        const dynamic_linker_digest = try fileContentsDigest(ctx, info.dynamic_linker);
-        hasher.update(&dynamic_linker_digest);
-        updateHashBytes(&hasher, info.lib_dir);
-        updateHashBytes(&hasher, info.libc_path);
-        const libc_digest = try fileContentsDigest(ctx, info.libc_path);
-        hasher.update(&libc_digest);
-    } else {
-        updateHashBytes(&hasher, "no-libc");
-    }
 
     return hasher.finalResult();
 }
@@ -2278,7 +2272,9 @@ test "interpreter executable cache digest changes for platform host shim entrypo
 }
 
 fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget }!void {
-    const native_target = RocTarget.detectNative();
+    // Name the host by the CPU level it executes, so a target rejected only
+    // because this machine's CPU is older than it requires says so.
+    const native_target = roc_target.host_cpu.nativeTarget();
     try ctx.io.stderr().print(
         "Error: unsupported target for the default roc command: {s} cannot be executed on this host ({s}).\n\nUse `roc build --target={s}` to produce an artifact for that target.\n",
         .{ @tagName(target), @tagName(native_target), @tagName(target) },
@@ -3361,7 +3357,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
 fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
-    const native_target = RocTarget.detectNative();
+    const native_target = roc_target.host_cpu.nativeTarget();
     const default_target = defaultRunShimTarget(native_target);
     const selected_target = if (args.target) |target_str| blk: {
         const requested = RocTarget.fromString(target_str) orelse {
@@ -3371,13 +3367,6 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         if (!devShimTargetCompatible(requested, native_target)) {
             try rejectRunTargetNotExecutable(ctx, requested);
             unreachable;
-        }
-        if (requested.isStatic()) {
-            try ctx.io.stderr().print(
-                "Error: shared-memory dev runs for headerless default apps require a dynamic Linux target; got {s}.\n",
-                .{@tagName(requested)},
-            );
-            return error.UnsupportedTarget;
         }
         break :blk requested;
     } else default_target;
@@ -3459,17 +3448,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     const lowered = &lowered_result.lowered;
     const enable_debug = builtin.mode == .Debug;
     const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
-    const libc_info: ?libc_finder.LibcInfo = if (selected_target.isDynamic())
-        libc_finder.findLibc(ctx) catch |err| {
-            try ctx.io.stderr().print(
-                "Error: could not find system libc for shared-memory default app run: {}\n",
-                .{err},
-            );
-            return err;
-        }
-    else
-        null;
-    const link_inputs_identity = (try defaultRunLinkInputsIdentity(ctx, selected_target, libc_info)) orelse {
+    const link_inputs_identity = defaultRunLinkInputsIdentity(selected_target) orelse {
         return rejectRunTargetNotExecutable(ctx, selected_target);
     };
 
@@ -3535,18 +3514,9 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             shim_path,
             runtime_path,
         };
-        var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 5);
-        if (libc_info) |info| {
-            try extra_args.append("-dynamic-linker");
-            try extra_args.append(info.dynamic_linker);
-            try extra_args.append("-L");
-            try extra_args.append(info.lib_dir);
-            try extra_args.append("-lc");
-        }
-
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(selected_target.toOsTag()),
-            .target_abi = if (selected_target.isStatic()) .musl else .gnu,
+            .target_abi = llvmBuildLinkAbi(selected_target, true),
             .target_os = selected_target.toOsTag(),
             .target_arch = selected_target.toCpuArch(),
             .output_path = exe_path,
@@ -3554,7 +3524,6 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             .can_exit_early = false,
             .disable_output = false,
             .scratch_dir = temp_dir,
-            .extra_args = extra_args.items,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -4786,6 +4755,9 @@ pub const SharedMemoryHandle = struct {
     /// This may be much larger than `size` since the bump allocator reserves
     /// a large virtual address region upfront.
     mapped_size: usize,
+    /// The page size this process observed, published to the child so it does
+    /// not have to ask the OS itself. See `ipc.FdInfo.page_size`.
+    page_size: usize,
 };
 
 fn hotReloadHostChildHandle(handle: SharedMemoryHandle) SharedMemoryHandle {
@@ -4804,6 +4776,7 @@ test "hot reload host child maps the full shared-memory reservation" {
         .ptr = @as(*anyopaque, @ptrFromInt(0x5678)),
         .size = 4096,
         .mapped_size = 8192,
+        .page_size = 4096,
     };
 
     const child = hotReloadHostChildHandle(original);
@@ -4875,6 +4848,7 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
         .ptr = shm.base_ptr,
         .size = shm.getUsedSize(),
         .mapped_size = shm.total_size,
+        .page_size = shm.page_size,
     };
 }
 
@@ -5288,6 +5262,7 @@ fn sharedMemoryResult(
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
+            .page_size = shm.page_size,
         },
         .entrypoint_names = entrypoint_names,
         .hosted_symbols = hosted_symbols,
@@ -5323,17 +5298,27 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
     if (args.opt != .dev) return false;
     if (args.target != null) return true;
 
-    const native_target = RocTarget.detectNative();
+    const native_target = roc_target.host_cpu.nativeTarget();
     const default_target = defaultRunShimTarget(native_target);
     return devShimTargetCompatible(default_target, native_target) and
         default_target.toOsTag() == .linux and
         DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
 }
 
+/// The Linux target the headerless default app runs on, keeping the CPU level
+/// of the native target it came from.
+///
+/// Default apps run on the freestanding default platform: raw syscalls, its own
+/// `_start`, and a machine-code shim that reaches the kernel directly. Nothing
+/// in the executable calls libc, so every Linux host links the same static
+/// executable no matter which libc it ships -- matching what `llvmBuildLinkAbi`
+/// already does for `roc build`.
 fn defaultRunShimTarget(native: RocTarget) RocTarget {
     return switch (native) {
-        .x64musl, .x64glibc, .x64linux => .x64linux,
-        .arm64musl, .arm64glibc, .arm64linux => .arm64linux,
+        .x64musl, .x64glibc, .x64linux => .x64musl,
+        .arm64musl, .arm64glibc, .arm64linux => .arm64musl,
+        .x64v1musl, .x64v1glibc, .x64v1linux => .x64v1musl,
+        .arm64v1musl, .arm64v1glibc, .arm64v1linux => .arm64v1musl,
         else => native,
     };
 }
@@ -5620,13 +5605,15 @@ fn writeDevRunImageToSharedMemory(
         try readonly_data.appendSlice(ctx.gpa, internal_static_data);
         try readonly_data.appendSlice(ctx.gpa, static_strings.exports);
 
+        // This image executes in this process, so its instructions are held to
+        // what this machine's CPU runs rather than to the target's level.
         var codegen = try backend.HostLirCodeGen.init(
             ctx.gpa,
             store,
             layouts,
             static_strings.entries,
             .preserve,
-            .default,
+            roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
@@ -5814,6 +5801,7 @@ fn publishDevRunImage(
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
+            .page_size = shm.page_size,
         });
         break :blk .{
             .generation = 1,
@@ -5846,6 +5834,7 @@ fn publishDevRunImage(
         .ptr = shm.base_ptr,
         .size = shm.getUsedSize(),
         .mapped_size = shm.total_size,
+        .page_size = shm.page_size,
     };
 }
 
@@ -7379,7 +7368,14 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
             // Which default platform a target gets follows from its OS and
             // architecture, which a `v1` target shares with its default twin.
             return switch (requested.defaultCpuTarget()) {
-                .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
+                .x64mac,
+                .arm64mac,
+                .x64win,
+                .arm64win,
+                .x64freebsd,
+                .x64openbsd,
+                .x64netbsd,
+                => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
                 else => echo_platform.build_platform_main_source,
             };
@@ -7389,7 +7385,7 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     }
 
     return switch (RocTarget.detectNative().toOsTag()) {
-        .macos, .windows => echo_platform.build_c_platform_main_source,
+        .macos, .windows, .freebsd, .openbsd, .netbsd => echo_platform.build_c_platform_main_source,
         else => echo_platform.build_platform_main_source,
     };
 }
@@ -7476,7 +7472,7 @@ fn selectBuildPlatformTarget(
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
 ) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
-    return switch (target_selection.selectBuildTarget(targets_config, target_arg)) {
+    return switch (target_selection.selectBuildTarget(targets_config, target_arg, roc_target.host_cpu.level())) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
             renderValidationError(ctx, .{ .invalid_target = .{ .target_str = target_str } });
@@ -7499,11 +7495,18 @@ fn selectBuildPlatformTarget(
                 });
                 return error.UnsupportedTarget;
             }
-            const native_target = RocTarget.detectNative();
-            try ctx.io.stderr().print(
+            const native_target = roc_target.host_cpu.nativeTarget();
+            const stderr = ctx.io.stderr();
+            try stderr.print(
                 "Error: roc build requires --target or a platform target for wasm32 or the detected native host ({s}).\n",
                 .{@tagName(native_target)},
             );
+            if (native_target.cpuLevel() == .v1) {
+                try stderr.print(
+                    "\nThis machine's CPU does not run the instructions {s} uses, so building for\nthis machine means building for {s}.\n",
+                    .{ @tagName(native_target.defaultCpuTarget()), @tagName(native_target) },
+                );
+            }
             return error.UnsupportedTarget;
         },
         .not_runnable_on_host => unreachable,
@@ -7516,7 +7519,7 @@ fn selectRunPlatformTarget(
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
 ) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
-    return switch (target_selection.selectRunTarget(targets_config, target_arg)) {
+    return switch (target_selection.selectRunTarget(targets_config, target_arg, roc_target.host_cpu.level())) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
             const result = platform_validation.targets_validator.ValidationResult{
@@ -7545,7 +7548,7 @@ fn selectRunPlatformTarget(
                 });
                 return error.UnsupportedTarget;
             }
-            const native_target = RocTarget.detectNative();
+            const native_target = roc_target.host_cpu.nativeTarget();
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
                 native_target,
@@ -9505,7 +9508,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const target = selected.target;
     const link_type = selected.output;
 
-    const native_target = RocTarget.detectNative();
+    const native_target = roc_target.host_cpu.nativeTarget();
     if (target != native_target) {
         const stderr = ctx.io.stderr();
         try stderr.print("Error: The interpreter backend only supports building for the native target ({s}).\n\n", .{@tagName(native_target)});
@@ -10250,6 +10253,7 @@ fn collectExpectBindingPatterns(
                         .s_import,
                         .s_alias_decl,
                         .s_nominal_decl,
+                        .s_where_alias_decl,
                         .s_type_anno,
                         .s_type_var_alias,
                         .s_runtime_error,

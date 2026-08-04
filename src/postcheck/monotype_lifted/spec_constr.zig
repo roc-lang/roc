@@ -1375,6 +1375,11 @@ const Pass = struct {
                 const field_exprs = self.program.fieldExprSpan(fields);
                 for (0..field_exprs.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(field_exprs, index).value, changed);
             },
+            .record_update => |update| {
+                try self.markArgUsesInExpr(fn_id, update.base, changed);
+                const field_exprs = self.program.fieldExprSpan(update.fields);
+                for (0..field_exprs.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(field_exprs, index).value, changed);
+            },
             .tag => |tag| {
                 const payloads = self.program.exprSpan(tag.payloads);
                 for (0..payloads.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(payloads, index), changed);
@@ -1559,6 +1564,10 @@ const Pass = struct {
             .tuple,
             => |items| try self.collectCallPatternsInExprSpan(owner, items),
             .record => |fields| try self.collectCallPatternsInFieldExprSpan(owner, fields),
+            .record_update => |update| {
+                try self.collectCallPatternsInExpr(owner, update.base);
+                try self.collectCallPatternsInFieldExprSpan(owner, update.fields);
+            },
             .tag => |tag| try self.collectCallPatternsInExprSpan(owner, tag.payloads),
             .static_data_candidate => |candidate| try self.collectCallPatternsInExpr(owner, candidate.runtime_expr),
             .nominal,
@@ -3538,6 +3547,10 @@ const Pass = struct {
             .tuple,
             => |items| try self.rewriteCallsInExprSpan(items, done),
             .record => |fields| try self.rewriteCallsInFieldExprSpan(fields, done),
+            .record_update => |update| {
+                try self.rewriteCallsInExpr(update.base, done);
+                try self.rewriteCallsInFieldExprSpan(update.fields, done);
+            },
             .tag => |tag| try self.rewriteCallsInExprSpan(tag.payloads, done),
             .static_data_candidate => |candidate| try self.rewriteCallsInExpr(candidate.runtime_expr, done),
             .nominal,
@@ -3839,6 +3852,39 @@ const Pass = struct {
                     .ty = expr.ty,
                     .fields = shapes,
                 } };
+            },
+            .record_update => |update| blk: {
+                const record_ty = recordUpdateBackingType(self.program, expr.ty);
+                const type_fields = self.program.types.fieldSpan(recordUpdateFieldSpan(self.program, expr.ty));
+                const update_fields = self.program.fieldExprSpan(update.fields);
+                const shapes = try self.arena.allocator().alloc(FieldShape, type_fields.len);
+                for (0..type_fields.len) |index| {
+                    const type_field = GuardedList.at(type_fields, index);
+                    const updated = for (0..update_fields.len) |update_index| {
+                        const field = GuardedList.at(update_fields, update_index);
+                        if (self.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
+                    } else null;
+                    shapes[index] = .{
+                        .name = type_field.name,
+                        .shape = if (updated) |value|
+                            (try self.constructorShape(value)) orelse .{ .any = type_field.ty }
+                        else
+                            .{ .any = type_field.ty },
+                    };
+                }
+                const record_shape = Shape{ .record = .{
+                    .ty = record_ty,
+                    .fields = shapes,
+                } };
+                if (nominalConstructionLayer(self.program, expr.ty) != null) {
+                    const backing = try self.arena.allocator().create(Shape);
+                    backing.* = record_shape;
+                    break :blk Shape{ .nominal = .{
+                        .ty = expr.ty,
+                        .backing = backing,
+                    } };
+                }
+                break :blk record_shape;
             },
             .tuple => |items_span| blk: {
                 const items = self.program.exprSpan(items_span);
@@ -4418,6 +4464,10 @@ const Cloner = struct {
             .tuple,
             => |items| try self.collectCallPatternsInExprSpan(owner, items),
             .record => |fields| try self.collectCallPatternsInFieldExprSpan(owner, fields),
+            .record_update => |update| {
+                try self.collectCallPatternsInExpr(owner, update.base);
+                try self.collectCallPatternsInFieldExprSpan(owner, update.fields);
+            },
             .tag => |tag| try self.collectCallPatternsInExprSpan(owner, tag.payloads),
             .static_data_candidate => |candidate| try self.collectCallPatternsInExpr(owner, candidate.runtime_expr),
             .nominal,
@@ -4840,6 +4890,80 @@ const Cloner = struct {
                     .fields = fields,
                 } };
             },
+            .record_update => |update| {
+                const source_fields = try GuardedList.dupe(
+                    self.pass.allocator,
+                    Ast.FieldExpr,
+                    self.pass.program.fieldExprSpan(update.fields),
+                );
+                defer self.pass.allocator.free(source_fields);
+                const record_ty = recordUpdateBackingType(self.pass.program, expr.ty);
+                const type_fields = try GuardedList.dupe(
+                    self.pass.allocator,
+                    Type.Field,
+                    self.pass.program.types.fieldSpan(recordUpdateFieldSpan(self.pass.program, expr.ty)),
+                );
+                defer self.pass.allocator.free(type_fields);
+
+                const base = try self.cloneExpr(update.base);
+                const base_ty = self.pass.program.getExpr(base).ty;
+                if (!sameType(self.pass.program, base_ty, expr.ty)) {
+                    Common.invariant("record update base type differed from its result type in SpecConstr");
+                }
+                const base_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), base_ty);
+                try bindings.appendBinding(self.arena.allocator(), .{
+                    .local = base_local,
+                    .ty = base_ty,
+                    .value = base,
+                });
+                const base_ref = try self.addExpr(.{ .ty = base_ty, .data = .{ .local = base_local } });
+
+                const fields = try self.arena.allocator().alloc(FieldValue, type_fields.len);
+                for (type_fields, 0..) |type_field, index| {
+                    const updated = for (source_fields) |field| {
+                        if (self.pass.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
+                    } else null;
+                    if (updated != null) continue;
+
+                    const read = try self.addExpr(.{ .ty = type_field.ty, .data = .{ .field_access = .{
+                        .receiver = base_ref,
+                        .field = type_field.name,
+                    } } });
+                    const read_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), type_field.ty);
+                    try bindings.appendBinding(self.arena.allocator(), .{
+                        .local = read_local,
+                        .ty = type_field.ty,
+                        .value = read,
+                    });
+                    fields[index] = .{
+                        .name = type_field.name,
+                        .value = .{ .expr = try self.addExpr(.{ .ty = type_field.ty, .data = .{ .local = read_local } }) },
+                    };
+                }
+
+                for (type_fields, 0..) |type_field, index| {
+                    const updated = for (source_fields) |field| {
+                        if (self.pass.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
+                    } else continue;
+                    fields[index] = .{
+                        .name = type_field.name,
+                        .value = try self.cloneExprValueDemandingShapeInto(updated, bindings),
+                    };
+                }
+                const record_value = Value{ .record = .{
+                    .ty = record_ty,
+                    .fields = fields,
+                } };
+                if (nominalConstructionLayer(self.pass.program, expr.ty) != null) {
+                    const backing = try self.arena.allocator().create(Value);
+                    backing.* = record_value;
+                    return .{ .nominal = .{
+                        .ty = expr.ty,
+                        .backing = backing,
+                    } };
+                }
+                return record_value;
+            },
             .tuple => |items_span| {
                 assertStructuralConstructionType(self.pass.program, expr.ty);
                 const source_items = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(items_span));
@@ -5032,6 +5156,7 @@ const Cloner = struct {
                 false,
             .tag,
             .record,
+            .record_update,
             .tuple,
             .nominal,
             .fn_ref,
@@ -5221,6 +5346,10 @@ const Cloner = struct {
             .list => |items| .{ .list = try self.cloneExprSpan(items) },
             .tuple => |items| .{ .tuple = try self.cloneExprSpan(items) },
             .record => |fields| .{ .record = try self.cloneFieldExprSpan(fields) },
+            .record_update => |update| .{ .record_update = .{
+                .base = try self.cloneExpr(update.base),
+                .fields = try self.cloneFieldExprSpan(update.fields),
+            } },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
                 .payloads = try self.cloneExprSpan(tag.payloads),
@@ -6885,30 +7014,34 @@ const Cloner = struct {
             }
             try self.pass.ensureCallPatternForValues(callee, values);
 
+            // Every outcome below reads the argument values produced above
+            // rather than cloning the source arguments again: a second clone
+            // re-descends every argument, so a nested call chain (e.g. a long
+            // `+` sum, or a chain of builder-method calls) would clone each
+            // level twice and expand exponentially with depth. The reuse is
+            // also required for correctness when producing values with binding
+            // chains: those chains must be placed exactly once before the call.
             for (self.pass.plans[raw].specs.items) |spec| {
+                if (!callPatternMatchesValues(self.pass.program, spec.pattern, values)) continue;
+
                 var rewritten_args = std.ArrayList(Ast.ExprId).empty;
                 defer rewritten_args.deinit(self.pass.allocator);
                 var bindings: BindingChain = .{};
-
-                if (try self.appendClonedCallArgs(spec.pattern, args, &bindings, &rewritten_args)) {
-                    const specialized = try self.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
-                        .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls") },
-                        .args = try self.pass.program.addExprSpan(rewritten_args.items),
-                        .iterator_procedure = call.iterator_procedure,
-                        .captures = try self.cloneCaptureOperandSpan(call.captures),
-                        .is_cold = call.is_cold,
-                    } } });
-                    return try self.wrapBindings(bindings, specialized);
+                for (spec.pattern.args, values, analyzed) |shape, value, cloned| {
+                    bindings.appendChain(cloned.bindings);
+                    try self.appendExprsFromValue(shape, value, &rewritten_args);
                 }
+                const specialized = try self.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
+                    .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls") },
+                    .args = try self.pass.program.addExprSpan(rewritten_args.items),
+                    .iterator_procedure = call.iterator_procedure,
+                    .captures = try self.cloneCaptureOperandSpan(call.captures),
+                    .is_cold = call.is_cold,
+                } } });
+                return try self.wrapBindings(bindings, specialized);
             }
 
-            // No specialization matched, so the call stays residual. Reuse the
-            // argument values already produced above instead of re-cloning the
-            // source arguments: a second clone re-descends every argument, so a
-            // nested call chain (e.g. a long `+` sum) would clone each level
-            // twice and expand exponentially with depth. The reuse is also
-            // required for correctness when producing values with binding
-            // chains: those chains must be placed exactly once before the call.
+            // No specialization matched, so the call stays residual.
             const residual_args = try self.pass.allocator.alloc(Ast.ExprId, values.len);
             defer self.pass.allocator.free(residual_args);
             var bindings: BindingChain = .{};
@@ -6932,45 +7065,6 @@ const Cloner = struct {
             .captures = try self.cloneCaptureOperandSpan(call.captures),
             .is_cold = call.is_cold,
         } } });
-    }
-
-    fn appendClonedCallArgs(
-        self: *Cloner,
-        pattern: CallPattern,
-        args: []const Ast.ExprId,
-        bindings: *BindingChain,
-        out: *std.ArrayList(Ast.ExprId),
-    ) Common.LowerError!bool {
-        if (pattern.args.len != args.len) Common.invariant("call-pattern arity differed from direct call arity");
-        for (pattern.args, args) |shape, arg| {
-            if (!try self.appendClonedExprsForShape(shape, arg, bindings, out)) return false;
-        }
-        return true;
-    }
-
-    fn appendClonedExprsForShape(
-        self: *Cloner,
-        shape: Shape,
-        expr_id: Ast.ExprId,
-        bindings: *BindingChain,
-        out: *std.ArrayList(Ast.ExprId),
-    ) Common.LowerError!bool {
-        switch (shape) {
-            .any => {
-                try out.append(self.pass.allocator, try self.cloneExpr(expr_id));
-                return true;
-            },
-            else => {
-                const value = try self.valueForCallArg(expr_id, bindings);
-                if (!shapeMatchesValue(self.pass.program, shape, value)) return false;
-                try self.appendExprsFromValue(shape, value, out);
-                return true;
-            },
-        }
-    }
-
-    fn valueForCallArg(self: *Cloner, expr_id: Ast.ExprId, bindings: *BindingChain) Common.LowerError!Value {
-        return try self.cloneExprValueDemandingShapeInto(expr_id, bindings);
     }
 
     fn appendExprsFromValue(
@@ -9483,6 +9577,11 @@ const BodyLocalScope = struct {
                 const field_exprs = self.program.fieldExprSpan(fields);
                 for (0..field_exprs.len) |index| try self.walkExpr(GuardedList.at(field_exprs, index).value);
             },
+            .record_update => |update| {
+                try self.walkExpr(update.base);
+                const field_exprs = self.program.fieldExprSpan(update.fields);
+                for (0..field_exprs.len) |index| try self.walkExpr(GuardedList.at(field_exprs, index).value);
+            },
             .tag => |tag| try self.walkExprSpan(tag.payloads),
             .static_data_candidate => |candidate| try self.walkExpr(candidate.runtime_expr),
             .nominal,
@@ -9697,6 +9796,11 @@ const BodySizeCounter = struct {
                 const field_exprs = self.program.fieldExprSpan(fields);
                 for (0..field_exprs.len) |index| self.countExpr(GuardedList.at(field_exprs, index).value);
             },
+            .record_update => |update| {
+                self.countExpr(update.base);
+                const field_exprs = self.program.fieldExprSpan(update.fields);
+                for (0..field_exprs.len) |index| self.countExpr(GuardedList.at(field_exprs, index).value);
+            },
             .tag => |tag| self.countExprSpan(tag.payloads),
             .static_data_candidate => |candidate| self.countExpr(candidate.runtime_expr),
             .nominal,
@@ -9870,6 +9974,13 @@ fn collectAllFnUsesInExpr(
         => |items| collectAllFnUsesInExprSpan(program, items, owner, uses),
         .record => |fields| {
             const values = program.fieldExprSpan(fields);
+            for (0..values.len) |index| {
+                collectAllFnUsesInExpr(program, GuardedList.at(values, index).value, owner, uses);
+            }
+        },
+        .record_update => |update| {
+            collectAllFnUsesInExpr(program, update.base, owner, uses);
+            const values = program.fieldExprSpan(update.fields);
             for (0..values.len) |index| {
                 collectAllFnUsesInExpr(program, GuardedList.at(values, index).value, owner, uses);
             }
@@ -10097,6 +10208,14 @@ fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId
             }
             break :blk false;
         },
+        .record_update => |update| blk: {
+            if (exprCallsFn(program, update.base, fn_id)) break :blk true;
+            const field_exprs = program.fieldExprSpan(update.fields);
+            for (0..field_exprs.len) |index| {
+                if (exprCallsFn(program, GuardedList.at(field_exprs, index).value, fn_id)) break :blk true;
+            }
+            break :blk false;
+        },
         .tag => |tag| exprSpanCallsFn(program, tag.payloads, fn_id),
         .static_data_candidate => |candidate| exprCallsFn(program, candidate.runtime_expr, fn_id),
         .nominal, .dbg, .expect => |child| exprCallsFn(program, child, fn_id),
@@ -10211,6 +10330,15 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         => |items| exprSpanContainsReturn(program, items),
         .record => |fields| {
             const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |index| {
+                const field = GuardedList.at(field_exprs, index);
+                if (exprContainsReturn(program, field.value)) return true;
+            }
+            return false;
+        },
+        .record_update => |update| {
+            if (exprContainsReturn(program, update.base)) return true;
+            const field_exprs = program.fieldExprSpan(update.fields);
             for (0..field_exprs.len) |index| {
                 const field = GuardedList.at(field_exprs, index);
                 if (exprContainsReturn(program, field.value)) return true;
@@ -10341,6 +10469,15 @@ fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId,
         => |items| exprSpanContainsFreeLoopControl(program, items, loop_depth),
         .record => |fields| {
             const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |index| {
+                const field = GuardedList.at(field_exprs, index);
+                if (exprContainsFreeLoopControl(program, field.value, loop_depth)) return true;
+            }
+            return false;
+        },
+        .record_update => |update| {
+            if (exprContainsFreeLoopControl(program, update.base, loop_depth)) return true;
+            const field_exprs = program.fieldExprSpan(update.fields);
             for (0..field_exprs.len) |index| {
                 const field = GuardedList.at(field_exprs, index);
                 if (exprContainsFreeLoopControl(program, field.value, loop_depth)) return true;
@@ -10479,6 +10616,14 @@ fn collectTupleLocalDemandInExpr(
         => |items| collectTupleLocalDemandInExprSpan(program, local, items, used),
         .record => |fields| blk: {
             const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |index| {
+                if (!collectTupleLocalDemandInExpr(program, local, GuardedList.at(field_exprs, index).value, used)) break :blk false;
+            }
+            break :blk true;
+        },
+        .record_update => |update| blk: {
+            if (!collectTupleLocalDemandInExpr(program, local, update.base, used)) break :blk false;
+            const field_exprs = program.fieldExprSpan(update.fields);
             for (0..field_exprs.len) |index| {
                 if (!collectTupleLocalDemandInExpr(program, local, GuardedList.at(field_exprs, index).value, used)) break :blk false;
             }
@@ -10650,6 +10795,15 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
             }
             break :blk count;
         },
+        .record_update => |update| blk: {
+            var count = localUseCountInExpr(program, local, update.base);
+            const field_exprs = program.fieldExprSpan(update.fields);
+            for (0..field_exprs.len) |index| {
+                const field = GuardedList.at(field_exprs, index);
+                count += localUseCountInExpr(program, local, field.value);
+            }
+            break :blk count;
+        },
         .tag => |tag| localUseCountInExprSpan(program, local, tag.payloads),
         .static_data_candidate => |candidate| localUseCountInExpr(program, local, candidate.runtime_expr),
         .nominal,
@@ -10808,6 +10962,49 @@ fn assertStructuralConstructionType(program: *const Ast.Program, ty: Type.TypeId
     }
 }
 
+const NominalConstructionLayer = struct {
+    named: Type.TypeId,
+    backing: Type.TypeId,
+};
+
+fn nominalConstructionLayer(program: *const Ast.Program, ty: Type.TypeId) ?NominalConstructionLayer {
+    var current = ty;
+    while (true) {
+        switch (program.types.get(current)) {
+            .named => |named| {
+                const backing = named.backing orelse return null;
+                switch (named.kind) {
+                    .alias => current = backing.ty,
+                    .nominal, .@"opaque" => return .{ .named = current, .backing = backing.ty },
+                }
+            },
+            else => return null,
+        }
+    }
+}
+
+fn recordUpdateBackingType(program: *const Ast.Program, ty: Type.TypeId) Type.TypeId {
+    var current = ty;
+    while (true) {
+        switch (program.types.get(current)) {
+            .named => |named| {
+                const backing = named.backing orelse
+                    Common.invariant("record update had a named type without an explicit backing");
+                current = backing.ty;
+            },
+            .record => return current,
+            else => Common.invariant("record update had a non-record backing type"),
+        }
+    }
+}
+
+fn recordUpdateFieldSpan(program: *const Ast.Program, ty: Type.TypeId) Type.Span {
+    return switch (program.types.get(recordUpdateBackingType(program, ty))) {
+        .record => |fields| fields,
+        else => unreachable,
+    };
+}
+
 fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
     return switch (value) {
         .expr => |expr| program.getExpr(expr).ty,
@@ -10918,6 +11115,18 @@ fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
             break :blk true;
         },
     };
+}
+
+/// Whether one specialization's call pattern accepts a call's argument values.
+/// This reads the values the caller already cloned and takes no `Cloner`, so
+/// deciding a specialization cannot clone a source argument a second time and a
+/// rejected specialization costs nothing and leaves nothing behind.
+fn callPatternMatchesValues(program: *const Ast.Program, pattern: CallPattern, values: []const Value) bool {
+    if (pattern.args.len != values.len) Common.invariant("call-pattern arity differed from direct call arity");
+    for (pattern.args, values) |shape, value| {
+        if (!shapeMatchesValue(program, shape, value)) return false;
+    }
+    return true;
 }
 
 fn shapeMatchesValue(program: *const Ast.Program, shape: Shape, value: Value) bool {
@@ -11156,6 +11365,58 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         .empty, // comptime_sites
         0, // next_symbol
     );
+}
+
+test "SpecConstr preserves record update ordering while exposing its final shape" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const a = try program.names.internRecordFieldLabel("a");
+    const b = try program.names.internRecordFieldLabel("b");
+    const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
+        .{ .name = a, .ty = u8_ty },
+        .{ .name = b, .ty = u8_ty },
+    }) });
+    const base_local = try program.addLocal(@enumFromInt(1), record_ty);
+    const update_local = try program.addLocal(@enumFromInt(2), u8_ty);
+    const base = try program.addExpr(.{ .ty = record_ty, .data = .{ .local = base_local } });
+    const update_value = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = update_local } });
+    const update = try program.addExpr(.{ .ty = record_ty, .data = .{ .record_update = .{
+        .base = base,
+        .fields = try program.addFieldExprSpan(&.{.{ .name = b, .value = update_value }}),
+    } } });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    const shape = (try pass.constructorShape(update)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(shape == .record);
+    try std.testing.expectEqual(@as(usize, 2), shape.record.fields.len);
+
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const cloned = try cloner.cloneExprValue(update);
+    const record = switch (cloned.value) {
+        .record => |record| record,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 2), record.fields.len);
+
+    const base_binding = cloned.bindings.first orelse return error.TestUnexpectedResult;
+    const read_binding = base_binding.next orelse return error.TestUnexpectedResult;
+    try std.testing.expect(read_binding.next == null);
+    const read = switch (program.getExpr(read_binding.binding.value).data) {
+        .field_access => |read| read,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(a, read.field);
+    try std.testing.expectEqual(base_binding.binding.local, program.getExpr(read.receiver).data.local);
+
+    try std.testing.expectEqual(a, record.fields[0].name);
+    try std.testing.expectEqual(read_binding.binding.local, program.getExpr(record.fields[0].value.expr).data.local);
+    try std.testing.expectEqual(b, record.fields[1].name);
+    try std.testing.expectEqual(update_local, program.getExpr(record.fields[1].value.expr).data.local);
 }
 
 test "call-pattern scans direct call and function reference capture operands" {

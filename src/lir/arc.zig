@@ -1378,6 +1378,7 @@ const Inserter = struct {
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
+                    .arg_plan = assign.arg_plan,
                     .reuse_closure = assign.reuse_closure,
                     .reuse_source = assign.reuse_source,
                     .next = next,
@@ -3470,6 +3471,7 @@ const Inserter = struct {
             .name = self.store.freshSyntheticSymbol(),
             .args = source_spec.args,
             .erased_reuse_arg = source_spec.erased_reuse_arg,
+            .erased_call_args = source_spec.erased_call_args,
             .frame_locals = source_spec.frame_locals,
             .body = self.variants.original_bodies[@intFromEnum(callee)],
             .ret_layout = source_spec.ret_layout,
@@ -5683,12 +5685,14 @@ test "ARC transfers erased call ownership from an explicit outer source" {
     const owned_callable = try f.local(erased_callable);
     const extracted_callable = try f.local(erased_callable);
     const next_callable = try f.local(erased_callable);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
 
     const ret = try f.ret(next_callable);
     const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = next_callable,
         .closure = extracted_callable,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .reuse_closure = true,
         .reuse_source = owned_callable,
         .next = ret,
@@ -5727,6 +5731,7 @@ test "ARC retains an erased call reuse source that is read after the call" {
     const owned_callable = try f.local(erased_callable);
     const extracted_callable = try f.local(erased_callable);
     const next_callable = try f.local(erased_callable);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
 
     const ret = try f.ret(next_callable);
     const later_use = try f.expectStmt(owned_callable, ret);
@@ -5734,6 +5739,7 @@ test "ARC retains an erased call reuse source that is read after the call" {
         .target = next_callable,
         .closure = extracted_callable,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .reuse_closure = true,
         .reuse_source = owned_callable,
         .next = later_use,

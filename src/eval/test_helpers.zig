@@ -77,6 +77,11 @@ pub const TestHelperError = Allocator.Error || std.Thread.SpawnError || std.DynL
     InvalidHandle,
     WindowsSDKNotFound,
     CompilationFailed,
+    NoBitcodeModules,
+    UnsupportedLlvmTriple,
+    MissingBuiltinBitcode,
+    LlvmModuleVerificationFailed,
+    LlvmObjectEmitFailed,
     BitcodeParseError,
     ModuleLinkFailed,
     TempFileError,
@@ -2330,7 +2335,7 @@ pub fn devEvalBoolRoots(
         );
         defer static_strings.deinit();
 
-        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve, .default);
+        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve, roc_target.host_cpu.level());
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -2380,7 +2385,9 @@ const OwnedLlvmCompileOptions = struct {
 
 fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsize, opt: LlvmTestOpt) TestHelperError!OwnedLlvmCompileOptions {
     const llvm_compile = @import("llvm_compile");
-    const native_roc_target = roc_target.RocTarget.detectNative();
+    // This code is compiled to run in this process, so the CPU floor is the
+    // one this machine executes rather than the native target's default.
+    const native_roc_target = roc_target.host_cpu.nativeTarget();
     const resolved_target = std.zig.system.resolveTargetQuery(std.Options.debug_io, native_roc_target.llvmTargetQuery()) catch
         return error.UnsupportedTarget;
     const cpu = try allocator.dupeZ(u8, roc_target.llvmCpuName(resolved_target));

@@ -447,6 +447,12 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
+/// A record update whose base supplies every field not present in `fields`.
+pub const RecordUpdate = struct {
+    base: ExprId,
+    fields: Span(FieldExpr),
+};
+
 /// Tag expression entry.
 pub const TagExpr = struct {
     name: names.TagNameId,
@@ -696,6 +702,7 @@ pub const ExprData = union(enum(u8)) {
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
+    record_update: RecordUpdate,
     tag: TagExpr,
     nominal: ExprId,
     let_: struct {

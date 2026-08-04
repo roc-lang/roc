@@ -8126,7 +8126,13 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         const args_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         const capture_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         const reuse_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.bindErasedCallableAdapterParams(args, args_ptr, capture_ptr, reuse_ptr);
+        try self.bindErasedCallableAdapterParams(
+            args,
+            proc.erased_call_args orelse unreachable,
+            args_ptr,
+            capture_ptr,
+            reuse_ptr,
+        );
         break :blk ret_ptr;
     } else blk: {
         // Bind parameters to locals (after roc_ops_ptr when present).
@@ -8583,6 +8589,7 @@ fn generateHostedProcWrapper(
 fn bindErasedCallableAdapterParams(
     self: *Self,
     args: anytype,
+    arg_plan: LIR.ErasedCallArgsPlanId,
     args_ptr_local: u32,
     capture_ptr_local: u32,
     reuse_ptr_local: u32,
@@ -8594,15 +8601,17 @@ fn bindErasedCallableAdapterParams(
         unreachable;
     }
 
-    var arg_offset: u32 = 0;
     const explicit_count = args.len - 2;
+    const plan = self.store.getErasedCallArgsPlan(arg_plan);
+    const arg_offsets = self.store.getErasedCallArgOffsets(plan);
+    if (arg_offsets.len != explicit_count) unreachable;
     for (0..explicit_count) |i| {
         const arg = GuardedList.at(args, i);
         const local_layout = self.procLocalLayoutIdx(arg);
         const runtime_layout = self.runtimeRepresentationLayoutIdx(local_layout);
         const size_align = self.getLayoutStore().layoutSizeAlign(self.getLayoutStore().getLayout(runtime_layout));
         const arg_align: u32 = @intCast(@max(size_align.alignment.toByteUnits(), 1));
-        arg_offset = std.mem.alignForward(u32, arg_offset, arg_align);
+        const arg_offset = GuardedList.at(arg_offsets, i);
 
         const vt = try self.resolveValType(local_layout);
         const local_idx = self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
@@ -8650,8 +8659,6 @@ fn bindErasedCallableAdapterParams(
             try self.emitLoadOpForLayout(local_layout, arg_offset);
             try self.emitLocalSet(local_idx);
         }
-
-        arg_offset += size_align.size;
     }
 
     const hidden_capture_arg = GuardedList.at(args, explicit_count);
@@ -8926,6 +8933,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.generateErasedCall(.{
                 .closure = assign.closure,
                 .args = assign.args,
+                .arg_plan = assign.arg_plan,
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
                 .reuse_closure = assign.reuse_closure,
             });
@@ -9812,31 +9820,24 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
     try self.emitLocalSet(capture_ptr);
 
     const arg_refs = self.store.getLocalSpan(c.args);
-    var total_args_size: u32 = 0;
-    for (0..arg_refs.len) |i| {
-        const arg = GuardedList.at(arg_refs, i);
-        const arg_layout = self.procLocalLayoutIdx(arg);
-        const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
-        const size_align = self.getLayoutStore().layoutSizeAlign(self.getLayoutStore().getLayout(runtime_layout));
-        total_args_size = std.mem.alignForward(u32, total_args_size, @intCast(@max(size_align.alignment.toByteUnits(), 1)));
-        total_args_size += size_align.size;
-    }
+    const plan = self.store.getErasedCallArgsPlan(c.arg_plan);
+    const arg_offsets = self.store.getErasedCallArgOffsets(plan);
+    if (arg_offsets.len != arg_refs.len) unreachable;
 
     const args_ptr = if (arg_refs.len == 0)
         null
     else
-        try self.allocStackMemory(if (total_args_size == 0) 1 else total_args_size, 16);
+        try self.allocStackMemory(@max(plan.size, 1), plan.alignment);
     if (args_ptr) |args_offset| {
         const args_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitFpOffset(args_offset);
         try self.emitLocalSet(args_base);
-        var offset: u32 = 0;
         for (0..arg_refs.len) |i| {
             const arg = GuardedList.at(arg_refs, i);
             const arg_layout = self.procLocalLayoutIdx(arg);
             const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
             const size_align = self.getLayoutStore().layoutSizeAlign(self.getLayoutStore().getLayout(runtime_layout));
-            offset = std.mem.alignForward(u32, offset, @intCast(@max(size_align.alignment.toByteUnits(), 1)));
+            const offset = GuardedList.at(arg_offsets, i);
             if (size_align.size > 0) {
                 try self.emitProcLocal(arg);
                 if (try self.isCompositeLayout(arg_layout)) {
@@ -9847,7 +9848,6 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
                     try self.emitStoreToMemSized(args_base, offset, try self.resolveValType(arg_layout), size_align.size);
                 }
             }
-            offset += size_align.size;
         }
     }
 
@@ -11584,6 +11584,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             } else {
                 try self.emitLoadOpForLayout(elem_layout_idx, 0);
             }
+        },
+
+        .list_map_prepare_reuse => {
+            // Ownership-only identity; binding the result stabilizes the
+            // composite value in the target's storage.
+            try self.emitProcLocal(GuardedList.at(args, 0));
         },
 
         .list_map_can_reuse => {
@@ -14311,6 +14317,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .u128_to_i128_wrap,
         .i128_to_u128_wrap,
+        .dec_to_attos,
+        .dec_from_attos,
         => {
             // Same representation — just pass through (pointer stays the same)
             try self.emitProcLocal(GuardedList.at(args, 0));

@@ -681,6 +681,7 @@ pub const MappedProgramView = struct {
                 self.exprRefInBounds(candidate.runtime_expr),
             .list, .tuple => |span| self.exprIdSpanInBounds(span),
             .record => |span| self.fieldExprSpanInBounds(span),
+            .record_update => |update| self.exprRefInBounds(update.base) and self.fieldExprSpanInBounds(update.fields),
             .tag => |tag| self.exprIdSpanInBounds(tag.payloads),
             .nominal => |expr| self.exprRefInBounds(expr),
             .let_ => |let_| self.patRefInBounds(let_.bind) and
