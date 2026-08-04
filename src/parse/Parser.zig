@@ -124,6 +124,14 @@ pub fn peekNext(self: *Parser) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[next];
 }
 
+/// Peek at an absolute token position
+pub fn peekAt(self: *Parser, pos: Token.Idx) Token.Tag {
+    if (pos >= self.tok_buf.tokens.len) {
+        return .EndOfFile;
+    }
+    return self.tok_buf.tokens.items(.tag)[pos];
+}
+
 /// Peek at `n` tokens forward
 pub fn peekN(self: *Parser, n: u32) Token.Tag {
     if (n == 0) {
@@ -302,6 +310,7 @@ const TypeParentKind = enum(u16) {
     statement_type_after_anno = 0x34c9,
     statement_type_decl_anno = 0xae12,
     where_clause_type = 0x057d,
+    where_clause_alias = 0x9c31,
     type_apply = 0xc6e0,
     type_paren_item = 0x718b,
     type_paren_fn_ret = 0x2d44,
@@ -317,6 +326,7 @@ const TypeParentKind = enum(u16) {
 const WhereParentKind = enum(u16) {
     where_statement_type_anno = 0x3b6d,
     where_statement_type_decl = 0xc028,
+    where_statement_where_alias = 0x6ef4,
 };
 
 const StatementParentKind = enum(u16) {
@@ -475,6 +485,7 @@ fn recordStatementDecl(
                 .alias => .type_alias,
                 .nominal => .nominal,
                 .@"opaque" => .@"opaque",
+                .where_alias => .where_alias,
             };
             break :blk DeclIndex.Decl{
                 .scope = scope_idx,
@@ -944,9 +955,41 @@ fn parseTypeIdentToken(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     }
 }
 
-fn parseTypeHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.TypeHeader.Idx {
+/// Whether the tokens at the current position begin a where alias declaration:
+/// a lowercase receiver, a dotted upper name, optional arguments, then `:`.
+/// Nothing else in the language starts this way, so committing here lets the
+/// missing-`where` case report against the declaration rather than the line.
+fn whereAliasDeclFollows(self: *Parser) bool {
+    std.debug.assert(self.peek() == .LowerIdent);
+    if (self.peekNext() != .NoSpaceDotUpperIdent and self.peekNext() != .DotUpperIdent) return false;
+
+    var pos = self.pos + 2;
+    if (self.peekAt(pos) == .NoSpaceOpenRound or self.peekAt(pos) == .OpenRound) {
+        var depth: u32 = 1;
+        pos += 1;
+        while (depth > 0) : (pos += 1) {
+            switch (self.peekAt(pos)) {
+                .OpenRound, .NoSpaceOpenRound => depth += 1,
+                .CloseRound => depth -= 1,
+                .EndOfFile => return false,
+                else => {},
+            }
+        }
+    }
+
+    return self.peekAt(pos) == .OpColon;
+}
+
+/// Which token tag opens the header's name. Where alias headers are named by a
+/// dotted upper ident (`a.Sortable`), every other type header by a bare one.
+const TypeHeaderNameTag = enum { upper_ident, dotted_upper_ident };
+
+fn parseTypeHeaderTokens(self: *Parser, name_tag: TypeHeaderNameTag) std.mem.Allocator.Error!AST.TypeHeader.Idx {
     const start = self.pos;
-    std.debug.assert(self.peek() == .UpperIdent);
+    switch (name_tag) {
+        .upper_ident => std.debug.assert(self.peek() == .UpperIdent),
+        .dotted_upper_ident => std.debug.assert(self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent),
+    }
     self.advance();
     const open_tok = self.peek();
     if (open_tok != .NoSpaceOpenRound and open_tok != .OpenRound) {
@@ -2373,6 +2416,15 @@ const StatementTypeDeclReadyState = struct {
     type_path: ?DeclIndex.TypePathIdx,
 };
 
+const StatementWhereAliasAfterWhereState = struct {
+    start: Token.Idx,
+    header: AST.TypeHeader.Idx,
+    receiver: AST.TypeAnno.Idx,
+    type_dependencies_start: DeclIndex.TypeDependencyMark,
+    was_collecting_type_dependencies: bool,
+    type_path: ?DeclIndex.TypePathIdx,
+};
+
 const WhereState = struct {
     start: Token.Idx,
     scratch_top: u32,
@@ -2383,6 +2435,11 @@ const WhereClauseTypeState = struct {
     var_tok: Token.Idx,
     name_tok: Token.Idx,
     args_start: Token.Idx,
+};
+
+const WhereClauseAliasState = struct {
+    start: Token.Idx,
+    var_tok: Token.Idx,
 };
 
 const TypeDeclAssociatedState = struct {
@@ -2659,7 +2716,9 @@ const OpenSyntaxStack = struct {
     statement_type_associated_statement: std.ArrayList(StatementAssociatedStatementState) = .empty,
     where_statement_type_anno: std.ArrayList(StatementTypeAnnoAfterWhereState) = .empty,
     where_statement_type_decl: std.ArrayList(StatementTypeDeclAfterWhereState) = .empty,
+    where_statement_where_alias: std.ArrayList(StatementWhereAliasAfterWhereState) = .empty,
     where_clause_type: std.ArrayList(WhereClauseTypeState) = .empty,
+    where_clause_alias: std.ArrayList(WhereClauseAliasState) = .empty,
     pattern_tag_args: std.ArrayList(PatternTagArgsState) = .empty,
     pattern_list: std.ArrayList(PatternListState) = .empty,
     pattern_tuple: std.ArrayList(PatternTupleState) = .empty,
@@ -3008,6 +3067,35 @@ fn readQualificationChain(self: *Parser, mode: QualificationMode) std.mem.Alloca
         .qualifiers = qualifiers,
         .final_token = final_token,
         .is_upper = is_upper,
+    };
+}
+
+/// Parses the name of a where alias reference (e.g. the `.Json.Decodable` of
+/// `where [a.Json.Decodable]`). Unlike `readQualificationChain` this starts at
+/// the dot segment following the receiving type variable, so the receiver never
+/// becomes a module qualifier.
+fn readWhereAliasQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationResult {
+    std.debug.assert(self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent);
+
+    const scratch_top = self.store.scratchTokenTop();
+    var final_token = self.pos;
+    self.advance();
+
+    while (true) {
+        switch (self.peek()) {
+            .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                try self.store.addScratchToken(final_token);
+                final_token = self.pos;
+                self.advance();
+            },
+            else => break,
+        }
+    }
+
+    return QualificationResult{
+        .qualifiers = try self.store.tokenSpanFrom(scratch_top),
+        .final_token = final_token,
+        .is_upper = true,
     };
 }
 
@@ -5047,6 +5135,16 @@ fn runExprStatementKernel(
                         } });
                         continue :expr_kernel .type_complete;
                     },
+                    .where_clause_alias => {
+                        const state = open_syntax.popTypePayload(.where_clause_alias, WhereClauseAliasState);
+                        last_type_anno = null;
+                        try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_alias = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .alias = completed,
+                            .var_tok = state.var_tok,
+                        } }));
+                        continue :expr_kernel .where_after_clause;
+                    },
                     .where_clause_type => {
                         const state = open_syntax.popTypePayload(.where_clause_type, WhereClauseTypeState);
                         last_type_anno = null;
@@ -5445,21 +5543,45 @@ fn runExprStatementKernel(
 
                 const name_tok = self.pos;
                 switch (self.peek()) {
-                    .NoSpaceDotLowerIdent, .DotLowerIdent, .NoSpaceDotUpperIdent, .DotUpperIdent => self.advance(),
+                    .NoSpaceDotLowerIdent, .DotLowerIdent => self.advance(),
+                    .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                        // A where alias reference. Its name is read as an
+                        // ordinary type name so that module qualification and
+                        // arguments resolve the way they do everywhere else.
+                        const qual_result = try self.readWhereAliasQualificationChain();
+                        self.pos = qual_result.final_token + 1;
+                        const alias_anno = try self.store.addTypeAnno(.{ .ty = .{
+                            .region = .{ .start = name_tok, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+                        if (self.collect_type_dependencies) {
+                            try self.recordTypeDependencyFromQualifiedTokens(qual_result.qualifiers, qual_result.final_token);
+                        }
+
+                        if (self.peek() == .NoSpaceOpenRound) {
+                            self.advance();
+                            const scratch_top = self.store.scratchTypeAnnoTop();
+                            try self.store.addScratchTypeAnno(alias_anno);
+                            try open_syntax.pushType(open_allocator, .where_clause_alias, WhereClauseAliasState, .{
+                                .start = start,
+                                .var_tok = var_tok,
+                            });
+                            type_apply_state = .{ .start = name_tok, .scratch_top = scratch_top, .looking_for_args = .looking_for_args };
+                            continue :expr_kernel .type_apply_next;
+                        }
+
+                        try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_alias = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .alias = alias_anno,
+                            .var_tok = var_tok,
+                        } }));
+                        continue :expr_kernel .where_after_clause;
+                    },
                     else => {
                         try self.store.addScratchWhereClause(try self.pushMalformed(AST.WhereClause.Idx, .where_expected_method_or_alias_name, start));
                         continue :expr_kernel .where_after_clause;
                     },
-                }
-
-                const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
-                if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
-                    try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_alias = .{
-                        .region = .{ .start = start, .end = self.pos },
-                        .name_tok = name_tok,
-                        .var_tok = var_tok,
-                    } }));
-                    continue :expr_kernel .where_after_clause;
                 }
 
                 if (self.peek() != .OpColon) {
@@ -5551,6 +5673,21 @@ fn runExprStatementKernel(
                         };
                         continue :expr_kernel .statement_type_decl_finish;
                     },
+                    .where_statement_where_alias => {
+                        const state = open_syntax.popWherePayload(.where_statement_where_alias, StatementWhereAliasAfterWhereState);
+                        const type_dependencies = self.decl_index.typeDependencySpanFrom(state.type_dependencies_start);
+                        self.collect_type_dependencies = state.was_collecting_type_dependencies;
+                        statement_type_decl_ready_state = .{
+                            .start = state.start,
+                            .header = state.header,
+                            .anno = state.receiver,
+                            .kind = .where_alias,
+                            .where_clause = completed,
+                            .type_dependencies = type_dependencies,
+                            .type_path = state.type_path,
+                        };
+                        continue :expr_kernel .statement_type_decl_finish;
+                    },
                 }
             }
             unreachable;
@@ -5612,6 +5749,56 @@ fn runExprStatementKernel(
                 if (tok == .LowerIdent or tok == .NamedUnderscore) {
                     const start = self.pos;
                     const next_tok = self.peekNext();
+                    if (tok == .LowerIdent and self.whereAliasDeclFollows()) {
+                        const var_tok = self.pos;
+                        self.advance();
+                        const header = try self.parseTypeHeaderTokens(.dotted_upper_ident);
+                        const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
+                        if (header_node.tag == .malformed) {
+                            self.recoverMalformedTypeDeclLine(start);
+                            const reason: AST.Diagnostic.Tag = @enumFromInt(header_node.data.lhs);
+                            last_statement = try self.store.addMalformed(AST.Statement.Idx, reason, .{ .start = start, .end = self.pos });
+                            continue :expr_kernel .statement_complete;
+                        }
+
+                        const type_path = blk_path: {
+                            const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
+                            const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
+                            const scope_idx = self.decl_index.currentScope() orelse break :blk_path null;
+                            break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
+                        };
+
+                        // `whereAliasDeclFollows` already checked for the colon.
+                        std.debug.assert(self.peek() == .OpColon);
+                        self.advance();
+                        if (self.peek() != .KwWhere) {
+                            last_statement = try self.pushMalformed(AST.Statement.Idx, .where_alias_expected_where, self.pos);
+                            continue :expr_kernel .statement_complete;
+                        }
+
+                        // The receiver is the type the constraints are declared
+                        // against, so it stands in as the declaration's type.
+                        const receiver = try self.store.addTypeAnno(.{ .ty_var = .{
+                            .tok = var_tok,
+                            .region = .{ .start = var_tok, .end = var_tok + 1 },
+                        } });
+
+                        const type_dependencies_start = self.decl_index.typeDependencyTop();
+                        const was_collecting_type_dependencies = self.collect_type_dependencies;
+                        self.collect_type_dependencies = true;
+                        const where_start = self.pos;
+                        self.advance();
+                        try open_syntax.pushWhere(open_allocator, .where_statement_where_alias, StatementWhereAliasAfterWhereState, .{
+                            .start = start,
+                            .header = header,
+                            .receiver = receiver,
+                            .type_dependencies_start = type_dependencies_start,
+                            .was_collecting_type_dependencies = was_collecting_type_dependencies,
+                            .type_path = type_path,
+                        });
+                        where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
+                        continue :expr_kernel .where_start;
+                    }
                     if (next_tok == .OpAssign) {
                         self.advance();
                         const patt_idx = try self.store.addPattern(.{ .ident = .{
@@ -5697,7 +5884,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     }
 
-                    const header = try self.parseTypeHeaderTokens();
+                    const header = try self.parseTypeHeaderTokens(.upper_ident);
                     const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
                     if (header_node.tag == .malformed) {
                         self.recoverMalformedTypeDeclLine(start);
@@ -5965,11 +6152,16 @@ fn runExprStatementKernel(
                 }
 
                 const type_decl_state = open_syntax.popAssociatedPayload(.statement_type_decl_associated, TypeDeclAssociatedState);
-                if (type_decl_state.kind == .alias) {
-                    try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
+                switch (type_decl_state.kind) {
+                    .alias => try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
                         .start = type_decl_state.dot_pos,
                         .end = type_decl_state.dot_pos + 1,
-                    });
+                    }),
+                    .where_alias => try self.pushDiagnostic(.where_alias_cannot_have_associated, .{
+                        .start = type_decl_state.dot_pos,
+                        .end = type_decl_state.dot_pos + 1,
+                    }),
+                    .nominal, .@"opaque" => {},
                 }
                 const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
                     .header = type_decl_state.header,

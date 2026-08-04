@@ -339,12 +339,10 @@ checking_binding_rhs: bool = false,
 checking_binding_rhs_pattern: ?CIR.Pattern.Idx = null,
 /// The outer RHS expression of the currently checked `_ = ...` discard binding,
 /// if any. Nested instantiations inside that RHS use this as their error target:
-/// the value is explicitly discarded, so no caller can later pin return-only
-/// where-clause obligations created by the RHS. This is lexical context of the
-/// consuming binding, stamped onto ambiguity candidates created inside it; a
-/// constraint's own creation-time provenance cannot carry it, because whether
-/// the result is discarded is a property of the binding that consumes the
-/// expression, not of the expression itself.
+/// the whole discarded expression is the useful source region, rather than an
+/// internal lookup that happened to instantiate the constrained scheme. The
+/// ambiguity judgment derives liveness independently from its caller-pinnable
+/// sets; this lexical context affects diagnostic attribution only.
 discarded_binding_rhs_expr: ?CIR.Expr.Idx = null,
 /// Tracks whether static exhaustiveness diagnostics are compile-time candidates.
 exhaustiveness_context: ExhaustivenessContext.Context = .{},
@@ -510,11 +508,9 @@ reported_dispatch_vars: std.AutoHashMap(Var, void),
 /// Scratch for the ambiguity verdict apply: the re-validated creation-verdict
 /// receiver vars the node walk flags expressions against.
 ambiguity_verdict_vars: std.AutoHashMap(Var, void),
-/// Scratch for `collectArgPositionVars`: guards its function-ret / alias
-/// spine walk against unbounded recursion.
-pinnable_spine_visited: std.AutoHashMap(Var, void),
 /// Scratch for the ambiguity judgment: vars an outside caller can pin through
-/// the judged scheme's argument positions (rebuilt per judgment event).
+/// the judged scheme's complete interface, including expected result types
+/// (rebuilt per judgment event).
 external_pinnable: std.AutoHashMap(Var, void),
 /// Scratch for `defaultLiteralsAtGeneralizationBoundary`: reachable-var
 /// closure of the def root(s) being generalized (constraint-signature edges
@@ -693,9 +689,6 @@ const InstantiationDispatcher = struct {
     /// the constrained scheme). Null only if the dispatcher was created outside
     /// `checkExpr`.
     instantiation_expr: ?CIR.Expr.Idx,
-    /// True when `instantiation_expr` came from the RHS of an explicit discard
-    /// binding (`_ = ...`). See `AmbiguityCandidate.discarded_binding_rhs`.
-    discarded_binding_rhs: bool,
 };
 
 /// One dispatch-constrained receiver var awaiting the local ambiguity
@@ -711,8 +704,6 @@ const AmbiguityCandidate = struct {
     /// `.creation` candidates.
     instantiation_expr: ?CIR.Expr.Idx,
     source: Source,
-    /// See `InstantiationDispatcher.discarded_binding_rhs`.
-    discarded_binding_rhs: bool,
     /// Set once the candidate has been judged (either verdict or acquittal) so
     /// later events and the end-of-check residual pass skip it.
     judged: bool = false,
@@ -743,7 +734,6 @@ const AmbiguityVerdict = struct {
     /// Copied from the candidate (see `AmbiguityCandidate`).
     instantiation_expr: ?CIR.Expr.Idx,
     source: AmbiguityCandidate.Source,
-    discarded_binding_rhs: bool,
 };
 
 /// The evidence-record key for scheme instantiations performed while
@@ -1194,6 +1184,7 @@ const HoistSelectionTransaction = struct {
                 .s_import,
                 .s_alias_decl,
                 .s_nominal_decl,
+                .s_where_alias_decl,
                 .s_type_anno,
                 .s_type_var_alias,
                 .s_var,
@@ -1614,7 +1605,6 @@ fn initAssumePrepared(
         .pinnable_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_dispatch_vars = std.AutoHashMap(Var, void).init(gpa),
         .ambiguity_verdict_vars = std.AutoHashMap(Var, void).init(gpa),
-        .pinnable_spine_visited = std.AutoHashMap(Var, void).init(gpa),
         .external_pinnable = std.AutoHashMap(Var, void).init(gpa),
         .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
@@ -1743,7 +1733,6 @@ pub fn deinit(self: *Self) void {
     self.pinnable_vars.deinit();
     self.reported_dispatch_vars.deinit();
     self.ambiguity_verdict_vars.deinit();
-    self.pinnable_spine_visited.deinit();
     self.external_pinnable.deinit();
     self.boundary_reachable_vars.deinit();
     self.boundary_leak_vars.deinit();
@@ -2548,6 +2537,7 @@ fn markHoistInvalidatedStatementExprs(
         .s_import,
         .s_alias_decl,
         .s_nominal_decl,
+        .s_where_alias_decl,
         .s_type_anno,
         .s_type_var_alias,
         .s_runtime_error,
@@ -4117,13 +4107,11 @@ fn instantiateVarHelp(
                             .dispatcher_var = fresh_var,
                             .constraints = flex.constraints,
                             .instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
-                            .discarded_binding_rhs = self.discarded_binding_rhs_expr != null,
                         });
                         try self.recordAmbiguityCandidate(
                             fresh_var,
                             .instantiation,
                             self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
-                            self.discarded_binding_rhs_expr != null,
                         );
                     }
                 }
@@ -5530,7 +5518,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
 
         switch (stmt) {
-            .s_alias_decl, .s_nominal_decl => {
+            .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
                 _ = try self.ensureTypeDeclGenerated(stmt_idx, &env);
             },
             .s_runtime_error => {
@@ -5629,6 +5617,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
             .s_import,
             .s_alias_decl,
             .s_nominal_decl,
+            .s_where_alias_decl,
             .s_type_anno,
             .s_type_var_alias,
             .s_runtime_error,
@@ -6435,6 +6424,7 @@ fn hoistedStatementAllowsStoredConst(
         .s_import,
         .s_alias_decl,
         .s_nominal_decl,
+        .s_where_alias_decl,
         .s_type_anno,
         .s_type_var_alias,
         .s_crash,
@@ -6591,6 +6581,7 @@ fn hoistedRootStatementDependenciesAreKept(
         .s_import,
         .s_alias_decl,
         .s_nominal_decl,
+        .s_where_alias_decl,
         .s_type_anno,
         .s_type_var_alias,
         => true,
@@ -6868,9 +6859,10 @@ fn hoistedRootRecordDependenciesAreKept(
 /// Build the two pinnable sets for one ambiguity-judgment event into
 /// `self.external_pinnable` and `self.pinnable_vars`.
 ///
-/// `external_pinnable` holds every resolved var reachable through a function
-/// ARGUMENT position of the given scheme roots — the vars a future caller can
-/// still pin by choosing arguments. `pinnable_vars` additionally includes:
+/// `external_pinnable` holds every resolved var reachable through the complete
+/// interface of the given scheme roots — the vars a future caller can still pin
+/// by choosing arguments or by supplying an expected result type.
+/// `pinnable_vars` additionally includes:
 ///
 /// - Everything reachable through a still-open literal's constraint
 ///   signatures. Open literals are never dead ends: defaulting resolves them,
@@ -6888,19 +6880,17 @@ fn hoistedRootRecordDependenciesAreKept(
 ///
 /// At a generalization event the inputs are the generalizing definition's own
 /// scheme root, open literals, and lambdas (`*_def_start` cursors); at the
-/// end-of-check residual judgment they are every top-level def and the full
-/// recorded lists.
+/// end-of-check residual judgment they are every top-level callable def and the
+/// full recorded lists. Non-generalized values have already been evaluated and
+/// cannot gain a new owner from a later use.
 fn beginAmbiguityPinnableSets(self: *Self) void {
     self.external_pinnable.clearRetainingCapacity();
-    // Shared across all roots of one event; arg structure is already deduped
-    // via the set inside collectReachableVars.
-    self.pinnable_spine_visited.clearRetainingCapacity();
 }
 
-/// Add one scheme root's argument-position closure to `external_pinnable`.
+/// Add one scheme root's complete interface closure to `external_pinnable`.
 /// See `finishAmbiguityPinnableSets`.
 fn addAmbiguityPinnableRoot(self: *Self, scheme_root: Var) std.mem.Allocator.Error!void {
-    try self.collectArgPositionVars(scheme_root, &self.external_pinnable, &self.pinnable_spine_visited);
+    try self.collectReachableVars(scheme_root, &self.external_pinnable);
 }
 
 /// Complete the event's pinnable sets after every scheme root has been added.
@@ -7054,13 +7044,11 @@ fn recordAmbiguityCandidate(
     receiver_var: Var,
     source: AmbiguityCandidate.Source,
     instantiation_expr: ?CIR.Expr.Idx,
-    discarded_binding_rhs: bool,
 ) std.mem.Allocator.Error!void {
     try self.ambiguity_candidates.append(self.gpa, .{
         .var_ = receiver_var,
         .instantiation_expr = instantiation_expr,
         .source = source,
-        .discarded_binding_rhs = discarded_binding_rhs,
     });
 }
 
@@ -7069,6 +7057,9 @@ fn recordAmbiguityCandidate(
 const AmbiguitySelection = struct {
     constraint: StaticDispatchConstraint,
     is_instantiated_where_clause: bool,
+    /// True when every constraint on the receiver is a copied `where` contract.
+    /// Any concrete-use origin means this instantiation must resolve now.
+    only_where_clause_contracts: bool,
     /// The originating scheme's body provably dispatches this method (see
     /// `body_required` on the `where_clause` origin).
     body_forced: bool,
@@ -7084,20 +7075,13 @@ const AmbiguitySelection = struct {
 /// For an `.instantiation` candidate (a receiver created by instantiating a
 /// generalized constrained scheme):
 ///
-/// - A GENERALIZED receiver whose constraints are ALL `where`-clause contracts
-///   is a valid polymorphic obligation, not a dead end: it is a type parameter
-///   of an exposed generic function (e.g. `a` in
-///   `wrap : a -> a where [a.go : a -> a]`), and any caller that pins the
-///   receiver to a concrete type is responsible for — and separately checked
-///   for — satisfying the contract. Reporting it would wrongly reject a helper
-///   merely dispatched through nested generalized let-defs (issue 9632's
-///   recorded receiver is a stale scheme var promoted by an enclosing
-///   generalization). It IS still reported when it also carries a concrete-use
-///   dispatch (a non-`where`-clause origin such as `plus` from `n + 1`): that
-///   use forces the receiver toward a grounding the contract cannot satisfy
-///   (issue 9657). A generalized all-`where` receiver from a discarded
-///   `_ = ...` binding with a body-forced contract is also reported: the value
-///   was thrown away, so no caller can ever supply the owner (issue 9819).
+/// - A generalized `where`-clause receiver is reportable only when the
+///   constraint's body actually requires the method or an in-module dispatch
+///   uses it. The caller-pinnability test in `judgeAmbiguityCandidate` then
+///   distinguishes a valid polymorphic obligation (the receiver reaches the
+///   exported scheme interface or a generalized instantiated function's
+///   arguments) from a body-local dead end. This applies equally to direct
+///   discards and values discarded through local aliases.
 /// - A receiver carrying any literal-conversion constraint (a `from_literal`
 ///   origin or a `where`-clause contract naming a literal-conversion hook) is
 ///   skipped: defaulting owns it (at finalize and at generalization
@@ -7129,59 +7113,55 @@ const AmbiguitySelection = struct {
 /// unpinnable flex dispatcher at monomorphization.
 fn selectAmbiguityConstraint(
     self: *Self,
-    resolved_rank: Rank,
     constraints: []const StaticDispatchConstraint,
     source: AmbiguityCandidate.Source,
-    discarded_binding_rhs: bool,
 ) Allocator.Error!?AmbiguitySelection {
     switch (source) {
         .instantiation => {
-            if (resolved_rank == .generalized) {
-                var all_where_clause = true;
-                var any_body_required_where_clause = false;
-                for (constraints) |c| {
-                    if (c.origin != .where_clause) {
-                        all_where_clause = false;
-                        break;
-                    }
-                    if (c.origin.where_clause.body_required) {
-                        any_body_required_where_clause = true;
-                    }
-                }
-                if (all_where_clause and !(discarded_binding_rhs and any_body_required_where_clause)) return null;
-            }
-
-            var first_where_constraint: ?StaticDispatchConstraint = null;
             var first_nonliteral_constraint: ?StaticDispatchConstraint = null;
             var has_literal_constraint = false;
+            var only_where_clause_contracts = true;
             for (constraints) |c| {
+                if (c.origin != .where_clause) only_where_clause_contracts = false;
                 if (self.rejected_static_dispatches.contains(c.fn_var)) continue;
                 if (self.constraintIsLiteralConversion(c)) {
                     has_literal_constraint = true;
                 } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
                     continue;
-                } else if (c.origin == .where_clause) {
-                    if (first_where_constraint == null) first_where_constraint = c;
-                } else if (first_nonliteral_constraint == null) {
+                } else if (c.origin != .where_clause and first_nonliteral_constraint == null) {
                     first_nonliteral_constraint = c;
                 }
             }
             if (has_literal_constraint) return null;
-            const constraint = first_where_constraint orelse first_nonliteral_constraint orelse return null;
 
-            const is_instantiated_where_clause = constraint.origin == .where_clause;
-            const body_forced = is_instantiated_where_clause and constraint.origin.where_clause.body_required;
-            const where_dispatch_use = if (is_instantiated_where_clause)
-                try self.findStaticDispatchUseForConstraint(constraint)
-            else
-                null;
-            if (is_instantiated_where_clause and where_dispatch_use == null and !body_forced) return null;
+            // Prefer an explicit where-clause obligation that this program must
+            // execute. Phantom contracts do not hide a later body-required one.
+            for (constraints) |constraint| {
+                if (self.rejected_static_dispatches.contains(constraint.fn_var)) continue;
+                if (constraint.origin != .where_clause) continue;
+                if (self.constraintIsLiteralConversion(constraint)) continue;
+                if (constraint.fn_name.eql(self.cir.idents.is_eq)) continue;
 
+                const body_forced = constraint.origin.where_clause.body_required;
+                const where_dispatch_use = try self.findStaticDispatchUseForConstraint(constraint);
+                if (where_dispatch_use == null and !body_forced) continue;
+
+                return .{
+                    .constraint = constraint,
+                    .is_instantiated_where_clause = true,
+                    .only_where_clause_contracts = only_where_clause_contracts,
+                    .body_forced = body_forced,
+                    .where_dispatch_use = where_dispatch_use,
+                };
+            }
+
+            const constraint = first_nonliteral_constraint orelse return null;
             return .{
                 .constraint = constraint,
-                .is_instantiated_where_clause = is_instantiated_where_clause,
-                .body_forced = body_forced,
-                .where_dispatch_use = where_dispatch_use,
+                .is_instantiated_where_clause = false,
+                .only_where_clause_contracts = only_where_clause_contracts,
+                .body_forced = false,
+                .where_dispatch_use = null,
             };
         },
         .creation => {
@@ -7203,6 +7183,7 @@ fn selectAmbiguityConstraint(
             return .{
                 .constraint = constraint,
                 .is_instantiated_where_clause = false,
+                .only_where_clause_contracts = false,
                 .body_forced = false,
                 .where_dispatch_use = null,
             };
@@ -7217,13 +7198,14 @@ fn selectAmbiguityConstraint(
 ///
 /// An instantiated `where`-clause with an IN-MODULE dispatch use is judged
 /// against the stricter `external_pinnable` set: the method is dispatched on
-/// this receiver here, so this call must satisfy the copied contract now —
-/// lambda parameters inside the already-instantiated call do not count, only
-/// external arguments can still pin it (issue 9657: a receiver pinned to a
-/// type that lacks the method). Everything else uses the broader set: its
-/// dispatch lives in another body (the body-forced hole, issue 9644) or is a
-/// direct dispatch on a value a future call can still pin, so an (even
-/// nested) lambda parameter an enclosing caller can pin is not a dead end.
+/// this receiver here, so this call must satisfy the copied contract now.
+/// Variables exported through the enclosing scheme's arguments or result still
+/// count, but lambda parameters local to the already-instantiated call do not
+/// (issue 9657: a receiver pinned to a type that lacks the method). Everything
+/// else uses the broader set: its dispatch lives in another body (the
+/// body-forced hole, issue 9644) or is a direct dispatch on a value a future
+/// call can still pin, so an (even nested) lambda parameter an enclosing caller
+/// can pin is not a dead end.
 fn judgeAmbiguityCandidate(
     self: *Self,
     candidate: AmbiguityCandidate,
@@ -7233,11 +7215,23 @@ fn judgeAmbiguityCandidate(
 ) Allocator.Error!void {
     const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
     const selection = (try self.selectAmbiguityConstraint(
-        resolved_rank,
         constraints,
         candidate.source,
-        candidate.discarded_binding_rhs,
     )) orelse return;
+
+    // A generalized constrained function value can outlive this judgment even
+    // when a temporary scheme copy is absent from the current outer root. Its
+    // future caller can pin receivers that occur in the function's arguments.
+    // Result-only receivers do not qualify here: they must escape through the
+    // enclosing scheme interface (covered by the sets below), which distinguishes
+    // a generic wrapper from a discarded Json.parse result.
+    if (selection.only_where_clause_contracts and
+        resolved_rank == .generalized and
+        candidate.source == .instantiation and
+        try self.instantiationArgumentsCanPin(candidate.instantiation_expr, resolved_var))
+    {
+        return;
+    }
 
     const active_pinnable = if (selection.is_instantiated_where_clause and selection.where_dispatch_use != null)
         &self.external_pinnable
@@ -7253,8 +7247,22 @@ fn judgeAmbiguityCandidate(
         .var_ = candidate.var_,
         .instantiation_expr = candidate.instantiation_expr,
         .source = candidate.source,
-        .discarded_binding_rhs = candidate.discarded_binding_rhs,
     });
+}
+
+fn instantiationArgumentsCanPin(
+    self: *Self,
+    instantiation_expr: ?CIR.Expr.Idx,
+    resolved_var: Var,
+) Allocator.Error!bool {
+    const expr_idx = instantiation_expr orelse return false;
+    const func = self.functionTypeFromVar(ModuleEnv.varFrom(expr_idx)) orelse return false;
+
+    self.var_set.clearRetainingCapacity();
+    for (self.types.sliceVars(func.args)) |arg| {
+        try self.collectReachableVars(arg, &self.var_set);
+    }
+    return self.var_set.contains(resolved_var);
 }
 
 /// The generalization-time ambiguity rule. Runs immediately after a
@@ -7317,10 +7325,10 @@ fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(self: *Self, scheme_roots: 
 /// open to pinning by later defs and by the final constraint fixpoint, so
 /// judging them at def finalization would be premature) and instantiations
 /// performed outside any def. Judged once here at the settled state, against
-/// the whole module's remaining open surface — every top-level def's argument
-/// positions plus all recorded lambda parameters and open literals. Gated on
-/// pending candidates: a module whose receivers all resolved or were judged
-/// at generalization does zero work here.
+/// the whole module's remaining open surface — every top-level callable def's
+/// interface plus all recorded lambda parameters and open literals. Gated on
+/// pending candidates: a module whose receivers all resolved or were judged at
+/// generalization does zero work here.
 fn judgeResidualAmbiguityCandidates(self: *Self) Allocator.Error!void {
     var any_pending = false;
     for (self.ambiguity_candidates.items) |candidate| {
@@ -7334,7 +7342,10 @@ fn judgeResidualAmbiguityCandidates(self: *Self) Allocator.Error!void {
     self.beginAmbiguityPinnableSets();
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        try self.addAmbiguityPinnableRoot(ModuleEnv.varFrom(def_idx));
+        const def_var = ModuleEnv.varFrom(def_idx);
+        if (self.types.varResolvesToFunction(def_var)) {
+            try self.addAmbiguityPinnableRoot(def_var);
+        }
     }
     try self.finishAmbiguityPinnableSets(
         self.open_literal_vars.items,
@@ -7436,10 +7447,8 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     // state.
     const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
     const selection = (try self.selectAmbiguityConstraint(
-        resolved.desc.rank,
         constraints,
         .instantiation,
-        verdict.discarded_binding_rhs,
     )) orelse return;
     const constraint = selection.constraint;
     const is_instantiated_where_clause = selection.is_instantiated_where_clause;
@@ -7686,10 +7695,8 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
         // `selectAmbiguityConstraint` for the decision table).
         const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
         const selection = (try self.selectAmbiguityConstraint(
-            resolved.desc.rank,
             constraints,
             .creation,
-            false,
         )) orelse continue;
         const constraint = selection.constraint;
 
@@ -7719,44 +7726,9 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
-/// Collect, into `out`, every resolved var id reachable through a function
-/// ARGUMENT position of `var_`. Argument structure is recursed fully (records,
-/// tuples, tag payloads, nested function args AND rets). Return positions of the
-/// outer function are NOT collected (a return-only var is not parameter-pinnable),
-/// but once inside an argument every nested position counts.
-fn collectArgPositionVars(
-    self: *Self,
-    var_: Var,
-    out: *std.AutoHashMap(Var, void),
-    spine_visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!void {
-    const resolved = self.types.resolveVar(var_);
-    // Guard the function-ret / alias spine against cycles. Cyclic spines are
-    // currently pre-broken (infinite types are poisoned to .err before this
-    // pass, recursive aliases are rejected during generation), but the guard
-    // keeps this robust if that ever changes.
-    if (spine_visited.contains(resolved.var_)) return;
-    try spine_visited.put(resolved.var_, {});
-    switch (resolved.desc.content) {
-        .alias => |alias| try self.collectArgPositionVars(self.types.getAliasBackingVar(alias), out, spine_visited),
-        .structure => |flat| switch (flat) {
-            .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                for (self.types.sliceVars(func.args)) |arg| {
-                    try self.collectReachableVars(arg, out);
-                }
-                // Recurse into the return type: a curried function returns more
-                // functions whose own arguments are still parameter-pinnable.
-                try self.collectArgPositionVars(func.ret, out, spine_visited);
-            },
-            else => {},
-        },
-        else => {},
-    }
-}
-
 /// Collect, into `out`, `var_`'s resolved id and every resolved var id
 /// structurally reachable from it (tuples, records, tag payloads, function args
-/// and rets). Used to mark whole argument-position type structures as pinnable.
+/// and rets). Used to mark complete scheme interfaces and local pinning sources.
 fn collectReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     if (out.contains(resolved.var_)) return;
@@ -9839,6 +9811,9 @@ fn generateStmtTypeDeclType(
         .s_nominal_decl => |nominal| {
             try self.generateNominalDecl(decl_idx, decl_var, nominal, env);
         },
+        .s_where_alias_decl => |where_alias| {
+            try self.generateWhereAliasDecl(decl_var, where_alias, env);
+        },
         .s_runtime_error => {
             try self.unifyWith(decl_var, .err, env);
         },
@@ -9856,7 +9831,9 @@ fn ensureTypeDeclGenerated(
     switch (self.typeDeclGenerationState(decl_idx)) {
         .generated => return true,
         .generating => return switch (self.cir.store.getStatement(decl_idx)) {
-            .s_alias_decl => false,
+            // Neither aliases nor where aliases can refer to themselves, so
+            // re-entering one means the declaration is cyclic.
+            .s_alias_decl, .s_where_alias_decl => false,
             .s_nominal_decl => true,
             else => true,
         },
@@ -10050,6 +10027,47 @@ fn generateAliasDecl(
     }
 }
 
+/// Generate the type of a where alias declaration.
+///
+/// A where alias's type is its receiver: a rigid variable carrying every
+/// constraint the declaration names. Referencing the alias instantiates those
+/// constraints onto the referencing signature's own variable, so the receiver
+/// is the whole of what the declaration contributes.
+fn generateWhereAliasDecl(
+    self: *Self,
+    decl_var: Var,
+    where_alias: std.meta.fieldInfo(CIR.Statement, .s_where_alias_decl).type,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // A where alias is generated on demand, which can happen part way through
+    // building a referencing signature's constraints. Its own scratch entries
+    // must not land in that signature's range.
+    const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
+    defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
+
+    self.seen_annos.unsetAll();
+    const ctx = GenTypeAnnoCtx{ .annotation = where_alias.where };
+
+    // Parameters are generated the same way as the receiver rather than as
+    // plain header variables, because a constraint can be written against a
+    // parameter and must end up on that parameter's own variable.
+    const header = self.cir.store.getTypeHeader(where_alias.header);
+    for (self.cir.store.sliceTypeAnnos(header.args)) |param_idx| {
+        try self.generateAnnoTypeInPlace(param_idx, env, ctx);
+    }
+    try self.generateAnnoTypeInPlace(where_alias.receiver, env, ctx);
+
+    if (try self.generateRemainingWhereConstraintOwners(where_alias.where, env, ctx)) {
+        try self.unifyWithTargetRank(decl_var, .err, env);
+        return;
+    }
+
+    _ = try self.unify(decl_var, ModuleEnv.varFrom(where_alias.receiver), env);
+}
+
 /// Generate types for nominal type declaration
 fn generateNominalDecl(
     self: *Self,
@@ -10145,7 +10163,6 @@ fn generateStandaloneTypeAnno(
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(anno_var, .err, env);
         }
-        try self.reportUnsupportedWhereAliases(where_span);
     }
 
     // Unify the statement variable with the generated annotation type
@@ -10259,14 +10276,17 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(ModuleEnv.varFrom(annotation.anno), .err, env);
         }
-        try self.reportUnsupportedWhereAliases(where_span);
     }
 
     // Redirect the root annotation to inner annotation
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
 }
 
-fn declareOwnedStaticDispatchConstraint(
+/// Push every constraint one where clause places on `owner_var`. A method
+/// clause declares exactly one, left for `completeOwnedStaticDispatchConstraint`
+/// to type from its annotation; a where alias contributes each constraint it
+/// names, already typed by instantiating the declaration.
+fn declareOwnedStaticDispatchConstraints(
     self: *Self,
     where_idx: CIR.WhereClause.Idx,
     owner_var: Var,
@@ -10288,7 +10308,10 @@ fn declareOwnedStaticDispatchConstraint(
                 .state = .declared,
             });
         },
-        .w_alias, .w_malformed => {},
+        .w_alias => |alias| try self.declareWhereAliasConstraints(where_idx, alias, owner_var, env),
+        .w_malformed => {
+            try self.unifyWith(owner_var, .err, env);
+        },
     }
 }
 
@@ -10361,18 +10384,239 @@ fn generateRemainingWhereConstraintOwners(
     return invalid_receiver;
 }
 
-fn reportUnsupportedWhereAliases(self: *Self, where_span: CIR.WhereClause.Span) std.mem.Allocator.Error!void {
-    for (self.cir.store.sliceWhereClauses(where_span)) |where_idx| {
-        switch (self.cir.store.getWhereClause(where_idx)) {
-            .w_alias => |alias| {
-                _ = try self.problems.appendProblem(self.gpa, .{ .unsupported_alias_where_clause = .{
-                    .alias_name = alias.alias_name,
-                    .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(where_idx)),
+/// Report and poison a type reference that names a where alias, which is a set
+/// of method constraints rather than a type. Returns true once reported.
+fn rejectWhereAliasInTypePosition(
+    self: *Self,
+    name: Ident.Idx,
+    base_ref: CIR.TypeAnno.LocalOrExternal,
+    anno_var: Var,
+    anno_region: Region,
+    env: *Env,
+) std.mem.Allocator.Error!bool {
+    const names_where_alias = switch (base_ref) {
+        .local => |local| self.cir.store.getStatement(local.decl_idx) == .s_where_alias_decl,
+        .external => |ext| blk: {
+            const ext_ref = (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) orelse break :blk false;
+            const stmt: CIR.Statement.Idx = @enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx));
+            break :blk ext_ref.other_cir.store.getStatement(stmt) == .s_where_alias_decl;
+        },
+        .builtin, .pending => false,
+    };
+    if (!names_where_alias) return false;
+
+    _ = try self.problems.appendProblem(self.gpa, .{ .where_alias_in_type_position = .{
+        .name = name,
+        .region = anno_region,
+    } });
+    try self.unifyWith(anno_var, .err, env);
+    return true;
+}
+
+/// A where alias declaration, resolved from a reference to it. Every variable
+/// is in this module's type store, so a reference to an imported alias has
+/// already been copied across the module boundary.
+const ResolvedWhereAlias = struct {
+    /// The name the where clause used to refer to the declaration.
+    name: Ident.Idx,
+    /// The receiver, a rigid variable carrying the alias's own constraints.
+    receiver: Var,
+    /// The declaration's parameters, in declared order. Each is a rigid
+    /// variable, and may carry constraints of its own.
+    params: []const Var,
+};
+
+/// Resolve a where clause's reference to a where alias declaration. Returns
+/// null once the reason it could not resolve has been reported.
+fn resolveWhereAliasReference(
+    self: *Self,
+    alias_anno_idx: CIR.TypeAnno.Idx,
+    params_scratch: *std.ArrayListUnmanaged(Var),
+    env: *Env,
+) std.mem.Allocator.Error!?ResolvedWhereAlias {
+    const anno = self.cir.store.getTypeAnno(alias_anno_idx);
+    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias_anno_idx));
+    const name, const base_ref = switch (anno) {
+        .lookup => |lookup| .{ lookup.name, lookup.base },
+        .apply => |apply| .{ apply.name, apply.base },
+        // Canonicalization already reported why this name has no referent.
+        .malformed => return null,
+        else => unreachable, // canonicalization only builds a name reference here
+    };
+
+    switch (base_ref) {
+        .local => |local| {
+            const decl = switch (self.cir.store.getStatement(local.decl_idx)) {
+                .s_where_alias_decl => |decl| decl,
+                else => return try self.reportNotAWhereAlias(name, region),
+            };
+
+            if (!try self.ensureTypeDeclGenerated(local.decl_idx, env)) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .recursive_where_alias = .{
+                    .name = name,
+                    .region = region,
                 } });
-            },
-            .w_method, .w_malformed => {},
+                return null;
+            }
+
+            for (self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(decl.header).args)) |param_anno_idx| {
+                try params_scratch.append(self.gpa, ModuleEnv.varFrom(param_anno_idx));
+            }
+            return ResolvedWhereAlias{
+                .name = name,
+                .receiver = ModuleEnv.varFrom(decl.receiver),
+                .params = params_scratch.items,
+            };
+        },
+        .external => |ext| {
+            const ext_ref = (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) orelse {
+                // Canonicalization already reported the unresolved import.
+                return null;
+            };
+            const decl = switch (ext_ref.other_cir.store.getStatement(@enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx)))) {
+                .s_where_alias_decl => |decl| decl,
+                else => return try self.reportNotAWhereAlias(name, region),
+            };
+
+            // Each parameter is copied on its own. Every type variable a where
+            // alias's constraints can mention is either the receiver or a
+            // parameter, and both are substituted by name below, so the copies
+            // do not need to share variables with each other.
+            for (ext_ref.other_cir.store.sliceTypeAnnos(ext_ref.other_cir.store.getTypeHeader(decl.header).args)) |param_anno_idx| {
+                const param_ref = (try self.resolveVarFromExternal(ext.module_idx, @intFromEnum(param_anno_idx))) orelse return null;
+                try params_scratch.append(self.gpa, param_ref.local_var);
+            }
+            return ResolvedWhereAlias{
+                .name = name,
+                .receiver = ext_ref.local_var,
+                .params = params_scratch.items,
+            };
+        },
+        .builtin => return try self.reportNotAWhereAlias(name, region),
+        // An unresolvable import; canonicalization already reported it.
+        .pending => return null,
+    }
+}
+
+/// Report that a where clause named something other than a where alias. Always
+/// returns null, so resolution can `return` it directly.
+fn reportNotAWhereAlias(self: *Self, name: Ident.Idx, region: Region) std.mem.Allocator.Error!?ResolvedWhereAlias {
+    _ = try self.problems.appendProblem(self.gpa, .{ .not_a_where_alias = .{
+        .name = name,
+        .region = region,
+    } });
+    return null;
+}
+
+/// Expand a where alias reference into the constraints it names, applied to the
+/// referencing signature's own type variables.
+fn declareWhereAliasConstraints(
+    self: *Self,
+    where_idx: CIR.WhereClause.Idx,
+    alias: std.meta.fieldInfo(CIR.WhereClause, .w_alias).type,
+    owner_var: Var,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(where_idx));
+
+    var params_scratch: std.ArrayListUnmanaged(Var) = .empty;
+    defer params_scratch.deinit(self.gpa);
+    const resolved = (try self.resolveWhereAliasReference(alias.alias, &params_scratch, env)) orelse {
+        try self.unifyWith(owner_var, .err, env);
+        return;
+    };
+
+    // Already generated by `generateWhereAliasReferenceArgs`.
+    const arg_vars: []const Var = @ptrCast(self.whereAliasReferenceArgs(alias));
+
+    if (arg_vars.len != resolved.params.len) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+            .type_name = resolved.name,
+            .region = region,
+            .num_expected_args = @intCast(resolved.params.len),
+            .num_actual_args = @intCast(arg_vars.len),
+        } });
+        try self.unifyWith(owner_var, .err, env);
+        return;
+    }
+
+    // Every rigid variable in the declaration is either the receiver or a
+    // parameter, so substituting all of them by name rewrites the declaration's
+    // constraints into this signature's variables.
+    var subs = std.AutoHashMapUnmanaged(Ident.Idx, Var){};
+    defer subs.deinit(self.gpa);
+    const receiver_rigid = self.resolvedRigid(resolved.receiver) orelse return;
+    try subs.put(self.gpa, receiver_rigid.name, owner_var);
+    for (resolved.params, arg_vars) |param_var, arg_var| {
+        if (self.resolvedRigid(param_var)) |param_rigid| {
+            try subs.put(self.gpa, param_rigid.name, arg_var);
         }
     }
+
+    // Canonicalization rejects a declaration whose constraints are not all on
+    // its receiver, so the receiver carries the whole set. Instantiating one
+    // appends to the constraint store, so iterate rather than hold a slice.
+    var constraints = self.types.iterStaticDispatchConstraints(receiver_rigid.constraints);
+    while (constraints.next()) |constraint| {
+        try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
+            .where_clause = where_idx,
+            .var_ = owner_var,
+            .constraint = try self.instantiateWhereAliasConstraint(constraint, &subs, region, env),
+            .state = .completed,
+        });
+    }
+}
+
+/// The arguments a where clause supplies for a where alias's parameters.
+fn whereAliasReferenceArgs(self: *Self, alias: std.meta.fieldInfo(CIR.WhereClause, .w_alias).type) []const CIR.TypeAnno.Idx {
+    return switch (self.cir.store.getTypeAnno(alias.alias)) {
+        .apply => |apply| self.cir.store.sliceTypeAnnos(apply.args),
+        // A name canonicalization could not resolve carries no arguments; it is
+        // reported when the reference is resolved.
+        .lookup, .malformed => &.{},
+        else => unreachable, // canonicalization only builds a name reference here
+    };
+}
+
+/// Generate the types of the arguments a where alias reference supplies.
+fn generateWhereAliasReferenceArgs(
+    self: *Self,
+    alias: std.meta.fieldInfo(CIR.WhereClause, .w_alias).type,
+    env: *Env,
+    ctx: GenTypeAnnoCtx,
+) std.mem.Allocator.Error!void {
+    for (self.whereAliasReferenceArgs(alias)) |arg_anno_idx| {
+        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+    }
+}
+
+/// Rewrite one of a where alias declaration's constraints into the referencing
+/// signature's variables.
+fn instantiateWhereAliasConstraint(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    region: Region,
+    env: *Env,
+) std.mem.Allocator.Error!StaticDispatchConstraint {
+    return StaticDispatchConstraint{
+        .fn_name = constraint.fn_name,
+        .fn_var = try self.instantiateVarWithSubs(constraint.fn_var, subs, env, .{ .explicit = region }),
+        .origin = .{ .where_clause = .{} },
+        // The reference is what the user wrote, so an unmet constraint points
+        // at the where alias rather than at its declaration.
+        .provenance = .{ .expect_region = StaticDispatchConstraint.Provenance.OptRegion.some(region) },
+    };
+}
+
+/// The rigid variable a where alias declaration's receiver or parameter
+/// resolved to. Null when the declaration was poisoned, in which case it
+/// names no constraints and binds no name to substitute.
+fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .rigid => |rigid| rigid,
+        else => null,
+    };
 }
 
 /// Given an annotation, generate the corresponding type based on the CIR
@@ -10429,21 +10673,34 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 .type_decl => &.{},
             };
 
+            // A where alias reference's arguments can be this annotation's own
+            // constrained type variables, whose generation declares constraints
+            // of their own. Generate them before opening this dispatcher's
+            // scratch range so those constraints cannot land inside it.
+            for (owned_where_clauses) |where_idx| {
+                switch (self.cir.store.getWhereClause(where_idx)) {
+                    .w_alias => |alias| try self.generateWhereAliasReferenceArgs(alias, env, ctx),
+                    .w_method, .w_malformed => {},
+                }
+            }
+
+            // One source clause can declare more than one constraint: a where
+            // alias contributes every constraint it names.
             const scratch_constraints_start = self.scratch_static_dispatch_constraints.top();
             for (owned_where_clauses) |where_idx| {
-                try self.declareOwnedStaticDispatchConstraint(where_idx, anno_var, env);
+                try self.declareOwnedStaticDispatchConstraints(where_idx, anno_var, env);
             }
+            const scratch_constraints_end = self.scratch_static_dispatch_constraints.top();
 
             var constraint_representatives = std.AutoHashMap(Ident.Idx, usize).init(self.gpa);
             defer constraint_representatives.deinit();
-            try constraint_representatives.ensureTotalCapacity(@intCast(owned_where_clauses.len));
+            try constraint_representatives.ensureTotalCapacity(@intCast(scratch_constraints_end - scratch_constraints_start));
 
             // A dispatcher's requirements are a method-keyed set. Keep the
             // first source occurrence as its stable evidence position, and
             // share its callable type with every repeated source constraint.
             const static_dispatch_constraints_start = self.types.static_dispatch_constraints.len();
-            for (0..owned_where_clauses.len) |offset| {
-                const scratch_index = scratch_constraints_start + offset;
+            for (scratch_constraints_start..scratch_constraints_end) |scratch_index| {
                 const scratch_constraint = self.scratch_static_dispatch_constraints.items.items[scratch_index];
                 const representative = try constraint_representatives.getOrPut(scratch_constraint.constraint.fn_name);
                 if (representative.found_existing) {
@@ -10463,19 +10720,23 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 .constraints = static_dispatch_constraints_range,
             } }, env);
 
-            for (owned_where_clauses, 0..) |where_idx, offset| {
-                switch (self.cir.store.getWhereClause(where_idx)) {
+            // Where-alias constraints were typed as they were declared; only a
+            // written method signature still needs its annotation generated,
+            // which requires the dispatcher above to already be rigid.
+            for (scratch_constraints_start..scratch_constraints_end) |scratch_index| {
+                const scratch_constraint = self.scratch_static_dispatch_constraints.items.items[scratch_index];
+                if (scratch_constraint.state != .declared) continue;
+                switch (self.cir.store.getWhereClause(scratch_constraint.where_clause)) {
                     .w_method => |method| try self.completeOwnedStaticDispatchConstraint(
-                        where_idx,
+                        scratch_constraint.where_clause,
                         method,
                         anno_var,
-                        scratch_constraints_start + offset,
+                        scratch_index,
                         env,
                         ctx,
                     ),
-                    .w_alias, .w_malformed => {
-                        try self.unifyWith(anno_var, .err, env);
-                    },
+                    // Only method clauses are left declared.
+                    .w_alias, .w_malformed => unreachable,
                 }
             }
         },
@@ -10486,6 +10747,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             try self.unifyWith(anno_var, .{ .flex = Flex.init() }, env);
         },
         .lookup => |lookup| {
+            if (try self.rejectWhereAliasInTypePosition(lookup.name, lookup.base, anno_var, anno_region, env)) return;
             switch (lookup.base) {
                 .builtin => |builtin_type| {
                     try self.setBuiltinTypeContent(anno_var, lookup.name, builtin_type, &.{}, anno_region, env);
@@ -10590,6 +10852,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             }
         },
         .apply => |a| {
+            if (try self.rejectWhereAliasInTypePosition(a.name, a.base, anno_var, anno_region, env)) return;
+
             // Generate the types for the arguments
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             for (anno_args) |anno_arg| {
@@ -15406,7 +15670,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
-            .s_nominal_decl, .s_alias_decl, .s_type_anno => {
+            .s_nominal_decl, .s_alias_decl, .s_where_alias_decl, .s_type_anno => {
                 // Local type declarations are preprocessed before type checking.
                 // Avoid re-processing them inside block statements to prevent
                 // duplicate unifications and spurious type mismatches.
@@ -16762,7 +17026,7 @@ fn mkBinopConstraint(
     );
 
     _ = try self.unify(constrained_var, lhs_var, env);
-    try self.recordAmbiguityCandidate(lhs_var, .creation, null, false);
+    try self.recordAmbiguityCandidate(lhs_var, .creation, null);
 }
 
 fn publishBinopDispatchExpr(
@@ -16844,7 +17108,7 @@ fn mkUnaryOp(
     );
 
     _ = try self.unify(constrained_var, arg_var, env);
-    try self.recordAmbiguityCandidate(arg_var, .creation, null, false);
+    try self.recordAmbiguityCandidate(arg_var, .creation, null);
 }
 
 fn publishUnaryDispatchExpr(
@@ -17031,7 +17295,7 @@ fn mkReceiverDispatchConstraint(
     );
 
     _ = try self.unify(constrained_var, receiver_var, env);
-    try self.recordAmbiguityCandidate(receiver_var, .creation, null, false);
+    try self.recordAmbiguityCandidate(receiver_var, .creation, null);
     return constraint_fn_var;
 }
 
@@ -17066,7 +17330,7 @@ fn mkTypeMethodCallConstraint(
     );
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
-    try self.recordAmbiguityCandidate(dispatcher_var, .creation, null, false);
+    try self.recordAmbiguityCandidate(dispatcher_var, .creation, null);
     return constraint_fn_var;
 }
 

@@ -35,6 +35,13 @@ const windows_cross_targets = [_]CrossTarget{
     .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
 };
 
+/// BSD cross-compile targets
+const bsd_cross_targets = [_]CrossTarget{
+    .{ .name = "x64freebsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .freebsd, .abi = .none } },
+    .{ .name = "x64openbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .openbsd, .abi = .none } },
+    .{ .name = "x64netbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .netbsd, .abi = .none } },
+};
+
 /// All Linux cross-compile targets (musl + glibc)
 const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
 
@@ -46,7 +53,7 @@ comptime {
     // resolves them to the architecture baseline. Naming a model here would
     // put instructions the baseline lacks into every `v1` binary, so it has to
     // come with per-CPU-level objects instead.
-    for (musl_cross_targets ++ glibc_cross_targets ++ windows_cross_targets) |cross_target| {
+    for (musl_cross_targets ++ glibc_cross_targets ++ windows_cross_targets ++ bsd_cross_targets) |cross_target| {
         if (cross_target.query.cpu_model != .determined_by_arch_os) {
             @compileError("cross-compile target " ++ cross_target.name ++
                 " names a CPU model; baseline (v1) targets would link non-baseline builtins");
@@ -6777,6 +6784,9 @@ fn addMainExe(
         .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
         .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
         .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
+        .{ .name = "x64freebsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .freebsd, .abi = .none } },
+        .{ .name = "x64openbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .openbsd, .abi = .none } },
+        .{ .name = "x64netbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .netbsd, .abi = .none } },
         .{ .name = "x64mac", .query = roc_target.macos_deployment.query(.x86_64) },
         .{ .name = "arm64mac", .query = roc_target.macos_deployment.query(.aarch64) },
     };
@@ -6788,10 +6798,16 @@ fn addMainExe(
         // floor, ...) resolve into the -nostdlib executable. Excluded: wasm32
         // (gets compiler-rt via the dedicated merged object below) and macOS
         // (resolves them against -lSystem at the final link, and `-fcompiler-rt`
-        // crashes the Zig compiler for macOS targets under --listen).
+        // crashes the Zig compiler for macOS targets under --listen). BSD is
+        // also excluded because Zig 0.16.0 segfaults when compiling compiler_rt
+        // for x86_64-*-bsd-none targets.
         const cross_is_wasm = std.mem.eql(u8, cross_target.name, "wasm32");
         const cross_is_macos = cross_target.query.os_tag == .macos;
-        const cross_bundle_compiler_rt = !cross_is_wasm and !cross_is_macos;
+        const cross_is_bsd = switch (cross_target.query.os_tag orelse .freestanding) {
+            .freebsd, .openbsd, .netbsd => true,
+            else => false,
+        };
+        const cross_bundle_compiler_rt = !cross_is_wasm and !cross_is_macos and !cross_is_bsd;
 
         // Build builtins object file for this target.
         const cross_builtins_obj = b.addObject(.{

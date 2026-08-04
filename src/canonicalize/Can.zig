@@ -1345,6 +1345,7 @@ fn valueDeclKindResolvesAsValue(self: *const Self, kind: AST.DeclIndex.DeclKind)
         .type_alias,
         .nominal,
         .@"opaque",
+        .where_alias,
         .import,
         .file_import,
         => false,
@@ -1372,6 +1373,7 @@ fn forwardVisibleValueDecl(
             .type_alias,
             .nominal,
             .@"opaque",
+            .where_alias,
             .import,
             .file_import,
             => {},
@@ -1648,7 +1650,7 @@ fn typePathForBinding(self: *const Self, binding: Scope.TypeBinding) ?AST.DeclIn
 fn aliasBindingTargetName(self: *const Self, binding: Scope.TypeBinding) ?Ident.Idx {
     const stmt_idx = switch (binding) {
         .local_alias => |stmt_idx| stmt_idx,
-        .local_nominal, .associated_nominal, .external_nominal => return null,
+        .local_nominal, .local_where_alias, .associated_nominal, .external_nominal => return null,
     };
     const alias = switch (self.env.store.getStatement(stmt_idx)) {
         .s_alias_decl => |alias| alias,
@@ -2120,6 +2122,11 @@ fn placeholderTypeDeclStatement(
             .anno = .placeholder,
             .is_opaque = type_decl.kind == .@"opaque",
         } },
+        .where_alias => Statement{ .s_where_alias_decl = .{
+            .header = header_idx,
+            .receiver = .placeholder,
+            .where = CIR.WhereClause.Span.empty,
+        } },
     };
 }
 
@@ -2169,7 +2176,7 @@ fn registerTypeDecl(
     // any placeholder statement an earlier forward reference produced and
     // rewrites it in place so the stub header and placeholder annotation get
     // replaced by the real ones.
-    const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
+    const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind, self.whereAliasReceiverParameter(type_decl));
 
     // Check if the header is malformed before trying to use it
     const node = self.env.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
@@ -2237,6 +2244,7 @@ fn registerTypeDecl(
         const awaiting_real_decl = switch (existing_stmt) {
             .s_alias_decl => |alias| alias.anno == .placeholder,
             .s_nominal_decl => |nominal| nominal.anno == .placeholder,
+            .s_where_alias_decl => |where_alias| where_alias.receiver == .placeholder,
             else => false,
         };
 
@@ -2290,10 +2298,20 @@ fn registerTypeDecl(
         try self.mutuallyRecursiveAliasAnno(idx)
     else
         null;
+    // Set while canonicalizing a where alias body, which needs the receiver and
+    // the header's parameters in scope.
+    var where_alias_clauses = CIR.WhereClause.Span.empty;
     const anno_idx = maybe_cycle_anno orelse blk: {
         // Enter a new scope for type parameters
         const type_var_scope = self.scopeEnterTypeVar();
         defer self.scopeExitTypeVar(type_var_scope);
+
+        // A where alias receiver binds before the parameters, so a parameter
+        // that repeats it is the redeclaration.
+        const where_alias_receiver: ?TypeAnno.Idx = if (type_decl.kind == .where_alias)
+            try self.canonicalizeWhereAliasReceiver(type_decl.anno)
+        else
+            null;
 
         // Introduce type parameters from the header into the scope
         try self.introduceTypeParametersFromHeader(final_header_idx);
@@ -2331,14 +2349,21 @@ fn registerTypeDecl(
         break :blk switch (type_decl.kind) {
             .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
             .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+            .where_alias => wa_blk: {
+                const receiver = where_alias_receiver orelse unreachable; // set above for this kind
+                where_alias_clauses = try self.canonicalizeWhereAliasClauses(type_decl, final_header_idx, receiver);
+                break :wa_blk receiver;
+            },
         };
     };
 
     // Canonicalize where clauses if present
-    if (type_decl.where) |_| {
-        try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
-            .region = region,
-        } });
+    if (type_decl.kind != .where_alias) {
+        if (type_decl.where) |_| {
+            try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+                .region = region,
+            } });
+        }
     }
 
     // Create the real CIR type declaration statement with the canonicalized annotation
@@ -2358,6 +2383,15 @@ fn registerTypeDecl(
                         .header = final_header_idx,
                         .anno = anno_idx,
                         .is_opaque = type_decl.kind == .@"opaque",
+                    },
+                };
+            },
+            .where_alias => {
+                break :blk Statement{
+                    .s_where_alias_decl = .{
+                        .header = final_header_idx,
+                        .receiver = anno_idx,
+                        .where = where_alias_clauses,
                     },
                 };
             },
@@ -2423,6 +2457,7 @@ fn localTypeBindingInputForKind(kind: AST.TypeDeclKind, stmt_idx: Statement.Idx)
     return switch (kind) {
         .alias => Scope.TypeBindingInput{ .local_alias = stmt_idx },
         .nominal, .@"opaque" => Scope.TypeBindingInput{ .local_nominal = stmt_idx },
+        .where_alias => Scope.TypeBindingInput{ .local_where_alias = stmt_idx },
     };
 }
 
@@ -2432,7 +2467,7 @@ fn localTypeBindingForKind(kind: AST.TypeDeclKind, stmt_idx: Statement.Idx) Scop
 
 fn typeBindingOriginalRegion(self: *Self, binding: Scope.TypeBinding) Region {
     return switch (binding) {
-        .local_nominal, .local_alias, .associated_nominal => |stmt| self.env.store.getStatementRegion(stmt),
+        .local_nominal, .local_alias, .local_where_alias, .associated_nominal => |stmt| self.env.store.getStatementRegion(stmt),
         .external_nominal => |external| external.origin_region,
     };
 }
@@ -2445,7 +2480,7 @@ fn pushTypeRedeclarationForBinding(
 ) std.mem.Allocator.Error!void {
     const original_region = self.typeBindingOriginalRegion(existing);
     switch (existing) {
-        .local_alias => try self.env.pushDiagnostic(Diagnostic{ .type_alias_redeclared = .{
+        .local_alias, .local_where_alias => try self.env.pushDiagnostic(Diagnostic{ .type_alias_redeclared = .{
             .name = name_ident,
             .original_region = original_region,
             .redeclared_region = redeclared_region,
@@ -2482,7 +2517,7 @@ fn pushTypeShadowingWarning(
                 .original_region = external.origin_region,
             } });
         },
-        .local_nominal, .local_alias, .associated_nominal => try self.env.pushDiagnostic(Diagnostic{ .type_shadowed_warning = .{
+        .local_nominal, .local_alias, .local_where_alias, .associated_nominal => try self.env.pushDiagnostic(Diagnostic{ .type_shadowed_warning = .{
             .name = name_ident,
             .region = region,
             .original_region = self.typeBindingOriginalRegion(shadowed),
@@ -2527,6 +2562,7 @@ fn typeBindingInputFromBinding(binding: Scope.TypeBinding) Scope.TypeBindingInpu
     return switch (binding) {
         .local_nominal => |stmt| Scope.TypeBindingInput{ .local_nominal = stmt },
         .local_alias => |stmt| Scope.TypeBindingInput{ .local_alias = stmt },
+        .local_where_alias => |stmt| Scope.TypeBindingInput{ .local_where_alias = stmt },
         .associated_nominal => |stmt| Scope.TypeBindingInput{ .associated_nominal = stmt },
         .external_nominal => |external| Scope.TypeBindingInput{ .external_nominal = external },
     };
@@ -2564,6 +2600,7 @@ fn typeStatementAwaitingRealDecl(self: *Self, stmt_idx: Statement.Idx) bool {
     return switch (self.env.store.getStatement(stmt_idx)) {
         .s_alias_decl => |alias| alias.anno == .placeholder,
         .s_nominal_decl => |nominal| nominal.anno == .placeholder,
+        .s_where_alias_decl => |where_alias| where_alias.receiver == .placeholder,
         else => false,
     };
 }
@@ -2608,7 +2645,7 @@ fn refreshTypeBindingKindForStatement(
             entry.value_ptr.* = switch (entry.value_ptr.*) {
                 .associated_nominal => Scope.TypeBinding{ .associated_nominal = stmt_idx },
                 .external_nominal => entry.value_ptr.*,
-                .local_nominal, .local_alias => desired,
+                .local_nominal, .local_alias, .local_where_alias => desired,
             };
         }
     }
@@ -2820,6 +2857,11 @@ fn ensureParserTypeDeclBinding(
                 .header = header_idx,
                 .anno = .placeholder,
                 .is_opaque = kind == .@"opaque",
+            } },
+            .where_alias => Statement{ .s_where_alias_decl = .{
+                .header = header_idx,
+                .receiver = .placeholder,
+                .where = CIR.WhereClause.Span.empty,
             } },
         };
         const new_stmt_idx = try self.env.addStatement(placeholder_stmt, region);
@@ -3788,7 +3830,7 @@ fn canonicalizeAssociatedItems(
                         try self.env.store.addScratchWhereClause(canonicalized_where);
                     }
 
-                    break :blk try self.env.store.whereClauseSpanFrom(where_start, type_anno_idx);
+                    break :blk try self.env.store.whereClauseSpanFrom(where_start, &.{type_anno_idx});
                 } else null;
 
                 // Now, check the next stmt to see if it matches this anno
@@ -4356,7 +4398,7 @@ pub fn canonicalizeFile(
                         try self.env.store.addScratchWhereClause(canonicalized_where);
                     }
 
-                    break :blk try self.env.store.whereClauseSpanFrom(where_start, type_anno_idx);
+                    break :blk try self.env.store.whereClauseSpanFrom(where_start, &.{type_anno_idx});
                 } else null;
 
                 // Now, check the next non-malformed stmt to see if it matches this anno
@@ -5717,7 +5759,7 @@ fn resolveNumericSuffixTarget(self: *Self, type_ident: Ident.Idx) std.mem.Alloca
         return null;
     };
     return switch (binding_location.binding.*) {
-        .local_nominal, .local_alias, .associated_nominal => |stmt_idx| .{ .local = stmt_idx },
+        .local_nominal, .local_alias, .local_where_alias, .associated_nominal => |stmt_idx| .{ .local = stmt_idx },
         .external_nominal => |external| blk: {
             if (self.externalTypeBindingIsCompilerBuiltin(external)) {
                 if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
@@ -5879,7 +5921,7 @@ fn typeModulePublicRootIdent(self: *Self) ?Ident.Idx {
             const result = self.findMatchingTypeIdent() orelse return null;
             return switch (result.kind) {
                 .nominal, .@"opaque" => result.ident,
-                .alias => null,
+                .alias, .where_alias => null,
             };
         },
         else => null,
@@ -5914,7 +5956,7 @@ fn exposedTypeDeclStatementIdx(self: *Self, node_idx_u32: u32) ?Statement.Idx {
 
     const node_idx: Node.Idx = @enumFromInt(node_idx_u32);
     return switch (self.env.store.nodes.get(node_idx).tag) {
-        .statement_alias_decl, .statement_nominal_decl => @enumFromInt(node_idx_u32),
+        .statement_alias_decl, .statement_nominal_decl, .statement_where_alias_decl => @enumFromInt(node_idx_u32),
         else => null,
     };
 }
@@ -5923,6 +5965,7 @@ fn typeDeclHeader(self: *Self, stmt_idx: Statement.Idx) ?CIR.TypeHeader {
     return switch (self.env.store.getStatement(stmt_idx)) {
         .s_alias_decl => |alias| self.env.store.getTypeHeader(alias.header),
         .s_nominal_decl => |nominal| self.env.store.getTypeHeader(nominal.header),
+        .s_where_alias_decl => |where_alias| self.env.store.getTypeHeader(where_alias.header),
         else => null,
     };
 }
@@ -7509,7 +7552,7 @@ fn typeDispatchOwnerStatement(
     const binding_location = (try self.scopeLookupOrPrepareTypeBinding(owner_name)) orelse return null;
     return switch (binding_location.binding.*) {
         .local_alias => |stmt_idx| stmt_idx,
-        .local_nominal, .associated_nominal, .external_nominal => null,
+        .local_nominal, .local_where_alias, .associated_nominal, .external_nominal => null,
     };
 }
 
@@ -7894,6 +7937,7 @@ fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget
 
     return switch (binding_location.binding.*) {
         .local_nominal, .associated_nominal => |stmt| TryNominalTarget{ .local = stmt },
+        .local_where_alias => @panic("Try type binding resolved to a where alias"),
         .external_nominal => |external| blk: {
             const import_idx = external.import_idx orelse {
                 @panic("Try type binding had no import during try suffix canonicalization");
@@ -8452,6 +8496,7 @@ const DefiniteInitAnalyzer = struct {
             .s_import,
             .s_alias_decl,
             .s_nominal_decl,
+            .s_where_alias_decl,
             .s_type_anno,
             .s_type_var_alias,
             => true,
@@ -9049,7 +9094,7 @@ fn canonicalizeBlockTypeDeclStatement(
         return .{ .statement = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() } };
     }
 
-    const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
+    const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind, self.whereAliasReceiverParameter(type_decl));
     const header_node = self.env.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     if (header_node.tag == .malformed) {
         const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .malformed_type_annotation = .{
@@ -9059,7 +9104,9 @@ fn canonicalizeBlockTypeDeclStatement(
     }
 
     const type_header = self.env.store.getTypeHeader(header_idx);
-    const predeclared_stmt_idx: ?Statement.Idx = if (type_decl.kind == .alias) null else blk_predeclare: {
+    // Aliases and where aliases cannot be recursive, so they have nothing to
+    // gain from being visible while their own body is canonicalized.
+    const predeclared_stmt_idx: ?Statement.Idx = if (type_decl.kind == .alias or type_decl.kind == .where_alias) null else blk_predeclare: {
         const placeholder_stmt = placeholderTypeDeclStatement(type_decl, header_idx);
         const stmt_idx = try self.env.addStatement(placeholder_stmt, region);
         try self.recordTypeDeclPath(stmt_idx, self.parserTypePathForAstStatement(ast_stmt_idx));
@@ -9068,9 +9115,15 @@ fn canonicalizeBlockTypeDeclStatement(
         break :blk_predeclare stmt_idx;
     };
 
+    var where_alias_clauses = CIR.WhereClause.Span.empty;
     const anno_idx = blk: {
         const type_var_scope = self.scopeEnterTypeVar();
         defer self.scopeExitTypeVar(type_var_scope);
+
+        const where_alias_receiver: ?TypeAnno.Idx = if (type_decl.kind == .where_alias)
+            try self.canonicalizeWhereAliasReceiver(type_decl.anno)
+        else
+            null;
 
         try self.introduceTypeParametersFromHeader(header_idx);
 
@@ -9083,6 +9136,11 @@ fn canonicalizeBlockTypeDeclStatement(
         break :blk switch (type_decl.kind) {
             .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
             .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+            .where_alias => wa_blk: {
+                const receiver = where_alias_receiver orelse unreachable; // set above for this kind
+                where_alias_clauses = try self.canonicalizeWhereAliasClauses(type_decl, header_idx, receiver);
+                break :wa_blk receiver;
+            },
         };
     };
 
@@ -9100,6 +9158,13 @@ fn canonicalizeBlockTypeDeclStatement(
                 .is_opaque = type_decl.kind == .@"opaque",
             },
         },
+        .where_alias => .{
+            .s_where_alias_decl = .{
+                .header = header_idx,
+                .receiver = anno_idx,
+                .where = where_alias_clauses,
+            },
+        },
     };
 
     const stmt_idx = if (predeclared_stmt_idx) |predeclared| blk_stmt: {
@@ -9115,10 +9180,12 @@ fn canonicalizeBlockTypeDeclStatement(
 
     try self.scratch_local_type_decls.append(self.env.gpa, stmt_idx);
 
-    if (type_decl.where) |_| {
-        try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
-            .region = region,
-        } });
+    if (type_decl.kind != .where_alias) {
+        if (type_decl.where) |_| {
+            try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+                .region = region,
+            } });
+        }
     }
 
     if (type_decl.associated) |assoc| {
@@ -9537,7 +9604,7 @@ fn canonicalizeStandaloneTypeAnnoStatement(
             const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
             try self.env.store.addScratchWhereClause(canonicalized_where);
         }
-        break :inner_blk try self.env.store.whereClauseSpanFrom(where_start, type_anno_idx);
+        break :inner_blk try self.env.store.whereClauseSpanFrom(where_start, &.{type_anno_idx});
     } else null;
 
     if (type_anno.is_var) {
@@ -9911,6 +9978,7 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                     .s_import,
                     .s_alias_decl,
                     .s_nominal_decl,
+                    .s_where_alias_decl,
                     .s_type_anno,
                     .s_type_var_alias,
                     .s_runtime_error,
@@ -11260,7 +11328,7 @@ fn runExprKernel(
                             const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
                             try self.env.store.addScratchWhereClause(canonicalized_where);
                         }
-                        break :inner_blk try self.env.store.whereClauseSpanFrom(where_start, type_anno_idx);
+                        break :inner_blk try self.env.store.whereClauseSpanFrom(where_start, &.{type_anno_idx});
                     } else null;
 
                     const next_i = state.next + 1;
@@ -13276,6 +13344,7 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         @panic("Bool type binding was absent during boolean operator canonicalization");
     };
     return switch (binding_location.binding.*) {
+        .local_where_alias => @panic("Bool type binding resolved to a where alias"),
         .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
             .e_nominal = .{
                 .nominal_type_decl = stmt,
@@ -13799,6 +13868,7 @@ fn lookupImportedTypeDeclNode(
         const header_idx = switch (imported_env.store.getStatement(stmt_idx)) {
             .s_nominal_decl => |decl| decl.header,
             .s_alias_decl => |alias| alias.header,
+            .s_where_alias_decl => |where_alias| where_alias.header,
             else => continue,
         };
         const header = imported_env.store.getTypeHeader(header_idx);
@@ -18015,7 +18085,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     const region = self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
                     if (type_anno_ctx.type == .type_decl_anno) {
                         try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                            .is_alias = true,
+                            .declared = .alias,
                             .region = region,
                         } });
                     }
@@ -18057,7 +18127,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     const region = self.parse_ir.tokenizedRegionToRegion(underscore.region);
                     if (type_anno_ctx.type == .type_decl_anno) {
                         try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                            .is_alias = true,
+                            .declared = .alias,
                             .region = region,
                         } });
                     }
@@ -18177,7 +18247,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     .lookup => |ty| {
                         if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
                             try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                                .is_alias = true,
+                                .declared = .alias,
                                 .region = self.env.store.getTypeAnnoRegion(state.base_anno_idx),
                             } });
                         }
@@ -18698,7 +18768,7 @@ fn canonicalizeTypeAnnoBasicType(
                         .name = type_name_ident,
                         .base = .{ .local = .{ .decl_idx = stmt } },
                     } }, region),
-                    .local_alias => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                    .local_alias, .local_where_alias => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                         .name = type_name_ident,
                         .base = .{ .local = .{ .decl_idx = stmt } },
                     } }, region),
@@ -19134,7 +19204,43 @@ fn recordTypeHeaderParameter(
     return false;
 }
 
-fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind: AST.TypeDeclKind) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
+/// The declarations whose parameters may not be underscore-prefixed, and how to
+/// name them in that diagnostic. Nominal and opaque declarations allow them
+/// because their parameters can be phantom.
+fn declaredTypeKindRejectingUnderscores(type_kind: AST.TypeDeclKind) ?CIR.DeclaredTypeKind {
+    return switch (type_kind) {
+        .alias => .alias,
+        .where_alias => .where_alias,
+        .nominal, .@"opaque" => null,
+    };
+}
+
+/// The receiver a where alias declares its constraints against, as a type
+/// parameter. Null for every other kind of type declaration.
+fn whereAliasReceiverParameter(
+    self: *const Self,
+    type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
+) ?SeenTypeParameter {
+    if (type_decl.kind != .where_alias) return null;
+    const receiver = switch (self.parse_ir.store.getTypeAnno(type_decl.anno)) {
+        .ty_var => |ty_var| ty_var,
+        else => return null,
+    };
+    return SeenTypeParameter{
+        .ident = self.parse_ir.tokens.resolveIdentifier(receiver.tok) orelse return null,
+        .region = self.parse_ir.tokenizedRegionToRegion(receiver.region),
+    };
+}
+
+/// Canonicalize a type declaration's header. `receiver` is the where alias
+/// receiver, which shares the parameters' namespace, so a parameter repeating it
+/// is reported as a parameter conflict.
+fn canonicalizeTypeHeader(
+    self: *Self,
+    header_idx: AST.TypeHeader.Idx,
+    type_kind: AST.TypeDeclKind,
+    receiver: ?SeenTypeParameter,
+) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -19164,6 +19270,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
     var seen_type_parameters = std.ArrayList(SeenTypeParameter).empty;
     defer seen_type_parameters.deinit(self.env.gpa);
+    if (receiver) |seen| try seen_type_parameters.append(self.env.gpa, seen);
 
     for (self.parse_ir.store.typeAnnoSlice(ast_header.args)) |arg_idx| {
         const ast_arg = self.parse_ir.store.getTypeAnno(arg_idx);
@@ -19185,11 +19292,13 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
                 // Check for underscore in type parameter
                 // Only reject underscore-prefixed names for type aliases, not nominal/opaque types
                 const param_name = self.parse_ir.env.getIdent(param_ident);
-                if (param_name.len > 0 and param_name[0] == '_' and type_kind == .alias) {
-                    try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                        .is_alias = true,
-                        .region = param_region,
-                    } });
+                if (param_name.len > 0 and param_name[0] == '_') {
+                    if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                        try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
+                            .declared = declared,
+                            .region = param_region,
+                        } });
+                    }
                 }
 
                 const param_anno = try self.env.addTypeAnno(.{ .rigid_var = .{
@@ -19211,9 +19320,9 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
                 if (try self.recordTypeHeaderParameter(&seen_type_parameters, name_ident, param_ident, param_region)) continue;
 
                 // Only reject underscore-prefixed parameters for type aliases, not nominal/opaque types
-                if (type_kind == .alias) {
+                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                        .is_alias = true,
+                        .declared = declared,
                         .region = param_region,
                     } });
                 }
@@ -19230,9 +19339,9 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
 
                 // Push underscore diagnostic for underscore type parameters
                 // Only reject for type aliases, not nominal/opaque types
-                if (type_kind == .alias) {
+                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                        .is_alias = true,
+                        .declared = declared,
                         .region = param_region,
                     } });
                 }
@@ -19247,9 +19356,9 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
 
                 // Push underscore diagnostic for malformed underscore type parameters
                 // Only reject for type aliases, not nominal/opaque types
-                if (type_kind == .alias) {
+                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                        .is_alias = true,
+                        .declared = declared,
                         .region = param_region,
                     } });
                 }
@@ -20379,6 +20488,88 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocato
 }
 
 /// Canonicalize a where clause from AST to CIR
+/// Canonicalize the receiver of a where alias declaration — the `a` in
+/// `a.Sortable : where [...]` — introducing it as a rigid variable so the
+/// declaration's constraints resolve against it.
+fn canonicalizeWhereAliasReceiver(self: *Self, ast_anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!TypeAnno.Idx {
+    const ast_anno = self.parse_ir.store.getTypeAnno(ast_anno_idx);
+    const receiver = switch (ast_anno) {
+        .ty_var => |ty_var| ty_var,
+        // The parser only builds a where alias declaration from a lowercase
+        // receiver token, so anything else is a compiler bug.
+        else => unreachable,
+    };
+    const region = self.parse_ir.tokenizedRegionToRegion(receiver.region);
+    const name = self.parse_ir.tokens.resolveIdentifier(receiver.tok) orelse {
+        return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{
+            .region = region,
+        } });
+    };
+
+    const anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{ .name = name } }, region);
+    _ = try self.scopeIntroduceTypeVar(name, anno_idx);
+    return anno_idx;
+}
+
+/// Canonicalize the constraint set of a where alias declaration. The receiver
+/// and the header's parameters are already in scope, and are the only type
+/// variables the constraints may mention.
+fn canonicalizeWhereAliasClauses(
+    self: *Self,
+    type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
+    header_idx: CIR.TypeHeader.Idx,
+    receiver: TypeAnno.Idx,
+) std.mem.Allocator.Error!CIR.WhereClause.Span {
+    // The parser only builds a where alias declaration from a `where` clause.
+    const where_coll = type_decl.where orelse unreachable;
+    const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+    const where_start = self.env.store.scratchWhereClauseTop();
+
+    const receiver_name = switch (self.env.store.getTypeAnno(receiver)) {
+        .rigid_var => |rigid| rigid.name,
+        else => null,
+    };
+    for (where_slice) |where_idx| {
+        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .type_decl_anno);
+        try self.env.store.addScratchWhereClause(canonicalized_where);
+
+        // A where alias declares constraints on its receiver. Constraining a
+        // parameter instead has no home: a rigid variable's contract set is
+        // fixed by the annotation that introduces it, so the constraint would
+        // silently not reach the applied argument.
+        if (receiver_name) |name| {
+            const constrained = switch (self.env.store.getWhereClause(canonicalized_where)) {
+                .w_method => |method| method.var_,
+                .w_alias => |alias| alias.var_,
+                .w_malformed => continue,
+            };
+            const constrained_root = switch (self.env.store.getTypeAnno(constrained)) {
+                .rigid_var_lookup => |lookup| lookup.ref,
+                else => constrained,
+            };
+            if (constrained_root != receiver) {
+                try self.env.pushDiagnostic(Diagnostic{ .where_alias_constraint_not_on_receiver = .{
+                    .receiver_name = name,
+                    .region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(canonicalized_where)),
+                } });
+            }
+        }
+    }
+
+    // The receiver and the header's parameters are the type variables the
+    // declaration introduces, so a constraint may be written against any of
+    // them.
+    const header_args = self.env.store.sliceTypeAnnos(self.env.store.getTypeHeader(header_idx).args);
+    var roots_sfa = std.heap.stackFallback(8 * @sizeOf(TypeAnno.Idx), self.env.gpa);
+    const roots_alloc = roots_sfa.get();
+    const roots = try roots_alloc.alloc(TypeAnno.Idx, header_args.len + 1);
+    defer roots_alloc.free(roots);
+    roots[0] = receiver;
+    @memcpy(roots[1..], header_args);
+
+    return try self.env.store.whereClauseSpanFrom(where_start, roots);
+}
+
 fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type_anno_ctx: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!WhereClause.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -20520,26 +20711,17 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                     },
                 };
 
-            // Get alias being referenced
+            // Resolve the where alias being referenced. Its name lives in the
+            // ordinary type namespace, so it resolves the same way any other
+            // type name in this module does.
             // where [ a.Alias ]
             //           ^^^^^
-
-            const alias_ident = blk: {
-                // Resolve alias name (remove leading dot)
-                const alias_name_text = self.parse_ir.resolve(ma.name_tok);
-
-                // Remove leading dot from alias name
-                const alias_name_clean = if (alias_name_text.len > 0 and alias_name_text[0] == '.')
-                    alias_name_text[1..]
-                else
-                    alias_name_text;
-
-                break :blk try self.env.insertIdent(Ident.for_text(alias_name_clean));
-            };
+            var alias_ctx = TypeAnnoCtx.init(type_anno_ctx);
+            const alias_anno_idx = try self.runTypeAnnoKernel(ma.alias, &alias_ctx);
 
             return try self.env.addWhereClause(WhereClause{ .w_alias = .{
                 .var_ = var_anno_idx,
-                .alias_name = alias_ident,
+                .alias = alias_anno_idx,
             } }, region);
         },
         .malformed => |m| {

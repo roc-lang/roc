@@ -1710,8 +1710,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .underscore_in_type_declaration => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            const kind = if (data.is_alias) "alias" else "opaque type";
-            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{kind});
+            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{data.declared.label()});
             defer allocator.free(headline);
             var report = try Report.init(allocator, "Underscore In Type Alias", headline, .runtime_error);
 
@@ -2746,6 +2745,27 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+
+            break :blk report;
+        },
+        .where_alias_constraint_not_on_receiver => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Where Alias Constrains Another Type", "", .runtime_error);
+            try report.headline.addReflowingText("A where alias constrains only its receiver, but this constraint is on a different type variable.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Write this constraint against ");
+            try report.document.addInlineCode(self.getIdent(data.receiver_name));
+            try report.document.addReflowingText(", or declare a separate where alias for the other type variable and apply it alongside this one.");
 
             break :blk report;
         },
@@ -4500,7 +4520,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         for (all_stmts) |stmt_idx| {
             const stmt = self.store.getStatement(stmt_idx);
             switch (stmt) {
-                .s_alias_decl, .s_nominal_decl => {
+                .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
                     has_type_decl = true;
                     break;
                 },
@@ -4540,6 +4560,21 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         const header = self.store.getTypeHeader(alias.header);
                         try header.pushToSExprTree(self, tree, alias.header);
 
+                        try tree.endNode(stmt_begin, stmt_attrs);
+                    },
+                    .s_where_alias_decl => |where_alias| {
+                        const stmt_begin = tree.beginNode();
+                        try tree.pushStaticAtom("where-alias");
+
+                        const stmt_region = self.store.getStatementRegion(stmt_idx);
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, stmt_region);
+
+                        try type_writer.write(varFrom(stmt_idx), .one_line);
+                        try tree.pushStringPair("type", type_writer.get());
+
+                        const stmt_attrs = tree.beginNode();
+                        const header = self.store.getTypeHeader(where_alias.header);
+                        try header.pushToSExprTree(self, tree, where_alias.header);
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
                     .s_nominal_decl => |nominal| {

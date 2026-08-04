@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 const target_mod = @import("target.zig");
 
 pub const RocTarget = target_mod.RocTarget;
-pub const RuntimeHost = target_mod.RuntimeHost;
+pub const CpuLevel = target_mod.CpuLevel;
 pub const TargetsConfig = target_mod.TargetsConfig;
 pub const TargetLinkSpec = target_mod.TargetLinkSpec;
 pub const OutputKind = target_mod.OutputKind;
@@ -36,10 +36,36 @@ pub const SelectionResult = union(enum) {
     not_runnable_on_host: RocTarget,
 };
 
-fn isBuildDefaultTarget(target: RocTarget, host: RuntimeHost) bool {
+/// Whether this machine's CPU executes the code generated for this target.
+///
+/// The OS and architecture matching is not enough: a target whose CPU level is
+/// above what the machine running the compiler supports links a host and emits
+/// instructions that fault here, so it is not a target this machine can be
+/// given by default.
+fn runsOnHostCpu(target: RocTarget, host_cpu_level: CpuLevel) bool {
+    return switch (host_cpu_level) {
+        .default => true,
+        .v1 => target.cpuLevel() == .v1,
+    };
+}
+
+fn isBuildDefaultTarget(target: RocTarget, host_cpu_level: CpuLevel) bool {
     // Compare the architecture rather than the target, so both the default and
-    // the baseline spelling of wasm are covered.
-    return target.toCpuArch() == .wasm32 or target.isExecutableOnRuntimeHost(host);
+    // the baseline spelling of wasm are covered. Neither spelling runs on the
+    // host CPU, so the host's CPU level does not narrow them.
+    if (target.toCpuArch() == .wasm32) return true;
+
+    return target.matchesHostOsAndArch() and runsOnHostCpu(target, host_cpu_level);
+}
+
+/// Whether the default `roc` command can execute an artifact built for this
+/// target on this machine.
+fn isRunnableOnHost(target: RocTarget, host_cpu_level: CpuLevel) bool {
+    return target.isExecutableOnHost() and runsOnHostCpu(target, host_cpu_level);
+}
+
+fn hasIncompatibleHostCpu(target: RocTarget, host_cpu_level: CpuLevel) bool {
+    return target.matchesHostOsAndArch() and !runsOnHostCpu(target, host_cpu_level);
 }
 
 fn selectExplicitBuildTarget(config: TargetsConfig, target: RocTarget) SelectionResult {
@@ -55,10 +81,10 @@ fn selectExplicitBuildTarget(config: TargetsConfig, target: RocTarget) Selection
     return .{ .unsupported_target = target };
 }
 
-fn selectDefaultBuildTarget(config: TargetsConfig, host: RuntimeHost) SelectionResult {
+fn selectDefaultBuildTarget(config: TargetsConfig, host_cpu_level: CpuLevel) SelectionResult {
     var incompatible_cpu: ?RocTarget = null;
     for (config.getSupportedTargets()) |link_spec| {
-        if (isBuildDefaultTarget(link_spec.target, host)) {
+        if (isBuildDefaultTarget(link_spec.target, host_cpu_level)) {
             return .{ .selected = .{
                 .target = link_spec.target,
                 .output = link_spec.output,
@@ -66,7 +92,7 @@ fn selectDefaultBuildTarget(config: TargetsConfig, host: RuntimeHost) SelectionR
                 .source = .default,
             } };
         }
-        if (incompatible_cpu == null and link_spec.target.matchesRuntimeHostOsAndArch(host)) {
+        if (incompatible_cpu == null and hasIncompatibleHostCpu(link_spec.target, host_cpu_level)) {
             incompatible_cpu = link_spec.target;
         }
     }
@@ -76,7 +102,10 @@ fn selectDefaultBuildTarget(config: TargetsConfig, host: RuntimeHost) SelectionR
 }
 
 /// Select a platform target for `roc build` without considering backend opt level.
-pub fn selectBuildTarget(config: TargetsConfig, target_arg: ?[]const u8, host: RuntimeHost) SelectionResult {
+///
+/// `host_cpu_level` only narrows the default: an explicit `--target` names a
+/// machine other than this one just as legitimately as it names another OS.
+pub fn selectBuildTarget(config: TargetsConfig, target_arg: ?[]const u8, host_cpu_level: CpuLevel) SelectionResult {
     if (target_arg) |target_str| {
         const target = RocTarget.fromString(target_str) orelse {
             return .{ .invalid_target = target_str };
@@ -84,10 +113,15 @@ pub fn selectBuildTarget(config: TargetsConfig, target_arg: ?[]const u8, host: R
         return selectExplicitBuildTarget(config, target);
     }
 
-    return selectDefaultBuildTarget(config, host);
+    return selectDefaultBuildTarget(config, host_cpu_level);
 }
 
-fn selectRunTargetForParsed(config: TargetsConfig, target: RocTarget, source: SelectionSource, host: RuntimeHost) SelectionResult {
+fn selectRunTargetForParsed(
+    config: TargetsConfig,
+    target: RocTarget,
+    source: SelectionSource,
+    host_cpu_level: CpuLevel,
+) SelectionResult {
     const link_spec = config.getLinkSpec(target) orelse {
         return .{ .unsupported_target = target };
     };
@@ -101,10 +135,12 @@ fn selectRunTargetForParsed(config: TargetsConfig, target: RocTarget, source: Se
         } };
     }
 
-    if (!target.matchesRuntimeHostOsAndArch(host) or target.toCpuArch() == .wasm32) {
+    if (hasIncompatibleHostCpu(target, host_cpu_level)) {
+        return .{ .incompatible_cpu = target };
+    }
+    if (!isRunnableOnHost(target, host_cpu_level)) {
         return .{ .not_runnable_on_host = target };
     }
-    if (!target.isCpuCompatibleWith(host.cpu)) return .{ .incompatible_cpu = target };
 
     return .{ .selected = .{
         .target = target,
@@ -115,18 +151,18 @@ fn selectRunTargetForParsed(config: TargetsConfig, target: RocTarget, source: Se
 }
 
 /// Select a host-runnable `output: Exe` target for the default `roc` command.
-pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8, host: RuntimeHost) SelectionResult {
+pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8, host_cpu_level: CpuLevel) SelectionResult {
     if (target_arg) |target_str| {
         const target = RocTarget.fromString(target_str) orelse {
             return .{ .invalid_target = target_str };
         };
-        return selectRunTargetForParsed(config, target, .explicit, host);
+        return selectRunTargetForParsed(config, target, .explicit, host_cpu_level);
     }
 
     var default_non_executable: ?SelectedTarget = null;
     var incompatible_cpu: ?RocTarget = null;
     for (config.getSupportedTargets()) |link_spec| {
-        if (link_spec.output == .exe and link_spec.target.isExecutableOnRuntimeHost(host)) {
+        if (link_spec.output == .exe and isRunnableOnHost(link_spec.target, host_cpu_level)) {
             return .{ .selected = .{
                 .target = link_spec.target,
                 .output = .exe,
@@ -136,12 +172,11 @@ pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8, host: Run
         }
         if (incompatible_cpu == null and
             link_spec.output == .exe and
-            link_spec.target.matchesRuntimeHostOsAndArch(host) and
-            !link_spec.target.isCpuCompatibleWith(host.cpu))
+            hasIncompatibleHostCpu(link_spec.target, host_cpu_level))
         {
             incompatible_cpu = link_spec.target;
         }
-        if (default_non_executable == null and link_spec.output != .exe and isBuildDefaultTarget(link_spec.target, host)) {
+        if (default_non_executable == null and link_spec.output != .exe and isBuildDefaultTarget(link_spec.target, host_cpu_level)) {
             default_non_executable = .{
                 .target = link_spec.target,
                 .output = link_spec.output,
@@ -191,24 +226,6 @@ fn expectRequiresExecutable(result: SelectionResult) error{ExpectedRequiresExecu
     };
 }
 
-fn x64RuntimeHost(model: *const std.Target.Cpu.Model, default_extensions: bool) RuntimeHost {
-    var cpu = model.toCpu(.x86_64);
-    if (default_extensions) {
-        cpu.features.addFeature(@intFromEnum(std.Target.x86.Feature.aes));
-        cpu.features.addFeature(@intFromEnum(std.Target.x86.Feature.pclmul));
-        cpu.features.populateDependencies(std.Target.Cpu.Arch.x86_64.allFeaturesList());
-    }
-    return .{ .os_tag = .linux, .cpu = cpu };
-}
-
-fn baselineX64Host() RuntimeHost {
-    return x64RuntimeHost(&std.Target.x86.cpu.x86_64, false);
-}
-
-fn defaultX64Host() RuntimeHost {
-    return x64RuntimeHost(&std.Target.x86.cpu.x86_64_v3, true);
-}
-
 test "explicit build target uses the target's declared output kind" {
     const config = TargetsConfig{
         .inputs_dir = null,
@@ -217,7 +234,7 @@ test "explicit build target uses the target's declared output kind" {
         },
     };
 
-    const selected = try expectSelected(selectBuildTarget(config, "wasm32", baselineX64Host()));
+    const selected = try expectSelected(selectBuildTarget(config, "wasm32", .default));
     try std.testing.expectEqual(RocTarget.wasm32, selected.target);
     try std.testing.expectEqual(OutputKind.shared, selected.output);
     try std.testing.expectEqual(SelectionSource.explicit, selected.source);
@@ -231,7 +248,7 @@ test "default build target selects wasm shared module" {
         },
     };
 
-    const selected = try expectSelected(selectBuildTarget(config, null, baselineX64Host()));
+    const selected = try expectSelected(selectBuildTarget(config, null, .default));
     try std.testing.expectEqual(RocTarget.wasm32, selected.target);
     try std.testing.expectEqual(OutputKind.shared, selected.output);
     try std.testing.expectEqual(SelectionSource.default, selected.source);
@@ -242,11 +259,11 @@ test "default build target uses platform order" {
         .inputs_dir = null,
         .targets = &.{
             .{ .target = .wasm32, .output = .exe, .items = &.{.app} },
-            .{ .target = .x64v1musl, .output = .exe, .items = &.{.app} },
+            .{ .target = RocTarget.detectNative(), .output = .exe, .items = &.{.app} },
         },
     };
 
-    const selected = try expectSelected(selectBuildTarget(config, null, baselineX64Host()));
+    const selected = try expectSelected(selectBuildTarget(config, null, .default));
     try std.testing.expectEqual(RocTarget.wasm32, selected.target);
     try std.testing.expectEqual(OutputKind.exe, selected.output);
 }
@@ -259,12 +276,12 @@ test "run target requires host exe target" {
         },
     };
 
-    const default_selected = try expectRequiresExecutable(selectRunTarget(config, null, baselineX64Host()));
+    const default_selected = try expectRequiresExecutable(selectRunTarget(config, null, .default));
     try std.testing.expectEqual(RocTarget.wasm32, default_selected.target);
     try std.testing.expectEqual(OutputKind.shared, default_selected.output);
     try std.testing.expectEqual(SelectionSource.default, default_selected.source);
 
-    const explicit_selected = try expectRequiresExecutable(selectRunTarget(config, "wasm32", baselineX64Host()));
+    const explicit_selected = try expectRequiresExecutable(selectRunTarget(config, "wasm32", .default));
     try std.testing.expectEqual(RocTarget.wasm32, explicit_selected.target);
     try std.testing.expectEqual(OutputKind.shared, explicit_selected.output);
     try std.testing.expectEqual(SelectionSource.explicit, explicit_selected.source);
@@ -278,20 +295,20 @@ test "run target excludes wasm exe targets" {
         },
     };
 
-    try std.testing.expectEqual(SelectionResult.no_default, selectRunTarget(config, null, baselineX64Host()));
-    try std.testing.expectEqual(SelectionResult{ .not_runnable_on_host = .wasm32 }, selectRunTarget(config, "wasm32", baselineX64Host()));
+    try std.testing.expectEqual(SelectionResult.no_default, selectRunTarget(config, null, .default));
+    try std.testing.expectEqual(SelectionResult{ .not_runnable_on_host = .wasm32 }, selectRunTarget(config, "wasm32", .default));
 }
 
 test "run target excludes non-exe outputs" {
     const config = TargetsConfig{
         .inputs_dir = null,
         .targets = &.{
-            .{ .target = .x64v1musl, .output = .shared, .items = &.{.app} },
+            .{ .target = RocTarget.detectNative(), .output = .shared, .items = &.{.app} },
         },
     };
 
-    const selected = try expectRequiresExecutable(selectRunTarget(config, null, baselineX64Host()));
-    try std.testing.expectEqual(RocTarget.x64v1musl, selected.target);
+    const selected = try expectRequiresExecutable(selectRunTarget(config, null, .default));
+    try std.testing.expectEqual(RocTarget.detectNative(), selected.target);
     try std.testing.expectEqual(OutputKind.shared, selected.output);
 }
 
@@ -300,12 +317,12 @@ test "run target selects native exe target" {
         .inputs_dir = null,
         .targets = &.{
             .{ .target = .wasm32, .output = .shared, .items = &.{.app} },
-            .{ .target = .x64v1musl, .output = .exe, .items = &.{.app} },
+            .{ .target = RocTarget.detectNative(), .output = .exe, .items = &.{.app} },
         },
     };
 
-    const selected = try expectSelected(selectRunTarget(config, null, baselineX64Host()));
-    try std.testing.expectEqual(RocTarget.x64v1musl, selected.target);
+    const selected = try expectSelected(selectRunTarget(config, null, .default));
+    try std.testing.expectEqual(RocTarget.detectNative(), selected.target);
     try std.testing.expectEqual(OutputKind.exe, selected.output);
 }
 
@@ -322,66 +339,83 @@ test "baseline wasm is a build default target like its default twin" {
     // Both spellings of wasm build from any host, so both are eligible as a
     // build default. Comparing against `.wasm32` alone silently excluded
     // `wasm32v1` and sent it down the native path instead.
-    try std.testing.expect(isBuildDefaultTarget(.wasm32, baselineX64Host()));
-    try std.testing.expect(isBuildDefaultTarget(.wasm32v1, baselineX64Host()));
+    for ([_]CpuLevel{ .default, .v1 }) |host_cpu_level| {
+        try std.testing.expect(isBuildDefaultTarget(.wasm32, host_cpu_level));
+        try std.testing.expect(isBuildDefaultTarget(.wasm32v1, host_cpu_level));
+    }
 }
 
-test "default selection skips an incompatible CPU floor and selects v1" {
+test "a v1 target is a build default exactly when its default twin is on a host that runs both" {
+    for (std.enums.values(RocTarget)) |target| {
+        if (target.cpuLevel() != .v1) continue;
+        try std.testing.expectEqual(
+            isBuildDefaultTarget(target.defaultCpuTarget(), .default),
+            isBuildDefaultTarget(target, .default),
+        );
+    }
+}
+
+test "a host below the default CPU level only takes native v1 targets" {
+    // The whole point of detecting the host CPU: a machine that cannot execute
+    // the default level's instructions must not be handed them by default.
+    for (std.enums.values(RocTarget)) |target| {
+        if (target.toCpuArch() == .wasm32) continue;
+        if (target.cpuLevel() != .default) continue;
+
+        try std.testing.expect(!isBuildDefaultTarget(target, .v1));
+        try std.testing.expect(!isRunnableOnHost(target, .v1));
+    }
+}
+
+test "default build target drops to the v1 twin on a host below the default CPU level" {
+    const native = RocTarget.detectNative();
+    const baseline = native.baselineCpuTarget() orelse return error.SkipZigTest;
+
     const config = TargetsConfig{
         .inputs_dir = null,
         .targets = &.{
-            .{ .target = .x64musl, .output = .exe, .items = &.{.app} },
-            .{ .target = .x64v1musl, .output = .exe, .items = &.{.app} },
+            .{ .target = native, .output = .exe, .items = &.{.app} },
+            .{ .target = baseline, .output = .exe, .items = &.{.app} },
         },
     };
 
-    const build = try expectSelected(selectBuildTarget(config, null, baselineX64Host()));
-    try std.testing.expectEqual(RocTarget.x64v1musl, build.target);
+    const default_host = try expectSelected(selectBuildTarget(config, null, .default));
+    try std.testing.expectEqual(native, default_host.target);
 
-    const run = try expectSelected(selectRunTarget(config, null, baselineX64Host()));
-    try std.testing.expectEqual(RocTarget.x64v1musl, run.target);
+    const baseline_host = try expectSelected(selectBuildTarget(config, null, .v1));
+    try std.testing.expectEqual(baseline, baseline_host.target);
+
+    const run_on_baseline_host = try expectSelected(selectRunTarget(config, null, .v1));
+    try std.testing.expectEqual(baseline, run_on_baseline_host.target);
 }
 
-test "default selection retains the platform's faster target on a compatible CPU" {
+test "a platform without a v1 target reports its incompatible CPU floor" {
+    const native = RocTarget.detectNative();
+    if (native.baselineCpuTarget() == null) return error.SkipZigTest;
+
     const config = TargetsConfig{
         .inputs_dir = null,
         .targets = &.{
-            .{ .target = .x64musl, .output = .exe, .items = &.{.app} },
-            .{ .target = .x64v1musl, .output = .exe, .items = &.{.app} },
+            .{ .target = native, .output = .exe, .items = &.{.app} },
         },
     };
 
-    const build = try expectSelected(selectBuildTarget(config, null, defaultX64Host()));
-    try std.testing.expectEqual(RocTarget.x64musl, build.target);
-
-    const run = try expectSelected(selectRunTarget(config, null, defaultX64Host()));
-    try std.testing.expectEqual(RocTarget.x64musl, run.target);
-}
-
-test "an incompatible sole platform target is rejected before execution" {
-    const config = TargetsConfig{
-        .inputs_dir = null,
-        .targets = &.{
-            .{ .target = .x64musl, .output = .exe, .items = &.{.app} },
-        },
-    };
-    const host = baselineX64Host();
-
     try std.testing.expectEqual(
-        SelectionResult{ .incompatible_cpu = .x64musl },
-        selectBuildTarget(config, null, host),
+        SelectionResult{ .incompatible_cpu = native },
+        selectBuildTarget(config, null, .v1),
     );
     try std.testing.expectEqual(
-        SelectionResult{ .incompatible_cpu = .x64musl },
-        selectRunTarget(config, null, host),
-    );
-    try std.testing.expectEqual(
-        SelectionResult{ .incompatible_cpu = .x64musl },
-        selectRunTarget(config, "x64musl", host),
+        SelectionResult{ .incompatible_cpu = native },
+        selectRunTarget(config, null, .v1),
     );
 
-    // An explicit build is a cross-compilation request and does not execute
-    // the artifact, so it remains available.
-    const explicit_build = try expectSelected(selectBuildTarget(config, "x64musl", host));
-    try std.testing.expectEqual(RocTarget.x64musl, explicit_build.target);
+    // Naming the target explicitly still builds it — cross-compiling for a
+    // newer CPU than this one is as legitimate as compiling for another OS —
+    // but running it here is not.
+    const explicit = try expectSelected(selectBuildTarget(config, native.toName(), .v1));
+    try std.testing.expectEqual(native, explicit.target);
+    try std.testing.expectEqual(
+        SelectionResult{ .incompatible_cpu = native },
+        selectRunTarget(config, native.toName(), .v1),
+    );
 }

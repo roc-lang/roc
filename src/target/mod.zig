@@ -120,30 +120,6 @@ pub const CpuLevel = enum {
     default,
 };
 
-/// The OS and CPU features of the machine running the Roc compiler.
-///
-/// This is detected at runtime. `builtin.target.cpu` describes the CPU floor
-/// the released compiler itself was built for, which is deliberately baseline
-/// and therefore cannot answer whether a generated executable may use the
-/// default target's newer instructions.
-pub const RuntimeHost = struct {
-    os_tag: std.Target.Os.Tag,
-    cpu: std.Target.Cpu,
-
-    pub fn fromStdTarget(target: std.Target) RuntimeHost {
-        return .{
-            .os_tag = target.os.tag,
-            .cpu = target.cpu,
-        };
-    }
-};
-
-/// Detect the CPU features available to executables started by this process.
-pub fn detectRuntimeHost(io: std.Io) std.zig.system.DetectError!RuntimeHost {
-    const target = try std.zig.system.resolveTargetQuery(io, .{ .cpu_model = .native });
-    return RuntimeHost.fromStdTarget(target);
-}
-
 /// The single CPU contract shared by code generation and native platform
 /// selection. `instruction_features` contains only requirements above the
 /// architecture baseline; their transitive dependencies are derived here.
@@ -380,14 +356,16 @@ pub const RocTarget = enum {
         };
     }
 
-    /// How old a CPU this target's generated code must run on.
-    pub fn cpuLevel(self: RocTarget) CpuLevel {
-        return if (self.defaultCpuTarget() == self) .default else .v1;
-    }
-
-    /// The baseline twin of this target, when Roc has raised its CPU floor.
-    pub fn v1CpuTarget(self: RocTarget) ?RocTarget {
-        return switch (self.defaultCpuTarget()) {
+    /// The `v1` twin of this target, or null when it has none.
+    ///
+    /// A target has no twin when Roc names no CPU floor for it: `arm32*` and
+    /// `arm64mac` already generate code for every CPU that can run them, so
+    /// there is nothing below them to drop to. A `v1` target is its own twin.
+    ///
+    /// Every target is listed rather than using `else`, so adding a target
+    /// fails to compile until its baseline spelling is declared here.
+    pub fn baselineCpuTarget(self: RocTarget) ?RocTarget {
+        return switch (self) {
             .x64mac => .x64v1mac,
             .x64win => .x64v1win,
             .x64freebsd => .x64v1freebsd,
@@ -405,8 +383,6 @@ pub const RocTarget = enum {
 
             .wasm32 => .wasm32v1,
 
-            .arm64mac, .arm32linux, .arm32musl => null,
-
             .x64v1mac,
             .x64v1win,
             .x64v1freebsd,
@@ -421,8 +397,15 @@ pub const RocTarget = enum {
             .arm64v1musl,
             .arm64v1glibc,
             .wasm32v1,
-            => unreachable,
+            => self,
+
+            .arm64mac, .arm32linux, .arm32musl => null,
         };
+    }
+
+    /// How old a CPU this target's generated code must run on.
+    pub fn cpuLevel(self: RocTarget) CpuLevel {
+        return if (self.defaultCpuTarget() == self) .default else .v1;
     }
 
     /// Get the OS tag for this RocTarget
@@ -560,6 +543,12 @@ pub const RocTarget = enum {
         return contract;
     }
 
+    /// Instruction features above the architecture baseline that codegen may
+    /// emit and runtime host detection must confirm.
+    pub fn requiredRuntimeCpuFeatures(self: RocTarget) std.Target.Cpu.Feature.Set {
+        return self.cpuContract().requiredRuntimeFeatures(self.toCpuArch());
+    }
+
     /// Build the single target query used for every LLVM compilation of Roc
     /// program code, including linked applications, host shims, eval, and
     /// optimized `roc test` roots.
@@ -670,11 +659,6 @@ pub const RocTarget = enum {
             self.toCpuArch() == builtin.target.cpu.arch;
     }
 
-    /// Check this target against an explicitly detected runtime host.
-    pub fn matchesRuntimeHostOsAndArch(self: RocTarget, host: RuntimeHost) bool {
-        return self.toOsTag() == host.os_tag and self.toCpuArch() == host.cpu.arch;
-    }
-
     /// The complete LLVM target feature set, including scheduling and tuning
     /// flags that do not represent instruction-set requirements.
     fn llvmTargetFeatures(self: RocTarget) std.Target.Cpu.Feature.Set {
@@ -696,19 +680,6 @@ pub const RocTarget = enum {
         return cpu.features;
     }
 
-    /// Whether this host supplies every CPU feature code generation may use.
-    pub fn isCpuCompatibleWith(self: RocTarget, host_cpu: std.Target.Cpu) bool {
-        return self.toCpuArch() == host_cpu.arch and
-            host_cpu.features.isSuperSetOf(self.cpuContract().requiredRuntimeFeatures(self.toCpuArch()));
-    }
-
-    /// Check whether this target produces a process executable runnable here,
-    /// including its statically declared CPU floor.
-    pub fn isExecutableOnRuntimeHost(self: RocTarget, host: RuntimeHost) bool {
-        if (self.toCpuArch() == .wasm32) return false;
-        return self.matchesRuntimeHostOsAndArch(host) and self.isCpuCompatibleWith(host.cpu);
-    }
-
     /// Check if this target can be built on the current host.
     /// wasm32 is always compatible because wasm code generation is host-independent.
     /// Native targets are compatible if both OS and architecture match the host.
@@ -717,6 +688,15 @@ pub const RocTarget = enum {
         if (self.toCpuArch() == .wasm32) return true;
 
         // Otherwise, check if both OS and architecture match
+        return self.matchesHostOsAndArch();
+    }
+
+    /// Check if this target produces a process executable that can run on this host.
+    /// This is intentionally stricter than build compatibility: wasm32 can be
+    /// built on any host, but the default `roc` command does not execute wasm artifacts directly.
+    pub fn isExecutableOnHost(self: RocTarget) bool {
+        if (self.toCpuArch() == .wasm32) return false;
+
         return self.matchesHostOsAndArch();
     }
 
@@ -759,6 +739,10 @@ pub const RocTarget = enum {
     }
 };
 
+/// What the CPU running this compiler can execute, which `builtin.cpu` cannot
+/// answer because the compiler itself is built for the architecture baseline.
+pub const host_cpu = @import("host_cpu.zig");
+
 /// LLVM spelling of a resolved Zig CPU model.
 pub fn llvmCpuName(target: std.Target) []const u8 {
     return target.cpu.model.llvm_name orelse "";
@@ -787,6 +771,12 @@ pub fn llvmFeatureString(allocator: std.mem.Allocator, target: std.Target) std.m
     return features.toOwnedSliceSentinel(allocator, 0);
 }
 
+test {
+    // Nothing in this file references host CPU detection, so name it here to
+    // put its tests and its comptime check of the CPU floor in this run.
+    std.testing.refAllDecls(host_cpu);
+}
+
 test "native target matches host OS and architecture" {
     try std.testing.expect(RocTarget.detectNative().matchesHostOsAndArch());
 }
@@ -807,6 +797,7 @@ test "every v1 target shares its default target's platform" {
         try std.testing.expectEqual(default.isWindows(), target.isWindows());
         try std.testing.expectEqual(default.ptrBitWidth(), target.ptrBitWidth());
         try std.testing.expectEqual(default.isCompatibleWithHost(), target.isCompatibleWithHost());
+        try std.testing.expectEqual(default.isExecutableOnHost(), target.isExecutableOnHost());
 
         // The switches that list `v1` targets by hand are the ones that could
         // put a target in the wrong arm without the compiler noticing.
@@ -843,14 +834,6 @@ test "default targets round-trip through defaultCpuTarget" {
     for (std.enums.values(RocTarget)) |target| {
         if (target.cpuLevel() != .default) continue;
         try std.testing.expectEqual(target, target.defaultCpuTarget());
-    }
-}
-
-test "v1 targets round-trip through their default target" {
-    for (std.enums.values(RocTarget)) |target| {
-        if (target.cpuLevel() != .v1) continue;
-        try std.testing.expectEqual(target, target.defaultCpuTarget().v1CpuTarget().?);
-        try std.testing.expectEqual(target, target.v1CpuTarget().?);
     }
 }
 
@@ -906,30 +889,6 @@ test "v1 targets ask LLVM for the architecture baseline" {
         if (target.cpuLevel() != .v1) continue;
         try std.testing.expect(target.llvmTargetQuery().cpu_features_add.isEmpty());
     }
-}
-
-test "runtime CPU compatibility follows the target query feature set" {
-    const baseline_cpu = std.Target.x86.cpu.x86_64.toCpu(.x86_64);
-    try std.testing.expect(RocTarget.x64v1musl.isCpuCompatibleWith(baseline_cpu));
-    try std.testing.expect(!RocTarget.x64musl.isCpuCompatibleWith(baseline_cpu));
-
-    // x86-64-v3 alone is not Roc's complete default floor: the target query
-    // explicitly adds the AES and carryless-multiply instructions used by the
-    // SIMD builtins.
-    var v3_cpu = std.Target.x86.cpu.x86_64_v3.toCpu(.x86_64);
-    try std.testing.expect(!RocTarget.x64musl.isCpuCompatibleWith(v3_cpu));
-
-    v3_cpu.features.addFeature(@intFromEnum(std.Target.x86.Feature.aes));
-    v3_cpu.features.addFeature(@intFromEnum(std.Target.x86.Feature.pclmul));
-    v3_cpu.features.populateDependencies(std.Target.Cpu.Arch.x86_64.allFeaturesList());
-    try std.testing.expect(RocTarget.x64musl.isCpuCompatibleWith(v3_cpu));
-}
-
-test "detected runtime CPU satisfies the architecture baseline" {
-    const host = try detectRuntimeHost(std.testing.io);
-    const native_target = RocTarget.detectNative();
-    const baseline_target = native_target.v1CpuTarget() orelse native_target;
-    try std.testing.expect(baseline_target.isCpuCompatibleWith(host.cpu));
 }
 
 test "CPU contracts exactly constrain LLVM target features" {
@@ -988,11 +947,7 @@ test "arm32 and macOS arm64 have no v1 twin because Roc names no floor for them"
 }
 
 test "wasm32 is not host executable" {
-    const host = RuntimeHost{
-        .os_tag = .linux,
-        .cpu = std.Target.x86.cpu.x86_64.toCpu(.x86_64),
-    };
-    try std.testing.expect(!RocTarget.wasm32.isExecutableOnRuntimeHost(host));
+    try std.testing.expect(!RocTarget.wasm32.isExecutableOnHost());
 }
 
 test "wasm32 host matching is distinct from build compatibility" {

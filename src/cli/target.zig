@@ -7,11 +7,10 @@ const compile = @import("compile");
 // Re-export RocTarget from the shared build module
 pub const RocTarget = @import("roc_target").RocTarget;
 pub const CpuLevel = @import("roc_target").CpuLevel;
-pub const RuntimeHost = @import("roc_target").RuntimeHost;
-pub const detectRuntimeHost = @import("roc_target").detectRuntimeHost;
 pub const macos_deployment = @import("roc_target").macos_deployment;
 pub const llvmCpuName = @import("roc_target").llvmCpuName;
 pub const llvmFeatureString = @import("roc_target").llvmFeatureString;
+pub const host_cpu = @import("roc_target").host_cpu;
 
 // Re-export link configuration types from the compile layer
 pub const TargetsConfig = compile.targets_config.TargetsConfig;
