@@ -476,14 +476,17 @@ pub fn internErasedCallArgsPlan(
     return id;
 }
 
+/// Return an interned erased-call argument layout plan.
 pub fn getErasedCallArgsPlan(self: *const Self, id: ErasedCallArgsPlanId) ErasedCallArgsPlan {
     return self.erased_call_arg_plans.get(@intFromEnum(id));
 }
 
+/// Return the number of interned erased-call argument layout plans.
 pub fn erasedCallArgsPlanCount(self: *const Self) usize {
     return self.erased_call_arg_plans.len();
 }
 
+/// Borrow the ordered field offsets named by an erased-call argument layout plan.
 pub fn getErasedCallArgOffsets(self: *const Self, plan: ErasedCallArgsPlan) StoreSpanBorrow(u32, "u32s") {
     return self.u32s.borrowSpan(plan.offsets.start, plan.offsets.len);
 }

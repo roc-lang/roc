@@ -4,6 +4,7 @@ const std = @import("std");
 const layout = @import("layout.zig");
 const Store = @import("store.zig").Store;
 
+/// Total storage requirements for an erased-call argument buffer.
 pub const Metrics = struct {
     size: u32,
     alignment: u32,
