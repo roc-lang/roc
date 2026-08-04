@@ -163,11 +163,16 @@ my @categories = (
         # ci/check_postcheck_architecture.pl for the deleted-API gate on the
         # mutable-view/refill API). These readers stay until Slice 7 deletes
         # logical graph solving.
+        # $LOWER gained one `importMono` for the born-final callable: a ground
+        # direct-call request instantiates as a constant of directed
+        # translation's answer instead of an open instantiation node, so the
+        # import REPLACES instNode work rather than adding a read of solved
+        # state. It deletes with the graph, whose relations it only constrains.
         name    => 'logical-graph-import',
         exempt  => [],
         patterns => [
             { label => 'importMono', re => qr/\bimportMono\b/,
-              counts => { $SOLVE => 15, $LOWER => 21 } },
+              counts => { $SOLVE => 15, $LOWER => 22 } },
         ],
     },
     {
