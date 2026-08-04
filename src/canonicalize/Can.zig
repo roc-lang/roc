@@ -6227,6 +6227,7 @@ fn importAliased(
     self: *Self,
     module_name: Ident.Idx,
     alias_tok: ?Token.Idx,
+    default_alias: Ident.Idx,
     exposed_items_span: CIR.ExposedItem.Span,
     import_region: Region,
     is_package_qualified: bool,
@@ -6242,7 +6243,7 @@ fn importAliased(
     );
 
     // 2. Resolve the alias
-    const alias = try self.resolveModuleAlias(alias_tok, module_name) orelse return null;
+    const alias = self.resolveModuleAlias(alias_tok, default_alias) orelse return null;
 
     // 3. Add to scope: alias -> module_name mapping (includes is_package_qualified flag)
     try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span, is_package_qualified);
@@ -6420,7 +6421,7 @@ fn canonicalizeImportStatement(
     defer trace.end();
 
     // 1. Build the complete module name selected by the parser.
-    if (self.parse_ir.tokens.resolveIdentifier(import_stmt.target.module_name_tok) == null) return null;
+    const default_alias = self.parse_ir.tokens.resolveIdentifier(import_stmt.target.module_name_tok) orelse return null;
     if (import_stmt.target.qualifier_tok) |qualifier_tok| {
         if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok) == null) return null;
     }
@@ -6443,7 +6444,14 @@ fn canonicalizeImportStatement(
     return if (import_stmt.target.hasNestedTypes())
         try self.importUnaliased(module_name, cir_exposes, import_region, is_package_qualified)
     else
-        try self.importAliased(module_name, import_stmt.alias_tok, cir_exposes, import_region, is_package_qualified);
+        try self.importAliased(
+            module_name,
+            import_stmt.alias_tok,
+            default_alias,
+            cir_exposes,
+            import_region,
+            is_package_qualified,
+        );
 }
 
 fn nestedImportPathIdent(
@@ -6686,20 +6694,21 @@ fn canonicalizeAutoImport(
     // Empty exposed-items span.
     const scratch_start = self.env.store.scratchExposedItemTop();
     const empty_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
-    return try self.importAliased(module_name, null, empty_exposes, import_region, false);
+    return try self.importAliased(module_name, null, module_name, empty_exposes, import_region, false);
 }
 
-/// Resolve the module alias name from either explicit alias or module name
+/// Resolve the source-visible binding from the parser's explicit alias or its
+/// final source-module token. The complete import path is dependency identity,
+/// not a source binding to reconstruct by splitting strings.
 fn resolveModuleAlias(
     self: *Self,
     alias_tok: ?Token.Idx,
-    module_name: Ident.Idx,
-) std.mem.Allocator.Error!?Ident.Idx {
+    default_alias: Ident.Idx,
+) ?Ident.Idx {
     if (alias_tok) |alias_token| {
         return self.parse_ir.tokens.resolveIdentifier(alias_token);
     } else {
-        // Extract last part from module name - e.g., "Json" from "json.Json"
-        return try self.extractModuleName(module_name);
+        return default_alias;
     }
 }
 
@@ -20123,7 +20132,8 @@ fn ensureParserImportAlias(self: *Self, alias_name: Ident.Idx) std.mem.Allocator
     }
     const module_name = try self.normalizedImportModuleIdent(import_stmt);
 
-    const resolved_alias = try self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return;
+    const default_alias = self.parse_ir.tokens.resolveIdentifier(import_stmt.target.module_name_tok) orelse return;
+    const resolved_alias = self.resolveModuleAlias(import_stmt.alias_tok, default_alias) orelse return;
     if (!resolved_alias.eql(alias_name)) return;
 
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
@@ -20472,20 +20482,6 @@ fn getOrCreateAutoImportIdent(self: *Self, module_ident: Ident.Idx) std.mem.Allo
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_ident, new_import_idx);
 
     return new_import_idx;
-}
-
-/// Extract the module name from a full qualified name (e.g., "Json" from "json.Json")
-fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
-    const module_text = self.env.getIdent(module_name_ident);
-
-    // Find the last dot and extract the part after it
-    if (std.mem.findLast(u8, module_text, ".")) |last_dot_idx| {
-        const extracted_name = module_text[last_dot_idx + 1 ..];
-        return try self.env.insertIdent(base.Ident.for_text(extracted_name));
-    } else {
-        // No dot found, return the original name
-        return module_name_ident;
-    }
 }
 
 /// Canonicalize a where clause from AST to CIR
