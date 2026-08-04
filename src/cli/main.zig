@@ -2286,6 +2286,43 @@ fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFai
     return error.UnsupportedTarget;
 }
 
+fn rejectTargetCpuIncompatible(
+    ctx: *CliCtx,
+    target: RocTarget,
+    targets_config: roc_target.TargetsConfig,
+    platform_source: ?[]const u8,
+) error{ WriteFailed, UnsupportedTarget }!void {
+    try ctx.io.stderr().print(
+        "Error: the {s} target requires CPU features this host does not support.\n\n",
+        .{@tagName(target)},
+    );
+
+    if (target.v1CpuTarget()) |v1_target| {
+        if (targets_config.getLinkSpec(v1_target)) |link_spec| {
+            if (link_spec.output == .exe) {
+                try ctx.io.stderr().print(
+                    "Use `--target={s}` to select the platform's baseline-CPU executable.\n",
+                    .{@tagName(v1_target)},
+                );
+            } else {
+                try ctx.io.stderr().print(
+                    "This host needs {s}, but that platform target produces {s} rather than an executable.\n",
+                    .{ @tagName(v1_target), @tagName(link_spec.output) },
+                );
+            }
+        } else {
+            const result = platform_validation.createUnsupportedTargetResult(
+                platform_source orelse "<unknown>",
+                v1_target,
+                targets_config,
+            );
+            renderValidationError(ctx, result);
+        }
+    }
+
+    return error.UnsupportedTarget;
+}
+
 fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
     switch (install_store.classifySourceRef(args.path)) {
         .url => return rocRunUrl(ctx, args, arg0),
@@ -7475,8 +7512,9 @@ fn selectBuildPlatformTarget(
     targets_config: roc_target.TargetsConfig,
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
-) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
-    return switch (target_selection.selectBuildTarget(targets_config, target_arg)) {
+) (std.zig.system.DetectError || error{ InvalidTarget, UnsupportedTarget, WriteFailed })!target_selection.SelectedTarget {
+    const runtime_host = try roc_target.detectRuntimeHost(ctx.io.std_io);
+    return switch (target_selection.selectBuildTarget(targets_config, target_arg, runtime_host)) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
             renderValidationError(ctx, .{ .invalid_target = .{ .target_str = target_str } });
@@ -7490,6 +7528,10 @@ fn selectBuildPlatformTarget(
             );
             renderValidationError(ctx, result);
             return error.UnsupportedTarget;
+        },
+        .incompatible_cpu => |target| {
+            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
+            unreachable;
         },
         .requires_executable => unreachable,
         .no_default => {
@@ -7515,8 +7557,9 @@ fn selectRunPlatformTarget(
     targets_config: roc_target.TargetsConfig,
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
-) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
-    return switch (target_selection.selectRunTarget(targets_config, target_arg)) {
+) (std.zig.system.DetectError || error{ InvalidTarget, UnsupportedTarget, WriteFailed })!target_selection.SelectedTarget {
+    const runtime_host = try roc_target.detectRuntimeHost(ctx.io.std_io);
+    return switch (target_selection.selectRunTarget(targets_config, target_arg, runtime_host)) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
             const result = platform_validation.targets_validator.ValidationResult{
@@ -7533,6 +7576,10 @@ fn selectRunPlatformTarget(
             );
             renderValidationError(ctx, result);
             return error.UnsupportedTarget;
+        },
+        .incompatible_cpu => |target| {
+            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
+            unreachable;
         },
         .requires_executable => |selected| {
             try rejectRequiredExecutableOutput(ctx, selected);

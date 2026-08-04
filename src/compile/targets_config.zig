@@ -18,6 +18,7 @@ const roc_target = @import("roc_target");
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const RocTarget = roc_target.RocTarget;
+const RuntimeHost = roc_target.RuntimeHost;
 const checked = check.CheckedArtifact;
 
 /// Individual link item from a targets section.
@@ -200,11 +201,13 @@ pub const TargetsConfig = struct {
         return null;
     }
 
-    /// Get the default target based on the current system.
-    /// Returns the first target in the list that's compatible with the current host (OS and arch).
-    pub fn getDefaultTarget(self: TargetsConfig) ?RocTarget {
+    /// Get the first target compatible with the runtime host, including its
+    /// CPU feature floor. Wasm targets remain build-compatible on every host.
+    pub fn getDefaultTarget(self: TargetsConfig, host: RuntimeHost) ?RocTarget {
         for (self.targets) |spec| {
-            if (spec.target.isCompatibleWithHost()) {
+            if (spec.target.toCpuArch() == .wasm32 or
+                (spec.target.matchesRuntimeHostOsAndArch(host) and spec.target.isCpuCompatibleWith(host.cpu)))
+            {
                 return spec.target;
             }
         }
@@ -215,9 +218,9 @@ pub const TargetsConfig = struct {
     /// Get the default target for commands that must execute the result on this host.
     /// This excludes build-compatible targets such as wasm32 that are not native
     /// process executables for the default `roc` command, and targets that don't produce executables.
-    pub fn getDefaultHostExecutableTarget(self: TargetsConfig) ?RocTarget {
+    pub fn getDefaultHostExecutableTarget(self: TargetsConfig, host: RuntimeHost) ?RocTarget {
         for (self.targets) |spec| {
-            if (spec.output == .exe and spec.target.isExecutableOnHost()) {
+            if (spec.output == .exe and spec.target.isExecutableOnRuntimeHost(host)) {
                 return spec.target;
             }
         }
@@ -881,25 +884,24 @@ fn decScalarUnsigned(value: i128, reason: *TargetConfigResolveReason) ?u128 {
 
 // Tests
 const testing = std.testing;
-const builtin = @import("builtin");
 
-test "getDefaultTarget returns first compatible target" {
-    // Create a config with only x64glibc (not x64musl)
-    // On a Linux x64 system, both are compatible, but we only include glibc
+fn baselineX64RuntimeHost() RuntimeHost {
+    return .{
+        .os_tag = .linux,
+        .cpu = std.Target.x86.cpu.x86_64.toCpu(.x86_64),
+    };
+}
+
+test "getDefaultTarget returns first CPU-compatible target" {
     const config = TargetsConfig{
         .inputs_dir = "targets",
         .targets = &.{
             .{ .target = .x64glibc, .output = .exe, .items = &.{.app} },
+            .{ .target = .x64v1glibc, .output = .exe, .items = &.{.app} },
         },
     };
 
-    // getDefaultTarget should return x64glibc if we're on Linux x64
-    // (since both x64musl and x64glibc are compatible with Linux x64)
-    if (builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64) {
-        const result = config.getDefaultTarget();
-        try testing.expect(result != null);
-        try testing.expectEqual(RocTarget.x64glibc, result.?);
-    }
+    try testing.expectEqual(RocTarget.x64v1glibc, config.getDefaultTarget(baselineX64RuntimeHost()).?);
 }
 
 test "getDefaultHostExecutableTarget excludes wasm" {
@@ -910,8 +912,9 @@ test "getDefaultHostExecutableTarget excludes wasm" {
         },
     };
 
-    try testing.expectEqual(RocTarget.wasm32, config.getDefaultTarget().?);
-    try testing.expect(config.getDefaultHostExecutableTarget() == null);
+    const host = baselineX64RuntimeHost();
+    try testing.expectEqual(RocTarget.wasm32, config.getDefaultTarget(host).?);
+    try testing.expect(config.getDefaultHostExecutableTarget(host) == null);
 }
 
 test "getDefaultHostExecutableTarget excludes non-exe outputs" {
@@ -923,7 +926,7 @@ test "getDefaultHostExecutableTarget excludes non-exe outputs" {
         },
     };
 
-    try testing.expect(config.getDefaultHostExecutableTarget() == null);
+    try testing.expect(config.getDefaultHostExecutableTarget(baselineX64RuntimeHost()) == null);
 }
 
 test "getLinkSpec returns correct spec for supported target" {
