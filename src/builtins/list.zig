@@ -1050,11 +1050,12 @@ pub fn listAppendUnsafe(
     var output = list;
     output.length += 1;
 
-    if (output.bytes) |bytes| {
-        if (element) |source| {
-            const target = bytes + old_length * element_width;
-            copy(target, source, element_width);
-        }
+    // The caller has discharged every check: the list uniquely owns an
+    // allocation with a spare slot, so the data pointer cannot be null.
+    // Zero-sized elements have no bytes to copy (and may pass null).
+    if (element_width > 0) {
+        const target = output.bytes.? + old_length * element_width;
+        copy(target, element.?, element_width);
     }
 
     return output;
