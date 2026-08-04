@@ -6382,13 +6382,16 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     };
     const package_dir_path = try std.fs.path.join(ctx.arena, &.{ cache_dir_path, base58_hash });
 
-    // 3. Check if already cached
+    const platform_source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
+
+    // 3. Check if already cached. The check is the bundle's main.roc entry
+    // point rather than its directory: this cache is shared with the
+    // compiler's package resolution, whose rule is that a hash-named
+    // directory holds a complete bundle. A directory without its entry point
+    // is a leftover from an interrupted extraction, and gets replaced during
+    // publishing below rather than trusted.
     const already_cached = blk: {
-        var d = std.Io.Dir.cwd().openDir(ctx.io.std_io, package_dir_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => break :blk false,
-            else => return ctx.fail(.{ .directory_not_found = .{ .path = package_dir_path } }),
-        };
-        d.close(ctx.io.std_io);
+        std.Io.Dir.cwd().access(ctx.io.std_io, platform_source_path, .{}) catch break :blk false;
         break :blk true;
     };
 
@@ -6403,33 +6406,36 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
                 .err = make_err,
             } });
         };
+        sweepStalePackageStagingDirs(ctx.io.std_io, cache_dir_path);
 
-        // Create package directory
-        std.Io.Dir.cwd().createDir(ctx.io.std_io, package_dir_path, .default_dir) catch |make_err| switch (make_err) {
-            error.PathAlreadyExists => {}, // Race condition, another process created it
-            else => {
-                return ctx.fail(.{ .directory_create_failed = .{
-                    .path = package_dir_path,
-                    .err = make_err,
-                } });
-            },
+        // Download into a staging directory and publish it with a rename, so
+        // the hash-named directory never exists half-written. Other processes
+        // read this cache while we fill it, and a directory under the hash is
+        // their only signal that the bundle is complete.
+        const staging_dir_path = try packageStagingDirPath(ctx, package_dir_path);
+        std.Io.Dir.cwd().createDir(ctx.io.std_io, staging_dir_path, .default_dir) catch |make_err| {
+            return ctx.fail(.{ .directory_create_failed = .{
+                .path = staging_dir_path,
+                .err = make_err,
+            } });
         };
 
         // Download and extract (path-based, no Dir handle needed)
         var gpa_copy = ctx.gpa;
-        _ = download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, package_dir_path, .{}) catch |download_err| {
-            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, package_dir_path) catch {};
+        _ = download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, staging_dir_path, .{}) catch |download_err| {
+            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
             return ctx.fail(.{ .download_failed = .{
                 .url = url,
                 .err = download_err,
             } });
         };
 
+        try publishPackageDir(ctx, url, staging_dir_path, package_dir_path, platform_source_path);
+
         std.log.info("Bundle cached at {s}", .{package_dir_path});
     }
 
     // Platforms must have a main.roc entry point
-    const platform_source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
     std.Io.Dir.cwd().access(ctx.io.std_io, platform_source_path, .{}) catch {
         // The problem is rendered after this frame returns, so the slice of
         // searched paths must live on the arena, not this stack frame.
@@ -6444,6 +6450,87 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     return .{
         .source_path = platform_source_path,
     };
+}
+
+/// A staging path next to the final hash-named directory, so publishing is a
+/// rename within one directory rather than a copy across filesystems. The
+/// random component keeps concurrent downloads of the same bundle out of
+/// each other's way, and the `.tmp` suffix is what the stale sweep matches.
+fn packageStagingDirPath(ctx: *CliCtx, package_dir_path: []const u8) error{OutOfMemory}![]u8 {
+    var suffix: [8]u8 = undefined;
+    ctx.io.std_io.random(&suffix);
+    return std.fmt.allocPrint(ctx.arena, "{s}.{s}.tmp", .{ package_dir_path, std.fmt.bytesToHex(suffix, .lower) });
+}
+
+/// Move a finished staging directory into its hash-named slot in the package
+/// cache. Mirrors the publish step of the compiler's package resolution,
+/// which shares this cache: losing the rename to a concurrent process is
+/// success, since bundles are content-addressed and hash-verified, and a
+/// slot holding a directory with no entry point is an interrupted
+/// extraction's leftover that gets moved aside and deleted. Moving rather
+/// than deleting in place matters when a concurrent process publishes a good
+/// copy between our check and our repair: a rename cannot tear that copy
+/// out from under whoever is already reading it.
+fn publishPackageDir(
+    ctx: *CliCtx,
+    url: []const u8,
+    staging_dir_path: []const u8,
+    package_dir_path: []const u8,
+    entry_point_path: []const u8,
+) (CliError || error{OutOfMemory})!void {
+    std.Io.Dir.cwd().rename(staging_dir_path, std.Io.Dir.cwd(), package_dir_path, ctx.io.std_io) catch {
+        const entry_point_exists = exists: {
+            std.Io.Dir.cwd().access(ctx.io.std_io, entry_point_path, .{}) catch break :exists false;
+            break :exists true;
+        };
+        if (entry_point_exists) {
+            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
+            return;
+        }
+
+        const trash_dir_path = try packageStagingDirPath(ctx, package_dir_path);
+        std.Io.Dir.cwd().rename(package_dir_path, std.Io.Dir.cwd(), trash_dir_path, ctx.io.std_io) catch {};
+        defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, trash_dir_path) catch {};
+        std.Io.Dir.cwd().rename(staging_dir_path, std.Io.Dir.cwd(), package_dir_path, ctx.io.std_io) catch |rename_err| {
+            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
+            // Someone published in the gap between that move and this retry.
+            // Their copy is as good as ours.
+            const published_by_another = published: {
+                std.Io.Dir.cwd().access(ctx.io.std_io, entry_point_path, .{}) catch break :published false;
+                break :published true;
+            };
+            if (published_by_another) return;
+            return ctx.fail(.{ .download_failed = .{
+                .url = url,
+                .err = rename_err,
+            } });
+        };
+    };
+}
+
+/// Reclaim package cache staging directories stranded by processes that died
+/// mid-download. Nothing ever reads them again, and one older than a day
+/// cannot belong to a live download. The compiler's package resolution runs
+/// the same sweep over this cache with the same naming scheme, so either
+/// downloader cleans up after the other. Best-effort: any failure just
+/// leaves the sweep to a future download.
+fn sweepStalePackageStagingDirs(std_io: std.Io, cache_dir_path: []const u8) void {
+    var dir = std.Io.Dir.cwd().openDir(std_io, cache_dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(std_io);
+
+    const now_ns: i128 = std.Io.Timestamp.now(std_io, .real).nanoseconds;
+    var it = dir.iterate();
+    while (true) {
+        const entry = (it.next(std_io) catch break) orelse break;
+        if (entry.kind != .directory) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".tmp")) continue;
+
+        const info = dir.statFile(std_io, entry.name, .{}) catch continue;
+        const mtime_ns: i128 = @intCast(info.mtime.nanoseconds);
+        if (now_ns - mtime_ns <= stale_staging_max_age_ns) continue;
+
+        dir.deleteTree(std_io, entry.name) catch {};
+    }
 }
 
 /// Default output basename for `roc build <url>`: the last path segment of
