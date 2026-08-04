@@ -285,7 +285,7 @@ pub const Store = struct {
     /// to state structural identity itself — the shadow's logical store and
     /// the reference `Interner` — lifts the holds through
     /// `liftOccurrenceHolds`.
-    intern_occurrence_holds: bool = true,
+    intern_occurrence_holds: bool = false,
     /// Ids that must never be returned as a dedup result. An id read by a live
     /// instantiation-graph node is recorded here (by the graph, when it binds
     /// the id to a node) so no later intern hands it back as a shared type: a
