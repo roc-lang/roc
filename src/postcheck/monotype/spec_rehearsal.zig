@@ -846,6 +846,10 @@ const Frame = struct {
     /// The use-mint entries recorded while this frame was the requesting
     /// context, removed when it closes.
     recorded_uses: std.ArrayList(RequestingSite) = .empty,
+    /// The requesting module and the instantiated callable's return position,
+    /// kept so a mint the body produces can be emitted there after lowering.
+    request_ret_module: [32]u8 = [_]u8{0} ** 32,
+    request_ret_checked: ?u32 = null,
     /// The call site this specialization was requested at, so a mint its own
     /// body produces in tail position can be recorded for that site's readers.
     use_key: ?RequestingSite = null,
@@ -1519,6 +1523,50 @@ pub const Rehearsal = struct {
     pub fn currentFrameRequestRoot(self: *const Rehearsal) ?Type.TypeId {
         if (self.frames.items.len == 0) return null;
         return self.frames.items[self.frames.items.len - 1].request_root;
+    }
+
+    /// The frame's request emission with everything its body produced: a mint
+    /// the body handed to the frame's return after the start-of-frame emission
+    /// is emitted at the requested return position, and the callable is
+    /// rebuilt around it. Read after the body lowers.
+    pub fn currentFrameRequestRootFinal(self: *Rehearsal) ?Type.TypeId {
+        if (self.frames.items.len == 0) return null;
+        const frame = &self.frames.items[self.frames.items.len - 1];
+        const start_root = frame.request_root orelse return null;
+        const mint = frame.ret_mint orelse return start_root;
+        const ret_checked = frame.request_ret_checked orelse return start_root;
+        const start_function = switch (self.types.get(start_root)) {
+            .func => |func| func,
+            else => return start_root,
+        };
+        switch (self.types.get(start_function.ret)) {
+            .named => |named| if (named.def.iterator_representation != .none) return start_root,
+            else => return start_root,
+        }
+        const caller = self.lookup.cursor(frame.request_ret_module) orelse return start_root;
+        const floor = self.translator.representationInputCount();
+        defer self.translator.truncateRepresentationInputs(floor);
+        self.translator.declareRepresentationInput(.{
+            .position = .{ .module_bytes = frame.request_ret_module, .type_id = ret_checked },
+            .representation = mint,
+        }) catch return start_root;
+        var reason: direct_translate.SkipReason = undefined;
+        const minted_ret = self.translator.translateUnderEnvironment(
+            caller,
+            null,
+            checked.checked_residual_disposition_module_body_owner,
+            @enumFromInt(ret_checked),
+            &reason,
+        ) catch return start_root;
+        const args = self.types.span(start_function.args);
+        const len = GuardedList.borrowLen(args);
+        const arg_buffer = self.allocator.alloc(Type.TypeId, len) catch return start_root;
+        defer self.allocator.free(arg_buffer);
+        var index: usize = 0;
+        while (index < len) : (index += 1) arg_buffer[index] = GuardedList.at(args, index);
+        const rebuilt = self.types.internFunc(self.program_names, arg_buffer, minted_ret) catch return start_root;
+        census.bump("rehearsal_request_root_body_final");
+        return rebuilt;
     }
 
     /// Restate the innermost frame's declared return mint at the template
@@ -4483,6 +4531,13 @@ pub const Rehearsal = struct {
         // binding, and the request context's own emission of the same edge.
         frame.interface_root = self.emitQuietly(defining, frame.environment(), scheme.owner_node, scheme.root);
         frame.request_root = self.emitQuietly(caller, caller_env, caller_owner_node, site.instantiated_root);
+        switch (caller.view.payload(site.instantiated_root)) {
+            .function => |request_function| {
+                frame.request_ret_module = caller.module_bytes;
+                frame.request_ret_checked = @intFromEnum(request_function.ret);
+            },
+            else => {},
+        }
 
         // The requesting context's own emission of the instantiated callable
         // carries every producer representation the caller's directed
@@ -4978,6 +5033,13 @@ pub const Rehearsal = struct {
         frame.env_ready = true;
         frame.interface_root = declared;
         frame.request_root = requested;
+        switch (caller.view.payload(site.instantiated_root)) {
+            .function => |request_function| {
+                frame.request_ret_module = caller.module_bytes;
+                frame.request_ret_checked = @intFromEnum(request_function.ret);
+            },
+            else => {},
+        }
         census.bump("rehearsal_env_resolved");
         census.bump("rehearsal_env_resolved_foreign_scheme");
         noteEnvironmentScheme(scheme);

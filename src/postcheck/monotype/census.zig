@@ -526,6 +526,7 @@ pub const Census = struct {
     iter_chain_link_declared: Counter = Counter.init(0),
     rehearsal_use_mint_recorded: Counter = Counter.init(0),
     rehearsal_use_mint_propagated: Counter = Counter.init(0),
+    rehearsal_request_root_body_final: Counter = Counter.init(0),
     iter_chain_link_underived: Counter = Counter.init(0),
     iter_declare_identity_emit_failed: Counter = Counter.init(0),
     iter_declare_identity_not_named: Counter = Counter.init(0),

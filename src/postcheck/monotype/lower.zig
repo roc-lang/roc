@@ -3444,7 +3444,6 @@ const Builder = struct {
             if (self.rehearsal) |rehearsal| rehearsal.retractConsumerInputs(floor);
         };
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, lower_fn_ty);
-        body_ctx.measureSpecRootParity(template.checked_fn_root, lower_fn_ty);
         // reunify.md section 11.1, Slice 7 Stage B: reserve argument/result
         // representation slots before body discovery so the shadow can measure
         // which reserved positions gain representation information as the body
@@ -3474,6 +3473,10 @@ const Builder = struct {
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
+        // The comparison runs after the body: a mint the body produced has
+        // reached the frame's return by now, which the start-of-frame
+        // emission could not carry.
+        body_ctx.measureSpecRootParity(template.checked_fn_root, lower_fn_ty);
         const sealed_root_node, const draft_end = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
@@ -15913,7 +15916,7 @@ const BodyContext = struct {
         // instantiated callable, resolved when its frame began from the
         // claimed edge. An ambient innermost edge can belong to an unrelated
         // deferred lowering, so only the frame's own emission answers here.
-        const directed = rehearsal.currentFrameRequestRoot() orelse {
+        const directed = rehearsal.currentFrameRequestRootFinal() orelse {
             census.bump("spec_root_parity_declined");
             return;
         };
