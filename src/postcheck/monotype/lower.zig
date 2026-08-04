@@ -27003,7 +27003,27 @@ const BodyContext = struct {
             // measured once and the counter now names the ground population.
             census.bump("request_born_final_qualifies");
         }
-        const fn_node = try self.instNode(source_fn_ty);
+        // A ground callable with no expected return and no hosted capability
+        // is born final: the request instantiates as a constant of directed
+        // translation's answer, and every relation below constrains against
+        // its components instead of open instantiation nodes. Everything the
+        // answer does not cover instantiates exactly as before.
+        const fn_node = fn_node: {
+            born_final: {
+                if (expected_ret_node != null or hosted_try_capability != null) break :born_final;
+                const rehearsal = self.builder.rehearsal orelse break :born_final;
+                if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) break :born_final;
+                const address = self.typeAddress(source_fn_ty);
+                const final_ty = (rehearsal.typeForCheckedAuthoritativeOrUnstated(
+                    .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+                    self.callee_context,
+                    rehearsal.innermostRequestEdge(),
+                ) catch break :born_final) orelse break :born_final;
+                census.bump("request_callable_born_final");
+                break :fn_node try self.graph.importMono(final_ty);
+            }
+            break :fn_node try self.instNode(source_fn_ty);
+        };
         const fn_graph = switch (self.graph.content(fn_node)) {
             .func => |func| func,
             else => Common.invariant("checked direct call had a non-function instantiation node"),
