@@ -1544,6 +1544,16 @@ pub const Rehearsal = struct {
     /// Seal the innermost frame's provisional request emission through the
     /// class finals the body's relations recorded (reunify.md 10.6). Null
     /// where no provisional emission ran or a slot's class carries no final.
+    /// Which value stage the innermost frame's read would take, for the
+    /// probe's divergence trace.
+    pub fn currentFrameValueStage(self: *const Rehearsal) []const u8 {
+        if (self.frames.items.len == 0) return "no_frame";
+        const frame = &self.frames.items[self.frames.items.len - 1];
+        if (frame.request_provisional != null) return "drafts";
+        if (frame.scheme_root_checked != null) return "reemission";
+        return "declined";
+    }
+
     pub fn currentFrameRequestSealed(self: *Rehearsal) ?Type.TypeId {
         if (self.frames.items.len == 0) return null;
         const frame = &self.frames.items[self.frames.items.len - 1];
@@ -1603,15 +1613,29 @@ pub const Rehearsal = struct {
     /// Whether a callable root shares one checked id between an argument and
     /// its return: two roles at one address, which no address-keyed read may
     /// serve (reunify.md 13.2c).
+    fn throughAliases(cursor: direct_translate.ModuleCursor, start_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+        var current = start_ty;
+        var remaining: usize = 16;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (cursor.view.payload(current)) {
+                .alias => |alias_ty| current = alias_ty.backing,
+                else => return current,
+            }
+        }
+        return current;
+    }
+
     fn rootSharesArgRet(cursor: direct_translate.ModuleCursor, root: checked.CheckedTypeId) bool {
         switch (cursor.view.payload(root)) {
             .function => |root_fn| {
-                for (root_fn.args) |arg| {
-                    if (arg != root_fn.ret) continue;
+                const ret = throughAliases(cursor, root_fn.ret);
+                for (root_fn.args) |raw_arg| {
+                    const arg = throughAliases(cursor, raw_arg);
+                    if (arg != ret) continue;
                     // Only a position whose representation the checked data
                     // does not dictate can answer differently per role; a
                     // ground shared id carries one value for both.
-                    switch (cursor.view.payload(root_fn.ret)) {
+                    switch (cursor.view.payload(ret)) {
                         .nominal => |n| {
                             if (direct_translate.nominalIsOpenRepresentation(n)) return true;
                         },

@@ -16078,7 +16078,9 @@ const BodyContext = struct {
         }
         census.bump("value_parity_diverge");
         if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-            std.debug.print("VALUE-DIVERGE tpl\n  directed: ", .{});
+            std.debug.print("VALUE-DIVERGE stage={s}\n  directed: ", .{
+                self.builder.rehearsal.?.currentFrameValueStage(),
+            });
             debugTypeSummary(types, name_store, sealed, 0);
             std.debug.print("\n  sealed:   ", .{});
             debugTypeSummary(types, name_store, request_fn_ty, 0);
