@@ -229,6 +229,15 @@ const WrapperAnalyzer = struct {
                 }
                 return true;
             },
+            .record_update => |update| {
+                if (!self.exprReadsOnlyArgs(update.base, args)) return false;
+                const field_exprs = self.solved.lifted.fieldExprSpan(update.fields);
+                for (0..field_exprs.len) |index| {
+                    const field = GuardedList.at(field_exprs, index);
+                    if (!self.exprReadsOnlyArgs(field.value, args)) return false;
+                }
+                return true;
+            },
             .tag => |tag| self.exprSpanReadsOnlyArgs(tag.payloads, args),
             .static_data_candidate => |candidate| self.exprReadsOnlyArgs(candidate.runtime_expr, args),
             .nominal,
@@ -329,6 +338,14 @@ const WrapperAnalyzer = struct {
             => |items| try self.visitSpanCallees(items),
             .record => |fields| {
                 const field_exprs = self.solved.lifted.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| {
+                    const field = GuardedList.at(field_exprs, index);
+                    try self.visitBodyCallees(field.value);
+                }
+            },
+            .record_update => |update| {
+                try self.visitBodyCallees(update.base);
+                const field_exprs = self.solved.lifted.fieldExprSpan(update.fields);
                 for (0..field_exprs.len) |index| {
                     const field = GuardedList.at(field_exprs, index);
                     try self.visitBodyCallees(field.value);

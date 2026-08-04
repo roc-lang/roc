@@ -3809,6 +3809,7 @@ const ExprData = union(enum) {
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
+    record_update: struct { base: ExprId, fields: Span(FieldExpr) },
     tag: TagExpr,
     nominal: ExprId,
 
@@ -3847,6 +3848,21 @@ const LambdaExpr = struct {
     source: FnTemplate,
 };
 ```
+
+`record` is a complete constructor: its field span contains every field in the
+expression type. `record_update` preserves the evaluated base and exactly the
+explicitly updated fields until LIR construction. This distinction is required
+while a Monotype solve group is open: the result type can gain fields from later
+constraints, so enumerating the current type shape and expanding an update at
+that point would permanently omit fields that the final closed type contains.
+Lambda Solved relates the base to the update result and checks each explicit
+field against the final record type. Direct LIR lowering evaluates the base
+once, reads all unchanged fields before evaluating update expressions, and
+writes the final fields in committed runtime order. A `record_update` may carry
+a structural, alias, or nominal record result type directly; unlike `record`,
+`tuple`, and `tag`, it is a base-preserving transformation rather than a fresh
+structural constructor that must be wrapped to construct a nominal value. No
+later stage reconstructs the base or missing fields from source syntax.
 
 `LoopExpr.params` and `LoopExpr.initial` have the same length. Each initial
 value has the type of the corresponding parameter. Every `continue_` reached
@@ -4805,6 +4821,7 @@ const ExprData = union(enum) {
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
+    record_update: struct { base: ExprId, fields: Span(FieldExpr) },
     tag: TagExpr,
     nominal: ExprId,
 
