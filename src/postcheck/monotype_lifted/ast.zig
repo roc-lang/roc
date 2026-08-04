@@ -425,6 +425,35 @@ pub const Program = struct {
     /// Ambient checked source region recorded by `addExpr`/`addStmt`.
     current_region: base.Region,
 
+    /// Append-only section lengths at the start of a SpecConstr analysis walk.
+    ///
+    /// Value-aware pattern discovery evaluates expressions symbolically through
+    /// the same cloner used by the mutating rewrite. The cloner may need
+    /// temporary expression, pattern, statement, and local ids, but those ids
+    /// are analysis work storage and must not become durable lifted IR.
+    pub const SpecConstrAnalysisMark = struct {
+        fns: usize,
+        exprs: usize,
+        pats: usize,
+        stmts: usize,
+        locals: usize,
+        expr_ids: usize,
+        pat_ids: usize,
+        typed_locals: usize,
+        stmt_ids: usize,
+        field_exprs: usize,
+        capture_operands: usize,
+        record_destructs: usize,
+        str_pattern_steps: usize,
+        branches: usize,
+        if_branches: usize,
+        expr_locs: usize,
+        expr_regions: usize,
+        stmt_locs: usize,
+        stmt_regions: usize,
+        local_names: usize,
+    };
+
     pub fn init(
         allocator: std.mem.Allocator,
         name_store: names.NameStore,
@@ -582,6 +611,95 @@ pub const Program = struct {
             .stmt_regions = self.stmt_regions.unsafeRawItemsForView(),
             .local_names = self.local_names.unsafeRawItemsForView(),
         };
+    }
+
+    pub fn markSpecConstrAnalysis(self: *const Program) SpecConstrAnalysisMark {
+        return .{
+            .fns = self.fns.len(),
+            .exprs = self.exprs.len(),
+            .pats = self.pats.len(),
+            .stmts = self.stmts.len(),
+            .locals = self.locals.len(),
+            .expr_ids = self.expr_ids.len(),
+            .pat_ids = self.pat_ids.len(),
+            .typed_locals = self.typed_locals.len(),
+            .stmt_ids = self.stmt_ids.len(),
+            .field_exprs = self.field_exprs.len(),
+            .capture_operands = self.capture_operands.len(),
+            .record_destructs = self.record_destructs.len(),
+            .str_pattern_steps = self.str_pattern_steps.len(),
+            .branches = self.branches.len(),
+            .if_branches = self.if_branches.len(),
+            .expr_locs = self.expr_locs.len(),
+            .expr_regions = self.expr_regions.len(),
+            .stmt_locs = self.stmt_locs.len(),
+            .stmt_regions = self.stmt_regions.len(),
+            .local_names = self.local_names.len(),
+        };
+    }
+
+    /// Discard SpecConstr analysis-only appends while retaining their capacity
+    /// for the next analysis walk.
+    pub fn rewindSpecConstrAnalysis(self: *Program, mark: SpecConstrAnalysisMark) void {
+        self.assertSpecConstrAnalysisMark(mark);
+        self.freeAnalysisLocalNames(mark.local_names);
+        self.exprs.restoreLen(mark.exprs);
+        self.pats.restoreLen(mark.pats);
+        self.stmts.restoreLen(mark.stmts);
+        self.locals.restoreLen(mark.locals);
+        self.expr_ids.restoreLen(mark.expr_ids);
+        self.pat_ids.restoreLen(mark.pat_ids);
+        self.typed_locals.restoreLen(mark.typed_locals);
+        self.stmt_ids.restoreLen(mark.stmt_ids);
+        self.field_exprs.restoreLen(mark.field_exprs);
+        self.capture_operands.restoreLen(mark.capture_operands);
+        self.record_destructs.restoreLen(mark.record_destructs);
+        self.str_pattern_steps.restoreLen(mark.str_pattern_steps);
+        self.branches.restoreLen(mark.branches);
+        self.if_branches.restoreLen(mark.if_branches);
+        self.expr_locs.restoreLen(mark.expr_locs);
+        self.expr_regions.restoreLen(mark.expr_regions);
+        self.stmt_locs.restoreLen(mark.stmt_locs);
+        self.stmt_regions.restoreLen(mark.stmt_regions);
+        self.local_names.restoreLen(mark.local_names);
+    }
+
+    /// Finish a SpecConstr analysis transaction and release capacity used only
+    /// by its temporary nodes.
+    pub fn finishSpecConstrAnalysis(self: *Program, mark: SpecConstrAnalysisMark) void {
+        self.assertSpecConstrAnalysisMark(mark);
+        self.freeAnalysisLocalNames(mark.local_names);
+        self.exprs.shrinkAndFree(self.allocator, mark.exprs);
+        self.pats.shrinkAndFree(self.allocator, mark.pats);
+        self.stmts.shrinkAndFree(self.allocator, mark.stmts);
+        self.locals.shrinkAndFree(self.allocator, mark.locals);
+        self.expr_ids.shrinkAndFree(self.allocator, mark.expr_ids);
+        self.pat_ids.shrinkAndFree(self.allocator, mark.pat_ids);
+        self.typed_locals.shrinkAndFree(self.allocator, mark.typed_locals);
+        self.stmt_ids.shrinkAndFree(self.allocator, mark.stmt_ids);
+        self.field_exprs.shrinkAndFree(self.allocator, mark.field_exprs);
+        self.capture_operands.shrinkAndFree(self.allocator, mark.capture_operands);
+        self.record_destructs.shrinkAndFree(self.allocator, mark.record_destructs);
+        self.str_pattern_steps.shrinkAndFree(self.allocator, mark.str_pattern_steps);
+        self.branches.shrinkAndFree(self.allocator, mark.branches);
+        self.if_branches.shrinkAndFree(self.allocator, mark.if_branches);
+        self.expr_locs.shrinkAndFree(self.allocator, mark.expr_locs);
+        self.expr_regions.shrinkAndFree(self.allocator, mark.expr_regions);
+        self.stmt_locs.shrinkAndFree(self.allocator, mark.stmt_locs);
+        self.stmt_regions.shrinkAndFree(self.allocator, mark.stmt_regions);
+        self.local_names.shrinkAndFree(self.allocator, mark.local_names);
+    }
+
+    fn assertSpecConstrAnalysisMark(self: *const Program, mark: SpecConstrAnalysisMark) void {
+        if (self.fns.len() < mark.fns) {
+            Common.invariant("SpecConstr analysis removed a durable lifted function");
+        }
+    }
+
+    fn freeAnalysisLocalNames(self: *Program, start: usize) void {
+        for (self.local_names.unsafeRawItemsForView()[start..]) |name| {
+            if (name.len > 0) self.allocator.free(name);
+        }
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
@@ -908,6 +1026,14 @@ pub const Program = struct {
         const start: u32 = @intCast(self.branches.len());
         try self.branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    /// Read one branch by value from a stable span identity. Unlike
+    /// `branchSpan`, this retains no borrow across a recursive walk that may
+    /// append to `branches`.
+    pub fn branchAt(self: *const Program, span_: Span(Branch), index: usize) Branch {
+        if (index >= span_.len) Common.invariant("branch index was outside span");
+        return self.branches.get(span_.start + index);
     }
 
     pub fn addIfBranchSpan(self: *Program, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {

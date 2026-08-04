@@ -131,10 +131,10 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
     if (line.len == 0) return .none;
 
     if (std.mem.eql(u8, line, ":help")) return .{ .output = try self.helpText() };
-    if (std.mem.eql(u8, line, ":defs")) return .{ .output = try self.printDefs() };
+    if (std.mem.eql(u8, line, ":defs")) return .{ .output = try self.printDefs(report_config.shouldUseColors()) };
     if (std.mem.startsWith(u8, line, ":t ")) {
         const rest = std.mem.trim(u8, line[3..], " \t");
-        return .{ .output = try self.printTypeOfVar(rest) };
+        return .{ .output = try self.printTypeOfVar(rest, report_config.shouldUseColors()) };
     }
     if (std.mem.eql(u8, line, ":exit") or
         std.mem.eql(u8, line, ":quit") or
@@ -509,7 +509,7 @@ fn helpText(self: *ReplSession) Allocator.Error![]u8 {
     );
 }
 
-fn printDefs(self: *ReplSession) ReplStepError![]u8 {
+fn printDefs(self: *ReplSession, use_color: bool) ReplStepError![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(self.allocator);
 
@@ -527,18 +527,26 @@ fn printDefs(self: *ReplSession) ReplStepError![]u8 {
                 const def_idx = getDefOfName(env, name) orelse continue;
                 try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
 
-                try out.print(
-                    self.allocator,
-                    "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n{s}\n\n",
-                    .{ name, tw.get(), item.source },
-                );
+                if (use_color) {
+                    try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n{s}\n\n", .{ name, tw.get(), item.source });
+                } else {
+                    try out.print(self.allocator, "{s} : {s}\n{s}\n\n", .{ name, tw.get(), item.source });
+                }
             },
             .annotation => {
                 // italics, usually succeeded by a .value let-binding
-                try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n", .{item.source});
+                if (use_color) {
+                    try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n", .{item.source});
+                } else {
+                    try out.print(self.allocator, "{s}\n", .{item.source});
+                }
             },
             .type_decl, .import => {
-                try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n\n", .{item.source});
+                if (use_color) {
+                    try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n\n", .{item.source});
+                } else {
+                    try out.print(self.allocator, "{s}\n\n", .{item.source});
+                }
             },
         }
     }
@@ -546,7 +554,7 @@ fn printDefs(self: *ReplSession) ReplStepError![]u8 {
     return try out.toOwnedSlice(self.allocator);
 }
 
-fn printTypeOfVar(self: *ReplSession, name: []const u8) ReplStepError![]u8 {
+fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplStepError![]u8 {
     var out = std.ArrayList(u8).empty;
     defer out.deinit(self.allocator);
 
@@ -559,7 +567,11 @@ fn printTypeOfVar(self: *ReplSession, name: []const u8) ReplStepError![]u8 {
 
     if (getDefOfName(env, name)) |def_idx| {
         try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
-        try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n", .{ name, tw.get() });
+        if (use_color) {
+            try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n", .{ name, tw.get() });
+        } else {
+            try out.print(self.allocator, "{s} : {s}\n", .{ name, tw.get() });
+        }
     } else {
         try out.print(self.allocator, "Did not find a definition for `{s}`\n", .{name});
     }
@@ -601,6 +613,21 @@ const DefinitionValidation = struct {
     error_message: ?[]u8,
 };
 
+fn parsedResourcesHaveDiagnostics(parsed: *const eval.test_helpers.ParsedResources) Allocator.Error!bool {
+    if (parsed.checker.problems.problems.items.len > 0) return true;
+    const main_diagnostics = try parsed.module_env.getDiagnostics();
+    defer parsed.module_env.gpa.free(main_diagnostics);
+    if (main_diagnostics.len > 0) return true;
+
+    for (parsed.extra_modules) |*module| {
+        if (module.checker.problems.problems.items.len > 0) return true;
+        const diagnostics = try module.module_env.getDiagnostics();
+        defer module.module_env.gpa.free(diagnostics);
+        if (diagnostics.len > 0) return true;
+    }
+    return false;
+}
+
 fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) Allocator.Error!DefinitionValidation {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
@@ -621,8 +648,16 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         import_sources,
         self.prePublishedBuiltin(),
         self.roc_ctx,
-    )) |parsed| {
-        eval.test_helpers.cleanupParseAndCanonical(self.allocator, parsed);
+    )) |parsed_value| {
+        var parsed = parsed_value;
+        defer parsed.deinit(self.allocator);
+        if (try parsedResourcesHaveDiagnostics(&parsed)) {
+            const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return .{ .valid = false, .error_message = null },
+            };
+            return .{ .valid = false, .error_message = msg };
+        }
         return .{ .valid = true, .error_message = null };
     } else |err| switch (err) {
         error.TypeCheckError => {
@@ -675,6 +710,15 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         else => return err,
     };
     defer compiled.deinit(self.allocator);
+
+    // Checked publication deliberately succeeds in the presence of user
+    // diagnostics so build/run/test can execute independent roots. A REPL
+    // expression is a single interactive transaction: report its diagnostics
+    // and leave the session definitions intact instead of executing the
+    // explicit runtime-error node and aborting the remaining batch input.
+    if (try parsedResourcesHaveDiagnostics(&compiled.resources)) {
+        return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
+    }
 
     return switch (self.backend_kind) {
         .interpreter => .{ .output = try eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered) },

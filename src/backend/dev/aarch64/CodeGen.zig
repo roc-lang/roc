@@ -465,6 +465,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.fstrRegMemSoff(.single, src, .FP, offset);
         }
 
+        pub fn emitLoadStackV128(self: *Self, dst: FloatReg, offset: i32) Allocator.Error!void {
+            try self.emit.ldrQRegMemSoff(dst, .FP, offset);
+        }
+
+        pub fn emitStoreStackV128(self: *Self, offset: i32, src: FloatReg) Allocator.Error!void {
+            try self.emit.strQRegMemSoff(src, .FP, offset);
+        }
+
         // Immediate loading
 
         /// Load immediate value into register

@@ -615,7 +615,6 @@ pub const PublishInputs = struct {
 /// Public `CompileTimeFinalizer` declaration.
 pub const CompileTimeFinalizer = struct {
     pub const Error = Allocator.Error || std.Thread.SpawnError || error{
-        CompileTimeProblem,
         EmptyCode,
         MmapFailed,
         MprotectFailed,
@@ -711,11 +710,8 @@ pub const ExportTableView = struct {
 pub const ProvidesEntry = struct {
     source_name: canonical.ExportNameId,
     ffi_symbol: canonical.ExternalSymbolNameId,
-    /// The top-level definition this provides entry binds, resolved by the
-    /// producer within its own module (the canonicalize->check boundary is
-    /// the one legitimate name-resolution point). Consumers (glue) use this
-    /// instead of re-matching definition names.
-    def: ?CIR.Def.Idx = null,
+    /// The platform-local top-level definition selected by canonicalization.
+    def: CIR.Def.Idx,
 };
 
 /// Public `RequiresEntry` declaration.
@@ -792,35 +788,13 @@ pub const ProvidedExportTable = struct {
         top_level_values: *const TopLevelValueTable,
         published_provides: []const ProvidesEntry,
     ) Allocator.Error!ProvidedExportTable {
-        const module_env = module.moduleEnvConst();
-        const source = module_env.provides_entries.items.items;
-        if (source.len != published_provides.len) {
-            checkedArtifactInvariant("published provides metadata disagrees with ModuleEnv provides count", .{});
-        }
-
         var exports = std.ArrayList(ProvidedExport).empty;
         errdefer exports.deinit(allocator);
 
-        for (source, published_provides) |provides_entry, published| {
-            const def_node_idx = module_env.getExposedValueNodeIndexById(provides_entry.ident) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: provided entry {s} has no top-level definition",
-                        .{module_env.getIdent(provides_entry.ident)},
-                    );
-                }
-                unreachable;
-            };
-            const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
-            const top_level = top_level_values.lookupByDef(def_idx) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: provided entry {s} has no top-level value",
-                        .{module_env.getIdent(provides_entry.ident)},
-                    );
-                }
-                unreachable;
-            };
+        for (published_provides) |published| {
+            const def_idx = published.def;
+            const top_level = top_level_values.lookupByDef(def_idx) orelse
+                checkedArtifactInvariant("provided entry has no top-level value", .{});
             const source_checked_type = try checkedTypeIdForRootSource(
                 allocator,
                 module,
@@ -1376,6 +1350,7 @@ const CompileTimeRequestScheduler = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             => {},
         }
     }
@@ -2016,6 +1991,7 @@ fn resolvedRefIsUnboundPlatformRequirement(
         .top_level_proc,
         .imported_proc,
         .hosted_proc,
+        .platform_required_checked_error,
         .platform_required_const,
         .platform_required_proc,
         .promoted_top_level_proc,
@@ -2557,6 +2533,14 @@ pub const CheckedBuiltinNominal = enum {
     f32,
     f64,
     dec,
+    u8x16,
+    i8x16,
+    u16x8,
+    i16x8,
+    u32x4,
+    i32x4,
+    u64x2,
+    i64x2,
     list,
     box,
     dict,
@@ -2587,6 +2571,14 @@ pub const CheckedPrimitive = enum(u8) {
     f32,
     f64,
     dec,
+    u8x16,
+    i8x16,
+    u16x8,
+    i16x8,
+    u32x4,
+    i32x4,
+    u64x2,
+    i64x2,
 };
 
 /// Public `CheckedBuiltinRuntimeEncoding` declaration.
@@ -2624,6 +2616,14 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .f32 => .{ .primitive = .f32 },
         .f64 => .{ .primitive = .f64 },
         .dec => .{ .primitive = .dec },
+        .u8x16 => .{ .primitive = .u8x16 },
+        .i8x16 => .{ .primitive = .i8x16 },
+        .u16x8 => .{ .primitive = .u16x8 },
+        .i16x8 => .{ .primitive = .i16x8 },
+        .u32x4 => .{ .primitive = .u32x4 },
+        .i32x4 => .{ .primitive = .i32x4 },
+        .u64x2 => .{ .primitive = .u64x2 },
+        .i64x2 => .{ .primitive = .i64x2 },
         .list => .list,
         .box => .box,
         .dict => .dict,
@@ -4734,6 +4734,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     _: bool,
 ) Allocator.Error!void {
     if (anno_idx == .placeholder) return;
+    if (!localNominalDeclarationIsValid(module, statement_idx)) return;
 
     const statement_root = try appendCheckedTypeRoot(
         allocator,
@@ -4751,7 +4752,10 @@ fn appendCheckedNominalDeclarationFromStatement(
 
     const statement_nominal = switch (store.payloads.items[statement_root_index]) {
         .nominal => |nominal| nominal,
-        else => checkedArtifactInvariant("nominal declaration statement root was not a nominal checked type", .{}),
+        else => checkedArtifactInvariant(
+            "nominal declaration statement root was not a nominal checked type (source content {s})",
+            .{@tagName(module.typeStoreConst().resolveVar(ModuleEnv.varFrom(statement_idx)).desc.content)},
+        ),
     };
 
     const module_env = module.moduleEnvConst();
@@ -7055,6 +7059,14 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.f32) or ident.eql(common.f32_type)) return .f32;
     if (ident.eql(common.f64) or ident.eql(common.f64_type)) return .f64;
     if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
+    if (ident.eql(common.u8x16_type)) return .u8x16;
+    if (ident.eql(common.i8x16_type)) return .i8x16;
+    if (ident.eql(common.u16x8_type)) return .u16x8;
+    if (ident.eql(common.i16x8_type)) return .i16x8;
+    if (ident.eql(common.u32x4_type)) return .u32x4;
+    if (ident.eql(common.i32x4_type)) return .i32x4;
+    if (ident.eql(common.u64x2_type)) return .u64x2;
+    if (ident.eql(common.i64x2_type)) return .i64x2;
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
     if (ident.eql(common.dict) or ident.eql(common.builtin_dict)) return .dict;
@@ -7368,11 +7380,24 @@ fn localNominalDeclarationIdForStatement(
             else => continue,
         };
         if (nominal.anno == .placeholder) continue;
+        if (!localNominalDeclarationIsValid(module, candidate)) continue;
         const id: CheckedNominalDeclarationId = @enumFromInt(next_id);
         next_id += 1;
         if (candidate == statement_idx) return id;
     }
     checkedArtifactInvariant("checked nominal declaration statement had no declaration id", .{});
+}
+
+fn localNominalDeclarationIsValid(
+    module: TypedCIR.Module,
+    statement_idx: CIR.Statement.Idx,
+) bool {
+    const types_store = module.typeStoreConst();
+    const decl_idx = types_store.lookupNominalDeclByKey(
+        module.moduleEnvConst().selfModuleIdentity(),
+        @intFromEnum(statement_idx),
+    ) orelse checkedArtifactInvariant("checked local nominal declaration had no checker declaration entry", .{});
+    return types_store.getNominalDecl(decl_idx).isValid();
 }
 
 fn copyOptionalIdentText(
@@ -10038,6 +10063,7 @@ fn checkedExprDataDiverges(
         .ellipsis,
         .break_,
         .return_,
+        .runtime_error,
         => true,
         .str => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
         .list => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
@@ -10115,7 +10141,6 @@ fn checkedExprDataDiverges(
         .interpolation,
         .method_eq,
         .type_dispatch_call,
-        .runtime_error,
         .anno_only,
         => false,
     };
@@ -10134,6 +10159,7 @@ fn checkedStatementDataDiverges(
         .crash,
         .break_,
         .return_,
+        .runtime_error,
         => true,
         .decl => |decl| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states),
         .var_ => |var_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states),
@@ -10153,7 +10179,6 @@ fn checkedStatementDataDiverges(
         .nominal_decl,
         .type_anno,
         .type_var_alias,
-        .runtime_error,
         => false,
     };
 }
@@ -10233,6 +10258,7 @@ fn resolvedValueCanBeCalledDirectly(
         .top_level_const,
         .imported_const,
         .platform_required_declaration,
+        .platform_required_checked_error,
         .platform_required_const,
         => false,
     };
@@ -11930,6 +11956,9 @@ pub const ResolvedValueRef = union(enum) {
     imported_proc: ProcedureUseTemplate,
     hosted_proc: ProcedureUseTemplate,
     platform_required_declaration: PlatformRequiredDeclarationId,
+    /// The app-side check for this platform requirement failed. This is an
+    /// executable checked fact and lowers to a crash if the lookup is reached.
+    platform_required_checked_error,
     platform_required_const: PlatformRequiredConstResolvedRef,
     platform_required_proc: PlatformRequiredProcedureResolvedRef,
     promoted_top_level_proc: ProcedureUseTemplate,
@@ -12359,6 +12388,7 @@ fn attachUseTypePayload(
         .pattern_binder,
         .local_proc,
         .platform_required_declaration,
+        .platform_required_checked_error,
         => {},
     }
 }
@@ -12609,6 +12639,9 @@ fn categorizeRequiredValueRef(
     platform_required_bindings: *const PlatformRequiredBindingTable,
 ) ResolvedValueRef {
     const binding = platformBindingForRequiredIndex(platform_required_bindings, requires_idx) orelse {
+        if (platform_required_bindings.isCheckedError(requires_idx)) {
+            return .platform_required_checked_error;
+        }
         const declaration = platform_required_declarations.lookupByRequiredIndex(requires_idx) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
@@ -13713,6 +13746,18 @@ const EvidencePass = struct {
         chain: []const []const EvidenceParam,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.StaticDispatchResolution {
+        if (constraint_fn_var) |fn_var| {
+            const fn_content = self.types.resolveVar(fn_var).desc.content;
+            const checked_error = switch (fn_content) {
+                .err => true,
+                else => if (fn_content.unwrapFunc()) |func|
+                    self.types.resolveVar(func.ret).desc.content == .err
+                else
+                    false,
+            };
+            if (checked_error) return .checked_error;
+        }
+
         const resolved = self.types.resolveVar(dispatcher_var);
 
         // Builtin containers have ordinary registry methods for parser_for and
@@ -15964,6 +16009,11 @@ pub const PlatformAppRelation = struct {
     app_artifact: CheckedModuleArtifactKey,
     relations: []const PlatformRequirementRelationInput,
     bindings: []const PlatformRequiredBindingInput,
+    /// Requires-clause indices whose app-side requirement check failed. These
+    /// are explicit checked-error facts: platform required lookups at these
+    /// indices lower to a runtime crash, while successful sibling bindings
+    /// remain fully linked.
+    checked_error_requires: []const u32,
     /// The app-store checked roots the checker solved requirement identity
     /// variables to, flattened in canonical identity-slot order and indexed by
     /// each relation's `identity_start`/`identity_len` range.
@@ -15976,6 +16026,7 @@ pub const PlatformAppRelation = struct {
         }
         allocator.free(self.relations);
         allocator.free(self.bindings);
+        allocator.free(self.checked_error_requires);
         allocator.free(self.identity_solutions_app);
         self.* = .{
             .key = .{},
@@ -15984,27 +16035,9 @@ pub const PlatformAppRelation = struct {
             .app_artifact = .{},
             .relations = &.{},
             .bindings = &.{},
+            .checked_error_requires = &.{},
             .identity_solutions_app = &.{},
         };
-    }
-};
-
-/// Public `PlatformRequirementMissingValue` declaration.
-pub const PlatformRequirementMissingValue = struct {
-    declaration: PlatformRequiredDeclaration,
-};
-
-/// Public `PlatformAppRelationBuildResult` declaration.
-pub const PlatformAppRelationBuildResult = union(enum) {
-    relation: PlatformAppRelation,
-    missing_value: PlatformRequirementMissingValue,
-
-    pub fn deinit(self: *PlatformAppRelationBuildResult, allocator: Allocator) void {
-        switch (self.*) {
-            .relation => |*relation| relation.deinit(allocator),
-            .missing_value => {},
-        }
-        self.* = undefined;
     }
 };
 
@@ -16224,11 +16257,11 @@ pub const PlatformRequirementRelationTable = struct {
             declarations,
             active_relation,
         );
-        if (active_relation.relations.len != declarations.declarations.len) {
+        if (active_relation.relations.len != active_relation.bindings.len) {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
-                    "checked artifact invariant violated: platform/app relation has {d} checked relation rows for {d} platform requirements",
-                    .{ active_relation.relations.len, declarations.declarations.len },
+                    "checked artifact invariant violated: platform/app relation has {d} checked relation rows for {d} bindings",
+                    .{ active_relation.relations.len, active_relation.bindings.len },
                 );
             }
             unreachable;
@@ -16392,11 +16425,10 @@ pub const PlatformRequirementSolutionTable = struct {
     }
 };
 
-/// Materialize the checker-recorded requirement solutions into checked type
-/// roots in the app's store. A row whose types never solved (the app failed
-/// checking under a flow that still publishes an artifact) is dropped — the
-/// missing row IS the record of the app-side failure, and finalization only
-/// tolerates it on paths that permit user errors.
+/// Materialize the checker-recorded successful requirement solutions into
+/// checked type roots in the app's store. A row whose types contain an error
+/// is omitted here; platform/app relation construction converts that exact
+/// absent requires index into an explicit checked-error requirement outcome.
 fn platformRequirementSolutionTableFromInputs(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -16520,6 +16552,7 @@ pub const PlatformRequiredBinding = struct {
 /// Public `PlatformRequiredBindingTable` declaration.
 pub const PlatformRequiredBindingTable = struct {
     bindings: []PlatformRequiredBinding = &.{},
+    checked_error_requires: []u32 = &.{},
     closure_pool: ClosurePool = ClosurePool.empty,
 
     pub fn fromRelation(
@@ -16539,11 +16572,11 @@ pub const PlatformRequiredBindingTable = struct {
             declarations,
             active_relation,
         );
-        if (active_relation.bindings.len != declarations.declarations.len) {
+        if (active_relation.bindings.len + active_relation.checked_error_requires.len != declarations.declarations.len) {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
-                    "checked artifact invariant violated: platform/app relation has {d} bindings for {d} platform requirements",
-                    .{ active_relation.bindings.len, declarations.declarations.len },
+                    "checked artifact invariant violated: platform/app relation has {d} bindings and {d} checked errors for {d} platform requirements",
+                    .{ active_relation.bindings.len, active_relation.checked_error_requires.len, declarations.declarations.len },
                 );
             }
             unreachable;
@@ -16558,10 +16591,31 @@ pub const PlatformRequiredBindingTable = struct {
         }
 
         const bindings = try allocator.alloc(PlatformRequiredBinding, active_relation.bindings.len);
+        const checked_error_requires = try allocator.dupe(u32, active_relation.checked_error_requires);
         var closure_pool = ClosurePool.empty;
         errdefer {
             allocator.free(bindings);
+            allocator.free(checked_error_requires);
             closure_pool.deinit(allocator);
+        }
+
+        if (builtin.mode == .Debug) {
+            for (checked_error_requires) |requires_idx| {
+                const declaration = declarations.lookupByRequiredIndex(requires_idx) orelse {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform checked-error requirement {d} has no declaration",
+                        .{requires_idx},
+                    );
+                };
+                const declaration_index: usize = @intCast(@intFromEnum(declaration.id));
+                if (seen_declarations[declaration_index]) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: platform requirement declaration {d} has multiple outcomes",
+                        .{declaration_index},
+                    );
+                }
+                seen_declarations[declaration_index] = true;
+            }
         }
 
         for (active_relation.bindings, 0..) |binding, i| {
@@ -16629,11 +16683,18 @@ pub const PlatformRequiredBindingTable = struct {
             };
         }
 
-        return .{ .bindings = bindings, .closure_pool = closure_pool };
+        return .{
+            .bindings = bindings,
+            .checked_error_requires = checked_error_requires,
+            .closure_pool = closure_pool,
+        };
     }
 
     pub fn deinit(self: *PlatformRequiredBindingTable, allocator: Allocator) void {
-        if (!self.closure_pool.serialized) allocator.free(self.bindings);
+        if (!self.closure_pool.serialized) {
+            allocator.free(self.bindings);
+            allocator.free(self.checked_error_requires);
+        }
         self.closure_pool.deinit(allocator);
         self.* = .{};
     }
@@ -16649,10 +16710,11 @@ pub const PlatformRequiredBindingTable = struct {
     /// Relocatable serialized form: the POD row slice plus the closure pool.
     pub const Serialized = extern struct {
         bindings: SerializedSlice(PlatformRequiredBinding) = .{},
+        checked_error_requires: SerializedSlice(u32) = .{},
         closure_pool: ClosurePool.Serialized = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 15);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(PlatformRequiredBindingTable, @This());
@@ -16665,6 +16727,13 @@ pub const PlatformRequiredBindingTable = struct {
             if (binding.requires_idx == requires_idx) return binding;
         }
         return null;
+    }
+
+    pub fn isCheckedError(self: *const PlatformRequiredBindingTable, requires_idx: u32) bool {
+        for (self.checked_error_requires) |checked_error_requires_idx| {
+            if (checked_error_requires_idx == requires_idx) return true;
+        }
+        return false;
     }
 
     pub fn lookupByBindingId(self: *const PlatformRequiredBindingTable, binding_id: u32) ?PlatformRequiredBinding {
@@ -17760,7 +17829,7 @@ pub fn buildPlatformAppRelation(
     allocator: Allocator,
     platform_module: TypedCIR.Module,
     app_artifact: *const CheckedModuleArtifact,
-) Allocator.Error!PlatformAppRelationBuildResult {
+) Allocator.Error!PlatformAppRelation {
     const platform_module_env = platform_module.moduleEnvConst();
 
     // Derive the platform's required declarations and requirement context from the
@@ -17773,14 +17842,15 @@ pub fn buildPlatformAppRelation(
     defer declaration_table.deinit(allocator);
     const declarations = declaration_table.declarations;
 
-    const relations = try allocator.alloc(PlatformRequirementRelationInput, declarations.len);
-    errdefer allocator.free(relations);
-    const bindings = try allocator.alloc(PlatformRequiredBindingInput, declarations.len);
-    var initialized_bindings: usize = 0;
+    var relations = std.ArrayList(PlatformRequirementRelationInput).empty;
+    errdefer relations.deinit(allocator);
+    var bindings = std.ArrayList(PlatformRequiredBindingInput).empty;
     errdefer {
-        for (bindings[0..initialized_bindings]) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
-        allocator.free(bindings);
+        for (bindings.items) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
+        bindings.deinit(allocator);
     }
+    var checked_error_requires = std.ArrayList(u32).empty;
+    errdefer checked_error_requires.deinit(allocator);
 
     var identity_solutions_app = std.ArrayList(CheckedTypeId).empty;
     errdefer identity_solutions_app.deinit(allocator);
@@ -17791,20 +17861,13 @@ pub fn buildPlatformAppRelation(
     );
     const relation_key = PlatformAppRelationKey.compute(app_artifact.key, requirement_context);
 
-    for (declarations, 0..) |declaration, i| {
-        // The checker recorded which exported app value satisfied this
-        // requirement and how it solved. A missing row means the app failed
-        // checking under a flow that still publishes an artifact; the only
-        // caller that tolerates it is the coordinator's allow-user-errors path.
+    for (declarations) |declaration| {
+        // The checker records successful solutions as exact app value/type
+        // facts. A missing row is recorded explicitly as a checked-error
+        // requirement so publication stays total without inventing a binding.
         const solution = app_artifact.platform_requirement_solutions.lookupByRequiredIndex(declaration.requires_idx) orelse {
-            allocator.free(relations);
-            for (bindings[0..initialized_bindings]) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
-            allocator.free(bindings);
-            identity_solutions_app.deinit(allocator);
-            initialized_bindings = 0;
-            return .{ .missing_value = .{
-                .declaration = declaration,
-            } };
+            try checked_error_requires.append(allocator, declaration.requires_idx);
+            continue;
         };
 
         const requested_source_ty = try canonical_type_keys.fromVar(
@@ -17837,8 +17900,9 @@ pub fn buildPlatformAppRelation(
         try identity_solutions_app.appendSlice(allocator, app_identity_slice);
         const identity_len: u32 = @intCast(app_identity_slice.len);
 
-        relations[i] = .{
-            .id = @enumFromInt(@as(u32, @intCast(i))),
+        const relation_id: PlatformRequirementRelationId = @enumFromInt(@as(u32, @intCast(relations.items.len)));
+        try relations.append(allocator, .{
+            .id = relation_id,
             .declaration = declaration.id,
             .requires_idx = declaration.requires_idx,
             .app_value = app_value_ref,
@@ -17847,14 +17911,14 @@ pub fn buildPlatformAppRelation(
             .solved_root_app = solution.solved_root,
             .identity_start = identity_start,
             .identity_len = identity_len,
-        };
+        });
 
-        bindings[i] = .{
+        try bindings.append(allocator, .{
             .declaration = declaration.id,
             .requires_idx = declaration.requires_idx,
             .app_value = app_value_ref,
             .requested_source_ty = requested_source_ty,
-            .checked_relation = relations[i].id,
+            .checked_relation = relation_id,
             .value_use = if (value_kind == .procedure_value) blk: {
                 const procedure_binding = switch (top_level.value) {
                     .procedure_binding => |binding| binding,
@@ -17899,19 +17963,31 @@ pub fn buildPlatformAppRelation(
                     .relation_template_closure = template_closure,
                 } };
             },
-        };
-        initialized_bindings += 1;
+        });
     }
 
-    return .{ .relation = .{
+    const owned_relations = try relations.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_relations);
+    const owned_bindings = try bindings.toOwnedSlice(allocator);
+    errdefer {
+        for (owned_bindings) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
+        allocator.free(owned_bindings);
+    }
+    const owned_checked_errors = try checked_error_requires.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_checked_errors);
+    const owned_identity_solutions = try identity_solutions_app.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_identity_solutions);
+
+    return .{
         .key = relation_key,
         .requirement_context = requirement_context,
         .platform_module_idx = platform_module.moduleIndex(),
         .app_artifact = app_artifact.key,
-        .relations = relations,
-        .bindings = bindings,
-        .identity_solutions_app = try identity_solutions_app.toOwnedSlice(allocator),
-    } };
+        .relations = owned_relations,
+        .bindings = owned_bindings,
+        .checked_error_requires = owned_checked_errors,
+        .identity_solutions_app = owned_identity_solutions,
+    };
 }
 
 const FlattenedPlatformRequirementRecordRow = struct {
@@ -18144,18 +18220,19 @@ fn publishProvidesMetadata(
 ) Allocator.Error![]ProvidesEntry {
     const module_env = module.moduleEnvConst();
     const source = module_env.provides_entries.items.items;
-    const provides = try allocator.alloc(ProvidesEntry, source.len);
-    errdefer allocator.free(provides);
+    var provides = std.ArrayList(ProvidesEntry).empty;
+    errdefer provides.deinit(allocator);
 
-    for (source, 0..) |entry, i| {
-        provides[i] = .{
+    for (source) |entry| {
+        const def = entry.local_def orelse continue;
+        try provides.append(allocator, .{
             .source_name = try names.internExportIdent(module_env.getIdentStoreConst(), entry.ident),
             .ffi_symbol = try names.internExternalSymbolName(module_env.getString(entry.ffi_symbol)),
-            .def = module.topLevelDefByIdent(entry.ident),
-        };
+            .def = def,
+        });
     }
 
-    return provides;
+    return provides.toOwnedSlice(allocator);
 }
 
 fn publishRequiresMetadata(
@@ -18644,6 +18721,14 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                     .f32,
                     .f64,
                     .dec,
+                    .u8x16,
+                    .i8x16,
+                    .u16x8,
+                    .i16x8,
+                    .u32x4,
+                    .i32x4,
+                    .u64x2,
+                    .i64x2,
                     .bool,
                     .parse_tag_union_spec,
                     .fields,
@@ -19086,8 +19171,12 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
             .pending, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {
-            .fn_value => true,
-            .pending, .const_node, .expect => false,
+            // A callable initializer that reaches an explicit checked error is
+            // stored as a divergent ConstStore node. Monotype restores that
+            // node at the callable's expected type, so execution crashes at
+            // the exact invalid binding while independent roots remain usable.
+            .fn_value, .const_node => true,
+            .pending, .expect => false,
         },
         .expect => switch (payload) {
             .expect => true,
@@ -19288,6 +19377,7 @@ const ExhaustivenessTemplateReachability = struct {
             .imported_const,
             .imported_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             => {},
         }
     }
@@ -21565,6 +21655,7 @@ const PublicApiClosureDependencyCollector = struct {
             .pattern_binder,
             .local_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             => {},
         }
     }
@@ -22365,6 +22456,7 @@ const ImportedTemplateClosureBuilder = struct {
             .top_level_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             .platform_required_proc,
             .promoted_top_level_proc,
@@ -22444,6 +22536,7 @@ const ImportedTemplateClosureBuilder = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .promoted_top_level_proc,
             => false,
         };
@@ -22511,6 +22604,7 @@ const ImportedTemplateClosureBuilder = struct {
             .imported_const,
             .imported_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             => return null,
         };
@@ -22541,6 +22635,7 @@ const ImportedTemplateClosureBuilder = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             .platform_required_proc,
             => return false,
@@ -22595,6 +22690,7 @@ const ImportedTemplateClosureBuilder = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             .platform_required_proc,
             .promoted_top_level_proc,
@@ -23641,7 +23737,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 200);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 201);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -23789,7 +23885,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 26;
+    const serialized_layout_version: u32 = 29;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -24635,6 +24731,20 @@ pub const CheckedModuleArtifact = struct {
             validatePlatformBindingRelation(binding.declaration, binding.requires_idx, binding.app_value, std.meta.activeTag(binding.value_use), relation, i);
             verifyPlatformRequiredValueUse(self, binding);
         }
+        for (self.platform_required_bindings.checked_error_requires) |requires_idx| {
+            _ = self.platform_required_declarations.lookupByRequiredIndex(requires_idx) orelse {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform checked-error requirement {d} has no declaration",
+                    .{requires_idx},
+                );
+            };
+            if (self.platform_required_bindings.lookupByRequiredIndex(requires_idx) != null) {
+                std.debug.panic(
+                    "checked artifact invariant violated: platform requirement {d} is both bound and a checked error",
+                    .{requires_idx},
+                );
+            }
+        }
 
         for (self.callable_eval_templates.templates, 0..) |template, i| {
             std.debug.assert(@intFromEnum(template.id) == i);
@@ -24706,6 +24816,7 @@ pub const CheckedModuleArtifact = struct {
                 .procedure => |procedure| {
                     std.debug.assert(procedure.source_name == metadata.source_name);
                     std.debug.assert(procedure.ffi_symbol == metadata.ffi_symbol);
+                    std.debug.assert(procedure.def == metadata.def);
                     std.debug.assert(@intFromEnum(procedure.checked_type) < self.checked_types.roots.items.len);
                     const top_level = self.top_level_values.lookupByDef(procedure.def) orelse {
                         std.debug.panic("checked artifact invariant violated: provided procedure export references missing top-level value", .{});
@@ -24721,6 +24832,7 @@ pub const CheckedModuleArtifact = struct {
                 .data => |data| {
                     std.debug.assert(data.source_name == metadata.source_name);
                     std.debug.assert(data.ffi_symbol == metadata.ffi_symbol);
+                    std.debug.assert(data.def == metadata.def);
                     std.debug.assert(@intFromEnum(data.checked_type) < self.checked_types.roots.items.len);
                     const top_level = self.top_level_values.lookupByDef(data.def) orelse {
                         std.debug.panic("checked artifact invariant violated: provided data export references missing top-level value", .{});
@@ -24755,7 +24867,7 @@ pub const CheckedModuleArtifact = struct {
         }
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprCount());
-            if (self.platform_required_bindings.bindings.len > 0) {
+            if (self.checking_context_identity.platform_app_relation != null) {
                 switch (record.ref) {
                     .platform_required_declaration => std.debug.panic(
                         "checked artifact invariant violated: executable platform artifact kept a declaration-only required lookup",
@@ -24772,6 +24884,7 @@ pub const CheckedModuleArtifact = struct {
                     .top_level_proc,
                     .imported_proc,
                     .hosted_proc,
+                    .platform_required_checked_error,
                     .platform_required_const,
                     .platform_required_proc,
                     .promoted_top_level_proc,
@@ -28663,8 +28776,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x88, 0xCE, 0xF8, 0xDA, 0xF1, 0xE7, 0xC6, 0x29, 0x2C, 0x81, 0xD1, 0xCC, 0xFC, 0x51, 0x8F, 0xCE,
-        0x9B, 0x8A, 0xAE, 0x4F, 0x88, 0x87, 0xCB, 0xA6, 0x14, 0xF5, 0xE1, 0xF0, 0xE7, 0x93, 0x38, 0xC6,
+        0x67, 0x90, 0xc7, 0xb8, 0xfc, 0x14, 0x1a, 0x97, 0xab, 0x1b, 0xa1, 0x86, 0xc2, 0x5e, 0x17, 0x17,
+        0x1c, 0x52, 0xac, 0x05, 0xd0, 0x14, 0xc9, 0xb4, 0x7f, 0xeb, 0xc8, 0x1c, 0xea, 0x4d, 0xde, 0xf2,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

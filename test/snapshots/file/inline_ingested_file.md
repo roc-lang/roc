@@ -91,10 +91,7 @@ NO CHANGE
 		(e-runtime-error (tag "file_import_not_found")))
 	(d-let
 		(p-assign (ident "foo"))
-		(e-call
-			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-lookup-local
-				(p-assign (ident "data")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-import (mod "Json")
 		(exposes)))
 ~~~

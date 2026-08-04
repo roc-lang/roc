@@ -50,12 +50,7 @@ a = (0->b()).c()
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-method-call (method "c")
-			(receiver
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-num (value "0"))))
-			(args))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

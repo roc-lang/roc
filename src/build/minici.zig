@@ -83,6 +83,7 @@ const jobs = [_]Job{
     .{ .name = "run-check-test-wiring" },
     .{ .name = "run-check-builtin-format" },
     .{ .name = "run-check-glue-abi" },
+    .{ .name = "run-check-simd-codegen" },
     .{ .name = "run-check-snapshots" },
     .{ .name = "run-check-test-asset-coverage" },
     .{ .name = "run-test-zig-module-collections" },
@@ -128,11 +129,10 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-lir-inline" },
     .{ .name = "run-test-zig-trmc-lir" },
     .{ .name = "run-test-zig-build-helpers" },
-    .{ .name = "run-test-zig-cli-runner-unit" },
     .{ .name = "run-test-zig-backend-llvm" },
     .{ .name = "run-test-eval", .kind = .harness, .args = &.{ "--timeout", "120000" } },
+    .{ .name = "run-test-simd-differential", .kind = .harness },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
-    .{ .name = "run-test-lambda-mono-differential", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
@@ -1663,6 +1663,14 @@ test "resolveSelection supports exhaustive adjacent MiniCI shards" {
     try std.testing.expect(!middle.includes(core_boundary));
     try std.testing.expect(!middle.includes(harness_boundary));
     try std.testing.expect(last.includes(harness_boundary));
+}
+
+test "MiniCI runs the exhaustive SIMD differential after ordinary eval" {
+    const eval_index = jobIndexByName("run-test-eval") orelse return error.MissingEval;
+    const simd_index = jobIndexByName("run-test-simd-differential") orelse return error.MissingSimdDifferential;
+
+    try std.testing.expectEqual(eval_index + 1, simd_index);
+    try std.testing.expectEqual(JobKind.harness, jobs[simd_index].kind);
 }
 
 test "resolveSelection rejects unknown and empty MiniCI ranges" {

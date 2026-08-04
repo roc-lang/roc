@@ -84,12 +84,7 @@ main = {
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-block
-			(s-let
-				(p-assign (ident "x"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(e-lookup-local
-				(p-assign (ident "x")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-import (mod "json.Json")
 		(exposes))
 	(s-import (mod "http.Client")

@@ -90,7 +90,8 @@ test "embedding API: full canonical sequence on simple_success app" {
     }
     try std.testing.expect(!coord.hasUserErrors());
 
-    // 4. Finalize must succeed (no HasUserErrors).
+    // 4. Finalization always publishes executable artifacts; diagnostics do
+    // not form a separate failure outcome.
     try coord.finalizeExecutableArtifacts();
     try std.testing.expect(!coord.hasUserErrors());
 

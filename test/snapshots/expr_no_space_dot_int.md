@@ -46,8 +46,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-tuple-access (index "0")
-			(e-runtime-error (tag "ident_not_in_scope")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

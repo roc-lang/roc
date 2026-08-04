@@ -1758,6 +1758,7 @@ pub const BoxyRuntime = struct {
                         .{ @intFromEnum(layout_idx), self.helper.sizeOf(layout_idx) },
                     ),
                 },
+                .vector => a.read(u128) == b.read(u128),
             },
             .box_of_zst => if (desc) |payload_desc| blk: {
                 const hooks = maybe_hooks orelse
@@ -5129,6 +5130,10 @@ pub const BoxyRuntime = struct {
             .scalar => switch (layout_val.getScalar().tag) {
                 .str => try self.appendQuotedInspectBytes(out, readRocStr(value)),
                 .int, .frac, .opaque_ptr => try self.appendScalarInspect(out, value, layout_idx),
+                .vector => return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: SIMD inspect reached descriptor walking without an explicit inspect method",
+                    .{},
+                ),
             },
             .box_of_zst => {
                 if (desc) |payload_desc| {

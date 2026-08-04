@@ -357,6 +357,9 @@ pub fn main(init: std.process.Init) RunnerError!void {
     }
     if (!generated_only) {
         for (eval_tests.tests) |tc| {
+            // Dedicated proof corpora are selected only by an explicit filter;
+            // keep the ordinary Lambda Mono sweep bounded.
+            if (tc.opt_in and cli.filters.len == 0) continue;
             // Frontend-problem cases have nothing to execute differentially.
             switch (tc.expected) {
                 .problem, .problem_and_crash => continue,

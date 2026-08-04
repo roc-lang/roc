@@ -118,30 +118,7 @@ main = {
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-block
-			(s-let
-				(p-assign (ident "data"))
-				(e-record
-					(fields
-						(field (name "name")
-							(e-string
-								(e-literal (string "Alice"))))
-						(field (name "age")
-							(e-num (value "30"))))))
-			(s-let
-				(p-assign (ident "encoded"))
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local
-						(p-assign (ident "data")))))
-			(s-let
-				(p-assign (ident "decoded"))
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local
-						(p-assign (ident "encoded")))))
-			(e-lookup-local
-				(p-assign (ident "decoded")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-import (mod "json.Json")
 		(exposes
 			(exposed (name "decode") (wildcard false))

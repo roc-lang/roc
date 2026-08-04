@@ -137,7 +137,7 @@ o = || {
 			(e-block
 				(s-let
 					(p-applied-tag)
-					(e-num (value "0")))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(e-empty_record))))
 	(d-let
 		(p-tuple

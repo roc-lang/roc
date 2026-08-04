@@ -190,6 +190,7 @@ pub const Writer = struct {
                 .dec => .{ .dec_bits = value.read(builtins.dec.RocDec).num },
             },
             .opaque_ptr => writerInvariant("opaque pointer scalar layout reached scalar const plan"),
+            .vector => .{ .u128 = value.read(u128) },
         };
     }
 

@@ -41,13 +41,11 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     std.Thread.SpawnError ||
     error{
         BuiltinLowLevelAnnotationMustBeFunction,
-        CompileTimeProblem,
         DownloadFailed,
         ExpectedPlatformString,
         ExpectedString,
         FileError,
         FileNotFound,
-        HasUserErrors,
         Internal,
         InvalidDependency,
         InvalidNullByteInPath,

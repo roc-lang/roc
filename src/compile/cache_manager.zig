@@ -147,6 +147,50 @@ pub const CacheManager = struct {
         return data;
     }
 
+    /// Load a cache entry as a `CacheModule.CacheData`, memory-mapping the file on
+    /// POSIX targets and reading it onto the heap elsewhere. The returned value must
+    /// be released with `CacheData.deinit(self.allocator)`, which unmaps a mapped
+    /// entry and frees a heap-read entry. The caller must keep the entry alive for
+    /// as long as it reads from the returned bytes.
+    pub fn loadRawBytesMapped(self: *Self, cache_key: [32]u8, entries_dir: []const u8) ?CacheModule.CacheData {
+        if (!self.config.enabled) return null;
+
+        const cache_path = self.computeCacheFilePath(cache_key, entries_dir) catch {
+            self.stats.recordMiss();
+            return null;
+        };
+        defer self.allocator.free(cache_path);
+
+        if (!self.roc_ctx.fileExists(cache_path)) {
+            self.stats.recordMiss();
+            return null;
+        }
+
+        // Prefer a copy-on-write mapping of the file. A `roc_ctx` that cannot
+        // map files (a virtual filesystem, a target without `mmap`) yields
+        // `null` and reads onto the heap instead.
+        if (CacheModule.tryMapCacheFile(self.roc_ctx, cache_path)) |mapped| {
+            self.stats.recordHit(mapped.data().len);
+            return mapped;
+        }
+
+        const data = self.roc_ctx.readFile(cache_path, self.allocator) catch |err| {
+            self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
+            self.stats.recordMiss();
+            return null;
+        };
+        defer self.allocator.free(data);
+
+        const buffer = self.allocator.alignedAlloc(u8, CacheModule.SERIALIZATION_ALIGNMENT, data.len) catch {
+            self.stats.recordMiss();
+            return null;
+        };
+        @memcpy(buffer, data);
+
+        self.stats.recordHit(buffer.len);
+        return CacheModule.CacheData{ .allocated = buffer };
+    }
+
     pub fn getStats(self: *const Self) CacheStats {
         return self.stats;
     }

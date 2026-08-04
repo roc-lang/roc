@@ -1810,8 +1810,7 @@ main! = |_| { # Yeah Ie
 				(e-if
 					(if-branches
 						(if-branch
-							(e-lookup-local
-								(p-assign (ident "num")))
+							(e-runtime-error (tag "erroneous_value_use"))
 							(e-block
 								(s-dbg
 									(e-runtime-error (tag "empty_tuple")))
@@ -1828,177 +1827,7 @@ main! = |_| { # Yeah Ie
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-lambda
-			(args
-				(p-assign (ident "a"))
-				(p-assign (ident "b")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "a"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign (ident "lue")))
-								(pattern (degenerate true)
-									(p-applied-tag)))
-							(value
-								(e-block
-									(s-expr
-										(e-runtime-error (tag "ident_not_in_scope")))
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo"))))
-							(value
-								(e-num (value "0"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo")))
-								(pattern (degenerate false)
-									(p-str (text "bar"))))
-							(value
-								(e-num (value "20"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-assign (ident "ist"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec))
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "rest") (ident "rest")
-												(rest-pattern
-													(p-assign (ident "rest"))))))))
-							(value
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-num (value "12"))
-									(e-num (value "34")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "#others") (ident "#others")
-												(rest-pattern
-													(p-underscore)))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-runtime-error (tag "not_implemented"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "121000")))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -2024,15 +1853,9 @@ main! = |_| { # Yeah Ie
 				(s-return
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-call (constraint-fn-var 1364)
-						(e-lookup-local
-							(p-assign (ident "match_time")))
-						(e-not-implemented)))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-expr
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dbg
-							(e-num (value "42")))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-crash (msg "Unreachtement"))
 				(s-let
 					(p-assign (ident "tag_with"))
@@ -2047,7 +1870,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1391) (dispatcher-var 315)
+						(e-interpolation (constraint-fn-var 1410) (dispatcher-var 315)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts

@@ -286,7 +286,6 @@ const LayoutRequest = struct {
 
 const StaticInitializerRequest = struct {
     static_data: Common.StaticDataId,
-    ty: Type.TypeId,
     layout_idx: layout.Idx,
 };
 
@@ -615,7 +614,15 @@ const Lowerer = struct {
         self.result.store.current_loc = self.solved.lifted.exprLoc(initializer.expr);
         self.result.store.current_region = self.solved.lifted.exprRegion(initializer.expr);
 
-        const body = try self.lowerExprReturn(initializer.expr, initializer.ty);
+        // A recursive type can have a different representation at a nested
+        // occurrence than at its graph root (for example, the occurrence is a
+        // box while the root is a tag union). The request already carries that
+        // exact layout in the initializer proc; lower directly into it instead
+        // of reconstructing the root layout from the logical type.
+        const ret_layout = self.result.store.getProcSpec(initializer.proc).ret_layout;
+        const ret_local = try self.addLocalForLayout(ret_layout);
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const body = try self.lowerExprIntoAtType(ret_local, initializer.expr, initializer.ty, ret_stmt);
         const frame_locals = try self.writeFrameLocals(&proc_locals);
         const proc = self.result.store.getProcSpecPtr(initializer.proc);
         proc.body = body;
@@ -1432,7 +1439,6 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.StaticDataId {
         const request = StaticInitializerRequest{
             .static_data = candidate.static_data,
-            .ty = ty,
             .layout_idx = layout_idx,
         };
         const gop = try self.static_initializer_map.getOrPut(request);
@@ -1483,6 +1489,14 @@ const Lowerer = struct {
                 .f32,
                 .f64,
                 .dec,
+                .u8x16,
+                .i8x16,
+                .u16x8,
+                .i16x8,
+                .u32x4,
+                .i32x4,
+                .u64x2,
+                .i64x2,
                 => .scalar,
             },
             .zst => .zst,
@@ -3600,7 +3614,7 @@ const Lowerer = struct {
         const lowered = try self.lowerExprsToTemps(args);
         defer lowered.deinit(self.allocator);
         const lowered_op = if (lowered.ids.len > 0)
-            CheckedArithmetic.checkedOp(op, self.result.store.getLocal(lowered.ids[0]).layout_idx) orelse op
+            CheckedArithmetic.lowerOp(op, self.result.store.getLocal(lowered.ids[0]).layout_idx)
         else
             op;
         var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
@@ -4674,7 +4688,7 @@ const Lowerer = struct {
                 .i32 => if (value < 0 or value > std.math.maxInt(i32)) return null else 32,
                 // 128-bit integers exceed switch_stmt's condition width; Dec,
                 // floats, bool, and str never take this path.
-                .u128, .i128, .bool, .str, .f32, .f64, .dec => return null,
+                .u128, .i128, .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
             };
             // Encode as the value's bits zero-extended at layout width — the
             // read every executor performs on an unsigned or sign-bit-clear
@@ -5843,9 +5857,37 @@ const Lowerer = struct {
         if (primitive == .bool) {
             return try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next);
         }
+
+        // SIMD leaves participate in structural equality, but scalar numeric
+        // equality operations do not accept vector operands. Compare the full
+        // 128-bit representation explicitly so every LIR consumer observes all
+        // lanes through the existing U128 equality operation.
+        switch (primitive) {
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => {
+                const lhs_bits = try self.addLocalForLayout(.u128);
+                const rhs_bits = try self.addLocalForLayout(.u128);
+                const compare = try self.lowerPrimitiveEqLocalsInto(target, lhs_bits, rhs_bits, .u128, negated, next);
+                const lower_rhs = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = rhs_bits,
+                    .op = .simd_to_u128_bits,
+                    .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                    .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{rhs}),
+                    .next = compare,
+                } });
+                return try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = lhs_bits,
+                    .op = .simd_to_u128_bits,
+                    .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                    .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{lhs}),
+                    .next = lower_rhs,
+                } });
+            },
+            else => {},
+        }
         const eq_op: LIR.LowLevel = switch (primitive) {
             .str => .str_is_eq,
             .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => .num_is_eq,
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => unreachable,
             .bool => unreachable,
         };
         const args = [_]LIR.LocalId{ lhs, rhs };
@@ -7634,6 +7676,14 @@ const Lowerer = struct {
             .f32 => .f32,
             .f64 => .f64,
             .dec => .dec,
+            .u8x16 => .u8x16,
+            .i8x16 => .i8x16,
+            .u16x8 => .u16x8,
+            .i16x8 => .i16x8,
+            .u32x4 => .u32x4,
+            .i32x4 => .i32x4,
+            .u64x2 => .u64x2,
+            .i64x2 => .i64x2,
         };
     }
 
@@ -7654,6 +7704,14 @@ const Lowerer = struct {
             .f32 => .f32,
             .f64 => .f64,
             .dec => .dec,
+            .u8x16 => .u8x16,
+            .i8x16 => .i8x16,
+            .u16x8 => .u16x8,
+            .i16x8 => .i16x8,
+            .u32x4 => .u32x4,
+            .i32x4 => .i32x4,
+            .u64x2 => .u64x2,
+            .i64x2 => .i64x2,
             .list,
             .box,
             .dict,

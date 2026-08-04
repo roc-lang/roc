@@ -97,3 +97,32 @@ test "inner where lookup does not take ownership of enclosing rigid" {
     const lookup = test_env.module_env.store.getTypeAnno(method.var_).rigid_var_lookup;
     try testing.expectEqual(owners[0].rigid_var, @intFromEnum(lookup.ref));
 }
+
+test "type dispatch aliases do not become lambda captures" {
+    const source =
+        \\{
+        \\    succeeds! : provider => Try(Bool, err)
+        \\        where [
+        \\            provider.run! : provider => Try({}, err),
+        \\            provider.is_failed : provider, err -> Bool,
+        \\        ]
+        \\    succeeds! = |provider| {
+        \\        ProviderType : provider
+        \\
+        \\        match ProviderType.run!(provider) {
+        \\            Ok({}) => Ok(True)
+        \\            Err(err) if ProviderType.is_failed(provider, err) => Ok(False)
+        \\            Err(err) => Err(err)
+        \\        }
+        \\    }
+        \\    succeeds!
+        \\}
+    ;
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    const root = try test_env.canonicalizeExpr() orelse unreachable;
+    const statement = try firstStatement(&test_env, root.get_idx());
+    try testing.expectEqual(.s_decl, std.meta.activeTag(statement));
+    try testing.expectEqual(.e_lambda, std.meta.activeTag(test_env.getCanonicalExpr(statement.s_decl.expr)));
+}

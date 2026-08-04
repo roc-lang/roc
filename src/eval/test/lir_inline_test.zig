@@ -1589,7 +1589,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .exact_type_checks = 22,
         .nominal_backing_reuses = 1,
         .nominal_backing_instantiations = 73,
-        .evidence_walks = 708,
+        .evidence_walks = 682,
         .evidence_walk_memo_hits = 514,
     }, counters);
 }
@@ -1639,7 +1639,7 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .exact_type_checks = 5,
         .nominal_backing_reuses = 8,
         .nominal_backing_instantiations = 101,
-        .evidence_walks = 820,
+        .evidence_walks = 806,
         .evidence_walk_memo_hits = 566,
     }, counters);
 }
@@ -3537,6 +3537,16 @@ fn branchJoinedRecordStateWorkerIsGeneric(shape: ProcShape) bool {
         shape.jump_count >= 2;
 }
 
+fn isFusedRawListLoop(shape: ProcShape) bool {
+    return shape.list_get_unsafe_count >= 1 and
+        shape.join_count >= 1 and
+        shape.direct_call_count == 0;
+}
+
+fn rawListAccessOutsideLoop(shape: ProcShape) bool {
+    return shape.list_get_unsafe_count >= 1 and shape.join_count == 0;
+}
+
 fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_unsafe_count: usize) TestError!void {
     const allocator = std.testing.allocator;
 
@@ -4920,6 +4930,40 @@ fn expectSameObservationsAcrossInlineModes(source: []const u8) TestError!void {
     try expectRecordedRunsEqual(naive_run, optimized_run);
 }
 
+test "iterdiff: recursively-constructed iterator chain agrees across inline modes" {
+    // The e026f6e678 fixpoint shape: `wrap` maps its iterator argument and
+    // recurses on itself a runtime number of times, so the known iterator value
+    // for a use site references the recursive construction and its measured
+    // size saturates the work budget. Constructor specialization must not
+    // deep-materialize that value; it rebinds it through a plain clone of the
+    // source expression instead. This case proves that path lowers and produces
+    // the same result as the naive lowering (`wrap(depth, 0..<5)` at depth 3
+    // adds 3 to each element, summing to 25). `depth` is a runtime function
+    // argument, so the recursion is not statically unrolled.
+    try expectSameObservationsAcrossInlineModes(
+        \\wrap : U64, Iter(U64) -> Iter(U64)
+        \\wrap = |n, it|
+        \\    if n == 0 {
+        \\        it
+        \\    } else {
+        \\        wrap(n - 1, Iter.map(it, |x| x + 1))
+        \\    }
+        \\
+        \\build : U64 -> U64
+        \\build = |depth| {
+        \\    var $sum = 0.U64
+        \\    for x in wrap(depth, 0.U64..<5) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    dbg $sum
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = build(3)
+    );
+}
+
 test "iterdiff: bounded list map collect agrees across inline modes" {
     // Map over a statically-known list, collected into a List, then reduced to a
     // scalar. The `dbg` of the collected list is the structural (allocation-
@@ -5682,6 +5726,284 @@ test "compiler-generated dispatch classes lower via checked evidence" {
     const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
     defer allocator.free(output);
     try std.testing.expectEqualStrings("True", output);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10301: a list produced by an
+// opaque effectful expression and iterated by `for` must scalarize into a raw
+// indexed loop in the root proc, leaving no per-element iterator-step calls in
+// any reachable proc.
+test "issue 10301 for-loop over effect-produced list scalarizes" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg "produce"
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\main : U64
+        \\main = {
+        \\    var $sum = 0
+        \\    for byte in produce(1) {
+        \\        $sum = $sum * 31 + byte
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    const root_shape = try collectProcShape(allocator, &optimized.lowered, try rootProc(&optimized.lowered));
+    const reachable_total = try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count");
+    // Every raw list access lives in the root: the iterator scalarized into a
+    // direct indexed loop, and no per-element step proc remains reachable.
+    try std.testing.expect(root_shape.list_get_unsafe_count >= 1);
+    try std.testing.expectEqual(root_shape.list_get_unsafe_count, reachable_total);
+}
+
+test "issue 10301 fold over effect-produced list scalarizes" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg 7.U64
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\main : U64
+        \\main = Iter.fold(produce(1).iter(), 0, |acc, byte| acc * 31 + byte)
+    ;
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    // The fold fuses as a peel plus worker, the same shape a static-list fold
+    // takes: the root runs the first step inline and calls the fused worker
+    // once for the rest. Exactly one reachable proc is a self-contained
+    // raw-indexed loop with no per-element call, and every raw list access
+    // lives inside a loop-carrying proc — a retained per-element step proc is
+    // loop-less, so none may remain.
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeCount(allocator, &optimized.lowered, isFusedRawListLoop));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeCount(allocator, &optimized.lowered, rawListAccessOutsideLoop));
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10317: a loop-carried
+// variable reassigned under a branch must keep resolving through its binder
+// identity after the carried slot is rebound to a fresh param; a dangling
+// reference would surface as a phantom root argument.
+test "issue 10317 loop-carried reassignment keeps root arg count" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : I64
+        \\main = {
+        \\    var $x = 0
+        \\    var $y = 0
+        \\    for flag in [Bool.False] {
+        \\        $y = if flag {
+        \\            $x = 1
+        \\            0
+        \\        } else {
+        \\            0
+        \\        }
+        \\    }
+        \\    $x + $y
+        \\}
+    ;
+    var dev = try lowerModule(allocator, source, .none);
+    defer dev.deinit(allocator);
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    // Comparing full argument layouts (not just counts) rules out a phantom
+    // argument replacing a legitimate one at the same arity.
+    const dev_layouts = try mainProcArgLayouts(allocator, &dev.lowered);
+    defer allocator.free(dev_layouts);
+    const opt_layouts = try mainProcArgLayouts(allocator, &optimized.lowered);
+    defer allocator.free(opt_layouts);
+    try std.testing.expectEqualSlices(LayoutIdx, dev_layouts, opt_layouts);
+}
+
+test "iterdiff: issue 10317 branch-reassigned carry agrees across inline modes" {
+    try expectSameObservationsAcrossInlineModes(
+        \\main : I64
+        \\main = {
+        \\    var $x = 0
+        \\    var $y = 0
+        \\    for flag in [Bool.False, Bool.True, Bool.False] {
+        \\        $y = if flag {
+        \\            $x = $x + 1
+        \\            $x
+        \\        } else {
+        \\            $y
+        \\        }
+        \\    }
+        \\    dbg $x
+        \\    dbg $y
+        \\    $x * 10 + $y
+        \\}
+    );
+}
+
+test "iterdiff: match-reassigned carry agrees across inline modes" {
+    try expectSameObservationsAcrossInlineModes(
+        \\main : I64
+        \\main = {
+        \\    var $x = 0
+        \\    var $y = 0
+        \\    for v in [1.I64, 0, 2, 0] {
+        \\        $y = match v {
+        \\            0 => $y
+        \\            n => {
+        \\                $x = $x + n
+        \\                $x
+        \\            }
+        \\        }
+        \\    }
+        \\    dbg $x
+        \\    dbg $y
+        \\    $x * 10 + $y
+        \\}
+    );
+}
+
+test "sequential effect-produced for-loops both scalarize" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg 7
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\main : U64
+        \\main = {
+        \\    var $a = 0.U64
+        \\    for x in produce(1) {
+        \\        $a = $a + x
+        \\    }
+        \\    var $b = 0.U64
+        \\    for y in produce(4) {
+        \\        $b = $b * 2 + y
+        \\    }
+        \\    $a + $b
+        \\}
+    ;
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    const root_shape = try collectProcShape(allocator, &optimized.lowered, try rootProc(&optimized.lowered));
+    const reachable_total = try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count");
+    // Both loops fuse: each contributes its raw indexed access in the root and
+    // no step proc remains reachable for either.
+    try std.testing.expect(root_shape.list_get_unsafe_count >= 2);
+    try std.testing.expectEqual(root_shape.list_get_unsafe_count, reachable_total);
+}
+
+test "issue 10301 producer effect runs exactly once when the loop fuses" {
+    try expectOptimizedDbgEvents(
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg 7.U64
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\main : {}
+        \\main = {
+        \\    var $sum = 0.U64
+        \\    for byte in produce(1) {
+        \\        $sum = $sum * 31 + byte
+        \\    }
+        \\    dbg $sum
+        \\    {}
+        \\}
+    ,
+        &.{ "7", "1026" },
+    );
+}
+
+test "iterdiff: effect-produced fold agrees across inline modes" {
+    try expectSameObservationsAcrossInlineModes(
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg 7.U64
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\main : U64
+        \\main = {
+        \\    total = Iter.fold(produce(1).iter(), 0, |acc, byte| acc * 31 + byte)
+        \\    dbg total
+        \\    total
+        \\}
+    );
+}
+
+test "iterdiff: effect-produced for-loop agrees across inline modes" {
+    try expectSameObservationsAcrossInlineModes(
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg 7
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\main : U64
+        \\main = {
+        \\    var $sum = 0.U64
+        \\    for byte in produce(1) {
+        \\        dbg byte
+        \\        $sum = $sum * 31 + byte
+        \\    }
+        \\    dbg $sum
+        \\    $sum
+        \\}
+    );
+}
+
+test "iterdiff: two effect producers keep source order across inline modes" {
+    try expectSameObservationsAcrossInlineModes(
+        \\produce : U64, U64 -> List(U64)
+        \\produce = |label, n| {
+        \\    dbg label
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\combine : List(U64), List(U64) -> U64
+        \\combine = |xs, ys| {
+        \\    var $sum = 0.U64
+        \\    for x in xs {
+        \\        $sum = $sum + x
+        \\    }
+        \\    for y in ys {
+        \\        $sum = $sum * 2 + y
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = combine(produce(1, 10), produce(2, 20))
+    );
+}
+
+test "iterdiff: conditional effect producer stays conditional across inline modes" {
+    try expectSameObservationsAcrossInlineModes(
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg n
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\pick : Bool -> U64
+        \\pick = |flag| {
+        \\    xs = if flag { produce(1) } else { [] }
+        \\    var $sum = 0.U64
+        \\    for x in xs {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = pick(Bool.True) + pick(Bool.False)
+    );
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10253: the recursive call

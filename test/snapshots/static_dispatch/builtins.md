@@ -56,11 +56,7 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

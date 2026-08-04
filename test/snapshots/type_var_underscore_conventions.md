@@ -237,8 +237,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-string
-				(e-literal (string "default"))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

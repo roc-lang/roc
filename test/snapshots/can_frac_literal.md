@@ -61,7 +61,7 @@ NO CHANGE
 		(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
 	(d-let
 		(p-assign (ident "y"))
-		(e-num-from-numeral))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "z"))
 		(e-dec-small (numerator "5") (denominator-power-of-ten "1") (value "0.5"))))

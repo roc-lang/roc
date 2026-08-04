@@ -231,14 +231,13 @@ result = multi_arg_fn(
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 306)
+		(e-call (constraint-fn-var 325)
 			(e-lookup-local
 				(p-assign (ident "multi_arg_fn")))
-			(e-num (value "42"))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-string
 				(e-literal (string "hello")))
-			(e-string
-				(e-literal (string "world")))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-dec-small (numerator "15") (denominator-power-of-ten "1") (value "1.5"))
 			(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 			(e-list

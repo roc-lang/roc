@@ -2077,11 +2077,15 @@ const Formatter = struct {
 
                 try fmt.pushTokenText(t.tag_tok);
                 if (t.backing_value) {
-                    // Nominal-value destructure renders as `Type.(args)` (the `.`
-                    // distinguishes it from an ordinary applied-tag `Tag(args)`).
+                    // The `.` distinguishes nominal-value destructuring from an
+                    // ordinary applied-tag pattern.
                     try fmt.push('.');
                 }
-                if (t.backing_value or t.has_args) {
+                if (t.record_shorthand) {
+                    const args = fmt.ast.store.patternSlice(t.args);
+                    std.debug.assert(t.backing_value and args.len == 1);
+                    try fmt.formatPatternDiscard(args[0]);
+                } else if (t.backing_value or t.has_args) {
                     try fmt.formatCollection(region, fmt.ast.store.getCollectionLayout(pi), .round, AST.Pattern.Idx, fmt.ast.store.patternSlice(t.args), Formatter.formatPattern);
                 }
             },
@@ -2933,11 +2937,10 @@ const Formatter = struct {
 
     fn formatTypeAnno(fmt: *Formatter, anno: AST.TypeAnno.Idx) FormatAstError!AST.TokenizedRegion {
         const a = fmt.ast.store.getTypeAnno(anno);
-        var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
+        const region = fmt.nodeRegion(@intFromEnum(anno));
         const multiline = fmt.nodeWillBeMultiline(AST.TypeAnno.Idx, anno);
         switch (a) {
             .apply => |app| {
-                region = app.region;
                 const slice = fmt.ast.store.typeAnnoSlice(app.args);
                 const first = slice[0];
                 try fmt.formatTypeAnnoDiscard(first);
@@ -2945,11 +2948,9 @@ const Formatter = struct {
                 try fmt.formatCollection(app.region, fmt.ast.store.getCollectionLayout(anno), .round, AST.TypeAnno.Idx, rest, Formatter.formatTypeAnno);
             },
             .ty_var => |v| {
-                region = v.region;
                 try fmt.pushTokenText(v.tok);
             },
             .underscore_type_var => |utv| {
-                region = utv.region;
                 try fmt.pushTokenText(utv.tok);
             },
             .ty => |t| {
@@ -2964,11 +2965,9 @@ const Formatter = struct {
                 try fmt.pushTokenText(t.token);
             },
             .tuple => |t| {
-                region = t.region;
                 try fmt.formatCollection(t.region, fmt.ast.store.getCollectionLayout(anno), .round, AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(t.annos), Formatter.formatTypeAnno);
             },
             .record => |r| {
-                region = r.region;
                 switch (r.ext) {
                     .closed => {
                         // Regular record without extension - use formatCollection
@@ -2981,7 +2980,6 @@ const Formatter = struct {
                 }
             },
             .tag_union => |t| {
-                region = t.region;
                 const tags = fmt.ast.store.typeAnnoSlice(t.tags);
                 const is_open = t.ext != .closed;
                 const tag_multiline = fmt.ast.store.getCollectionLayout(anno) == .expanded or
@@ -3050,8 +3048,6 @@ const Formatter = struct {
                 }
             },
             .@"fn" => |f| {
-                region = f.region;
-
                 const args = fmt.ast.store.typeAnnoSlice(f.args);
                 for (args, 0..) |idx, i| {
                     const arg_region = fmt.nodeRegion(@intFromEnum(idx));
@@ -3086,7 +3082,6 @@ const Formatter = struct {
                 try fmt.formatTypeAnnoDiscard(f.ret);
             },
             .parens => |p| {
-                region = p.region;
                 try fmt.push('(');
                 if (multiline) {
                     try fmt.flushCommentsAfterDiscard(region.start);
@@ -3098,8 +3093,7 @@ const Formatter = struct {
                 try fmt.flushCommentsBeforeDiscard(anno_region.end);
                 try fmt.push(')');
             },
-            .underscore => |u| {
-                region = u.region;
+            .underscore => {
                 try fmt.push('_');
             },
             .malformed => {
@@ -4092,6 +4086,32 @@ test "issue 10046: empty nominal destructure lambda argument is idempotent" {
     const result = try moduleFmtsStable(std.testing.allocator, "g=|D.()|0", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("g = |D.()| 0\n", result);
+}
+
+test "nominal record destructure shorthand is preserved in every pattern position" {
+    const input =
+        \\sum_arg = |Point.{x,y}| x+y
+        \\sum_let = |point| {
+        \\Point.{x,y}=point
+        \\x+y
+        \\}
+        \\sum_match = |point| match point {
+        \\Point.{x,y} => x+y
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        "sum_arg = |Point.{ x, y }| x + y\n\n" ++
+        "sum_let = |point| {\n" ++
+        "\tPoint.{ x, y } = point\n" ++
+        "\tx + y\n" ++
+        "}\n\n" ++
+        "sum_match = |point| match point {\n" ++
+        "\tPoint.{ x, y } => x + y\n" ++
+        "}\n";
+    try std.testing.expectEqualStrings(expected, result);
 }
 
 test "issue 9940: comments in empty collections and blocks are preserved" {

@@ -488,6 +488,146 @@ pub const InstGraph = struct {
         return self.nodes.items[@intFromEnum(self.find(id))];
     }
 
+    /// Constrain only explicit type arguments in a deferred specialization
+    /// request from a freshly instantiated checked function root. Matching
+    /// value structure is traversed but never unified; named arguments and
+    /// the element arguments of the builtin List and Box constructors are
+    /// unified in full. This supplies checked-only structure such as phantom
+    /// nominal arguments without letting one callee's concrete function
+    /// arguments constrain a sibling request.
+    pub fn fillDeferredRequestTypeArgs(
+        self: *InstGraph,
+        request_root: NodeId,
+        checked_root: NodeId,
+    ) Allocator.Error!void {
+        const Pending = struct {
+            request: NodeId,
+            checked: NodeId,
+        };
+        var pending = std.ArrayList(Pending).empty;
+        defer pending.deinit(self.allocator);
+        var visited = std.AutoHashMap(Pending, void).init(self.allocator);
+        defer visited.deinit();
+
+        try pending.append(self.allocator, .{
+            .request = request_root,
+            .checked = checked_root,
+        });
+
+        while (pending.pop()) |raw_pair| {
+            const request = self.find(raw_pair.request);
+            const checked_root_node = self.find(raw_pair.checked);
+            if (request == checked_root_node) continue;
+
+            const pair = Pending{
+                .request = request,
+                .checked = checked_root_node,
+            };
+            const entry = try visited.getOrPut(pair);
+            if (entry.found_existing) continue;
+
+            const request_content = self.nodes.items[@intFromEnum(request)];
+            const checked_content = self.nodes.items[@intFromEnum(checked_root_node)];
+            if (request_content == .unresolved or checked_content == .unresolved) continue;
+
+            switch (request_content) {
+                .redirect, .unresolved => unreachable,
+                .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .list => |request_elem| switch (checked_content) {
+                    .list => |checked_elem| try self.unify(request_elem, checked_elem),
+                    else => {},
+                },
+                .box => |request_elem| switch (checked_content) {
+                    .box => |checked_elem| try self.unify(request_elem, checked_elem),
+                    else => {},
+                },
+                .tuple => |request_items| switch (checked_content) {
+                    .tuple => |checked_items| if (request_items.len == checked_items.len) {
+                        for (request_items, checked_items) |request_item, checked_item| {
+                            try pending.append(self.allocator, .{
+                                .request = request_item,
+                                .checked = checked_item,
+                            });
+                        }
+                    },
+                    else => {},
+                },
+                .func => |request_fn| switch (checked_content) {
+                    .func => |checked_fn| if (request_fn.args.len == checked_fn.args.len) {
+                        for (request_fn.args, checked_fn.args) |request_arg, checked_arg| {
+                            try pending.append(self.allocator, .{
+                                .request = request_arg,
+                                .checked = checked_arg,
+                            });
+                        }
+                        try pending.append(self.allocator, .{
+                            .request = request_fn.ret,
+                            .checked = checked_fn.ret,
+                        });
+                    },
+                    else => {},
+                },
+                .tag_union => |request_row| switch (checked_content) {
+                    .tag_union => |checked_row| {
+                        for (request_row.tags) |request_tag| {
+                            const wanted = self.tagLabelText(request_tag.name);
+                            for (checked_row.tags) |checked_tag| {
+                                if (!Ident.textEql(wanted, self.tagLabelText(checked_tag.name))) continue;
+                                if (request_tag.payloads.len == checked_tag.payloads.len) {
+                                    for (request_tag.payloads, checked_tag.payloads) |request_payload, checked_payload| {
+                                        try pending.append(self.allocator, .{
+                                            .request = request_payload,
+                                            .checked = checked_payload,
+                                        });
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    },
+                    else => {},
+                },
+                .record => |request_row| switch (checked_content) {
+                    .record => |checked_row| {
+                        for (request_row.fields) |request_field| {
+                            const wanted = self.fieldLabelText(request_field.name);
+                            for (checked_row.fields) |checked_field| {
+                                if (!Ident.textEql(wanted, self.fieldLabelText(checked_field.name))) continue;
+                                try pending.append(self.allocator, .{
+                                    .request = request_field.ty,
+                                    .checked = checked_field.ty,
+                                });
+                                break;
+                            }
+                        }
+                    },
+                    else => {},
+                },
+                .named => |request_named| switch (checked_content) {
+                    .named => |checked_named| {
+                        if (!std.meta.eql(request_named.def, checked_named.def) or
+                            request_named.args.len != checked_named.args.len)
+                        {
+                            continue;
+                        }
+                        for (request_named.args, checked_named.args) |request_arg, checked_arg| {
+                            try self.unify(request_arg, checked_arg);
+                        }
+                        if (request_named.backing) |request_backing| {
+                            if (checked_named.backing) |checked_backing| {
+                                try pending.append(self.allocator, .{
+                                    .request = request_backing.node,
+                                    .checked = checked_backing.node,
+                                });
+                            }
+                        }
+                    },
+                    else => {},
+                },
+            }
+        }
+    }
+
     /// Return the graph node for one field of a record-shaped node. Field
     /// access is a type relation, so callers use this node directly instead of
     /// selecting a field from a temporary Monotype view and losing later row
@@ -2448,6 +2588,82 @@ fn testCheckedTypeId(comptime value: u32) checked.CheckedTypeId {
 test "completed monotype program view does not expose instantiation graph nodes" {
     @setEvalBranchQuota(10_000);
     comptime assertNoNodeId(Ast.ProgramView, "Ast.ProgramView");
+}
+
+test "deferred request pinning fills type arguments without constraining call arguments" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(gpa);
+    defer unsolved_monos.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x47} ** 32));
+    const type_name = try name_store.internTypeName("Phantom");
+    const field_name = try name_store.internRecordFieldLabel("present");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(47) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+
+    const request_row_ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
+    const request_phantom = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().alloc(InstField, 0),
+        .ext = request_row_ext,
+    } });
+    const request_named_args = try graph.arena().alloc(NodeId, 1);
+    request_named_args[0] = request_phantom;
+    const request_named = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = request_named_args,
+        .backing = null,
+    } });
+
+    const checked_field_ty = try graph.newNode(.{ .primitive = .str });
+    const checked_fields = try graph.arena().alloc(InstField, 1);
+    checked_fields[0] = .{ .name = field_name, .ty = checked_field_ty };
+    const checked_phantom = try graph.newNode(.{ .record = .{
+        .fields = checked_fields,
+        .ext = try graph.newNode(.empty_record),
+    } });
+    const checked_named_args = try graph.arena().alloc(NodeId, 1);
+    checked_named_args[0] = checked_phantom;
+    const checked_named = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = checked_named_args,
+        .backing = null,
+    } });
+
+    const request_call_arg = try graph.newNode(.{ .primitive = .u64 });
+    const request_fn_args = try graph.arena().alloc(NodeId, 1);
+    request_fn_args[0] = request_call_arg;
+    const request_root = try graph.newNode(.{ .func = .{ .args = request_fn_args, .ret = request_named } });
+
+    const checked_call_arg = try graph.newNode(.{ .primitive = .dec });
+    const checked_fn_args = try graph.arena().alloc(NodeId, 1);
+    checked_fn_args[0] = checked_call_arg;
+    const checked_root = try graph.newNode(.{ .func = .{ .args = checked_fn_args, .ret = checked_named } });
+
+    try graph.fillDeferredRequestTypeArgs(request_root, checked_root);
+
+    try std.testing.expectEqual(Type.Primitive.u64, graph.content(request_call_arg).primitive);
+    try std.testing.expectEqual(Type.Primitive.dec, graph.content(checked_call_arg).primitive);
+    try std.testing.expect(graph.find(request_call_arg) != graph.find(checked_call_arg));
+    try std.testing.expectEqual(
+        graph.find(checked_field_ty),
+        graph.find(try graph.recordFieldNode(request_phantom, field_name)),
+    );
 }
 
 fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {

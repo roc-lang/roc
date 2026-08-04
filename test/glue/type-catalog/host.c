@@ -106,65 +106,41 @@ static int roc_str_eq(const RocStr *str, const char *expected) {
     return roc_str_len(str) == expected_len && memcmp(roc_str_bytes(str), expected, expected_len) == 0;
 }
 
-static int32_t read_i32(const uint8_t *bytes) {
-    int32_t value;
-    memcpy(&value, bytes, sizeof(value));
-    return value;
-}
-
-static uint64_t read_u64(const uint8_t *bytes) {
-    uint64_t value;
-    memcpy(&value, bytes, sizeof(value));
-    return value;
-}
-
-enum {
-    STRUCTURAL_NAME_OFFSET = 8,
-    STRUCTURAL_NESTED_OFFSET = 32,
-    A_RESULT_TAG_OFFSET = 24,
-    B_RESULT_TAG_OFFSET = 32,
-    B_RESULT_ERR_MESSAGE_OFFSET = 0,
-    B_RESULT_ERR_CODE_OFFSET = 24,
-    TAG_ERR = 0,
-    TAG_OK = 1,
-};
-
 static void run_contract(void) {
     __typeof__(roc_point()) point = roc_point();
-    if (read_i32(point.bytes + 0) != -17 || read_i32(point.bytes + 4) != 42) {
+    if (point.x != -17 || point.y != 42) {
         record_failure("point bytes mismatch");
     }
 
     __typeof__(roc_structural()) structural = roc_structural();
-    if (read_u64(structural.bytes + 0) != 19) {
+    if (structural.count != 19) {
         record_failure("structural count mismatch");
     }
-    RocStr *name = (RocStr *)(void *)(structural.bytes + STRUCTURAL_NAME_OFFSET);
-    if (!roc_str_eq(name, "catalog")) {
+    if (!roc_str_eq(&structural.name, "catalog")) {
         record_failure("structural name mismatch");
     }
-    if (structural.bytes[STRUCTURAL_NESTED_OFFSET] != 7 || structural.bytes[STRUCTURAL_NESTED_OFFSET + 1] != 1) {
+    if (structural.nested.byte != 7 || !structural.nested.flag) {
         record_failure("structural nested bytes mismatch");
     }
 
     AResult result_a = roc_result_a();
-    if (result_a.bytes[A_RESULT_TAG_OFFSET] != TAG_OK) {
+    if (result_a.tag != AResultTag_Ok) {
         record_failure("A.Result tag mismatch");
     }
-    RocStr *result_a_payload = (RocStr *)(void *)result_a.bytes;
-    if (!roc_str_eq(result_a_payload, "alpha")) {
+    RocStr result_a_payload = AResult_payload_ok(&result_a);
+    if (!roc_str_eq(&result_a_payload, "alpha")) {
         record_failure("A.Result payload mismatch");
     }
 
     BResult result_b = roc_result_b();
-    if (result_b.bytes[B_RESULT_TAG_OFFSET] != TAG_ERR) {
+    if (result_b.tag != BResultTag_Err) {
         record_failure("B.Result tag mismatch");
     }
-    if (read_i32(result_b.bytes + B_RESULT_ERR_CODE_OFFSET) != 5) {
+    BResultErr result_b_payload = BResult_payload_err(&result_b);
+    if (result_b_payload.code != 5) {
         record_failure("B.Result code mismatch");
     }
-    RocStr *result_b_message = (RocStr *)(void *)(result_b.bytes + B_RESULT_ERR_MESSAGE_OFFSET);
-    if (!roc_str_eq(result_b_message, "bravo")) {
+    if (!roc_str_eq(&result_b_payload.message, "bravo")) {
         record_failure("B.Result message mismatch");
     }
 

@@ -27,6 +27,14 @@
 #define ROC_STATIC_ASSERT(cond, message) _Static_assert(cond, message)
 #endif
 
+static inline void roc_abi_copy_bytes(void* dst, const void* src, size_t count) {
+    uint8_t* dst_bytes = (uint8_t*)dst;
+    const uint8_t* src_bytes = (const uint8_t*)src;
+    for (size_t index = 0; index < count; index++) {
+        dst_bytes[index] = src_bytes[index];
+    }
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -39,6 +47,68 @@ typedef struct {
 
 ROC_STATIC_ASSERT(sizeof(RocDec) == 16, "RocDec must be sixteen bytes");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(RocDec) == 16, "RocDec must be 16-byte aligned");
+
+#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64)
+#include <intrin.h>
+typedef __m128i RocU8x16;
+typedef __m128i RocI8x16;
+typedef __m128i RocU16x8;
+typedef __m128i RocI16x8;
+typedef __m128i RocU32x4;
+typedef __m128i RocI32x4;
+typedef __m128i RocU64x2;
+typedef __m128i RocI64x2;
+#elif defined(_MSC_VER) && !defined(__clang__) && defined(_M_ARM64)
+#include <arm64_neon.h>
+typedef uint8x16_t RocU8x16;
+typedef int8x16_t RocI8x16;
+typedef uint16x8_t RocU16x8;
+typedef int16x8_t RocI16x8;
+typedef uint32x4_t RocU32x4;
+typedef int32x4_t RocI32x4;
+typedef uint64x2_t RocU64x2;
+typedef int64x2_t RocI64x2;
+#elif defined(__aarch64__)
+#include <arm_neon.h>
+typedef uint8x16_t RocU8x16;
+typedef int8x16_t RocI8x16;
+typedef uint16x8_t RocU16x8;
+typedef int16x8_t RocI16x8;
+typedef uint32x4_t RocU32x4;
+typedef int32x4_t RocI32x4;
+typedef uint64x2_t RocU64x2;
+typedef int64x2_t RocI64x2;
+#elif defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+typedef v128_t RocU8x16;
+typedef v128_t RocI8x16;
+typedef v128_t RocU16x8;
+typedef v128_t RocI16x8;
+typedef v128_t RocU32x4;
+typedef v128_t RocI32x4;
+typedef v128_t RocU64x2;
+typedef v128_t RocI64x2;
+#else
+typedef uint8_t RocU8x16 __attribute__((vector_size(16)));
+typedef int8_t RocI8x16 __attribute__((vector_size(16)));
+typedef uint16_t RocU16x8 __attribute__((vector_size(16)));
+typedef int16_t RocI16x8 __attribute__((vector_size(16)));
+typedef uint32_t RocU32x4 __attribute__((vector_size(16)));
+typedef int32_t RocI32x4 __attribute__((vector_size(16)));
+typedef uint64_t RocU64x2 __attribute__((vector_size(16)));
+typedef int64_t RocI64x2 __attribute__((vector_size(16)));
+#endif
+
+#define ROC_ASSERT_VECTOR(T) ROC_STATIC_ASSERT(sizeof(T) == 16, #T " size mismatch"); ROC_STATIC_ASSERT(ROC_ALIGNOF(T) == 16, #T " alignment mismatch")
+ROC_ASSERT_VECTOR(RocU8x16);
+ROC_ASSERT_VECTOR(RocI8x16);
+ROC_ASSERT_VECTOR(RocU16x8);
+ROC_ASSERT_VECTOR(RocI16x8);
+ROC_ASSERT_VECTOR(RocU32x4);
+ROC_ASSERT_VECTOR(RocI32x4);
+ROC_ASSERT_VECTOR(RocU64x2);
+ROC_ASSERT_VECTOR(RocI64x2);
+#undef ROC_ASSERT_VECTOR
 
 typedef struct {
     uint8_t* bytes;
@@ -91,60 +161,155 @@ static inline uint8_t* roc_erased_callable_capture_ptr(RocErasedCallable callabl
 
 // Reflected Roc Types
 
+typedef struct Builder Builder;
+typedef struct HostTree HostTree;
+typedef struct Host Host;
+typedef struct Padded Padded;
+
 #if UINTPTR_MAX == UINT64_MAX
-typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[32];
-} Builder;
+struct Builder {
+    RocStr value;
+    uint64_t count;
+};
 ROC_STATIC_ASSERT(sizeof(Builder) == 32, "Builder size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Builder) == 8, "Builder alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Builder, value) == 0, "Builder.value offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Builder, count) == 24, "Builder.count offset mismatch");
 #else
-typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[24];
-} Builder;
+struct Builder {
+    RocStr value;
+    uint64_t count;
+};
 ROC_STATIC_ASSERT(sizeof(Builder) == 24, "Builder size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Builder) == 8, "Builder alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Builder, value) == 0, "Builder.value offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Builder, count) == 16, "Builder.count offset mismatch");
 #endif
 
 #if UINTPTR_MAX == UINT64_MAX
 typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[24];
-} HostTree;
+    HostTree* _0;
+    HostTree* _1;
+} HostTreeNodePayload;
+ROC_STATIC_ASSERT(sizeof(HostTreeNodePayload) == 16, "HostTreeNodePayload size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTreeNodePayload) == 8, "HostTreeNodePayload alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTreeNodePayload, _0) == 0, "HostTreeNodePayload._0 offset mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTreeNodePayload, _1) == 8, "HostTreeNodePayload._1 offset mismatch");
+#else
+typedef struct {
+    HostTree* _0;
+    HostTree* _1;
+} HostTreeNodePayload;
+ROC_STATIC_ASSERT(sizeof(HostTreeNodePayload) == 8, "HostTreeNodePayload size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTreeNodePayload) == 4, "HostTreeNodePayload alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTreeNodePayload, _0) == 0, "HostTreeNodePayload._0 offset mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTreeNodePayload, _1) == 4, "HostTreeNodePayload._1 offset mismatch");
+#endif
+
+typedef uint8_t HostTreeTag;
+enum {
+    HostTreeTag_Leaf = 0,
+    HostTreeTag_Node = 1
+};
+typedef union {
+    int64_t leaf;
+    HostTreeNodePayload node;
+} HostTreeTagPayloadStorage;
+#if UINTPTR_MAX == UINT64_MAX
+struct HostTree {
+    HostTreeTagPayloadStorage payload;
+    HostTreeTag tag;
+};
 ROC_STATIC_ASSERT(sizeof(HostTree) == 24, "HostTree size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTree) == 8, "HostTree alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTree, tag) == 16, "HostTree.tag offset mismatch");
 #else
-typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[16];
-} HostTree;
+struct HostTree {
+    ROC_ALIGNAS(8) uint8_t payload[8];
+    HostTreeTag tag;
+};
 ROC_STATIC_ASSERT(sizeof(HostTree) == 16, "HostTree size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTree) == 8, "HostTree alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTree, tag) == 8, "HostTree.tag offset mismatch");
 #endif
+static inline HostTree HostTree_make_leaf(int64_t payload) {
+    HostTree out = {0};
+    out.tag = HostTreeTag_Leaf;
+#if UINTPTR_MAX == UINT64_MAX
+    out.payload.leaf = payload;
+#else
+    roc_abi_copy_bytes(out.payload, &payload, sizeof(payload));
+#endif
+    return out;
+}
+
+static inline HostTree HostTree_make_node(HostTreeNodePayload payload) {
+    HostTree out = {0};
+    out.tag = HostTreeTag_Node;
+#if UINTPTR_MAX == UINT64_MAX
+    out.payload.node = payload;
+#else
+    roc_abi_copy_bytes(out.payload, &payload, sizeof(payload));
+#endif
+    return out;
+}
+
+static inline int64_t HostTree_payload_leaf(const HostTree* value) {
+#if UINTPTR_MAX == UINT64_MAX
+    return value->payload.leaf;
+#else
+    int64_t payload;
+    roc_abi_copy_bytes(&payload, value->payload, sizeof(payload));
+    return payload;
+#endif
+}
+
+static inline HostTreeNodePayload HostTree_payload_node(const HostTree* value) {
+#if UINTPTR_MAX == UINT64_MAX
+    return value->payload.node;
+#else
+    HostTreeNodePayload payload;
+    roc_abi_copy_bytes(&payload, value->payload, sizeof(payload));
+    return payload;
+#endif
+}
 
 #if UINTPTR_MAX == UINT64_MAX
-typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[24];
-} Host;
+struct Host {
+    RocStr name;
+};
 ROC_STATIC_ASSERT(sizeof(Host) == 24, "Host size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Host) == 8, "Host alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Host, name) == 0, "Host.name offset mismatch");
 #else
-typedef struct {
-    ROC_ALIGNAS(4) uint8_t bytes[12];
-} Host;
+struct Host {
+    RocStr name;
+};
 ROC_STATIC_ASSERT(sizeof(Host) == 12, "Host size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Host) == 4, "Host alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Host, name) == 0, "Host.name offset mismatch");
 #endif
 
 #if UINTPTR_MAX == UINT64_MAX
-typedef struct {
-    ROC_ALIGNAS(4) uint8_t bytes[12];
-} Padded;
+struct Padded {
+    uint32_t z;
+    uint8_t _pad0[4];
+    uint32_t a;
+};
 ROC_STATIC_ASSERT(sizeof(Padded) == 12, "Padded size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Padded) == 4, "Padded alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Padded, z) == 0, "Padded.z offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Padded, a) == 8, "Padded.a offset mismatch");
 #else
-typedef struct {
-    ROC_ALIGNAS(4) uint8_t bytes[12];
-} Padded;
+struct Padded {
+    uint32_t z;
+    uint8_t _pad0[4];
+    uint32_t a;
+};
 ROC_STATIC_ASSERT(sizeof(Padded) == 12, "Padded size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Padded) == 4, "Padded alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Padded, z) == 0, "Padded.z offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Padded, a) == 8, "Padded.a offset mismatch");
 #endif
 
 

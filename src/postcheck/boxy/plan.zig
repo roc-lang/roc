@@ -9620,6 +9620,7 @@ const Builder = struct {
             .top_level_const,
             .imported_const,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             => boxyPlanInvariant("checked direct call target did not reference a procedure"),
         };
@@ -9650,6 +9651,7 @@ const Builder = struct {
             .top_level_const,
             .imported_const,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             => null,
         };
@@ -9680,6 +9682,7 @@ const Builder = struct {
             .imported_const,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             => null,
         };
@@ -10142,6 +10145,14 @@ fn storedPrimitiveMatchesBuiltin(
         .f32 => builtin == .f32,
         .f64 => builtin == .f64,
         .dec => builtin == .dec,
+        .u8x16 => builtin == .u8x16,
+        .i8x16 => builtin == .i8x16,
+        .u16x8 => builtin == .u16x8,
+        .i16x8 => builtin == .i16x8,
+        .u32x4 => builtin == .u32x4,
+        .i32x4 => builtin == .i32x4,
+        .u64x2 => builtin == .u64x2,
+        .i64x2 => builtin == .i64x2,
     };
 }
 

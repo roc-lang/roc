@@ -125,33 +125,7 @@ handleTry = |result| {
 (can-ir
 	(d-let
 		(p-assign (ident "handleTry"))
-		(e-closure
-			(captures
-				(capture (ident "value")))
-			(e-lambda
-				(args
-					(p-assign (ident "result")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "result"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error (tag "type_from_missing_mod"))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "value")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-runtime-error (tag "type_from_missing_mod"))))
-									(value
-										(e-string
-											(e-literal (string "Error: $(code.toStr())")))))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

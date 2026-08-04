@@ -1146,6 +1146,9 @@ pub const Evaluator = struct {
             .num_plus, .num_plus_checked => self.numArith(args, arg_types, result_ty, .add),
             .num_minus, .num_minus_checked => self.numArith(args, arg_types, result_ty, .sub),
             .num_times, .num_times_checked => self.numArith(args, arg_types, result_ty, .mul),
+            .num_plus_wrap => self.numWrappingArith(args, arg_types, result_ty, .plus),
+            .num_minus_wrap => self.numWrappingArith(args, arg_types, result_ty, .minus),
+            .num_times_wrap => self.numWrappingArith(args, arg_types, result_ty, .times),
             .num_div_by, .num_div_by_checked => self.numArith(args, arg_types, result_ty, .div),
             .num_div_trunc_by, .num_div_trunc_by_checked => self.numArith(args, arg_types, result_ty, .div_trunc),
             .num_rem_by, .num_rem_by_checked => self.numArith(args, arg_types, result_ty, .rem),
@@ -1177,6 +1180,63 @@ pub const Evaluator = struct {
             .num_count_one_bits => self.numBitCount(args, arg_types, .count_ones),
             .num_count_leading_zero_bits => self.numBitCount(args, arg_types, .count_leading_zeros),
             .num_count_trailing_zero_bits => self.numBitCount(args, arg_types, .count_trailing_zeros),
+
+            .simd_load_16_unchecked => self.evalSimdLoad(args, result_ty),
+            .simd_store_16_unchecked => self.evalSimdStore(args),
+            .simd_append_16 => self.evalSimdAppend(args),
+            .simd_splat,
+            .simd_get_lane_unchecked,
+            .simd_with_lane_unchecked,
+            .simd_to_u128_bits,
+            .simd_from_u128_bits,
+            .simd_add_wrap,
+            .simd_sub_wrap,
+            .simd_add_sat,
+            .simd_sub_sat,
+            .simd_neg_wrap,
+            .simd_abs_wrap,
+            .simd_min,
+            .simd_max,
+            .simd_abs_diff,
+            .simd_avg_rounded,
+            .simd_mul_wrap,
+            .simd_mul_high,
+            .simd_mul_q15_sat,
+            .simd_mul_wide_lo,
+            .simd_mul_wide_hi,
+            .simd_dot_pairs,
+            .simd_dot_pairs_sat,
+            .simd_sad,
+            .simd_and,
+            .simd_or,
+            .simd_xor,
+            .simd_not,
+            .simd_bit_select,
+            .simd_eq_lanes,
+            .simd_gt_lanes,
+            .simd_gte_lanes,
+            .simd_bitmask,
+            .simd_shl_wrap,
+            .simd_shr_wrap,
+            .simd_shr_zf_wrap,
+            .simd_shr_rounded,
+            .simd_interleave_lo,
+            .simd_interleave_hi,
+            .simd_even_lanes,
+            .simd_odd_lanes,
+            .simd_reverse_lanes,
+            .simd_table_lookup,
+            .simd_concat_shift_bytes,
+            .simd_widen_lo,
+            .simd_widen_hi,
+            .simd_pairwise_add_widen,
+            .simd_narrow_wrap,
+            .simd_narrow_sat,
+            .simd_sum_lanes,
+            .simd_sum_lanes_wrap,
+            .simd_clmul_lo,
+            .simd_clmul_hi,
+            => self.evalSimd(op, args, arg_types, result_ty),
 
             .bool_not => .{ .bool_ = !truthy(args[0]) },
 
@@ -1220,6 +1280,7 @@ pub const Evaluator = struct {
             .str_drop_prefix_caseless_ascii,
             .str_drop_suffix,
             .str_split_first,
+            .str_split_last,
             .str_count_utf8_bytes,
             .str_with_capacity,
             .str_reserve,
@@ -1310,6 +1371,7 @@ pub const Evaluator = struct {
             .i8, .i16, .i32, .i64, .i128 => cmpValues(i128, a.int, b.int, op),
             .u8, .u16, .u32, .u64, .u128 => cmpValues(u128, @bitCast(a.int), @bitCast(b.int), op),
             .str => return self.unsupported_("numeric comparison on string"),
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("numeric comparison on SIMD vector"),
         };
         return .{ .bool_ = result };
     }
@@ -1336,6 +1398,7 @@ pub const Evaluator = struct {
             .i8, .i16, .i32, .i64, .i128 => cmpOrder(i128, a.int, b.int),
             .u8, .u16, .u32, .u64, .u128 => cmpOrder(u128, @bitCast(a.int), @bitCast(b.int)),
             .str => return self.unsupported_("compare on string"),
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("compare on SIMD vector"),
         };
         // Result ordering tag union sorts as EQ, GT, LT (alphabetical), matching
         // the interpreter's runtime discriminants EQ=0, GT=1, LT=2.
@@ -1351,6 +1414,27 @@ pub const Evaluator = struct {
     // numeric arithmetic
 
     const ArithOp = enum { add, sub, mul, div, div_trunc, rem, mod, negate, abs, abs_diff };
+    const WrappingArithOp = enum { plus, minus, times };
+
+    fn numWrappingArith(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, result_ty: Type.TypeId, op: WrappingArithOp) EvalError!Value {
+        const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("wrapping arithmetic operand without primitive type");
+        const result_prim = self.primitiveOf(result_ty) orelse prim;
+
+        return switch (prim) {
+            inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
+                const T = intType(p);
+                const a = readAs(T, args[0]);
+                const b = readAs(T, args[1]);
+                const result = switch (op) {
+                    .plus => a +% b,
+                    .minus => a -% b,
+                    .times => a *% b,
+                };
+                break :blk self.canonicalInt(result_prim, bitsOf(T, result));
+            },
+            else => self.unsupported_("wrapping arithmetic on non-integer type"),
+        };
+    }
 
     fn numArith(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, result_ty: Type.TypeId, op: ArithOp) EvalError!Value {
         const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("arithmetic operand without primitive type");
@@ -1525,12 +1609,12 @@ pub const Evaluator = struct {
         }
         return switch (op) {
             .sqrt => @sqrt(x),
-            .sin => std.math.sin(x),
-            .cos => std.math.cos(x),
-            .tan => std.math.tan(x),
-            .asin => std.math.asin(x),
-            .acos => std.math.acos(x),
-            .atan => std.math.atan(x),
+            .sin => builtins.float_math_f64.sin(x),
+            .cos => builtins.float_math_f64.cos(x),
+            .tan => builtins.float_math_f64.tan(x),
+            .asin => builtins.float_math_f64.asin(x),
+            .acos => builtins.float_math_f64.acos(x),
+            .atan => builtins.float_math_f64.atan(x),
             .log => @log(x),
         };
     }
@@ -1539,7 +1623,7 @@ pub const Evaluator = struct {
         const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("pow operand without primitive type");
         switch (prim) {
             .f32 => return .{ .float32 = builtins.float_math_f32.pow(args[0].float32, args[1].float32) },
-            .f64 => return .{ .float64 = std.math.pow(f64, args[0].float64, args[1].float64) },
+            .f64 => return .{ .float64 = builtins.float_math_f64.pow(args[0].float64, args[1].float64) },
             .dec => return self.unsupported_("dec transcendental op"),
             else => return self.unsupported_("integer pow op"),
         }
@@ -1641,6 +1725,101 @@ pub const Evaluator = struct {
         };
     }
 
+    fn simdKindForPrimitive(prim: Primitive) ?builtins.simd.Kind {
+        return switch (prim) {
+            .u8x16 => .u8x16,
+            .i8x16 => .i8x16,
+            .u16x8 => .u16x8,
+            .i16x8 => .i16x8,
+            .u32x4 => .u32x4,
+            .i32x4 => .i32x4,
+            .u64x2 => .u64x2,
+            .i64x2 => .i64x2,
+            else => null,
+        };
+    }
+
+    fn valueBits(value: Value) error{UnsupportedValue}!u128 {
+        return switch (value) {
+            .int => |int| @bitCast(int),
+            .bool_ => |boolean| @intFromBool(boolean),
+            else => error.UnsupportedValue,
+        };
+    }
+
+    fn evalSimd(
+        self: *Evaluator,
+        op: base.LowLevel,
+        args: []const Value,
+        arg_types: []const Type.TypeId,
+        result_ty: Type.TypeId,
+    ) EvalError!Value {
+        var source_kind: ?builtins.simd.Kind = null;
+        for (arg_types) |arg_ty| {
+            const prim = self.primitiveOf(arg_ty) orelse continue;
+            source_kind = simdKindForPrimitive(prim) orelse continue;
+            break;
+        }
+        const result_prim = self.primitiveOf(result_ty) orelse return self.unsupported_("SIMD result without primitive type");
+        const destination_kind = simdKindForPrimitive(result_prim);
+        const source = source_kind orelse destination_kind orelse return self.unsupported_("SIMD op without vector type");
+        const destination = destination_kind orelse source;
+
+        var operands = [_]u128{ 0, 0, 0 };
+        for (0..@min(args.len, operands.len)) |i| {
+            operands[i] = valueBits(args[i]) catch return self.unsupported_("SIMD operand without integer bits");
+        }
+        const simd_op: builtins.simd.Op = @enumFromInt(op.simdOpIndex() orelse unreachable);
+        const result_bits = builtins.simd.eval(simd_op, source, destination, operands[0], operands[1], operands[2]);
+        if (destination_kind != null) return .{ .int = @bitCast(result_bits) };
+        return self.canonicalInt(result_prim, @bitCast(result_bits));
+    }
+
+    fn evalSimdLoad(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
+        const result_prim = self.primitiveOf(result_ty) orelse return self.unsupported_("SIMD load result without primitive type");
+        if (simdKindForPrimitive(result_prim) == null) return self.unsupported_("SIMD load result without vector type");
+        const bytes = switch (args[0]) {
+            .list => |list| list,
+            else => return self.unsupported_("SIMD load from non-list value"),
+        };
+        const index: usize = @intCast(valueBits(args[1]) catch return self.unsupported_("SIMD load index without integer bits"));
+        var bits: u128 = 0;
+        for (0..16) |i| {
+            const byte_bits = valueBits(bytes[index + i]) catch return self.unsupported_("SIMD load byte without integer bits");
+            bits |= @as(u128, @truncate(byte_bits)) << @intCast(i * 8);
+        }
+        return .{ .int = @bitCast(bits) };
+    }
+
+    fn evalSimdStore(self: *Evaluator, args: []const Value) EvalError!Value {
+        const source = switch (args[1]) {
+            .list => |list| list,
+            else => return self.unsupported_("SIMD store into non-list value"),
+        };
+        const result = self.alloc().dupe(Value, source) catch return error.OutOfMemory;
+        const bits = valueBits(args[0]) catch return self.unsupported_("SIMD store value without integer bits");
+        const index: usize = @intCast(valueBits(args[2]) catch return self.unsupported_("SIMD store index without integer bits"));
+        for (0..16) |i| {
+            const byte: u8 = @truncate(bits >> @intCast(i * 8));
+            result[index + i] = self.canonicalInt(.u8, byte);
+        }
+        return .{ .list = result };
+    }
+
+    fn evalSimdAppend(self: *Evaluator, args: []const Value) EvalError!Value {
+        const source = switch (args[1]) {
+            .list => |list| list,
+            else => return self.unsupported_("SIMD append to non-list value"),
+        };
+        const result = self.alloc().alloc(Value, source.len + 16) catch return error.OutOfMemory;
+        @memcpy(result[0..source.len], source);
+        const bits = valueBits(args[0]) catch return self.unsupported_("SIMD append value without integer bits");
+        for (0..16) |i| {
+            const byte: u8 = @truncate(bits >> @intCast(i * 8));
+            result[source.len + i] = self.canonicalInt(.u8, byte);
+        }
+        return .{ .list = result };
+    }
     // to_str
 
     fn evalToStr(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId) EvalError!Value {
@@ -1666,6 +1845,7 @@ pub const Evaluator = struct {
                 return .{ .str = formatted };
             },
             .bool, .str => return self.unsupported_("to_str on bool or str"),
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("to_str on SIMD vector"),
         }
     }
 
@@ -1764,6 +1944,7 @@ pub const Evaluator = struct {
             .str_inspect => return .{ .str = try self.strInspect(args[0].str) },
             .str_drop_prefix_caseless_ascii => return try self.strDropPrefixCaseless(result_ty, args[0].str, args[1].str),
             .str_split_first => return try self.strSplitFirst(result_ty, args[0].str, args[1].str),
+            .str_split_last => return try self.strSplitLast(result_ty, args[0].str, args[1].str),
             .str_from_utf8 => return try self.strFromUtf8(result_ty, args[0]),
             .str_from_utf8_lossy => {
                 const elems = args[0].list;
@@ -1861,6 +2042,25 @@ pub const Evaluator = struct {
             found = true;
             after = source;
         } else if (std.mem.find(u8, source, delimiter)) |index| {
+            found = true;
+            before = source[0..index];
+            after = source[index + delimiter.len ..];
+        }
+        return self.buildNamedRecord(result_ty, &.{
+            .{ .name = "after", .value = .{ .str = after } },
+            .{ .name = "before", .value = .{ .str = before } },
+            .{ .name = "found", .value = .{ .bool_ = found } },
+        });
+    }
+
+    fn strSplitLast(self: *Evaluator, result_ty: Type.TypeId, source: []const u8, delimiter: []const u8) EvalError!Value {
+        var before: []const u8 = "";
+        var after: []const u8 = "";
+        var found = false;
+        if (delimiter.len == 0) {
+            found = true;
+            before = source;
+        } else if (std.mem.findLast(u8, source, delimiter)) |index| {
             found = true;
             before = source[0..index];
             after = source[index + delimiter.len ..];
@@ -2662,4 +2862,9 @@ fn isNumericPrimitive(prim: Primitive) bool {
 
 test "lambda mono eval declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "SIMD bit extraction rejects values without an integer representation" {
+    try std.testing.expectError(error.UnsupportedValue, Evaluator.valueBits(.{ .float32 = 1.0 }));
+    try std.testing.expectEqual(@as(u128, 1), try Evaluator.valueBits(.{ .bool_ = true }));
 }

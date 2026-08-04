@@ -13338,6 +13338,7 @@ const ProcBodyBuilder = struct {
             .imported_const,
             => |const_use| try self.restoreConstUseInto(target, checked_ty, const_use, next),
             .platform_required_const => |required| try self.restoreConstUseInto(target, checked_ty, required.const_use, next),
+            .platform_required_checked_error => try self.lowerUnexecutableDispatchInto("platform requirement failed checking"),
             .local_proc => try self.lowerProcedureValueRefInto(target, expr_id, checked_ty, ref_id, next),
             .top_level_proc,
             .imported_proc,
@@ -26920,6 +26921,37 @@ const ProcBodyBuilder = struct {
             return try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next);
         }
 
+        switch (primitive) {
+            .u8x16,
+            .i8x16,
+            .u16x8,
+            .i16x8,
+            .u32x4,
+            .i32x4,
+            .u64x2,
+            .i64x2,
+            => {
+                const lhs_bits = try self.addFrameLocal(.u128);
+                const rhs_bits = try self.addFrameLocal(.u128);
+                const compare = try self.lowerPrimitiveEqLocalsInto(target, lhs_bits, rhs_bits, .u128, negated, next);
+                const lower_rhs = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = rhs_bits,
+                    .op = .simd_to_u128_bits,
+                    .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                    .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{rhs}),
+                    .next = compare,
+                } });
+                return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = lhs_bits,
+                    .op = .simd_to_u128_bits,
+                    .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                    .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{lhs}),
+                    .next = lower_rhs,
+                } });
+            },
+            else => {},
+        }
+
         const eq_op: LIR.LowLevel = switch (primitive) {
             .str => .str_is_eq,
             .u8,
@@ -26936,6 +26968,15 @@ const ProcBodyBuilder = struct {
             .f64,
             .dec,
             => .num_is_eq,
+            .u8x16,
+            .i8x16,
+            .u16x8,
+            .i16x8,
+            .u32x4,
+            .i32x4,
+            .u64x2,
+            .i64x2,
+            => unreachable,
             .bool => unreachable,
         };
         const args = [_]LIR.LocalId{ lhs, rhs };
@@ -34393,6 +34434,15 @@ const ProcBodyBuilder = struct {
             .f32 => .hasher_write_f32,
             .f64 => .hasher_write_f64,
             .dec => .hasher_write_dec,
+            .u8x16,
+            .i8x16,
+            .u16x8,
+            .i16x8,
+            .u32x4,
+            .i32x4,
+            .u64x2,
+            .i64x2,
+            => .hasher_write_u128,
         };
     }
 
@@ -34413,6 +34463,15 @@ const ProcBodyBuilder = struct {
             .f32 => .f32_to_str,
             .f64 => .f64_to_str,
             .dec => .dec_to_str,
+            .u8x16,
+            .i8x16,
+            .u16x8,
+            .i16x8,
+            .u32x4,
+            .i32x4,
+            .u64x2,
+            .i64x2,
+            => boxyLowerInvariant("SIMD inspect must lower through its explicit Builtin body"),
         };
     }
 
@@ -35566,6 +35625,15 @@ fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, rep_id: Plan
             .f32 => "parse_f32",
             .f64 => "parse_f64",
             .bool => "parse_bool",
+            .u8x16,
+            .i8x16,
+            .u16x8,
+            .i16x8,
+            .u32x4,
+            .i32x4,
+            .u64x2,
+            .i64x2,
+            => null,
         },
         .bool_tag_union => "parse_bool",
         else => null,
@@ -35595,6 +35663,15 @@ fn generatedEncoderScalarMethodForRep(plan: *const Plan.ProgramPlan, rep_id: Pla
             .f32 => "encode_f32",
             .f64 => "encode_f64",
             .bool => "encode_bool",
+            .u8x16,
+            .i8x16,
+            .u16x8,
+            .i16x8,
+            .u32x4,
+            .i32x4,
+            .u64x2,
+            .i64x2,
+            => null,
         },
         .bool_tag_union => "encode_bool",
         else => null,

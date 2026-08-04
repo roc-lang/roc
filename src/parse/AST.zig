@@ -1306,6 +1306,10 @@ pub const Pattern = union(enum) {
         /// nominal type and `args` is the backing pattern. False for ordinary
         /// tag patterns like `Tag(args)` / `Module.Tag`.
         backing_value: bool = false,
+        /// True when a nominal record destructure uses the record shorthand
+        /// `Type.{ fields }` instead of the general `Type.({ fields })` form.
+        /// This implies `backing_value` and exactly one record pattern in `args`.
+        record_shorthand: bool = false,
         region: TokenizedRegion,
     },
     int: struct {

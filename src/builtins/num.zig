@@ -9,6 +9,8 @@ const std = @import("std");
 const i128h = @import("compiler_rt_128.zig");
 const parse_float = @import("vendor_parse_float");
 const float_bits = @import("float_bits.zig");
+const float_math_f32 = @import("float_math/f32.zig");
+const float_math_f64 = @import("float_math/f64.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
@@ -310,7 +312,9 @@ pub fn exportPow(
                     }
                 },
                 else => {
-                    return std.math.pow(T, base, exp);
+                    if (T == f32) return float_math_f32.pow(base, exp);
+                    if (T == f64) return float_math_f64.pow(base, exp);
+                    @compileError("floating-point power supports only F32 and F64");
                 },
             }
         }
@@ -419,61 +423,73 @@ pub fn exportIsFinite(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute arcsine using zig std.math.
+/// Compute arcsine using Roc's width-specific float implementation.
 pub fn exportAsin(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return std.math.asin(input);
+            if (T == f32) return float_math_f32.asin(input);
+            if (T == f64) return float_math_f64.asin(input);
+            @compileError("arcsine supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute arccosine using zig std.math.
+/// Compute arccosine using Roc's width-specific float implementation.
 pub fn exportAcos(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return std.math.acos(input);
+            if (T == f32) return float_math_f32.acos(input);
+            if (T == f64) return float_math_f64.acos(input);
+            @compileError("arccosine supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute arctangent using zig std.math.
+/// Compute arctangent using Roc's width-specific float implementation.
 pub fn exportAtan(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return std.math.atan(input);
+            if (T == f32) return float_math_f32.atan(input);
+            if (T == f64) return float_math_f64.atan(input);
+            @compileError("arctangent supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute sine using zig std.math.
+/// Compute sine using Roc's width-specific float implementation.
 pub fn exportSin(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return math.sin(input);
+            if (T == f32) return float_math_f32.sin(input);
+            if (T == f64) return float_math_f64.sin(input);
+            @compileError("sine supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute cosine using zig std.math.
+/// Compute cosine using Roc's width-specific float implementation.
 pub fn exportCos(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return math.cos(input);
+            if (T == f32) return float_math_f32.cos(input);
+            if (T == f64) return float_math_f64.cos(input);
+            @compileError("cosine supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute tangent using zig std.math.
+/// Compute tangent using Roc's width-specific float implementation.
 pub fn exportTan(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return math.tan(input);
+            if (T == f32) return float_math_f32.tan(input);
+            if (T == f64) return float_math_f64.tan(input);
+            @compileError("tangent supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });

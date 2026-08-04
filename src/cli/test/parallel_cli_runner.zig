@@ -13,6 +13,7 @@
 //!   --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
 //!   --include-llvm       Include size and speed LLVM backend jobs
 //!   --specialize=<yes|no> Override the runtime lowering strategy for platform jobs
+//!   --cross-target <name> Build platform cases for this target without running them
 //!   --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
 //!   --glue-opt <opt>     Glue execution mode: default, dev, size, or speed
 //!   --verbose            Print PASS results and timing details
@@ -117,6 +118,13 @@ const SuiteSelection = struct {
     fn isEmpty(self: SuiteSelection) bool {
         for (self.enabled) |enabled| {
             if (enabled) return false;
+        }
+        return true;
+    }
+
+    fn includesOnly(self: SuiteSelection, selected: Suite) bool {
+        for (self.enabled, 0..) |enabled, index| {
+            if (enabled != (index == @intFromEnum(selected))) return false;
         }
         return true;
     }
@@ -236,6 +244,7 @@ const FilePathMode = enum {
 const CommandCase = struct {
     args: []const []const u8,
     roc_file: ?[]const u8 = null,
+    app_args: []const []const u8 = &.{},
     file_path_mode: FilePathMode = .absolute,
     stdin: ?[]const u8 = null,
     exit: ExitExpectation = .success,
@@ -266,6 +275,8 @@ const PlatformCase = struct {
         native_run,
         /// Build natively, run with --test <spec>; check exit code 0
         io_spec: []const u8,
+        /// Build for the named cross-compilation target without running.
+        cross_compile: []const u8,
     };
 };
 
@@ -416,6 +427,7 @@ const CustomCase = enum {
     install_glue_roundtrip,
     glue_debug,
     glue_debug_dev,
+    glue_dev_without_temp_env,
     glue_dylib_cache_hit,
     glue_c_header,
     glue_c_header_compiles,
@@ -472,17 +484,24 @@ fn buildCases(
     include_llvm: bool,
     suites: SuiteSelection,
     glue_options: GlueRunnerOptions,
+    cross_target: ?[]const u8,
 ) CliRunnerError![]const CliCase {
     var cases: std.ArrayListUnmanaged(CliCase) = .empty;
 
     if (suites.includes(.platforms)) {
         for (&platform_config.platforms) |platform| {
-            for (&base_test_opts) |opt| {
-                try appendPlatformSpecs(allocator, &cases, platform, opt, filters);
-            }
-            if (include_llvm) {
-                for (&llvm_test_opts) |opt| {
+            if (cross_target) |target| {
+                const target_info = platform_config.findTarget(platform, target) orelse continue;
+                if (target_info.requires_linux and builtin.os.tag != .linux) continue;
+                try appendCrossCompilePlatformSpecs(allocator, &cases, platform, target, filters);
+            } else {
+                for (&base_test_opts) |opt| {
                     try appendPlatformSpecs(allocator, &cases, platform, opt, filters);
+                }
+                if (include_llvm) {
+                    for (&llvm_test_opts) |opt| {
+                        try appendPlatformSpecs(allocator, &cases, platform, opt, filters);
+                    }
                 }
             }
         }
@@ -509,26 +528,31 @@ fn appendGlueRuntimeCases(
     glue_options: GlueRunnerOptions,
 ) CliRunnerError!void {
     for (glue_runtime_platforms) |platform| {
-        inline for (.{ GlueLanguage.zig, GlueLanguage.rust, GlueLanguage.c }) |language| {
-            const target: GlueRuntimeTarget = .native;
-            const name = try std.fmt.allocPrint(
-                allocator,
-                "glue runtime: {s} {s} [{s}, glue-opt={s}]",
-                .{ language.displayName(), platform.name, target.displayName(), glue_options.execution_mode.cliName() },
-            );
-            const case = CliCase{
-                .id = cases.items.len,
-                .suite = .glue,
-                .name = name,
-                .body = .{ .glue_runtime = .{
-                    .language = language,
-                    .platform = platform,
-                    .target = target,
-                    .execution_mode = glue_options.execution_mode,
-                } },
-            };
-            if (matchesFilters(case, filters)) {
-                try cases.append(allocator, case);
+        // The broad glue contract corpus has checked-in musl inputs. The ABI
+        // probe additionally owns native macOS and Windows targets so those
+        // systems execute the exact cross-language vector boundary matrix.
+        if (builtin.os.tag == .linux or std.mem.eql(u8, platform.name, "layout-probe")) {
+            inline for (.{ GlueLanguage.zig, GlueLanguage.rust, GlueLanguage.c }) |language| {
+                const target: GlueRuntimeTarget = .native;
+                const name = try std.fmt.allocPrint(
+                    allocator,
+                    "glue runtime: {s} {s} [{s}, glue-opt={s}]",
+                    .{ language.displayName(), platform.name, target.displayName(), glue_options.execution_mode.cliName() },
+                );
+                const case = CliCase{
+                    .id = cases.items.len,
+                    .suite = .glue,
+                    .name = name,
+                    .body = .{ .glue_runtime = .{
+                        .language = language,
+                        .platform = platform,
+                        .target = target,
+                        .execution_mode = glue_options.execution_mode,
+                    } },
+                };
+                if (matchesFilters(case, filters)) {
+                    try cases.append(allocator, case);
+                }
             }
         }
 
@@ -641,6 +665,65 @@ fn appendPlatformSpecs(
     }
 }
 
+fn appendCrossCompilePlatformSpecs(
+    allocator: Allocator,
+    cases: *std.ArrayListUnmanaged(CliCase),
+    platform: platform_config.PlatformConfig,
+    target: []const u8,
+    filters: []const []const u8,
+) CliRunnerError!void {
+    switch (platform.test_apps) {
+        .single => |app_name| {
+            const roc_file = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ platform.base_dir, app_name });
+            try appendCrossCompileCase(allocator, cases, platform.name, target, roc_file, &.{}, filters);
+        },
+        .spec_list => |specs| {
+            for (specs) |spec| {
+                try appendCrossCompileCase(
+                    allocator,
+                    cases,
+                    platform.name,
+                    target,
+                    spec.roc_file,
+                    spec.expected_build_stderr_contains,
+                    filters,
+                );
+            }
+        },
+        .simple_list => |specs| {
+            for (specs) |spec| {
+                try appendCrossCompileCase(allocator, cases, platform.name, target, spec.roc_file, &.{}, filters);
+            }
+        },
+    }
+}
+
+fn appendCrossCompileCase(
+    allocator: Allocator,
+    cases: *std.ArrayListUnmanaged(CliCase),
+    platform: []const u8,
+    target: []const u8,
+    roc_file: []const u8,
+    expected_build_stderr_contains: []const []const u8,
+    filters: []const []const u8,
+) CliRunnerError!void {
+    const name = try std.fmt.allocPrint(allocator, "{s} [cross {s}]", .{ roc_file, target });
+    const case = CliCase{
+        .id = cases.items.len,
+        .suite = .platforms,
+        .name = name,
+        .body = .{ .platform = .{
+            .roc_file = roc_file,
+            .platform = platform,
+            .expected_build_stderr_contains = expected_build_stderr_contains,
+            .test_kind = .{ .cross_compile = target },
+        } },
+    };
+    if (matchesFilters(case, filters)) {
+        try cases.append(allocator, case);
+    }
+}
+
 fn skipIoSpecOnHost(spec: @import("fx_test_specs.zig").TestSpec) bool {
     if (spec.skip) return true;
     return spec.skip_on_windows and builtin.os.tag == .windows;
@@ -705,6 +788,7 @@ const all_syntax_expected_stdout =
     \\("Roc", 1.0, 1.0, 1.0)
     \\10.0
     \\{ age: 31, name: "Alice" }
+    \\{ age: 30, name: "Alice" }
     \\{ binary: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5.0, octal: 5.0, usage_based: 5.0 }
     \\<opaque>
     \\"The secret key is: my_secret_key"
@@ -757,6 +841,7 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy list keeps reserved capacity across erased boundary (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/echo/boxy_list_capacity.roc", .stdout_exact = "1.0,2.0,3.0,4.0,5.0\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy dynamic tag with ZST payload materializes to concrete union (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/boxy_zst_tag_materialize.roc", .stdout_exact = "some unit\nnone\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy inspect of erased record and tag values matches concrete rendering (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/boxy_inspect_dynamic.roc", .stdout_exact = "{ label: \"hi\", nums: [1.0, 2.0] }\nOk(3)\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: forward helper reports nested binder shadowing without panic (issue 10327)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/echo/issue_10327.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "DUPLICATE DEFINITION" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "local lookup referenced an unbound pattern binder" }, .{ .stream = .stderr, .text = "panic" } } } } },
 };
 
 // Glue suite cases
@@ -764,6 +849,7 @@ const echo_cases = [_]CliCase{
 const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds", .body = .{ .custom = .glue_debug } },
     .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds with --opt=dev", .body = .{ .custom = .glue_debug_dev } },
+    .{ .id = 0, .suite = .glue, .name = "glue command succeeds without temp environment variables", .skip = .{ .windows = "Windows requires TEMP or TMP" }, .body = .{ .custom = .glue_dev_without_temp_env } },
     .{ .id = 0, .suite = .glue, .name = "glue command reuses cached compiler-owned dylib", .body = .{ .custom = .glue_dylib_cache_hit } },
     .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
@@ -854,6 +940,11 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads dev shim code", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads app-provided Model through Box", .skip = .{ .windows = "generated hot-reload model test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_model_boundary } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch runs headerless default app", .body = .{ .custom = .hot_reload_default_app } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10307: direct dev run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10307: explicit run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{ "run", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10307: interpreter run passes source path as argv0", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10307: size run passes source path as argv0", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10307: speed run passes source path as argv0", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports missing host symbols before linking", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--target=x64musl" }, .roc_file = "test/missing-host-symbol/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING HOST SYMBOLS" }, .{ .stream = .stderr, .text = "roc_host_vanish" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check writes parse errors to stderr", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_parse_error.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &parse_error_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "direct roc rejects compiler-owned glue platform as hostless", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "src/glue/src/DebugGlue.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "EMPTY TARGETS SECTION" }, .{ .stream = .stderr, .text = "roc glue" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "EXPECTED PLATFORM STRING" }, .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } } } } },
@@ -863,21 +954,32 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/10162: compiler-derived
     // codec method markers in a platform module remain structural methods.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10162: platform derived codec methods are not hosted functions", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10162_platform_derived_codec/platform/main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }, .{ .stream = .stderr, .text = "EFFECTFUL FUNCTION NAME" } } } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10315: an error in a
+    // nominal's owner module must be reported without aborting later dispatch.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10315: static dispatch reports failed nominal owner module errors", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10315_static_dispatch_failed_owner/app.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "NAME NOT IN SCOPE" }, .{ .stream = .stderr, .text = "missing_name" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "type checker invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10315: roc run executes through an unrelated checked error", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_10315_static_dispatch_failed_owner/app.roc", .exit = .success, .contains = &.{ .{ .stream = .stderr, .text = "NAME NOT IN SCOPE" }, .{ .stream = .stderr, .text = "missing_name" }, .{ .stream = .stdout, .text = "continued after checking" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "type checker invariant violated" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Roc application crashed" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10345: provides rejects app-required values without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10345_required_provides/app.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "REQUIRED VALUE IN PROVIDES" }, .{ .stream = .stderr, .text = "main_for_host! = main!" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "EXPOSED BUT NOT DEFINED" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9826: roc check rejects open rows in hosted signatures", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9826_open_host_boundary/hosted/app.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "HOST BOUNDARY REQUIRES CLOSED ROWS" }, .{ .stream = .stderr, .text = "open record or tag-union rows" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9826: roc check rejects open rows in provides signatures", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9826_open_host_boundary/provides/app.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "HOST BOUNDARY REQUIRES CLOSED ROWS" }, .{ .stream = .stderr, .text = "open record or tag-union rows" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check succeeds on valid file", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .not_contains = &.{ .{ .stream = .stderr, .text = "Failed to check" }, .{ .stream = .stderr, .text = "error" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10175: file-imported Str split during compile-time condition does not double free", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10175_file_import_str_uaf.roc", .exit = .{ .code = 2 }, .contains = &.{.{ .stream = .stderr, .text = "UNCONDITIONAL CONDITION" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "COMPILE TIME CRASH" }, .{ .stream = .stderr, .text = "Use-after-free" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10204: imported interpolation metadata defaults to Str without panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10204_imported_interpolation_metadata/Main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "builtin Str interpolation constraint had no metadata" }, .{ .stream = .stderr, .text = "type checker invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10202: functions resolve from same-named modules in distinct packages", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10202_same_named_package_modules/main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10220: a method on an
+    // imported nominal may return a nominal type owned by the app's platform.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10220: cross-module nominal method returning a platform type checks cleanly", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/postcheck/issue_10220_cross_module_nominal_platform_type/app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "erroneous checked type reached Monotype instantiation" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10154: hosted effect forwarded through a function argument checks cleanly", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10154_hosted_effect_forwarded.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10062: where-clause type dispatch checks without postcheck panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10062_where_clause_segfault/main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "dispatch plan reached monotype lowering without a resolution" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "annotation-only decls in a non-platform type module are not flagged as effectful", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/AnnoOnlyNotEffectful.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "DECLARATION HAS NO VALUE" }}, .not_contains = &.{.{ .stream = .stderr, .text = "EFFECTFUL FUNCTION NAME" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc run prints warning diagnostics once (issue 9509)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/Issue9509WarningOnly.roc", .exit = .{ .code = 2 }, .stderr_min_len = 1, .occurrences = &.{ .{ .stream = .stderr, .text = "UNUSED VARIABLE", .count = 1 }, .{ .stream = .stderr, .text = "Found 0 error(s) and 1 warning(s)", .count = 1 } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run prints warning diagnostics once (issue 9509)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/Issue9509WarningOnly.roc", .exit = .{ .code = 2 }, .stderr_min_len = 1, .occurrences = &.{ .{ .stream = .stderr, .text = "UNUSED VARIABLE", .count = 1 }, .{ .stream = .stderr, .text = "Found 0 errors and 1 warning", .count = 1 } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9898: large nested List.repeat lowers without local span overflow", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9898_large_nested_list_repeat.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "integer does not fit in destination type" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9883: imported type alias works as Try error from split module", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9883_imported_alias_try_error/Main.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed emits no invalid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &invalid_llvm_debug_info_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed --debug emits valid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--debug", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &invalid_llvm_debug_info_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10020: inline effectful record lambda with open Try row builds", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/Issue10020EffectfulRecordLambda.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "tag count failed Lambda Solved unification" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10311: type dispatch in a match guard does not capture the branch binder", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/Issue10311MixedEffectWhere.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "checked procedure template root closure had captures" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10176: compile-time imported matrix checks without segfault", .timeout_ms = 60_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10176_compile_time_matrix/Main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10297: chunky compile-time list checks with bounded ARC memory", .timeout_ms = 120_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10297_chunky_comptime/Main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "OutOfMemory" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // repro for https://github.com/roc-lang/roc/issues/9690: a self-recursive
     // closure that captures an enclosing value must compile through the LLVM
     // size/speed backend. The crash guard inside the program makes a wrong
@@ -914,7 +1016,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10161: checking platform main succeeds", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9864_static_dispatch_package_nominal/platform/main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "MODULE NOT FOUND" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10161: checking platform child resolves package aliases from owning main", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9864_static_dispatch_package_nominal/platform/ThingFx.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "MODULE NOT FOUND" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9858: default app args.get value times reports missing method without panic", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9858_default_app_args_get_times.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING METHOD" }, .{ .stream = .stderr, .text = "times" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "checked method registry is missing resolved dispatch target" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "pipeline parity: identical diagnostics and exit codes across check/build/run/test", .body = .{ .custom = .pipeline_parity_diagnostics } },
+    .{ .id = 0, .suite = .subcommands, .name = "pipeline parity: identical diagnostics across check/build/run/test", .body = .{ .custom = .pipeline_parity_diagnostics } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test runs independent roots before returning diagnostic failure", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/pipeline_parity/error_app/main.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "TYPE MISMATCH" }, .{ .stream = .stdout, .text = "All (1) tests passed" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "pipeline parity: check/build/run/test share one checked-module cache (issue 9788)", .body = .{ .custom = .pipeline_parity_shared_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9509: run renders each diagnostic exactly once (PR 9759)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/pipeline_parity/error_app/main.roc", .exit = .{ .code = 1 }, .occurrences = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH", .count = 1 }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "transitive package dependency runs exactly when it builds", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/pipeline_parity/app/main.roc", .contains = &.{.{ .stream = .stdout, .text = "alpha[beta:parity]" }} } } },
@@ -1041,6 +1144,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects JSON parser composite dict keys", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/JsonUnsupportedCompositeDictParserKey.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects JSON encoder_for composite dict keys", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/JsonUnsupportedCompositeDictEncodeKey.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects JSON encoder_for empty tag unions", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/JsonUnsupportedEmptyTagUnionEncode.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects an outer JSON state used as a container cursor", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/JsonEncodeRejectsOuterStateAsContainerCursor.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Roc crashed" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects Json.to_str when encoder can fail", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/JsonToStrRejectsF32.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects unsupported numeric parser field before postcheck", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParserUnsupportedNumericField.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects old structural parser method name", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParserOldStructuralMethodRejected.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -1256,6 +1360,13 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc U8 subtraction underflow crashes (issue 9361, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue9361_integer_sub_underflow_u8.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer subtraction overflowed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc U128 addition overflow crashes (issue 9360, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue9360_integer_add_overflow_u128.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer addition overflowed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc I128 subtraction underflow crashes (issue 9361, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue9361_integer_sub_underflow_i128.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer subtraction overflowed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc runtime-count U128 shift links in a standalone dev executable", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_u128_shift_dev_link.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "undefined symbol" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD concat shift rejects counts above sixteen (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_concat_shift_crash.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "U8x16.concat_shift_bytes: count out of range" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD concat shift rejects counts above sixteen (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_concat_shift_crash.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "U8x16.concat_shift_bytes: count out of range" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD concat shift rejects counts above sixteen (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_concat_shift_crash.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "U8x16.concat_shift_bytes: count out of range" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc U8 multiplication overflow crashes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/checked_arithmetic_mul_overflow_u8.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer multiplication overflowed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc U8 multiplication overflow crashes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/checked_arithmetic_mul_overflow_u8.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer multiplication overflowed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc U8 multiplication overflow crashes (llvm speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/checked_arithmetic_mul_overflow_u8.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Integer multiplication overflowed" }} } } },
@@ -1287,6 +1398,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc repl polymorphic where-clause helper through nested generalized defs is accepted, not ambiguous", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "run : a -> a where [a.go : a -> a]\nrun = |x| x.go()\nwrap = |y| {\n  go2 = |z| run(z)\n  go2(y)\n}\nwrap\n", .exit = .not_panic, .contains = &.{.{ .stream = .stdout, .text = "<function>" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "MISSING METHOD" }, .{ .stream = .stderr, .text = "dispatch plan had no method owner" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check custom interpolation in tuple annotation reports type mismatch (issue 9711)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9711_checked_interpolation_tuple.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation unified a primitive type with a non-primitive type" }, .{ .stream = .stderr, .text = "checked interpolation constraint had no generated item type" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check open error row callback via exposed platform module alias does not panic (issue 9655)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9655_open_init_row_platform/app.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "missing platform declaration artifact" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check reports incompatible defaulted local procedure dispatch without panicking (issue 10347)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10347_distinct_local_proc_specializations/app.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation unified two different primitive types" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts nominal app type bound by platform for-clause (issue 9731)", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9731_nominal_for_clause/app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "MISSING PLATFORM REQUIRED TYPE" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts alias app type bound by platform for-clause", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9731_nominal_for_clause/app_alias.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "MISSING PLATFORM REQUIRED TYPE" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build nominal app type bound by platform for-clause does not panic (issue 9731)", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/issue_9731_nominal_for_clause/app.roc", .exit = .not_panic, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -1564,8 +1676,6 @@ fn runSingleTest(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: u6
 fn runPlatformCase(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: u64) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .setup, .message = "no clock" };
     const platform = spec.body.platform;
-    const backend = spec.backend orelse
-        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "platform case missing backend" };
 
     const dirs = util.createIsolatedTestDirs(io, allocator) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to create test directories" };
@@ -1603,9 +1713,16 @@ fn runPlatformCase(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: 
     util.putIsolatedTempEnv(&env_map, dirs.temp_dir) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set isolated temp dir" };
 
-    const result = switch (backend) {
-        .interpreter => runInterpreterTest(io, allocator, backend, platform, roc_file, &env_map, dirs.work_dir, &timer, timeout_ms),
-        .dev, .size, .speed => runCompiledTest(io, allocator, backend, platform, roc_file, output_name, &env_map, dirs.work_dir, &timer, timeout_ms),
+    const result = switch (platform.test_kind) {
+        .cross_compile => |target| runCrossCompileTest(io, allocator, target, platform, roc_file, output_name, &env_map, dirs.work_dir, &timer, timeout_ms),
+        .native_run, .io_spec => blk: {
+            const backend = spec.backend orelse
+                break :blk TestResult{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "platform case missing backend" };
+            break :blk switch (backend) {
+                .interpreter => runInterpreterTest(io, allocator, backend, platform, roc_file, &env_map, dirs.work_dir, &timer, timeout_ms),
+                .dev, .size, .speed => runCompiledTest(io, allocator, backend, platform, roc_file, output_name, &env_map, dirs.work_dir, &timer, timeout_ms),
+            };
+        },
     };
 
     if (result.status == .pass) {
@@ -1652,6 +1769,7 @@ fn runInterpreterTest(
             argv_buf[argc] = io_spec;
             argc += 1;
         },
+        .cross_compile => unreachable,
     }
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
@@ -1755,6 +1873,7 @@ fn runCompiledTest(
             run_argv_buf[argc] = io_spec;
             argc += 1;
         },
+        .cross_compile => unreachable,
     }
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .build_ns = build_ns, .message = "no clock" };
@@ -1770,6 +1889,65 @@ fn runCompiledTest(
     };
     const run_ns = run_timer.read();
     return resultFromProcess(run_result, timer, .run, build_ns, run_ns, "run failed");
+}
+
+fn runCrossCompileTest(
+    io: std.Io,
+    allocator: Allocator,
+    target: []const u8,
+    platform: PlatformCase,
+    roc_file: []const u8,
+    output_name: []const u8,
+    env_map: *const std.process.Environ.Map,
+    work_dir: []const u8,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) TestResult {
+    const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target}) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate target arg" };
+    defer allocator.free(target_arg);
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{output_name}) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate output arg" };
+    defer allocator.free(output_arg);
+    const build_argv = &[_][]const u8{ roc_binary_path, "build", target_arg, output_arg, roc_file };
+
+    var build_timer = harness.Timer.start() catch
+        return .{ .status = .infra_error, .phase = .build, .duration_ns = timer.read(), .message = "no clock" };
+    const build_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .build, "case timeout exhausted before cross-build command started");
+    const build_result = util.runChildWithTimeout(io, allocator, build_argv, .{
+        .cwd = work_dir,
+        .env_map = env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+        .timeout_ms = build_timeout_ms,
+    }) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "cross-build spawn error: {}", .{err}) catch "cross-build spawn error";
+        return .{ .status = .infra_error, .phase = .build, .duration_ns = timer.read(), .build_ns = build_timer.read(), .message = msg };
+    };
+    const build_ns = build_timer.read();
+    const expected_stderr = platform.expected_build_stderr_contains;
+    if (processTimedOut(build_result.stderr) or hasMemoryErrors(build_result.stderr) != null or
+        !buildSucceededOrExpectedDiagnostics(build_result, expected_stderr))
+    {
+        return resultFromProcess(build_result, timer, .build, build_ns, 0, "cross-build failed");
+    }
+    if (missingExpectedStderr(build_result.stderr, expected_stderr)) |needle| {
+        const msg = std.fmt.allocPrint(allocator, "missing expected cross-build stderr: {s}", .{needle}) catch "missing expected cross-build stderr";
+        return .{
+            .status = .build_failed,
+            .phase = .build,
+            .duration_ns = timer.read(),
+            .build_ns = build_ns,
+            .exit_code = exitCode(build_result.term),
+            .stderr_capture = build_result.stderr,
+            .stdout_capture = build_result.stdout,
+            .message = msg,
+        };
+    }
+    if (!builtOutputExists(io, allocator, output_name)) {
+        return .{ .status = .build_failed, .phase = .build, .duration_ns = timer.read(), .build_ns = build_ns, .message = "cross-build succeeded but output file was not created" };
+    }
+    return .{ .status = .pass, .phase = .build, .duration_ns = timer.read(), .build_ns = build_ns };
 }
 
 fn builtOutputExists(io: std.Io, allocator: Allocator, output_name: []const u8) bool {
@@ -1958,7 +2136,7 @@ fn runCommandCase(
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
     const child_timeout_ms = childCommandTimeoutMs(&timer, timeout_ms) orelse
         return addPreservedWorkDirMessage(allocator, timeoutFailure(allocator, &timer, .run, "case timeout exhausted before command started"), env.dirs.work_dir);
-    const result = runRocInEnv(io, allocator, &env, command.args, command.roc_file, command.file_path_mode, command.stdin, child_timeout_ms) catch |err| {
+    const result = runRocInEnv(io, allocator, &env, command.args, command.roc_file, command.file_path_mode, command.app_args, command.stdin, child_timeout_ms) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "run spawn error: {}", .{err}) catch "run spawn error";
         return addPreservedWorkDirMessage(allocator, .{
             .status = .infra_error,
@@ -1994,10 +2172,11 @@ fn runRocInEnv(
     args: []const []const u8,
     roc_file: ?[]const u8,
     file_path_mode: FilePathMode,
+    app_args: []const []const u8,
     stdin: ?[]const u8,
     timeout_ms: u64,
 ) CliRunnerError!std.process.RunResult {
-    const argv = try buildRocArgv(allocator, args, roc_file, file_path_mode);
+    const argv = try buildRocArgv(allocator, args, roc_file, file_path_mode, app_args);
     return util.runChildWithTimeout(io, allocator, argv, .{
         .cwd = project_root_path,
         .env_map = &env.env_map,
@@ -2030,6 +2209,7 @@ fn buildRocArgv(
     args: []const []const u8,
     roc_file: ?[]const u8,
     file_path_mode: FilePathMode,
+    app_args: []const []const u8,
 ) CliRunnerError![]const []const u8 {
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     const is_glue_command = args.len > 0 and std.mem.eql(u8, args[0], "glue");
@@ -2050,6 +2230,10 @@ fn buildRocArgv(
             .relative => path,
         };
         try argv.append(allocator, resolved);
+    }
+    if (app_args.len > 0) {
+        try argv.append(allocator, "--");
+        try argv.appendSlice(allocator, app_args);
     }
     return try argv.toOwnedSlice(allocator);
 }
@@ -2252,6 +2436,7 @@ fn runCustomCase(
         .install_glue_roundtrip => customInstallGlueRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .glue_debug => customGlueDebug(io, allocator, &env, &timer, timeout_ms),
         .glue_debug_dev => customGlueDebugDev(io, allocator, &env, &timer, timeout_ms),
+        .glue_dev_without_temp_env => customGlueDevWithoutTempEnv(io, allocator, &env, &timer, timeout_ms),
         .glue_dylib_cache_hit => customGlueDylibCacheHit(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
@@ -2333,7 +2518,7 @@ fn runRocAndCheck(
 ) ?TestResult {
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before command started");
-    const result = runRocInEnv(io, allocator, env, command.args, command.roc_file, command.file_path_mode, command.stdin, child_timeout_ms) catch |err|
+    const result = runRocInEnv(io, allocator, env, command.args, command.roc_file, command.file_path_mode, command.app_args, command.stdin, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "run spawn error: {}", .{err});
 
     if (checkCommandExpectation(allocator, result, command)) |message| {
@@ -2596,11 +2781,55 @@ const NativeMuslTarget = struct {
     c_host_needs_compiler_rt: bool,
 };
 
+const GlueNativeKind = enum {
+    musl,
+    macos,
+    windows,
+};
+
+const GlueNativeTarget = struct {
+    roc_target: []const u8,
+    zig_target: []const u8,
+    rust_target: []const u8,
+    host_library: []const u8,
+    output_name: []const u8,
+    kind: GlueNativeKind,
+    c_host_needs_compiler_rt: bool,
+};
+
 fn nativeMuslTarget() ?NativeMuslTarget {
     if (builtin.os.tag != .linux) return null;
     return switch (builtin.cpu.arch) {
         .x86_64 => .{ .roc_target = "x64musl", .zig_target = "x86_64-linux-musl", .rust_target = "x86_64-unknown-linux-musl", .c_host_needs_compiler_rt = false },
         .aarch64 => .{ .roc_target = "arm64musl", .zig_target = "aarch64-linux-musl", .rust_target = "aarch64-unknown-linux-musl", .c_host_needs_compiler_rt = true },
+        else => null,
+    };
+}
+
+fn nativeGlueTarget() ?GlueNativeTarget {
+    if (nativeMuslTarget()) |target| {
+        return .{
+            .roc_target = target.roc_target,
+            .zig_target = target.zig_target,
+            .rust_target = target.rust_target,
+            .host_library = "libhost.a",
+            .output_name = "glue-runtime-app",
+            .kind = .musl,
+            .c_host_needs_compiler_rt = target.c_host_needs_compiler_rt,
+        };
+    }
+
+    return switch (builtin.os.tag) {
+        .macos => switch (builtin.cpu.arch) {
+            .x86_64 => .{ .roc_target = "x64mac", .zig_target = "x86_64-macos", .rust_target = "x86_64-apple-darwin", .host_library = "libhost.a", .output_name = "glue-runtime-app", .kind = .macos, .c_host_needs_compiler_rt = false },
+            .aarch64 => .{ .roc_target = "arm64mac", .zig_target = "aarch64-macos", .rust_target = "aarch64-apple-darwin", .host_library = "libhost.a", .output_name = "glue-runtime-app", .kind = .macos, .c_host_needs_compiler_rt = false },
+            else => null,
+        },
+        .windows => switch (builtin.cpu.arch) {
+            .x86_64 => .{ .roc_target = "x64win", .zig_target = "x86_64-windows-msvc", .rust_target = "x86_64-pc-windows-msvc", .host_library = "host.lib", .output_name = "glue-runtime-app.exe", .kind = .windows, .c_host_needs_compiler_rt = false },
+            .aarch64 => .{ .roc_target = "arm64win", .zig_target = "aarch64-windows-msvc", .rust_target = "aarch64-pc-windows-msvc", .host_library = "host.lib", .output_name = "glue-runtime-app.exe", .kind = .windows, .c_host_needs_compiler_rt = false },
+            else => null,
+        },
         else => null,
     };
 }
@@ -4037,7 +4266,7 @@ fn runRocInCaseEnv(
     try case_env_map.put("ZIG_LOCAL_CACHE_DIR", zig_cache_dir);
     try util.putIsolatedTempEnv(&case_env_map, temp_dir);
 
-    const argv = try buildRocArgv(allocator, args, roc_file, .absolute);
+    const argv = try buildRocArgv(allocator, args, roc_file, .absolute, &.{});
     return util.runChildWithTimeout(io, allocator, argv, .{
         .cwd = project_root_path,
         .env_map = &case_env_map,
@@ -4676,7 +4905,7 @@ fn customListBuiltinInlined(
 
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc build started");
-    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=speed", "--no-cache", output_arg }, app_path, .absolute, null, child_timeout_ms) catch |err|
+    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=speed", "--no-cache", output_arg }, app_path, .absolute, &.{}, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc build spawn error: {}", .{err});
     if (checkCommandExpectation(allocator, result, .{ .args = &.{"build"}, .exit = .success })) |message| {
         return failureFromRun(allocator, timer, result, message);
@@ -4703,7 +4932,7 @@ fn customGeneratedModuleGraph(
             return customInfraFailure(allocator, timer, "failed to allocate cache path: {}", .{err});
         const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
             return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc check started");
-        const result = runRocInEnv(io, allocator, env, &.{"check"}, main_path, .absolute, null, child_timeout_ms) catch |err|
+        const result = runRocInEnv(io, allocator, env, &.{"check"}, main_path, .absolute, &.{}, null, child_timeout_ms) catch |err|
             return customInfraFailure(allocator, timer, "roc check spawn error: {}", .{err});
         if (checkCommandExpectation(allocator, result, .{ .args = &.{"check"}, .exit = .success })) |message| {
             return failureFromRun(allocator, timer, result, message);
@@ -4887,7 +5116,7 @@ fn customFmtStdin(
         return customInfraFailure(allocator, timer, "failed to read stdin source: {}", .{err});
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc fmt --stdin started");
-    const result = runRocInEnv(io, allocator, env, &.{ "fmt", "--stdin" }, null, .absolute, input, child_timeout_ms) catch |err|
+    const result = runRocInEnv(io, allocator, env, &.{ "fmt", "--stdin" }, null, .absolute, &.{}, input, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc fmt --stdin spawn error: {}", .{err});
     if (checkCommandExpectation(allocator, result, .{ .args = &.{ "fmt", "--stdin" } })) |message| {
         return failureFromRun(allocator, timer, result, message);
@@ -5037,7 +5266,7 @@ fn customDefaultAppAllSyntaxCheckedCache(io: std.Io, allocator: Allocator, env: 
 }
 
 /// Normalize one verb's stderr for cross-verb comparison: strip ANSI, cut the
-/// per-verb summary trailer ("Found N error(s) ..."), reduce source-location
+/// per-verb summary trailer ("Found N errors ..."), reduce source-location
 /// lines to basename:line:col (check prints absolute paths where the other
 /// verbs embed workspace-relative ones), and drop trailing blank lines.
 fn parityNormalizedReports(allocator: Allocator, stderr_bytes: []const u8) Allocator.Error![]u8 {
@@ -5070,7 +5299,8 @@ fn parityCompareVerbs(
     timer: *harness.Timer,
     timeout_ms: u64,
     fixture: []const u8,
-    expected_exit: u32,
+    expected_exits: [4]u32,
+    expect_no_ansi: bool,
 ) ?TestResult {
     const build_out = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "parity-build-out" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate build output path: {}", .{err});
@@ -5081,10 +5311,10 @@ fn parityCompareVerbs(
         name: []const u8,
         args: []const []const u8,
     }{
-        .{ .name = "check", .args = &.{ "check", "--no-cache" } },
-        .{ .name = "build", .args = &.{ "build", "--no-cache", build_out_arg } },
-        .{ .name = "run", .args = &.{"--no-cache"} },
-        .{ .name = "test", .args = &.{ "test", "--no-cache" } },
+        .{ .name = "check", .args = &.{ "--no-color", "check", "--no-cache" } },
+        .{ .name = "build", .args = &.{ "--no-color", "build", "--no-cache", build_out_arg } },
+        .{ .name = "run", .args = &.{ "--no-color", "--no-cache" } },
+        .{ .name = "test", .args = &.{ "--no-color", "test", "--no-cache" } },
     };
 
     var normalized: [verbs.len][]u8 = undefined;
@@ -5092,12 +5322,15 @@ fn parityCompareVerbs(
         const captured = captureRocRun(io, allocator, env, timer, timeout_ms, .{
             .args = verb.args,
             .roc_file = fixture,
-            .exit = .{ .code = expected_exit },
+            .exit = .{ .code = expected_exits[i] },
         });
         const result = switch (captured) {
             .failure => |failure| return failure,
             .result => |result| result,
         };
+        if (expect_no_ansi) {
+            if (expectNoAnsiInPreSummary(allocator, timer, verb.name, result)) |failure| return failure;
+        }
         normalized[i] = parityNormalizedReports(allocator, result.stderr) catch |err|
             return customInfraFailure(allocator, timer, "parity normalization failed: {}", .{err});
     }
@@ -5116,10 +5349,12 @@ fn parityCompareVerbs(
 }
 
 fn customPipelineParityDiagnostics(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    // One warning: every verb exits 2 and renders the same report.
-    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/warn_app/main.roc", 2)) |failure| return failure;
-    // One error: every verb exits 1 and renders the same report.
-    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/error_app/main.roc", 1)) |failure| return failure;
+    // Warnings retain the shared exit-2 policy after every verb completes.
+    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/warn_app/main.roc", .{ 2, 2, 2, 2 }, true)) |failure| return failure;
+    // A build completes and emits its executable despite the diagnostic; check
+    // reports failure, run reaches the checked error, and test reports failure
+    // only after executing all independent roots.
+    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/error_app/main.roc", .{ 1, 0, 1, 1 }, false)) |failure| return failure;
     return null;
 }
 
@@ -5388,7 +5623,7 @@ fn captureRocRun(
 ) CapturedRocRun {
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return .{ .failure = timeoutFailure(allocator, timer, .run, "case timeout exhausted before command started") };
-    const result = runRocInEnv(io, allocator, env, command.args, command.roc_file, command.file_path_mode, command.stdin, child_timeout_ms) catch |err|
+    const result = runRocInEnv(io, allocator, env, command.args, command.roc_file, command.file_path_mode, command.app_args, command.stdin, child_timeout_ms) catch |err|
         return .{ .failure = customInfraFailure(allocator, timer, "run spawn error: {}", .{err}) };
 
     if (checkCommandExpectation(allocator, result, command)) |message| {
@@ -6296,7 +6531,7 @@ fn customBuildIssue9435(io: std.Io, allocator: Allocator, env: *const CaseEnv, t
         return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc build started");
-    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", "--no-cache", out_arg }, "test/hosted_nominal_return/repro.roc", .absolute, null, child_timeout_ms) catch |err|
+    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", "--no-cache", out_arg }, "test/hosted_nominal_return/repro.roc", .absolute, &.{}, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc build spawn error: {}", .{err});
     if (result.term == .signal or (result.term == .exited and result.term.exited == 134)) {
         return failureFromRun(allocator, timer, result, "roc build panicked or aborted");
@@ -6885,9 +7120,9 @@ fn runGlueRuntimeCase(
 ) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .setup, .message = "no clock" };
 
-    const native_target: ?NativeMuslTarget = switch (runtime.target) {
-        .native => nativeMuslTarget() orelse {
-            return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "glue runtime native contracts run only on native Linux x64/arm64 hosts with checked-in musl target inputs" };
+    const native_target: ?GlueNativeTarget = switch (runtime.target) {
+        .native => nativeGlueTarget() orelse {
+            return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "glue runtime native contracts do not support this host target" };
         },
         .wasm32 => null,
     };
@@ -6914,12 +7149,13 @@ fn runGlueRuntimeCase(
         return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to allocate glue runtime host path: {}", .{err}), env.dirs.work_dir);
     const host_o_path = std.fs.path.join(allocator, &.{ target_dir, "host.o" }) catch |err|
         return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to allocate glue runtime host object path: {}", .{err}), env.dirs.work_dir);
-    const host_lib_path = std.fs.path.join(allocator, &.{ target_dir, "libhost.a" }) catch |err|
+    const host_lib_name = if (native_target) |target| target.host_library else "libhost.a";
+    const host_lib_path = std.fs.path.join(allocator, &.{ target_dir, host_lib_name }) catch |err|
         return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to allocate glue runtime host archive path: {}", .{err}), env.dirs.work_dir);
     const host_wasm_path = std.fs.path.join(allocator, &.{ target_dir, "host.wasm" }) catch |err|
         return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to allocate glue runtime host wasm path: {}", .{err}), env.dirs.work_dir);
     const output_name = switch (runtime.target) {
-        .native => "glue-runtime-app",
+        .native => native_target.?.output_name,
         .wasm32 => "glue-runtime-app.wasm",
     };
     const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, output_name }) catch |err|
@@ -6944,10 +7180,18 @@ fn runGlueRuntimeCase(
     switch (runtime.target) {
         .native => {
             const target = native_target.?;
-            copyNativeMuslTargetFile(io, allocator, target, "crt1.o", target_dir) catch |err|
-                return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime crt1.o: {}", .{err}), env.dirs.work_dir);
-            copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
-                return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime libc.a: {}", .{err}), env.dirs.work_dir);
+            if (target.kind == .musl) {
+                const musl_target = NativeMuslTarget{
+                    .roc_target = target.roc_target,
+                    .zig_target = target.zig_target,
+                    .rust_target = target.rust_target,
+                    .c_host_needs_compiler_rt = target.c_host_needs_compiler_rt,
+                };
+                copyNativeMuslTargetFile(io, allocator, musl_target, "crt1.o", target_dir) catch |err|
+                    return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime crt1.o: {}", .{err}), env.dirs.work_dir);
+                copyNativeMuslTargetFile(io, allocator, musl_target, "libc.a", target_dir) catch |err|
+                    return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime libc.a: {}", .{err}), env.dirs.work_dir);
+            }
         },
         .wasm32 => {},
     }
@@ -7059,7 +7303,7 @@ fn compileGlueRuntimeCHost(
     env: *const CaseEnv,
     timer: *harness.Timer,
     timeout_ms: u64,
-    target: NativeMuslTarget,
+    target: GlueNativeTarget,
     include_dir: []const u8,
     host_path: []const u8,
     host_o_path: []const u8,
@@ -7181,6 +7425,7 @@ fn compileGlueRuntimeCWasmHost(
         "cc",
         "-target",
         "wasm32-freestanding",
+        "-msimd128",
         "-O2",
         "-std=c11",
         "-Wall",
@@ -7206,7 +7451,7 @@ fn compileGlueRuntimeZigHost(
     env: *const CaseEnv,
     timer: *harness.Timer,
     timeout_ms: u64,
-    target: NativeMuslTarget,
+    target: GlueNativeTarget,
     host_path: []const u8,
     host_o_path: []const u8,
     host_lib_path: []const u8,
@@ -7250,6 +7495,8 @@ fn compileGlueRuntimeZigWasmHost(
         "build-obj",
         "-target",
         "wasm32-freestanding-none",
+        "-mcpu",
+        "baseline+simd128",
         "-fPIC",
         "-ffunction-sections",
         "-fdata-sections",
@@ -7267,7 +7514,7 @@ fn compileGlueRuntimeRustHost(
     env: *const CaseEnv,
     timer: *harness.Timer,
     timeout_ms: u64,
-    target: NativeMuslTarget,
+    target: GlueNativeTarget,
     host_path: []const u8,
     host_lib_path: []const u8,
 ) ?TestResult {
@@ -7407,6 +7654,8 @@ fn compileGlueRuntimeRustWasmHost(
         "wasm32-unknown-unknown",
         "-C",
         "panic=abort",
+        "-C",
+        "target-feature=+simd128",
         "--crate-type",
         "staticlib",
         host_path,
@@ -7458,6 +7707,30 @@ fn customGlueDebugDev(io: std.Io, allocator: Allocator, env: *const CaseEnv, tim
             .{ .stream = .stderr, .text = "PANIC" },
             .{ .stream = .stderr, .text = "unreachable" },
             .{ .stream = .stderr, .text = "name: \"\"" },
+        },
+    })) |failure| return failure;
+    return null;
+}
+
+fn customGlueDevWithoutTempEnv(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    var no_temp_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone environment for glue run: {}", .{err}),
+    };
+    defer no_temp_env.env_map.deinit();
+    _ = no_temp_env.env_map.swapRemove("TMPDIR");
+    _ = no_temp_env.env_map.swapRemove("TEMP");
+    _ = no_temp_env.env_map.swapRemove("TMP");
+
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-no-temp-env") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, &no_temp_env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "Compilation failed" },
+            .{ .stream = .stderr, .text = "PANIC" },
         },
     })) |failure| return failure;
     return null;
@@ -7902,6 +8175,8 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "--edition=2021",
         "-D",
         "warnings",
+        "--check-cfg",
+        "cfg()",
         "--crate-type",
         "lib",
         generated_path,
@@ -8686,6 +8961,7 @@ fn printUsage() void {
         \\  --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
         \\  --include-llvm       Include size and speed LLVM backend jobs
         \\  --specialize=<yes|no> Override the runtime lowering strategy for platform jobs
+        \\  --cross-target <name> Build platform cases for this target without running them
         \\  --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
         \\  --glue-opt <opt>     Glue execution mode: default, dev, size, or speed
         \\  --verbose            Show PASS results with timing
@@ -8699,6 +8975,7 @@ const ParsedRunnerArgs = struct {
     glue_options: GlueRunnerOptions,
     glue_roc: ?[]const u8 = null,
     specialization_arg: ?[]const u8 = null,
+    cross_target: ?[]const u8 = null,
 };
 
 fn parseSuiteName(value: []const u8) ?Suite {
@@ -8716,6 +8993,13 @@ fn parseGlueExecutionMode(value: []const u8) ?GlueExecutionMode {
     return null;
 }
 
+fn isKnownCrossTarget(value: []const u8) bool {
+    for (platform_config.platforms) |platform| {
+        if (platform_config.findTarget(platform, value) != null) return true;
+    }
+    return false;
+}
+
 fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunnerError!ParsedRunnerArgs {
     const raw_z = try process_args.toSlice(allocator);
     const raw_args: []const []const u8 = @ptrCast(raw_z);
@@ -8727,6 +9011,7 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
     var glue_options = GlueRunnerOptions{};
     var glue_roc: ?[]const u8 = null;
     var specialization_arg: ?[]const u8 = null;
+    var cross_target: ?[]const u8 = null;
     var saw_suite = false;
     var i: usize = 1;
     while (i < raw_args.len) : (i += 1) {
@@ -8756,6 +9041,29 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
                 return error.InvalidArgs;
             }
             glue_roc = raw_args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--cross-target")) {
+            i += 1;
+            if (i >= raw_args.len) {
+                std.debug.print("missing value for --cross-target\n", .{});
+                return error.InvalidArgs;
+            }
+            const value = raw_args[i];
+            if (!isKnownCrossTarget(value)) {
+                std.debug.print("unknown cross target: {s}\n", .{value});
+                return error.InvalidArgs;
+            }
+            cross_target = value;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--cross-target=")) {
+            const value = arg["--cross-target=".len..];
+            if (!isKnownCrossTarget(value)) {
+                std.debug.print("unknown cross target: {s}\n", .{value});
+                return error.InvalidArgs;
+            }
+            cross_target = value;
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--glue-roc=")) {
@@ -8796,7 +9104,15 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
     }
 
     if (!saw_suite or suites.isEmpty()) {
-        suites.addAll();
+        if (cross_target != null) {
+            suites.add(.platforms);
+        } else {
+            suites.addAll();
+        }
+    }
+    if (cross_target != null and !suites.includesOnly(.platforms)) {
+        std.debug.print("--cross-target can only be used with the platforms suite\n", .{});
+        return error.InvalidArgs;
     }
 
     return .{
@@ -8805,6 +9121,7 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
         .glue_options = glue_options,
         .glue_roc = glue_roc,
         .specialization_arg = specialization_arg,
+        .cross_target = cross_target,
     };
 }
 
@@ -8827,6 +9144,37 @@ test "effectiveTimeoutMs extends default for glue suite only" {
     default_args.timeout_provided = true;
     default_args.timeout_ms = 15_000;
     try std.testing.expectEqual(@as(u64, 15_000), effectiveTimeoutMs(default_args, suites));
+}
+
+test "cross target builds one build-only case per matching platform spec" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var suites = SuiteSelection{};
+    suites.add(.platforms);
+    const cases = try buildCases(
+        arena.allocator(),
+        &.{"test/fx/"},
+        false,
+        suites,
+        .{},
+        "x64musl",
+    );
+
+    const fx = platform_config.findPlatform("fx").?;
+    const expected_count = switch (fx.test_apps) {
+        .spec_list => |specs| specs.len,
+        else => unreachable,
+    };
+    try std.testing.expectEqual(expected_count, cases.len);
+    for (cases) |case| {
+        try std.testing.expectEqual(@as(?OptMode, null), case.backend);
+        try std.testing.expect(std.mem.startsWith(u8, case.body.platform.roc_file, "test/fx/"));
+        switch (case.body.platform.test_kind) {
+            .cross_compile => |target| try std.testing.expectEqualStrings("x64musl", target),
+            else => return error.TestUnexpectedResult,
+        }
+    }
 }
 
 /// Entry point for the parallel CLI test runner.
@@ -8869,7 +9217,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     glue_execution_mode = parsed.glue_options.execution_mode;
     platform_specialization_arg = parsed.specialization_arg;
 
-    const tests = try buildCases(spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options);
+    const tests = try buildCases(spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options, parsed.cross_target);
     if (tests.len == 0) return;
     const timeout_ms = effectiveTimeoutMs(args, parsed.suites);
 
@@ -8886,7 +9234,9 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
 
     std.debug.print("=== CLI Test Runner ===\n", .{});
     std.debug.print("{d} tests, {d} workers, {d}s timeout", .{ tests.len, max_children, timeout_ms / 1000 });
-    if (args.include_llvm) {
+    if (parsed.cross_target) |target| {
+        std.debug.print(", cross target: {s}\n\n", .{target});
+    } else if (args.include_llvm) {
         std.debug.print(", backends: interpreter, dev, size, speed\n\n", .{});
     } else {
         std.debug.print(", backends: interpreter, dev\n\n", .{});

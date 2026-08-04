@@ -256,10 +256,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "data")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "data")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -276,10 +273,7 @@ NO CHANGE
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-string
-				(e-literal (string "test")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "config"))
 		(e-runtime-error (tag "qualified_ident_does_not_exist")))

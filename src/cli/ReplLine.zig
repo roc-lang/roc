@@ -30,6 +30,8 @@ pub const NEW_LINE = switch (SUPPORTED_OS) {
 pub const InputEvent = union(enum) {
     /// A single byte to be processed normally (typed character, control key, etc.).
     byte: u8,
+    /// A 2-byte ESC sequence (ESC X) — typically Alt-key combinations.
+    esc2: [2]u8,
     /// A 3-byte CSI sequence (ESC [ X) — typically arrow keys.
     csi3: [3]u8,
     /// A bracketed paste began (consumed an `ESC[200~` marker).
@@ -143,6 +145,10 @@ pub const InputParser = struct {
 
                 try events.append(gpa, .{ .csi3 = .{ buf[i], buf[i + 1], buf[i + 2] } });
                 i += 3;
+            } else if (key == control_code.esc and i + 1 < total and buf[i + 1] != '[') {
+                // 2-byte ESC sequence (ESC X)
+                try events.append(gpa, .{ .esc2 = .{ buf[i], buf[i + 1] } });
+                i += 2;
             } else if (key == control_code.esc and i + 1 >= total) {
                 // Lone ESC at the end of the buffer — could be the start of a
                 // longer sequence whose tail is in the next chunk.
@@ -203,9 +209,20 @@ const History = struct {
     }
 
     pub fn append(self: *History, input: []const u8) Allocator.Error!void {
-        const input_copy = try self.allocator.alloc(u8, input.len);
-        @memcpy(input_copy, input);
-        try self.entries.append(self.allocator, input_copy);
+        var it = std.mem.splitScalar(u8, input, '\n');
+        while (it.next()) |raw_line| {
+            const line = std.mem.trimEnd(u8, raw_line, "\r");
+            if (line.len == 0) continue;
+
+            if (self.entries.items.len > 0) {
+                const last = self.entries.items[self.entries.items.len - 1];
+                if (std.mem.eql(u8, last, line)) continue;
+            }
+
+            try self.entries.ensureUnusedCapacity(self.allocator, 1);
+            const line_copy = try self.allocator.dupe(u8, line);
+            self.entries.appendAssumeCapacity(line_copy);
+        }
     }
 };
 
@@ -214,13 +231,28 @@ const ReplLine = @This();
 
 allocator: Allocator,
 history: History,
+kill_ring: ?[]const u8,
+replay_index: ?usize,
 
 pub fn init(allocator: Allocator) ReplLine {
-    return ReplLine{ .allocator = allocator, .history = History.init(allocator) };
+    return ReplLine{
+        .allocator = allocator,
+        .history = History.init(allocator),
+        .kill_ring = null,
+        .replay_index = null,
+    };
 }
 
 pub fn deinit(self: *ReplLine) void {
     self.history.deinit();
+    if (self.kill_ring) |k| {
+        self.allocator.free(k);
+    }
+}
+
+/// Add submitted input to this line editor's in-memory history.
+pub fn recordHistory(self: *ReplLine, input: []const u8) Allocator.Error!void {
+    try self.history.append(input);
 }
 
 const CommandError =
@@ -244,6 +276,9 @@ const LineState = struct {
     in_buffer: [8]u8,
     history: *History,
     history_index: ?usize,
+    transient_line: ?[]const u8,
+    kill_ring: *?[]const u8,
+    replay_index: *?usize,
     /// Set after a Ctrl-C so that a second consecutive Ctrl-C quits. Any other
     /// input event clears it, so the two presses must be back-to-back.
     ctrl_c_armed: bool,
@@ -268,6 +303,7 @@ fn printChar(state: *LineState) CommandError!void {
 
 fn deleteBefore(state: *LineState) CommandError!void {
     if (state.col_offset == 0) return;
+    state.history_index = null;
     state.col_offset -= 1;
     _ = state.line_buffer.orderedRemove(state.col_offset);
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
@@ -282,7 +318,8 @@ fn exitRepl(_: *LineState) CommandError!void {
     return error.ExitRepl;
 }
 
-fn acceptLine(_: *LineState) CommandError!void {
+fn acceptLine(state: *LineState) CommandError!void {
+    state.replay_index.* = if (state.history_index) |index| index + 1 else null;
     return error.NewLine;
 }
 
@@ -325,11 +362,151 @@ fn moveCursorLeft(state: *LineState) CommandError!void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
+fn moveCursorToStart(state: *LineState) CommandError!void {
+    state.col_offset = 0;
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+}
+
+fn moveCursorToEnd(state: *LineState) CommandError!void {
+    state.col_offset = state.line_buffer.items.len;
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn replaceKillRing(state: *LineState, text: []const u8) Allocator.Error!void {
+    const replacement = try state.outlive.dupe(u8, text);
+    if (state.kill_ring.*) |previous| {
+        state.outlive.free(previous);
+    }
+    state.kill_ring.* = replacement;
+}
+
+fn killLineToEnd(state: *LineState) CommandError!void {
+    const cut_text = state.line_buffer.items[state.col_offset..];
+    if (cut_text.len > 0) {
+        try replaceKillRing(state, cut_text);
+        state.history_index = null;
+    }
+    state.line_buffer.shrinkAndFree(state.temp, state.col_offset);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+}
+
+fn isWordChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+fn findWordStartBackward(buf: []const u8, start: usize) usize {
+    var i = start;
+    while (i > 0 and !isWordChar(buf[i - 1])) : (i -= 1) {}
+    while (i > 0 and isWordChar(buf[i - 1])) : (i -= 1) {}
+    return i;
+}
+
+fn deleteToStart(state: *LineState) CommandError!void {
+    if (state.col_offset == 0) return;
+    state.history_index = null;
+
+    const cut_text = state.line_buffer.items[0..state.col_offset];
+    try replaceKillRing(state, cut_text);
+
+    const remaining_len = state.line_buffer.items.len - state.col_offset;
+    std.mem.copyForwards(u8, state.line_buffer.items[0..remaining_len], state.line_buffer.items[state.col_offset..]);
+    state.line_buffer.shrinkRetainingCapacity(remaining_len);
+    state.col_offset = 0;
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+}
+
+fn deleteWordBackward(state: *LineState) CommandError!void {
+    if (state.col_offset == 0) return;
+
+    const word_start = findWordStartBackward(state.line_buffer.items, state.col_offset);
+    if (word_start == state.col_offset) return;
+    state.history_index = null;
+
+    const cut_text = state.line_buffer.items[word_start..state.col_offset];
+    try replaceKillRing(state, cut_text);
+
+    const remaining_len = state.line_buffer.items.len - (state.col_offset - word_start);
+    std.mem.copyForwards(
+        u8,
+        state.line_buffer.items[word_start..remaining_len],
+        state.line_buffer.items[state.col_offset..],
+    );
+    state.line_buffer.shrinkRetainingCapacity(remaining_len);
+    state.col_offset = word_start;
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn yank(state: *LineState) CommandError!void {
+    const text = state.kill_ring.* orelse return;
+    if (text.len == 0) return;
+    state.history_index = null;
+
+    try state.line_buffer.insertSlice(state.temp, state.col_offset, text);
+    state.col_offset += text.len;
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn findWordEndForward(buf: []const u8, start: usize) usize {
+    var i = start;
+    const len = buf.len;
+    while (i < len and !isWordChar(buf[i])) : (i += 1) {}
+    while (i < len and isWordChar(buf[i])) : (i += 1) {}
+    return i;
+}
+
+fn moveWordLeft(state: *LineState) CommandError!void {
+    state.col_offset = findWordStartBackward(state.line_buffer.items, state.col_offset);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn moveWordRight(state: *LineState) CommandError!void {
+    state.col_offset = findWordEndForward(state.line_buffer.items, state.col_offset);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn killWordForward(state: *LineState) CommandError!void {
+    const word_end = findWordEndForward(state.line_buffer.items, state.col_offset);
+    if (word_end == state.col_offset) return;
+    state.history_index = null;
+
+    const cut_text = state.line_buffer.items[state.col_offset..word_end];
+    try replaceKillRing(state, cut_text);
+
+    const cut_len = word_end - state.col_offset;
+    const remaining_len = state.line_buffer.items.len - cut_len;
+    std.mem.copyForwards(
+        u8,
+        state.line_buffer.items[state.col_offset..remaining_len],
+        state.line_buffer.items[word_end..],
+    );
+    state.line_buffer.shrinkRetainingCapacity(remaining_len);
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
 fn historyBackward(state: *LineState) CommandError!void {
+    state.replay_index.* = null;
+
     const hist_len = state.history.entries.items.len;
     if (hist_len == 0) return;
 
     if (state.history_index == null) {
+        state.transient_line = try state.temp.dupe(u8, state.line_buffer.items);
         state.history_index = hist_len - 1;
     } else if (state.history_index.? > 0) {
         state.history_index = state.history_index.? - 1;
@@ -348,19 +525,39 @@ fn historyBackward(state: *LineState) CommandError!void {
 
 fn historyForward(state: *LineState) CommandError!void {
     const hist_len = state.history.entries.items.len;
-    if (hist_len == 0 or state.history_index == null) return;
+    const replay_index = state.replay_index.*;
+    state.replay_index.* = null;
+    if (hist_len == 0) return;
 
-    if (state.history_index.? < hist_len - 1) {
-        state.history_index = state.history_index.? + 1;
-        const entry = state.history.entries.items[state.history_index.?];
+    if (state.history_index) |index| {
+        if (index < hist_len - 1) {
+            const next_index = index + 1;
+            state.history_index = next_index;
+            const entry = state.history.entries.items[next_index];
+            state.line_buffer.clearAndFree(state.temp);
+            try state.line_buffer.appendSlice(state.temp, entry);
+            state.col_offset = entry.len;
+        } else {
+            // Past the end, restore transient draft line
+            state.history_index = null;
+            state.line_buffer.clearAndFree(state.temp);
+            if (state.transient_line) |transient| {
+                try state.line_buffer.appendSlice(state.temp, transient);
+                state.col_offset = transient.len;
+            } else {
+                state.col_offset = 0;
+            }
+        }
+    } else if (replay_index) |index| {
+        if (index >= hist_len) return;
+
+        state.history_index = index;
+        const entry = state.history.entries.items[index];
         state.line_buffer.clearAndFree(state.temp);
         try state.line_buffer.appendSlice(state.temp, entry);
         state.col_offset = entry.len;
     } else {
-        // Past the end, clear line
-        state.history_index = null;
-        state.line_buffer.clearAndFree(state.temp);
-        state.col_offset = 0;
+        return;
     }
 
     try ansi_term.setCursorColumn(state.out, state.prompt_width);
@@ -377,6 +574,15 @@ fn findCommandFn(state: *LineState) CommandFn {
         ansi_term.ctrlKey('D') => exitRepl,
         ansi_term.ctrlKey('L') => clearScreen,
         ansi_term.ctrlKey('C') => handleCtrlC,
+        ansi_term.ctrlKey('A') => moveCursorToStart,
+        ansi_term.ctrlKey('E') => moveCursorToEnd,
+        ansi_term.ctrlKey('K') => killLineToEnd,
+        ansi_term.ctrlKey('U') => deleteToStart,
+        ansi_term.ctrlKey('W') => deleteWordBackward,
+        ansi_term.ctrlKey('Y') => yank,
+        ansi_term.ctrlKey('B') => moveCursorLeft,
+        ansi_term.ctrlKey('F') => moveCursorRight,
+        ansi_term.ctrlKey('H') => deleteBefore,
         control_code.lf, control_code.cr => acceptLine,
         control_code.esc => {
             if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
@@ -385,6 +591,13 @@ fn findCommandFn(state: *LineState) CommandFn {
                     ansi_term.RIGHT => moveCursorRight,
                     ansi_term.UP => historyBackward,
                     ansi_term.DOWN => historyForward,
+                    else => doNothing,
+                };
+            } else if (state.bytes_read == 2) {
+                return switch (state.in_buffer[1]) {
+                    'b', 'B' => moveWordLeft,
+                    'f', 'F' => moveWordRight,
+                    'd', 'D' => killWordForward,
                     else => doNothing,
                 };
             } else {
@@ -494,6 +707,9 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
         .in_buffer = undefined,
         .history = &self.history,
         .history_index = null,
+        .transient_line = null,
+        .kill_ring = &self.kill_ring,
+        .replay_index = &self.replay_index,
         .ctrl_c_armed = false,
     };
 
@@ -550,6 +766,11 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                     state.in_buffer[0] = b;
                     state.bytes_read = 1;
                 },
+                .esc2 => |seq| {
+                    state.in_buffer[0] = seq[0];
+                    state.in_buffer[1] = seq[1];
+                    state.bytes_read = 2;
+                },
                 .csi3 => |seq| {
                     state.in_buffer[0] = seq[0];
                     state.in_buffer[1] = seq[1];
@@ -569,6 +790,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                     try state.line_buffer.insertSlice(state.temp, state.col_offset, paste_buffer.items);
                     state.col_offset += paste_buffer.items.len;
                     state.history_index = null;
+                    state.replay_index.* = null;
 
                     const has_newline = std.mem.findAny(u8, paste_buffer.items, "\n\r") != null;
                     paste_buffer.clearRetainingCapacity();
@@ -596,6 +818,11 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
             }
 
             const cmd = ReplLine.findCommandFn(&state);
+
+            if (cmd != historyForward and cmd != historyBackward and cmd != acceptLine) {
+                state.replay_index.* = null;
+            }
+
             cmd(&state) catch |err| {
                 switch (err) {
                     error.ExitRepl => return .eof,
@@ -669,16 +896,13 @@ test "InputParser: 3-byte CSI split as ESC then [A" {
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
 }
 
-test "InputParser: bare ESC followed by non-[ bytes is flushed as bytes" {
-    // Once a non-`[` byte appears after ESC, ESC and the trailing bytes are
-    // emitted as plain `byte` events (the existing 3-byte CSI path is the
-    // only one that consumes ESC specially).
+test "InputParser: bare ESC followed by non-[ bytes is parsed as a 2-byte ESC sequence" {
+    // Once a non-`[` byte appears after ESC, it is parsed as a 2-byte ESC sequence.
     var parser = InputParser{};
     var events = try collectEvents(&parser, &.{"\x1bOP"});
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .byte = 0x1b },
-        .{ .byte = 'O' },
+        .{ .esc2 = .{ 0x1b, 'O' } },
         .{ .byte = 'P' },
     }, events.items);
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
@@ -967,4 +1191,310 @@ test "writeAlignedToPrompt: original indentation is preserved on top of prompt i
 
 test "writeAlignedToPrompt: trailing newline still emits indent for empty next line" {
     try expectAlignedOutput("z = 5\n", 2, "z = 5\n  ");
+}
+
+test "Keyboard commands: advanced bindings" {
+    var line_buffer = std.ArrayList(u8).empty;
+    defer line_buffer.deinit(testing.allocator);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |k| testing.allocator.free(k);
+
+    var dummy_replay_index: ?usize = null;
+    var state = LineState{
+        .outlive = testing.allocator,
+        .temp = testing.allocator,
+        .prompt = "» ",
+        .prompt_width = 2,
+        .out = &aw.writer,
+        .in = undefined,
+        .col_offset = 0,
+        .line_buffer = line_buffer,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = undefined,
+        .history_index = null,
+        .transient_line = null,
+        .kill_ring = &kill_ring,
+        .replay_index = &dummy_replay_index,
+        .ctrl_c_armed = false,
+    };
+    defer state.line_buffer.deinit(testing.allocator);
+
+    // Simulate typing "hello world!"
+    try state.line_buffer.appendSlice(testing.allocator, "hello world!");
+    state.col_offset = 12;
+
+    // Ctrl-A: move cursor to start
+    try moveCursorToStart(&state);
+    try testing.expectEqual(@as(usize, 0), state.col_offset);
+
+    // Ctrl-E: move cursor to end
+    try moveCursorToEnd(&state);
+    try testing.expectEqual(@as(usize, 12), state.col_offset);
+
+    // Ctrl-B: move cursor left (backward)
+    try moveCursorLeft(&state);
+    try testing.expectEqual(@as(usize, 11), state.col_offset);
+
+    // Ctrl-F: move cursor right (forward)
+    try moveCursorRight(&state);
+    try testing.expectEqual(@as(usize, 12), state.col_offset);
+
+    // Ctrl-H / Backspace: delete character before cursor
+    try deleteBefore(&state); // deletes '!'
+    try testing.expectEqualStrings("hello world", state.line_buffer.items);
+    try testing.expectEqual(@as(usize, 11), state.col_offset);
+
+    // Move cursor back to 5 (after "hello")
+    state.col_offset = 5;
+
+    // Ctrl-K: kill line to end (kills " world")
+    try killLineToEnd(&state);
+    try testing.expectEqualStrings("hello", state.line_buffer.items);
+    try testing.expectEqualStrings(" world", kill_ring.?);
+
+    // Ctrl-Y: yank/paste at cursor
+    try yank(&state);
+    try testing.expectEqualStrings("hello world", state.line_buffer.items);
+    try testing.expectEqual(@as(usize, 11), state.col_offset);
+
+    // Ctrl-W: delete word backward (deletes "world")
+    try deleteWordBackward(&state);
+    try testing.expectEqualStrings("hello ", state.line_buffer.items);
+    try testing.expectEqualStrings("world", kill_ring.?);
+
+    // Test that Ctrl-W stops at parentheses and punctuation
+    try state.line_buffer.appendSlice(testing.allocator, "foo(bar_baz)");
+    state.col_offset = 18; // pointing to end of line: "hello foo(bar_baz)"
+
+    // Ctrl-W: should delete "bar_baz)" (word: "bar_baz", non-word: ")")
+    try deleteWordBackward(&state);
+    try testing.expectEqualStrings("hello foo(", state.line_buffer.items);
+    try testing.expectEqualStrings("bar_baz)", kill_ring.?);
+
+    // Ctrl-W: should delete "foo(" (word: "foo", non-word: "(")
+    try deleteWordBackward(&state);
+    try testing.expectEqualStrings("hello ", state.line_buffer.items);
+    try testing.expectEqualStrings("foo(", kill_ring.?);
+
+    // Ctrl-U: delete to start (deletes "hello ")
+    try deleteToStart(&state);
+    try testing.expectEqualStrings("", state.line_buffer.items);
+    try testing.expectEqualStrings("hello ", kill_ring.?);
+
+    // Reset buffer to "hello foo(bar_baz)" for Alt-B, Alt-F, Alt-D testing
+    state.line_buffer.clearRetainingCapacity();
+    try state.line_buffer.appendSlice(testing.allocator, "hello foo(bar_baz)");
+    state.col_offset = 0;
+
+    // Alt-F (moveWordRight)
+    try moveWordRight(&state); // moves past "hello" -> 5 (space before foo)
+    try testing.expectEqual(@as(usize, 5), state.col_offset);
+
+    try moveWordRight(&state); // moves past "foo" -> 9 (parenthesis '(')
+    try testing.expectEqual(@as(usize, 9), state.col_offset);
+
+    try moveWordRight(&state); // moves past "bar_baz" -> 17 (parenthesis ')')
+    try testing.expectEqual(@as(usize, 17), state.col_offset);
+
+    // Alt-B (moveWordLeft)
+    try moveWordLeft(&state); // moves to start of "bar_baz" -> 10
+    try testing.expectEqual(@as(usize, 10), state.col_offset);
+
+    try moveWordLeft(&state); // moves to start of "foo" -> 6
+    try testing.expectEqual(@as(usize, 6), state.col_offset);
+
+    // Alt-D (killWordForward)
+    // currently at "hello foo(bar_baz)" with col_offset at 6 (start of "foo")
+    try killWordForward(&state); // should delete "foo" (word: "foo", non-word: "(" stops it)
+    try testing.expectEqualStrings("hello (bar_baz)", state.line_buffer.items);
+    try testing.expectEqualStrings("foo", kill_ring.?);
+    try testing.expectEqual(@as(usize, 6), state.col_offset);
+}
+
+test "InputParser: 2-byte ESC sequence" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1bb\x1bf\x1bd"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .esc2 = .{ 0x1b, 'b' } },
+        .{ .esc2 = .{ 0x1b, 'f' } },
+        .{ .esc2 = .{ 0x1b, 'd' } },
+    }, events.items);
+}
+
+test "History: basic appending and deduplication" {
+    var history = History.init(testing.allocator);
+    defer history.deinit();
+
+    try history.append("x = 1");
+    try history.append("y = 2");
+    try history.append("y = 2"); // should be ignored as consecutive duplicate
+
+    try testing.expectEqual(@as(usize, 2), history.entries.items.len);
+    try testing.expectEqualStrings("x = 1", history.entries.items[0]);
+    try testing.expectEqualStrings("y = 2", history.entries.items[1]);
+}
+
+test "History: transient line preservation" {
+    var history = History.init(testing.allocator);
+    defer history.deinit();
+
+    try history.append("first command");
+    try history.append("second command");
+
+    var arena = base.SingleThreadArena.init(testing.allocator);
+    defer arena.deinit();
+    const temp = arena.allocator();
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |k| testing.allocator.free(k);
+
+    var dummy_replay_index: ?usize = null;
+    var state = LineState{
+        .outlive = testing.allocator,
+        .temp = temp,
+        .prompt = "> ",
+        .prompt_width = 2,
+        .out = &aw.writer,
+        .in = undefined, // not used in history functions
+        .col_offset = 0,
+        .line_buffer = std.ArrayList(u8).empty,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = &history,
+        .history_index = null,
+        .transient_line = null,
+        .kill_ring = &kill_ring,
+        .replay_index = &dummy_replay_index,
+        .ctrl_c_armed = false,
+    };
+
+    // Simulate typing a transient command "third draft"
+    try state.line_buffer.appendSlice(temp, "third draft");
+    state.col_offset = 11;
+
+    // Navigate back to history (second command)
+    try historyBackward(&state);
+    try testing.expectEqualStrings("second command", state.line_buffer.items);
+    try testing.expectEqualStrings("third draft", state.transient_line.?);
+    try testing.expectEqual(@as(?usize, 1), state.history_index);
+
+    // Navigate further back (first command)
+    try historyBackward(&state);
+    try testing.expectEqualStrings("first command", state.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 0), state.history_index);
+
+    // Navigate forward (second command)
+    try historyForward(&state);
+    try testing.expectEqualStrings("second command", state.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 1), state.history_index);
+
+    // Navigate past the end (restores transient command "third draft")
+    try historyForward(&state);
+    try testing.expectEqualStrings("third draft", state.line_buffer.items);
+    try testing.expect(state.history_index == null);
+}
+
+test "History: replay index" {
+    var history = History.init(testing.allocator);
+    defer history.deinit();
+
+    try history.append("cmd 0");
+    try history.append("cmd 1");
+    try history.append("cmd 2");
+
+    var arena = base.SingleThreadArena.init(testing.allocator);
+    defer arena.deinit();
+    const temp = arena.allocator();
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |k| testing.allocator.free(k);
+
+    var replay_index: ?usize = null;
+    var state = LineState{
+        .outlive = testing.allocator,
+        .temp = temp,
+        .prompt = "> ",
+        .prompt_width = 2,
+        .out = &aw.writer,
+        .in = undefined,
+        .col_offset = 0,
+        .line_buffer = std.ArrayList(u8).empty,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = &history,
+        .history_index = null,
+        .transient_line = null,
+        .kill_ring = &kill_ring,
+        .replay_index = &replay_index,
+        .ctrl_c_armed = false,
+    };
+    defer state.line_buffer.deinit(temp);
+
+    // Navigate backward twice
+    try historyBackward(&state);
+    try historyBackward(&state);
+
+    try testing.expectEqual(@as(?usize, 1), state.history_index);
+
+    // Accepting a recalled line records the following entry for the next prompt.
+    try testing.expectError(error.NewLine, acceptLine(&state));
+    try testing.expectEqual(@as(?usize, 2), replay_index);
+
+    // Initialize fresh state for the next prompt
+    var state2 = LineState{
+        .outlive = testing.allocator,
+        .temp = temp,
+        .prompt = "> ",
+        .prompt_width = 2,
+        .out = &aw.writer,
+        .in = undefined,
+        .col_offset = 0,
+        .line_buffer = std.ArrayList(u8).empty,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = &history,
+        .history_index = null,
+        .transient_line = null,
+        .kill_ring = &kill_ring,
+        .replay_index = &replay_index,
+        .ctrl_c_armed = false,
+    };
+    defer state2.line_buffer.deinit(temp);
+
+    // Pressing DOWN on the next blank prompt recalls that following entry.
+    try historyForward(&state2);
+    try testing.expectEqualStrings("cmd 2", state2.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 2), state2.history_index);
+    try testing.expect(state2.replay_index.* == null);
+
+    // Editing a recalled entry detaches it from history, so accepting the
+    // edited line does not continue replaying the old sequence.
+    try deleteBefore(&state2);
+    try testing.expect(state2.history_index == null);
+    try testing.expectError(error.NewLine, acceptLine(&state2));
+    try testing.expect(state2.replay_index.* == null);
+}
+
+test "History: multiline command split" {
+    var history = History.init(testing.allocator);
+    defer history.deinit();
+
+    try history.append("line A\nline B\r\nline C");
+
+    try testing.expectEqual(@as(usize, 3), history.entries.items.len);
+    try testing.expectEqualStrings("line A", history.entries.items[0]);
+    try testing.expectEqualStrings("line B", history.entries.items[1]);
+    try testing.expectEqualStrings("line C", history.entries.items[2]);
 }

@@ -202,6 +202,17 @@
 //! the same function id, or a specialized clone whose stored source function
 //! template is the same. That keeps dispatch static while allowing this pass's
 //! own callable workers to match the patterns that created them.
+//!
+//! Store-borrow discipline: this pass clones expressions while walking spans of
+//! the same `Program` store, and cloning appends new nodes to those stores.
+//! Never hold a `Program`-store borrow (any `*Span` result) across a call that
+//! can append to the same store: copy the span first via `GuardedList.dupe`, or
+//! read one element at a time by stable index via the `*At` accessors
+//! (`branchAt`, `captureOperandAt`), which retain no borrow. The GuardedList
+//! generation guard turns a violation into a Debug panic. The generation is
+//! per-list, so a borrow of one store stays valid across an append to a
+//! different store — only same-store appends invalidate it, so copying a span
+//! whose store this walk never grows is unnecessary.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -290,6 +301,20 @@ const CallableShape = struct {
     fn_id: Ast.FnId,
     captures: []const Shape,
 };
+
+/// Maximum number of `nominal.backing` / `static_data_candidate.runtime` /
+/// callable-capture pointer edges any single value-tree strip may follow. A
+/// value can reference itself through those edges when a `.local` resolves
+/// through the substitution maps to an ancestor of a recursive construction,
+/// so a strip that ignored the bound would hang on a cycle. A finite value's
+/// pointer-edge chain is far shorter than this cap (known values are bounded to
+/// a few thousand nodes by their derivations), so reaching it means the value
+/// is cyclic: the static matchers decline conservatively, and the
+/// materializing and reading walks — which only ever run on values proven
+/// acyclic — treat it as a compiler bug via `Common.invariant`, which is a
+/// checked panic only in safety-checked builds. See design.md "Core
+/// Principles" on bounded post-check walks.
+const value_wrapper_strip_cap: usize = 4096;
 
 const Value = union(enum) {
     expr: Ast.ExprId,
@@ -401,6 +426,13 @@ const PendingLet = struct {
     /// binding created after an effect was emitted in its region must not
     /// move to the region's start, because it would cross that effect.
     marks: usize,
+    /// The effect-mark count from just before this binding's value expression
+    /// began cloning, making its emission window `[marks_before, marks]`. A
+    /// windowed binding may delegate to the region boundary even when its
+    /// value is effectful, because a valid window proves the hoist crosses no
+    /// other effect (see `pendingChainDelegates`). Null when the origin did
+    /// not track a window; an effectful binding with no window always pins.
+    marks_before: ?usize,
 };
 
 const LoopPattern = struct {
@@ -511,6 +543,12 @@ const Pass = struct {
     /// an already-rewritten worker.
     callable_sources: std.AutoHashMap(Ast.FnId, Ast.FnId),
     next_join_point: u32,
+
+    const AnalysisMark = struct {
+        program: Ast.Program.SpecConstrAnalysisMark,
+        next_symbol: u32,
+        next_join_point: u32,
+    };
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Pass {
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
@@ -618,6 +656,37 @@ const Pass = struct {
         return id;
     }
 
+    fn markAnalysis(self: *Pass) AnalysisMark {
+        return .{
+            .program = self.program.markSpecConstrAnalysis(),
+            .next_symbol = self.symbols.next,
+            .next_join_point = self.next_join_point,
+        };
+    }
+
+    fn rewindAnalysis(self: *Pass, mark: AnalysisMark) void {
+        self.program.rewindSpecConstrAnalysis(mark.program);
+        self.restoreAnalysisIds(mark);
+    }
+
+    fn restoreAnalysisIds(self: *Pass, mark: AnalysisMark) void {
+        var next_symbol = mark.next_symbol;
+        for (mark.program.fns..self.program.fnCount()) |index| {
+            const fn_ = self.program.getFnAt(index);
+            if (fn_.body != .hosted or fn_.args.len != 0) {
+                Common.invariant("SpecConstr analysis emitted a non-reservation function");
+            }
+            next_symbol = @max(next_symbol, @intFromEnum(fn_.symbol) + 1);
+        }
+        self.symbols.next = next_symbol;
+        self.next_join_point = mark.next_join_point;
+    }
+
+    fn finishAnalysis(self: *Pass, mark: AnalysisMark) void {
+        self.program.finishSpecConstrAnalysis(mark.program);
+        self.restoreAnalysisIds(mark);
+    }
+
     fn deinit(self: *Pass) void {
         self.callable_sources.deinit();
         self.callable_workers.deinit();
@@ -635,6 +704,12 @@ const Pass = struct {
     fn run(self: *Pass) Common.LowerError!void {
         const original_fn_count = self.plans.len;
 
+        const capture_snapshot = try self.snapshotOriginalCaptures(original_fn_count);
+        defer {
+            for (capture_snapshot) |captures| self.allocator.free(captures);
+            self.allocator.free(capture_snapshot);
+        }
+
         // The append peel runs first, while an append chain's arms are still
         // separate `append` calls over their shared base. Specialization would
         // otherwise collapse a multi-append arm into one specialized adapter
@@ -651,8 +726,90 @@ const Pass = struct {
         try self.scalarizeKnownLoops(original_fn_count);
         try self.createSpecializations(original_fn_count);
         try Lift.recomputeCaptures(self.allocator, self.program);
+        self.verifyRewrittenCaptureGain(capture_snapshot);
+        try self.verifyRewrittenBodyLocals(original_fn_count);
 
         self.program.next_symbol = self.symbols.next;
+    }
+
+    /// Debug-only: the capture local ids each original fn declares before any
+    /// rewriting, indexed by fn. Empty outside safety-checked builds.
+    fn snapshotOriginalCaptures(self: *Pass, original_fn_count: usize) Allocator.Error![]const []const Ast.LocalId {
+        if (!std.debug.runtime_safety) return &.{};
+        const snapshot = try self.allocator.alloc([]const Ast.LocalId, original_fn_count);
+        for (0..original_fn_count) |index| {
+            const captures = self.program.typedLocalSpan(self.program.getFnAt(index).captures);
+            const locals = try self.allocator.alloc(Ast.LocalId, captures.len);
+            for (0..captures.len) |capture_index| {
+                locals[capture_index] = GuardedList.at(captures, capture_index).local;
+            }
+            snapshot[index] = locals;
+        }
+        return snapshot;
+    }
+
+    /// Debug-only: a value-substituting rewrite must never introduce a new
+    /// free local, so a fn whose body was rewritten in place may not gain a
+    /// capture its source did not declare. A gained capture is a reference
+    /// the rewrite left resolving to a vanished binding — capture
+    /// recomputation silently promotes it to a phantom argument, which
+    /// misreads whatever register the caller happens to leave there.
+    fn verifyRewrittenCaptureGain(self: *Pass, capture_snapshot: []const []const Ast.LocalId) void {
+        if (!std.debug.runtime_safety) return;
+        for (capture_snapshot, 0..) |original_captures, index| {
+            if (index >= self.whole_body_cloned.len or !self.whole_body_cloned[index]) continue;
+            const captures = self.program.typedLocalSpan(self.program.getFnAt(index).captures);
+            for (0..captures.len) |capture_index| {
+                const local = GuardedList.at(captures, capture_index).local;
+                var declared = false;
+                for (original_captures) |original| {
+                    if (original == local) {
+                        declared = true;
+                        break;
+                    }
+                }
+                if (!declared) {
+                    Common.invariant("rewritten fn gained a capture its source did not declare");
+                }
+            }
+        }
+    }
+
+    /// Debug-only: every `.local` reference in a rewritten body — mirroring
+    /// the reference forms the capture walk consumes, so an
+    /// `uninitialized_payload` condition is exempt exactly as it is there —
+    /// must resolve to an in-body binding, a function argument, or a
+    /// recomputed capture. A
+    /// value-substituting rewrite that leaves a reference resolving to a
+    /// vanished binding produces no diagnostic until code generation reads an
+    /// undeclared register; this walk turns that whole class into a
+    /// deterministic panic in every Debug suite. A body cloned or specialized
+    /// by this pass is checked; original bodies left in place are the lift
+    /// output, already covered by their own invariants.
+    fn verifyRewrittenBodyLocals(self: *Pass, original_fn_count: usize) Allocator.Error!void {
+        if (!std.debug.runtime_safety) return;
+        for (0..self.program.fnCount()) |index| {
+            const rewritten = index >= original_fn_count or
+                (index < self.whole_body_cloned.len and self.whole_body_cloned[index]);
+            if (!rewritten) continue;
+            const func = self.program.getFnAt(index);
+            const body = switch (func.body) {
+                .roc => |expr| expr,
+                .hosted => continue,
+            };
+            var validator = BodyLocalScope{
+                .program = self.program,
+                .allocator = self.allocator,
+                .fn_index = index,
+                .bound = std.AutoHashMap(Ast.LocalId, u32).init(self.allocator),
+            };
+            defer validator.bound.deinit();
+            const args = self.program.typedLocalSpan(func.args);
+            for (0..args.len) |arg_index| try validator.bind(GuardedList.at(args, arg_index).local);
+            const captures = self.program.typedLocalSpan(func.captures);
+            for (0..captures.len) |capture_index| try validator.bind(GuardedList.at(captures, capture_index).local);
+            try validator.walkExpr(body);
+        }
     }
 
     /// Rewrite each branch-chosen `append`-loop function into a base loop plus a
@@ -720,6 +877,9 @@ const Pass = struct {
     /// argument is known when it is first named by a `let`. Walk with the
     /// cloner's substitution environment so those calls still reserve workers.
     fn collectValueAwareCallPatterns(self: *Pass, original_fn_count: usize) Common.LowerError!void {
+        const analysis_mark = self.markAnalysis();
+        defer self.finishAnalysis(analysis_mark);
+
         var index: usize = 0;
         while (index < original_fn_count) : (index += 1) {
             const fn_ = self.program.getFnAt(index);
@@ -734,6 +894,7 @@ const Pass = struct {
             cloner.allow_nonrecursive_value_patterns = self.shape_demand_fns[index];
             defer cloner.deinit();
             try cloner.collectCallPatternsInExpr(fn_id, body);
+            self.rewindAnalysis(analysis_mark);
         }
     }
 
@@ -898,7 +1059,16 @@ const Pass = struct {
             },
             .loop_ => |loop| {
                 const initial_values = self.program.exprSpan(loop.initial_values);
-                for (0..initial_values.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(initial_values, index), changed);
+                for (0..initial_values.len) |index| {
+                    const initial = GuardedList.at(initial_values, index);
+                    // A loop-carried argument is a shape-relevant use: the
+                    // split scalarizes the slot only when the entry shape is
+                    // known, so a caller must expose the construction it
+                    // passes here.
+                    self.markArgUseIfLocal(fn_id, initial, changed);
+                    self.markShapeDemandIfDirect(fn_id, initial);
+                    try self.markArgUsesInExpr(fn_id, initial, changed);
+                }
                 try self.markArgUsesInExpr(fn_id, loop.body, changed);
             },
             .break_ => |maybe| if (maybe) |value| try self.markArgUsesInExpr(fn_id, value, changed),
@@ -1302,22 +1472,40 @@ const Pass = struct {
     /// their strict runtime construction behind.
     fn rewriteValueAwareCalls(self: *Pass) Common.LowerError!void {
         const fn_count = self.program.fnCount();
-        for (0..fn_count) |index| {
-            const fn_ = self.program.getFnAt(index);
-            const body = switch (fn_.body) {
-                .roc => |body| body,
-                .hosted => continue,
-            };
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            var cloner = Cloner.initForRewrite(self);
-            cloner.value_aware_detect_only = true;
-            cloner.emit_callable_workers = false;
-            cloner.allow_nonrecursive_value_patterns = index < self.shape_demand_fns.len and self.shape_demand_fns[index];
-            defer cloner.deinit();
-            try cloner.rewriteCallsWithValuesInExpr(body);
-            if (cloner.value_aware_rewrite_changed) {
-                try self.cloneFnBodyInPlace(fn_id, body);
+        const RewriteRequest = struct {
+            fn_id: Ast.FnId,
+            body: Ast.ExprId,
+        };
+        var requests = std.ArrayList(RewriteRequest).empty;
+        defer requests.deinit(self.allocator);
+
+        {
+            const analysis_mark = self.markAnalysis();
+            defer self.finishAnalysis(analysis_mark);
+
+            for (0..fn_count) |index| {
+                const fn_ = self.program.getFnAt(index);
+                const body = switch (fn_.body) {
+                    .roc => |body| body,
+                    .hosted => continue,
+                };
+                const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+                const changed = changed: {
+                    var cloner = Cloner.initForRewrite(self);
+                    defer cloner.deinit();
+                    cloner.value_aware_detect_only = true;
+                    cloner.emit_callable_workers = false;
+                    cloner.allow_nonrecursive_value_patterns = index < self.shape_demand_fns.len and self.shape_demand_fns[index];
+                    try cloner.rewriteCallsWithValuesInExpr(body);
+                    break :changed cloner.value_aware_rewrite_changed;
+                };
+                if (changed) try requests.append(self.allocator, .{ .fn_id = fn_id, .body = body });
+                self.rewindAnalysis(analysis_mark);
             }
+        }
+
+        for (requests.items) |request| {
+            try self.cloneFnBodyInPlace(request.fn_id, request.body);
         }
     }
 
@@ -3238,13 +3426,248 @@ const Pass = struct {
     }
 };
 
+/// One clone's substitution environment. It resolves a source local to its
+/// known value through two maps and records every write on an undo log so a
+/// scope's writes can be unwound at its boundary.
+///
+/// The exact-local map is keyed by `LocalId`; the binder-wide map is keyed by
+/// `BinderIdentity` — the pattern binder together with the digest of the local's
+/// monomorphic type, so two locals that share a binder but were monomorphized at
+/// different types stay distinct bindings. `put` writes the exact entry always,
+/// and additionally the binder-wide entry when the value is a known constructor
+/// (`tag`/`record`/`tuple`/`nominal`) so sibling reads of the same binder see
+/// the same structure, or when the binder is loop-carried, where reassigned and
+/// state-merged copies share the binder but not the local id and binder identity
+/// is the only path they resolve through. `get` consults both maps; `getExact`
+/// consults only the exact-local map, for the shape probes that intend to see
+/// only a directly-substituted local.
+const Subst = struct {
+    exact: std.AutoHashMap(Ast.LocalId, Value),
+    binder_subst: std.AutoHashMap(BinderIdentity, Value),
+    /// Binder identities carried by an enclosing loop being cloned, with a
+    /// nesting refcount. A carried variable's value must survive every `let`
+    /// scope inside the loop body: the state-merge lowering binds a merged
+    /// copy in a nested `let` whose lexical remainder is only the merge's
+    /// syntactic result, yet the loop back edge reads that copy through its
+    /// binder. `cloneLetValue` floats any update to a carried binder past its
+    /// own restore so a later reference resolves to the merged value rather
+    /// than the loop-entry value pinned at loop setup.
+    loop_carried_binders: std.AutoHashMap(BinderIdentity, u32),
+    changes: std.ArrayList(BindingChange),
+    allocator: Allocator,
+
+    fn init(allocator: Allocator) Subst {
+        return .{
+            .exact = std.AutoHashMap(Ast.LocalId, Value).init(allocator),
+            .binder_subst = std.AutoHashMap(BinderIdentity, Value).init(allocator),
+            .loop_carried_binders = std.AutoHashMap(BinderIdentity, u32).init(allocator),
+            .changes = .empty,
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(self: *Subst) void {
+        self.changes.deinit(self.allocator);
+        self.loop_carried_binders.deinit();
+        self.binder_subst.deinit();
+        self.exact.deinit();
+    }
+
+    /// Identity a local's binder-scoped substitution is keyed by: the pattern
+    /// binder together with the digest of the local's monomorphic type. Two
+    /// locals that share a binder but were monomorphized at different types are
+    /// distinct bindings and must not read one another's substitution.
+    fn binderIdentityOf(program: *const Ast.Program, local: Ast.LocalId) ?BinderIdentity {
+        const local_data = program.getLocal(local);
+        const binder = local_data.binder orelse return null;
+        return .{
+            .binder = binder,
+            .digest = program.types.typeDigest(&program.names, local_data.ty),
+        };
+    }
+
+    /// Resolve a local to its known value through the exact-local map, then the
+    /// binder-wide map.
+    fn get(self: *const Subst, program: *const Ast.Program, local: Ast.LocalId) ?Value {
+        if (self.exact.get(local)) |value| return value;
+        if (binderIdentityOf(program, local)) |identity| {
+            if (self.binder_subst.get(identity)) |value| return value;
+        }
+        return null;
+    }
+
+    /// Resolve a local through the exact-local map only. The shape probes use
+    /// this deliberately: they ask whether *this* local was substituted with a
+    /// known value here, not whether its binder holds one somewhere.
+    fn getExact(self: *const Subst, local: Ast.LocalId) ?Value {
+        return self.exact.get(local);
+    }
+
+    /// The change-log length; pass it to `restore` to unwind every write made
+    /// after this point.
+    fn watermark(self: *const Subst) usize {
+        return self.changes.items.len;
+    }
+
+    fn put(self: *Subst, program: *const Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
+        const previous = self.exact.get(local);
+        try self.changes.append(self.allocator, .{
+            .key = .{ .local = local },
+            .previous = previous,
+        });
+        try self.exact.put(local, value);
+
+        const identity = binderIdentityOf(program, local) orelse return;
+        // A structured value carries binder-wide identity so sibling reads of
+        // the same binder see the same known structure. A loop-carried binder
+        // also takes the binder-wide entry for any value variant: reassigned
+        // and state-merged copies share its binder but not its local id, so
+        // binder identity is the only path a later reference resolves through.
+        const subst_binder = self.isLoopCarried(identity) or switch (value) {
+            .tag,
+            .record,
+            .tuple,
+            .nominal,
+            => true,
+            .expr,
+            .static_data_candidate,
+            .callable,
+            => false,
+        };
+        if (subst_binder) {
+            const previous_binder = self.binder_subst.get(identity);
+            try self.changes.append(self.allocator, .{
+                .key = .{ .binder = identity },
+                .previous = previous_binder,
+            });
+            try self.binder_subst.put(identity, value);
+        }
+    }
+
+    /// Install a binder-wide substitution for a loop-carried slot. Reassigned
+    /// copies of a carried variable share its source binder but not its local
+    /// id, so binder identity is the only path they resolve through. Unlike
+    /// `put`, the entry is written for any value variant: an opaque scalar
+    /// param must reach those copies too, or they resolve to the dropped
+    /// pre-loop local and capture recomputation turns the vanished binding into
+    /// a phantom root argument.
+    fn putLoopCarried(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
+        const previous = self.binder_subst.get(identity);
+        try self.changes.append(self.allocator, .{
+            .key = .{ .binder = identity },
+            .previous = previous,
+        });
+        try self.binder_subst.put(identity, value);
+    }
+
+    /// Remove the pre-loop `binder_subst` value for the variable carried by a
+    /// loop slot whose initial value is that variable, and return the slot's
+    /// binder identity so the loop clone can install its param value under it.
+    /// The removal is recorded on the change log so it is restored when the
+    /// loop clone finishes. Returns null when the initial is not a bare
+    /// binder-carrying local; the identity is returned whether or not a
+    /// pre-loop entry existed, because the slot's reassigned copies resolve
+    /// through it either way.
+    fn dropCarriedBinder(self: *Subst, program: *const Ast.Program, initial: Ast.ExprId) Allocator.Error!?BinderIdentity {
+        const local = localExpr(program, initial) orelse return null;
+        const identity = binderIdentityOf(program, local) orelse return null;
+        const previous = self.binder_subst.get(identity) orelse return identity;
+        try self.changes.append(self.allocator, .{
+            .key = .{ .binder = identity },
+            .previous = previous,
+        });
+        _ = self.binder_subst.remove(identity);
+        return identity;
+    }
+
+    /// Whether an enclosing loop currently carries this binder.
+    fn isLoopCarried(self: *const Subst, identity: BinderIdentity) bool {
+        return self.loop_carried_binders.contains(identity);
+    }
+
+    /// Register a binder as carried by a loop being cloned. Nested loops that
+    /// carry the same binder are counted so the marker survives until the
+    /// outermost such loop finishes.
+    fn markLoopCarried(self: *Subst, identity: BinderIdentity) Allocator.Error!void {
+        const entry = try self.loop_carried_binders.getOrPut(identity);
+        if (entry.found_existing) {
+            entry.value_ptr.* += 1;
+        } else {
+            entry.value_ptr.* = 1;
+        }
+    }
+
+    /// Drop one registration of a carried binder, removing it at zero.
+    fn unmarkLoopCarried(self: *Subst, identity: BinderIdentity) void {
+        const entry = self.loop_carried_binders.getPtr(identity) orelse return;
+        if (entry.* <= 1) {
+            _ = self.loop_carried_binders.remove(identity);
+        } else {
+            entry.* -= 1;
+        }
+    }
+
+    /// Restore the change log to `start`, but re-apply the value each carried
+    /// binder holds now so it survives this scope's teardown. A loop-carried
+    /// binder's value escapes the `let` that binds it — the loop back edge
+    /// reads it through its binder after the binding's lexical remainder ends —
+    /// so its update floats out to the enclosing scope, where an outer restore
+    /// (an arm boundary or the loop clone itself) still unwinds it.
+    fn restoreFloatingLoopCarries(self: *Subst, start: usize) Allocator.Error!void {
+        if (self.loop_carried_binders.count() == 0) return self.restore(start);
+        var floated = std.ArrayList(struct { identity: BinderIdentity, value: Value }).empty;
+        defer floated.deinit(self.allocator);
+        for (self.changes.items[start..]) |change| {
+            const identity = switch (change.key) {
+                .binder => |identity| identity,
+                .local => continue,
+            };
+            if (!self.isLoopCarried(identity)) continue;
+            const value = self.binder_subst.get(identity) orelse continue;
+            var seen = false;
+            for (floated.items) |entry| {
+                if (std.meta.eql(entry.identity, identity)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try floated.append(self.allocator, .{ .identity = identity, .value = value });
+        }
+        self.restore(start);
+        for (floated.items) |entry| try self.putLoopCarried(entry.identity, entry.value);
+    }
+
+    fn restore(self: *Subst, start: usize) void {
+        var index = self.changes.items.len;
+        while (index > start) {
+            index -= 1;
+            const change = self.changes.items[index];
+            switch (change.key) {
+                .local => |local| {
+                    if (change.previous) |previous| {
+                        self.exact.putAssumeCapacity(local, previous);
+                    } else {
+                        _ = self.exact.remove(local);
+                    }
+                },
+                .binder => |identity| {
+                    if (change.previous) |previous| {
+                        self.binder_subst.putAssumeCapacity(identity, previous);
+                    } else {
+                        _ = self.binder_subst.remove(identity);
+                    }
+                },
+            }
+        }
+        self.changes.shrinkRetainingCapacity(start);
+    }
+};
+
 const Cloner = struct {
     pass: *Pass,
     source_fn: Ast.FnId,
     pattern: CallPattern,
-    subst: std.AutoHashMap(Ast.LocalId, Value),
-    binder_subst: std.AutoHashMap(BinderIdentity, Value),
-    changes: std.ArrayList(BindingChange),
+    subst: Subst,
     inline_stack: std.ArrayList(InlineFrame),
     loop_stack: std.ArrayList(LoopPattern),
     join_stack: std.ArrayList(ActiveJoinClone),
@@ -3267,11 +3690,33 @@ const Cloner = struct {
     /// nearest enclosing region boundary (`cloneExpr`), or earlier by any
     /// construct that pins its value with `resolvePending`.
     pending: std.ArrayList(PendingLet),
+    /// Emission-window starts for opaque values cloned from a known point,
+    /// keyed by their expression node. A value's window belongs to the node
+    /// itself — substitution passes the same node id around, so a pending
+    /// created for it at any later site can still prove where its effects
+    /// were emitted (see `pendingChainDelegates`). Only freshly emitted nodes
+    /// are recorded, and the first recording wins: a later touch of an
+    /// existing node is a lookup, and recording it would claim marks that
+    /// belong to other emissions.
+    expr_window_starts: std.AutoHashMap(Ast.ExprId, usize),
     /// Count of effect-bearing expressions emitted so far. Compared against
     /// `region_entry_marks` to decide whether a pending binding may move to
     /// its region's start without crossing an effect.
     effect_marks: usize,
     region_entry_marks: usize,
+    /// Depth of the wrapper-strip recursion in the static value matchers
+    /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
+    /// each `nominal.backing`/`static_data_candidate.runtime` pointer edge
+    /// followed. A loop-carried value can reference itself through those edges,
+    /// so an unbounded strip would hang; reaching `value_wrapper_strip_cap`
+    /// declines the static decision toward a residual runtime match.
+    wrapper_strip_depth: usize,
+    /// Depth of the wrapper-strip recursion in `materialize`, counting each
+    /// `nominal.backing`/`static_data_candidate.runtime`/callable-capture edge
+    /// followed. `materialize` runs on values proven acyclic by construction —
+    /// a cyclic value is rebound through a plain source clone before it can
+    /// reach here — so reaching `value_wrapper_strip_cap` is a compiler bug.
+    materialize_strip_depth: usize,
     inline_direct_calls: bool,
     inline_direct_requires_known_arg: bool,
     rewrite_call_patterns: bool,
@@ -3314,17 +3759,18 @@ const Cloner = struct {
             .pass = pass,
             .source_fn = source_fn,
             .pattern = pattern,
-            .subst = std.AutoHashMap(Ast.LocalId, Value).init(pass.allocator),
-            .binder_subst = std.AutoHashMap(BinderIdentity, Value).init(pass.allocator),
-            .changes = .empty,
+            .subst = Subst.init(pass.allocator),
             .inline_stack = .empty,
             .loop_stack = .empty,
             .join_stack = .empty,
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
             .pending = .empty,
+            .expr_window_starts = std.AutoHashMap(Ast.ExprId, usize).init(pass.allocator),
             .effect_marks = 0,
             .region_entry_marks = 0,
+            .wrapper_strip_depth = 0,
+            .materialize_strip_depth = 0,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = true,
             .rewrite_call_patterns = true,
@@ -3344,17 +3790,18 @@ const Cloner = struct {
             .pass = pass,
             .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
-            .subst = std.AutoHashMap(Ast.LocalId, Value).init(pass.allocator),
-            .binder_subst = std.AutoHashMap(BinderIdentity, Value).init(pass.allocator),
-            .changes = .empty,
+            .subst = Subst.init(pass.allocator),
             .inline_stack = .empty,
             .loop_stack = .empty,
             .join_stack = .empty,
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
             .pending = .empty,
+            .expr_window_starts = std.AutoHashMap(Ast.ExprId, usize).init(pass.allocator),
             .effect_marks = 0,
             .region_entry_marks = 0,
+            .wrapper_strip_depth = 0,
+            .materialize_strip_depth = 0,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = false,
             .rewrite_call_patterns = true,
@@ -3370,13 +3817,19 @@ const Cloner = struct {
     }
 
     fn deinit(self: *Cloner) void {
+        // Every decline path shrinks the bindings it created and every region
+        // boundary flushes the rest; a binding surviving to teardown was
+        // emitted nowhere, which drops its evaluation from the program. When
+        // teardown runs on an error path (allocation failure mid-clone), the
+        // stack may legitimately hold bindings the aborted clone never
+        // flushed; compilation is aborting either way.
+        if (std.debug.runtime_safety) std.debug.assert(self.pending.items.len == 0);
         self.pending.deinit(self.pass.allocator);
+        self.expr_window_starts.deinit();
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
         self.join_stack.deinit(self.pass.allocator);
         self.let_case_builds.deinit(self.pass.allocator);
-        self.changes.deinit(self.pass.allocator);
-        self.binder_subst.deinit();
         self.subst.deinit();
     }
 
@@ -3430,8 +3883,25 @@ const Cloner = struct {
                 const args = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(call.args));
                 defer self.pass.allocator.free(args);
 
+                // Shape detection is a discarded probe: it clones the arguments
+                // only to read their constructor shapes and emits nothing. Run
+                // it in an isolated effect context so its windows chain from a
+                // clean region entry. Effects counted while probing earlier
+                // calls in the same walk otherwise leave the effect marks
+                // advanced while the region entry stays put, so a constructed
+                // argument that carries its own effectful producer (an iterator
+                // over an effect-produced list) has that producer's emission
+                // window fall past the region entry and is pinned to an opaque
+                // value, hiding the constructor the pattern needs.
                 const pending_start = self.pending.items.len;
-                defer self.pending.shrinkRetainingCapacity(pending_start);
+                const saved_effect_marks = self.effect_marks;
+                const saved_region_entry = self.region_entry_marks;
+                self.region_entry_marks = self.effect_marks;
+                defer {
+                    self.pending.shrinkRetainingCapacity(pending_start);
+                    self.effect_marks = saved_effect_marks;
+                    self.region_entry_marks = saved_region_entry;
+                }
 
                 const values = try self.pass.allocator.alloc(Value, args.len);
                 defer self.pass.allocator.free(values);
@@ -3460,10 +3930,10 @@ const Cloner = struct {
                 try self.collectCallPatternsInExpr(owner, if_.final_else);
             },
             .block => |block| {
-                const change_start = self.changes.items.len;
+                const change_start = self.subst.watermark();
                 const pending_start = self.pending.items.len;
                 defer {
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     self.pending.shrinkRetainingCapacity(pending_start);
                 }
                 try self.collectCallPatternsInStmtSpan(owner, block.statements);
@@ -3471,8 +3941,8 @@ const Cloner = struct {
             },
             .loop_ => |loop| {
                 try self.collectCallPatternsInExprSpan(owner, loop.initial_values);
-                const change_start = self.changes.items.len;
-                defer self.restore(change_start);
+                const change_start = self.subst.watermark();
+                defer self.subst.restore(change_start);
                 const params = self.pass.program.typedLocalSpan(loop.params);
                 for (0..params.len) |index| {
                     try self.shadowLocal(GuardedList.at(params, index).local);
@@ -3482,11 +3952,11 @@ const Cloner = struct {
             .break_ => |maybe| if (maybe) |value| try self.collectCallPatternsInExpr(owner, value),
             .continue_ => |continue_| try self.collectCallPatternsInExprSpan(owner, continue_.values),
             .join_point => |join_point| {
-                const change_start = self.changes.items.len;
+                const change_start = self.subst.watermark();
                 const params = self.pass.program.typedLocalSpan(join_point.params);
                 for (0..params.len) |index| try self.shadowLocal(GuardedList.at(params, index).local);
                 try self.collectCallPatternsInExpr(owner, join_point.body);
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 try self.collectCallPatternsInExpr(owner, join_point.remainder);
             },
             .jump => |jump| try self.collectCallPatternsInExprSpan(owner, jump.args),
@@ -3497,15 +3967,15 @@ const Cloner = struct {
             },
             .try_sequence => |sequence| {
                 try self.collectCallPatternsInExpr(owner, sequence.try_expr);
-                const change_start = self.changes.items.len;
-                defer self.restore(change_start);
+                const change_start = self.subst.watermark();
+                defer self.subst.restore(change_start);
                 try self.shadowLocal(sequence.ok_local);
                 try self.collectCallPatternsInExpr(owner, sequence.ok_body);
             },
             .try_record_sequence => |sequence| {
                 try self.collectCallPatternsInExpr(owner, sequence.try_expr);
-                const change_start = self.changes.items.len;
-                defer self.restore(change_start);
+                const change_start = self.subst.watermark();
+                defer self.subst.restore(change_start);
                 try self.shadowLocal(sequence.value_local);
                 try self.shadowLocal(sequence.rest_local);
                 try self.collectCallPatternsInExpr(owner, sequence.ok_body);
@@ -3523,10 +3993,10 @@ const Cloner = struct {
     ) Common.LowerError!void {
         try self.collectCallPatternsInExpr(owner, value_expr);
 
-        const change_start = self.changes.items.len;
+        const change_start = self.subst.watermark();
         const pending_start = self.pending.items.len;
         defer {
-            self.restore(change_start);
+            self.subst.restore(change_start);
             self.pending.shrinkRetainingCapacity(pending_start);
         }
 
@@ -3564,8 +4034,8 @@ const Cloner = struct {
     fn collectCallPatternsInBranchSpan(self: *Cloner, owner: Ast.FnId, span: Ast.Span(Ast.Branch)) Common.LowerError!void {
         try walkSpanCloned(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(span), .{ .self = self, .owner = owner }, struct {
             fn visit(ctx: anytype, branch: Ast.Branch) Common.LowerError!void {
-                const change_start = ctx.self.changes.items.len;
-                defer ctx.self.restore(change_start);
+                const change_start = ctx.self.subst.watermark();
+                defer ctx.self.subst.restore(change_start);
                 try ctx.self.shadowPatLocals(branch.pat);
                 if (branch.guard) |guard| try ctx.self.collectCallPatternsInExpr(ctx.owner, guard);
                 try ctx.self.collectCallPatternsInExpr(ctx.owner, branch.body);
@@ -3620,10 +4090,10 @@ const Cloner = struct {
         recursive: bool,
         value: Value,
     ) Common.LowerError!bool {
-        const change_before = self.changes.items.len;
+        const change_before = self.subst.watermark();
         const pending_before = self.pending.items.len;
         if (try self.bindPatToReusableValue(pat_id, value) == .match) return true;
-        self.restore(change_before);
+        self.subst.restore(change_before);
         self.pending.shrinkRetainingCapacity(pending_before);
 
         const pat = self.pass.program.getPat(pat_id);
@@ -3635,7 +4105,7 @@ const Cloner = struct {
 
         const reusable = try self.makeReusableForMatch(value);
         if (try self.bindPatToFlowValue(pat_id, reusable)) return true;
-        self.restore(change_before);
+        self.subst.restore(change_before);
         self.pending.shrinkRetainingCapacity(pending_before);
         return false;
     }
@@ -3672,10 +4142,10 @@ const Cloner = struct {
             .comptime_branch_taken => |taken| try self.rewriteCallsWithValuesInExpr(taken.body),
             .let_ => |let_| {
                 try self.rewriteCallsWithValuesInExpr(let_.value);
-                const change_start = self.changes.items.len;
+                const change_start = self.subst.watermark();
                 const pending_start = self.pending.items.len;
                 defer {
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     self.pending.shrinkRetainingCapacity(pending_start);
                 }
                 const value = try self.cloneExprValue(let_.value);
@@ -3717,10 +4187,10 @@ const Cloner = struct {
                 try self.rewriteCallsWithValuesInExpr(if_.final_else);
             },
             .block => |block| {
-                const change_start = self.changes.items.len;
+                const change_start = self.subst.watermark();
                 const pending_start = self.pending.items.len;
                 defer {
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     self.pending.shrinkRetainingCapacity(pending_start);
                 }
                 try self.rewriteCallsWithValuesInStmtSpan(block.statements);
@@ -3728,8 +4198,8 @@ const Cloner = struct {
             },
             .loop_ => |loop| {
                 try self.rewriteCallsWithValuesInExprSpan(loop.initial_values);
-                const change_start = self.changes.items.len;
-                defer self.restore(change_start);
+                const change_start = self.subst.watermark();
+                defer self.subst.restore(change_start);
                 const params = self.pass.program.typedLocalSpan(loop.params);
                 for (0..params.len) |index| {
                     try self.shadowLocal(GuardedList.at(params, index).local);
@@ -3739,11 +4209,11 @@ const Cloner = struct {
             .break_ => |maybe| if (maybe) |value| try self.rewriteCallsWithValuesInExpr(value),
             .continue_ => |continue_| try self.rewriteCallsWithValuesInExprSpan(continue_.values),
             .join_point => |join_point| {
-                const change_start = self.changes.items.len;
+                const change_start = self.subst.watermark();
                 const params = self.pass.program.typedLocalSpan(join_point.params);
                 for (0..params.len) |index| try self.shadowLocal(GuardedList.at(params, index).local);
                 try self.rewriteCallsWithValuesInExpr(join_point.body);
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 try self.rewriteCallsWithValuesInExpr(join_point.remainder);
             },
             .jump => |jump| try self.rewriteCallsWithValuesInExprSpan(jump.args),
@@ -3754,15 +4224,15 @@ const Cloner = struct {
             },
             .try_sequence => |sequence| {
                 try self.rewriteCallsWithValuesInExpr(sequence.try_expr);
-                const change_start = self.changes.items.len;
-                defer self.restore(change_start);
+                const change_start = self.subst.watermark();
+                defer self.subst.restore(change_start);
                 try self.shadowLocal(sequence.ok_local);
                 try self.rewriteCallsWithValuesInExpr(sequence.ok_body);
             },
             .try_record_sequence => |sequence| {
                 try self.rewriteCallsWithValuesInExpr(sequence.try_expr);
-                const change_start = self.changes.items.len;
-                defer self.restore(change_start);
+                const change_start = self.subst.watermark();
+                defer self.subst.restore(change_start);
                 try self.shadowLocal(sequence.value_local);
                 try self.shadowLocal(sequence.rest_local);
                 try self.rewriteCallsWithValuesInExpr(sequence.ok_body);
@@ -3786,8 +4256,16 @@ const Cloner = struct {
 
         const values = try self.pass.allocator.alloc(Value, args.len);
         defer self.pass.allocator.free(values);
+        // A used argument's constructor only becomes visible after its
+        // construction call inlines (an iterator chain is a call, not a
+        // surface constructor), so expose it the same way `cloneCallProc`'s
+        // rewrite does; an unused argument's shape cannot matter.
+        const callee_uses = self.pass.plans[raw].used_args;
         for (args, 0..) |arg, index| {
-            values[index] = try self.cloneExprValue(arg);
+            values[index] = if (callee_uses[index])
+                try self.cloneExprValueDemandingShape(arg)
+            else
+                try self.cloneExprValue(arg);
         }
 
         for (self.pass.plans[raw].specs.items) |spec| {
@@ -3855,8 +4333,8 @@ const Cloner = struct {
     fn rewriteCallsWithValuesInBranchSpan(self: *Cloner, span: Ast.Span(Ast.Branch)) Common.LowerError!void {
         try walkSpanCloned(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(span), self, struct {
             fn visit(cloner: *Cloner, branch: Ast.Branch) Common.LowerError!void {
-                const change_start = cloner.changes.items.len;
-                defer cloner.restore(change_start);
+                const change_start = cloner.subst.watermark();
+                defer cloner.subst.restore(change_start);
                 try cloner.shadowPatLocals(branch.pat);
                 if (branch.guard) |guard| try cloner.rewriteCallsWithValuesInExpr(guard);
                 try cloner.rewriteCallsWithValuesInExpr(branch.body);
@@ -3927,7 +4405,7 @@ const Cloner = struct {
 
         for (source_args, self.pattern.args) |source_arg, shape| {
             const value = try self.valueFromShapeArgs(shape, &args);
-            try self.putSubst(source_arg.local, value);
+            try self.subst.put(self.pass.program, source_arg.local, value);
         }
 
         return try self.pass.program.addTypedLocalSpan(args.items);
@@ -4028,7 +4506,9 @@ const Cloner = struct {
         self.region_entry_marks = self.effect_marks;
         defer self.region_entry_marks = saved_entry_marks;
         const result = try self.materialize(try self.cloneExprValue(expr_id));
-        return try self.flushPendingSince(pending_start, result);
+        const flushed = try self.flushPendingSince(pending_start, result);
+        if (std.debug.runtime_safety) std.debug.assert(self.pending.items.len == pending_start);
+        return flushed;
     }
 
     fn cloneExprValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
@@ -4044,10 +4524,7 @@ const Cloner = struct {
         const expr = self.pass.program.getExpr(expr_id);
         switch (expr.data) {
             .local => |local| {
-                if (self.subst.get(local)) |value| return value;
-                if (self.binderIdentityOf(local)) |identity| {
-                    if (self.binder_subst.get(identity)) |value| return value;
-                }
+                if (self.subst.get(self.pass.program, local)) |value| return value;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .local = local } }) };
             },
             .fn_ref => |fn_ref| return try self.callableValueFromRef(expr.ty, fn_ref),
@@ -4221,18 +4698,19 @@ const Cloner = struct {
         for (0..operands.len) |index| {
             const operand = GuardedList.at(operands, index);
             const local = localExpr(self.pass.program, operand.value) orelse return true;
-            if (self.subst.contains(local)) return true;
-            if (self.binderIdentityOf(local)) |identity| {
-                if (self.binder_subst.contains(identity)) return true;
-            }
+            if (self.subst.get(self.pass.program, local) != null) return true;
         }
         return false;
     }
 
     fn exprHasKnownShape(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!bool {
         const expr = self.pass.program.getExpr(expr_id);
+        // These probes read the exact-local map only, not the binder-wide map:
+        // they ask whether this specific local was directly substituted with a
+        // known-shaped value here, so a binder-wide entry installed for a
+        // sibling of the same binder must not answer for it.
         return switch (expr.data) {
-            .local => |local| if (self.subst.get(local)) |value|
+            .local => |local| if (self.subst.getExact(local)) |value|
                 (try self.pass.shapeFromValue(value)) != null
             else
                 false,
@@ -4245,13 +4723,13 @@ const Cloner = struct {
             .list, .str_lit, .bytes_lit => self.inline_list_source_construction,
             .field_access => |field| blk: {
                 const receiver_local = localExpr(self.pass.program, field.receiver) orelse break :blk false;
-                const receiver = self.subst.get(receiver_local) orelse break :blk false;
+                const receiver = self.subst.getExact(receiver_local) orelse break :blk false;
                 const value = fieldFromValue(self.pass.program, receiver, field.field) orelse break :blk false;
                 break :blk (try self.pass.shapeFromValue(value)) != null;
             },
             .tuple_access => |access| blk: {
                 const tuple_local = localExpr(self.pass.program, access.tuple) orelse break :blk false;
-                const tuple = self.subst.get(tuple_local) orelse break :blk false;
+                const tuple = self.subst.getExact(tuple_local) orelse break :blk false;
                 const value = itemFromValue(tuple, access.elem_index) orelse break :blk false;
                 break :blk (try self.pass.shapeFromValue(value)) != null;
             },
@@ -4360,7 +4838,13 @@ const Cloner = struct {
         const captures = try self.pass.arena.allocator().alloc(CaptureValue, capture_count);
         for (0..capture_count) |index| {
             const operand = self.pass.program.captureOperandAt(fn_ref.captures, index);
-            captures[index] = .{ .id = operand.id, .value = try self.cloneExprValue(operand.value) };
+            const window_start = self.effect_marks;
+            const expr_watermark = self.pass.program.exprCount();
+            captures[index] = .{
+                .id = operand.id,
+                .value = try self.cloneExprValue(operand.value),
+            };
+            try self.recordValueWindow(captures[index].value, window_start, expr_watermark);
         }
         return .{ .callable = .{
             .ty = ty,
@@ -4464,11 +4948,11 @@ const Cloner = struct {
             } },
             .try_sequence => |sequence| blk: {
                 const try_expr = try self.cloneExpr(sequence.try_expr);
-                const shadow_start = self.changes.items.len;
+                const shadow_start = self.subst.watermark();
                 const ok_ty = self.pass.program.getLocal(sequence.ok_local).ty;
                 const ok_local = try self.cloneBinder(sequence.ok_local, ok_ty, .bind_runtime);
                 const ok_body = try self.cloneExpr(sequence.ok_body);
-                self.restore(shadow_start);
+                self.subst.restore(shadow_start);
                 break :blk .{ .try_sequence = .{
                     .try_expr = try_expr,
                     .ok_local = ok_local,
@@ -4478,13 +4962,13 @@ const Cloner = struct {
             },
             .try_record_sequence => |sequence| blk: {
                 const try_expr = try self.cloneExpr(sequence.try_expr);
-                const shadow_start = self.changes.items.len;
+                const shadow_start = self.subst.watermark();
                 const value_ty = self.pass.program.getLocal(sequence.value_local).ty;
                 const value_local = try self.cloneBinder(sequence.value_local, value_ty, .bind_runtime);
                 const rest_ty = self.pass.program.getLocal(sequence.rest_local).ty;
                 const rest_local = try self.cloneBinder(sequence.rest_local, rest_ty, .bind_runtime);
                 const ok_body = try self.cloneExpr(sequence.ok_body);
-                self.restore(shadow_start);
+                self.subst.restore(shadow_start);
                 break :blk .{ .try_record_sequence = .{
                     .try_expr = try_expr,
                     .value_local = value_local,
@@ -4530,10 +5014,10 @@ const Cloner = struct {
         try self.join_stack.append(self.pass.allocator, .{ .source = join_point.id, .target = target });
         defer _ = self.join_stack.pop();
 
-        const change_start = self.changes.items.len;
+        const change_start = self.subst.watermark();
         for (source_params, params) |source_param, param| {
             const local_expr = try self.addExpr(.{ .ty = param.ty, .data = .{ .local = param.local } });
-            try self.putSubst(source_param.local, .{ .expr = local_expr });
+            try self.subst.put(self.pass.program, source_param.local, .{ .expr = local_expr });
         }
         const body = try self.cloneExpr(join_point.body);
         // The remainder's jumps may forward-reference the join's own params:
@@ -4541,7 +5025,7 @@ const Cloner = struct {
         // its initialized-ness. Keep the param substitutions active so those
         // references follow the freshened params.
         const remainder = try self.cloneExpr(join_point.remainder);
-        self.restore(change_start);
+        self.subst.restore(change_start);
 
         return try self.addExpr(.{ .ty = ty, .data = .{ .join_point = .{
             .id = target,
@@ -4570,22 +5054,22 @@ const Cloner = struct {
                 return .{ .expr = try self.addExpr(.{ .ty = rest_ty, .data = data }) };
             }
         }
-        const change_start = self.changes.items.len;
+        const change_start = self.subst.watermark();
         const bound = try self.bindPatToReusableValue(let_.bind, value);
         if (bound == .match) {
             const rest = try self.cloneExprValue(let_.rest);
-            self.restore(change_start);
+            try self.subst.restoreFloatingLoopCarries(change_start);
             return rest;
         }
-        self.restore(change_start);
+        self.subst.restore(change_start);
         if (try self.bindPatToSingleUseRestValue(let_.bind, value, let_.rest)) {
             const rest = try self.cloneExprValue(let_.rest);
-            self.restore(change_start);
+            try self.subst.restoreFloatingLoopCarries(change_start);
             return rest;
         }
         if (try self.bindPatToPendingReusableValue(let_.bind, let_.value, false, value)) {
             const rest = try self.cloneExprValue(let_.rest);
-            self.restore(change_start);
+            try self.subst.restoreFloatingLoopCarries(change_start);
             return rest;
         }
         // A branch-built value that cannot bind as one value transfers each
@@ -4610,16 +5094,16 @@ const Cloner = struct {
                 const reusable = try self.makeReusableForMatch(value);
                 if (try self.bindPatToFlowValue(let_.bind, reusable)) {
                     const rest = try self.materialize(try self.cloneExprValue(let_.rest));
-                    self.restore(change_start);
+                    try self.subst.restoreFloatingLoopCarries(change_start);
                     return .{ .expr = try self.flushPendingSince(pending_before, rest) };
                 }
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 self.pending.shrinkRetainingCapacity(pending_before);
             }
         }
         const bind = try self.clonePat(let_.bind, .bind_runtime);
         const rest = try self.cloneExpr(let_.rest);
-        self.restore(change_start);
+        try self.subst.restoreFloatingLoopCarries(change_start);
         return .{ .expr = try self.addExpr(.{ .ty = self.pass.program.getExpr(let_.rest).ty, .data = .{ .let_ = .{
             .bind = bind,
             .value = value_expr,
@@ -4632,9 +5116,10 @@ const Cloner = struct {
     /// bindings: the value keeps its structure, uses substitute leaf
     /// references, and the pending bindings are emitted where the stack next
     /// flushes, still dominating every use. Sound only when every named leaf
-    /// is an effect-free computation created before any effect in its region,
-    /// and the value does not reference its own binder. Returns false with
-    /// all speculative work undone.
+    /// is an effect-free computation — a pure binding commutes with any
+    /// effect between its creation point and the flush — and the value does
+    /// not reference its own binder. Returns false with all speculative work
+    /// undone.
     fn bindPatToPendingReusableValue(
         self: *Cloner,
         pat_id: Ast.PatId,
@@ -4648,20 +5133,19 @@ const Cloner = struct {
             else => recursive,
         };
         if (self_referential) return false;
-        if (self.effect_marks != self.region_entry_marks) return false;
 
         const pending_before = self.pending.items.len;
-        const change_before = self.changes.items.len;
+        const change_before = self.subst.watermark();
         const reusable = try self.makeReusableForMatch(value);
         for (self.pending.items[pending_before..]) |pend| {
             if (!exprHasNoObservableEffect(self.pass.program, self.pass.fn_effect_free, pend.value, false)) {
-                self.restore(change_before);
+                self.subst.restore(change_before);
                 self.pending.shrinkRetainingCapacity(pending_before);
                 return false;
             }
         }
         if (try self.bindPatToReusableValue(pat_id, reusable) != .match) {
-            self.restore(change_before);
+            self.subst.restore(change_before);
             self.pending.shrinkRetainingCapacity(pending_before);
             return false;
         }
@@ -4671,27 +5155,27 @@ const Cloner = struct {
     fn cloneLet(self: *Cloner, let_: anytype) Common.LowerError!Ast.ExprData {
         const value = try self.cloneExprValue(let_.value);
         const value_expr = try self.materialize(value);
-        const change_start = self.changes.items.len;
+        const change_start = self.subst.watermark();
         const bound = try self.bindPatToReusableValue(let_.bind, value);
         var bind: Ast.PatId = undefined;
         const rest = if (bound == .match) blk: {
             const cloned = try self.cloneExpr(let_.rest);
-            self.restore(change_start);
+            self.subst.restore(change_start);
             bind = try self.clonePat(let_.bind, .output_only);
             break :blk cloned;
         } else if (try self.bindPatToSingleUseRestValue(let_.bind, value, let_.rest)) blk: {
             const cloned = try self.cloneExpr(let_.rest);
-            self.restore(change_start);
+            self.subst.restore(change_start);
             bind = try self.clonePat(let_.bind, .output_only);
             break :blk cloned;
         } else blk: {
-            self.restore(change_start);
+            self.subst.restore(change_start);
             if (self.caseExprFromValue(value)) |case_expr| {
                 if (try self.cloneLetOfCase(let_, case_expr)) |data| return data;
             }
             bind = try self.clonePat(let_.bind, .bind_runtime);
             const rest = try self.cloneExpr(let_.rest);
-            self.restore(change_start);
+            self.subst.restore(change_start);
             break :blk rest;
         };
         return .{ .let_ = .{
@@ -4713,7 +5197,7 @@ const Cloner = struct {
         if (unsafe_count != 1 or uses != 1 or !before_effect) {
             return false;
         }
-        try self.putSubst(local, value);
+        try self.subst.put(self.pass.program, local, value);
         return true;
     }
 
@@ -4794,13 +5278,13 @@ const Cloner = struct {
                 const rewritten = try self.pass.allocator.alloc(Ast.Branch, branches.len);
                 defer self.pass.allocator.free(rewritten);
                 for (branches, 0..) |branch, index| {
-                    const change_start = self.changes.items.len;
+                    const change_start = self.subst.watermark();
                     try self.shadowPatLocals(branch.pat);
                     const body = (try self.cloneLetOfCaseArmBody(probe, dispatch, branch.body)) orelse {
-                        self.restore(change_start);
+                        self.subst.restore(change_start);
                         return null;
                     };
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     rewritten[index] = .{
                         .pat = branch.pat,
                         .guard = branch.guard,
@@ -4867,11 +5351,11 @@ const Cloner = struct {
         const params = [_]Ast.TypedLocal{.{ .local = join_param, .ty = value_ty }};
         const param_expr = try self.addExpr(.{ .ty = value_ty, .data = .{ .local = join_param } });
 
-        const change_start = self.changes.items.len;
+        const change_start = self.subst.watermark();
         const pending_start = self.pending.items.len;
         const bind = try self.clonePat(let_.bind, .bind_runtime);
         const rest = try self.flushPendingSince(pending_start, try self.cloneExpr(let_.rest));
-        self.restore(change_start);
+        self.subst.restore(change_start);
         const continuation = try self.addExpr(.{ .ty = rest_ty, .data = .{ .let_ = .{
             .bind = bind,
             .value = param_expr,
@@ -5089,7 +5573,7 @@ const Cloner = struct {
         const branch_expr = self.pass.program.getExpr(branch_body);
         switch (branch_expr.data) {
             .block => |block| {
-                const change_start = self.changes.items.len;
+                const change_start = self.subst.watermark();
                 const pending_entry = self.pending.items.len;
 
                 const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
@@ -5108,22 +5592,22 @@ const Cloner = struct {
                 const final_value = try self.cloneExprValue(block.final_expr);
                 if (final_value == .expr) {
                     if (try self.cloneDivergentAtType(block.final_expr, dispatch_ty)) |divergent| {
-                        self.restore(change_start);
+                        self.subst.restore(change_start);
                         try self.appendPendingStmtsSince(pending_final, &statements);
                         return try self.addExpr(.{ .ty = dispatch_ty, .data = .{ .block = .{
                             .statements = try self.pass.program.addStmtSpan(statements.items),
                             .final_expr = divergent,
                         } } });
                     }
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     self.pending.shrinkRetainingCapacity(pending_entry);
                     return null;
                 }
 
-                try self.putSubst(probe, final_value);
+                try self.subst.put(self.pass.program, probe, final_value);
                 try self.appendPendingStmtsSince(pending_final, &statements);
                 const rest = try self.cloneExpr(dispatch);
-                self.restore(change_start);
+                self.subst.restore(change_start);
 
                 return try self.addExpr(.{ .ty = dispatch_ty, .data = .{ .block = .{
                     .statements = try self.pass.program.addStmtSpan(statements.items),
@@ -5133,19 +5617,19 @@ const Cloner = struct {
             else => {
                 const pending_entry = self.pending.items.len;
                 const branch_value = try self.cloneExprValue(branch_body);
-                const change_start = self.changes.items.len;
+                const change_start = self.subst.watermark();
                 if (branch_value == .expr) {
                     if (try self.cloneDivergentAtType(branch_body, dispatch_ty)) |divergent| {
-                        self.restore(change_start);
+                        self.subst.restore(change_start);
                         return try self.flushPendingSince(pending_entry, divergent);
                     }
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     self.pending.shrinkRetainingCapacity(pending_entry);
                     return null;
                 }
-                try self.putSubst(probe, branch_value);
+                try self.subst.put(self.pass.program, probe, branch_value);
                 const rest = try self.flushPendingSince(pending_entry, try self.cloneExpr(dispatch));
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 return rest;
             },
         }
@@ -5209,31 +5693,31 @@ const Cloner = struct {
         self.region_entry_marks = self.effect_marks;
         defer self.region_entry_marks = saved_entry_marks;
 
-        const change_start = self.changes.items.len;
+        const change_start = self.subst.watermark();
         const body = body: switch (join.binding) {
             .locals => |locals| {
                 if (site.values.len != locals.len) {
                     Common.invariant("let-of-case jump site argument count differed from join binder count");
                 }
-                for (locals, site.values) |local, value| try self.putSubst(local, value);
+                for (locals, site.values) |local, value| try self.subst.put(self.pass.program, local, value);
                 const body = try self.cloneExpr(join.body);
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 break :body body;
             },
             .pattern => |binding| {
                 if (try self.bindPatToFlowValue(binding.pat, site.values[0])) {
                     const body = try self.cloneExpr(join.body);
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     break :body body;
                 }
                 // The pattern could not consume the value's structure; keep
                 // an ordinary let of the materialized value at the site.
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 const value_expr = try self.materialize(site.values[0]);
-                const pat_change_start = self.changes.items.len;
+                const pat_change_start = self.subst.watermark();
                 const bind = try self.clonePat(binding.pat, .bind_runtime);
                 const rest = try self.cloneExpr(join.body);
-                self.restore(pat_change_start);
+                self.subst.restore(pat_change_start);
                 break :body try self.addExpr(.{ .ty = rest_ty, .data = .{ .let_ = .{
                     .bind = bind,
                     .value = value_expr,
@@ -5281,26 +5765,26 @@ const Cloner = struct {
             rebuilt[slot] = try self.rebuildLetCaseJoinValue(slot_values, arena, &params, site_args, &budget);
         }
 
-        const change_start = self.changes.items.len;
+        const change_start = self.subst.watermark();
         const saved_entry_marks = self.region_entry_marks;
         self.region_entry_marks = self.effect_marks;
         defer self.region_entry_marks = saved_entry_marks;
         const body = body: switch (join.binding) {
             .locals => |locals| {
-                for (locals, rebuilt) |local, value| try self.putSubst(local, value);
+                for (locals, rebuilt) |local, value| try self.subst.put(self.pass.program, local, value);
                 const body = try self.cloneExpr(join.body);
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 break :body body;
             },
             .pattern => |binding| {
                 if (try self.bindPatToFlowValue(binding.pat, rebuilt[0])) {
                     const body = try self.cloneExpr(join.body);
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     break :body body;
                 }
                 // The pattern could not consume the rebuilt structure; fall
                 // back to one opaque parameter bound by an ordinary let.
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 params.clearRetainingCapacity();
                 for (site_args) |*list| list.clearRetainingCapacity();
                 const param_ty = valueType(self.pass.program, sites[0].values[0]);
@@ -5310,10 +5794,10 @@ const Cloner = struct {
                     try list.append(arena, try self.materialize(site.values[0]));
                 }
                 const param_expr = try self.addExpr(.{ .ty = param_ty, .data = .{ .local = param_local } });
-                const pat_change_start = self.changes.items.len;
+                const pat_change_start = self.subst.watermark();
                 const bind = try self.clonePat(binding.pat, .bind_runtime);
                 const rest = try self.cloneExpr(join.body);
-                self.restore(pat_change_start);
+                self.subst.restore(pat_change_start);
                 break :body try self.addExpr(.{ .ty = rest_ty, .data = .{ .let_ = .{
                     .bind = bind,
                     .value = param_expr,
@@ -5503,7 +5987,7 @@ const Cloner = struct {
         // its initialized-ness at the loop head. The emitted params do not
         // exist yet, so pin those references to the source param ids while
         // cloning; each emission below retargets them to its fresh params.
-        const forward_start = self.changes.items.len;
+        const forward_start = self.subst.watermark();
         for (params) |param| try self.shadowLocal(param.local);
         for (initial_values, 0..) |initial, index| {
             values[index] = try self.cloneExprValueDemandingShape(initial);
@@ -5514,19 +5998,36 @@ const Cloner = struct {
                 shapes[index] = .{ .any = valueType(self.pass.program, values[index]) };
             }
         }
-        self.restore(forward_start);
+        self.subst.restore(forward_start);
         self.inline_direct_requires_known_arg = saved_requires_known_arg;
 
-        const change_start = self.changes.items.len;
-        defer self.restore(change_start);
+        const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
 
         // A loop-carried variable that was bound to a known constructor before the
-        // loop leaves that value in `binder_subst`, keyed on its source binder.
+        // loop leaves that value in the binder-wide substitution, keyed on its
+        // source binder.
         // Every back edge reassigns the variable, so its pre-loop value is not
         // what the slot carries inside the loop. Reads sharing that binder (the
         // reassigned copies feeding `continue`) must resolve to the value the slot
-        // actually holds, so drop those pre-loop values before cloning the body.
-        for (initial_values) |initial| try self.dropCarriedBinderValue(initial);
+        // actually holds, so drop those pre-loop values before cloning the body
+        // and keep each slot's identity: the emitted params are installed under
+        // it below, which is the only resolution path a reassigned copy has.
+        const carried_identities = try self.pass.allocator.alloc(?BinderIdentity, initial_values.len);
+        defer self.pass.allocator.free(carried_identities);
+        for (initial_values, carried_identities) |initial, *identity| {
+            identity.* = try self.subst.dropCarriedBinder(self.pass.program, initial);
+        }
+
+        // Mark each carried binder so a state-merged or reassigned copy bound in
+        // a nested `let` while cloning the body floats its value past that let's
+        // restore, letting the back edge resolve it through its binder.
+        for (carried_identities) |identity| {
+            if (identity) |carried| try self.subst.markLoopCarried(carried);
+        }
+        defer for (carried_identities) |identity| {
+            if (identity) |carried| self.subst.unmarkLoopCarried(carried);
+        };
 
         // Splitting a slot into its shape leaves is only sound when every back
         // edge can hand those leaves back. Whether a back edge can is knowable
@@ -5542,21 +6043,23 @@ const Cloner = struct {
         // erases at least one constructor leaf, so attempts are bounded by the
         // leaf count.
         while (has_constructor) {
+            const attempt_pending = self.pending.items.len;
             var new_params = std.ArrayList(Ast.TypedLocal).empty;
             defer new_params.deinit(self.pass.allocator);
 
             var new_initials = std.ArrayList(Ast.ExprId).empty;
             defer new_initials.deinit(self.pass.allocator);
 
-            const split_start = self.changes.items.len;
+            const split_start = self.subst.watermark();
             var forward_sources = std.ArrayList(Ast.LocalId).empty;
             defer forward_sources.deinit(self.pass.allocator);
             var forward_finals = std.ArrayList(Ast.LocalId).empty;
             defer forward_finals.deinit(self.pass.allocator);
-            for (params, shapes, values) |param, shape, value| {
+            for (params, shapes, values, carried_identities) |param, shape, value, carried_identity| {
                 const leaf_start = new_params.items.len;
                 const param_value = try self.valueFromShapeArgs(shape, &new_params);
-                try self.putSubst(param.local, param_value);
+                try self.subst.put(self.pass.program, param.local, param_value);
+                if (carried_identity) |identity| try self.subst.putLoopCarried(identity, param_value);
                 try self.appendExprsFromValue(shape, value, &new_initials);
                 switch (shape) {
                     // An `.any` slot keeps its whole value in one param, so a
@@ -5582,7 +6085,11 @@ const Cloner = struct {
                 } } }) };
             }
 
-            self.restore(split_start);
+            self.subst.restore(split_start);
+            // A discarded attempt must leave no pending binding behind: a
+            // survivor would flush at the region boundary as a live let for a
+            // clone that was thrown away, duplicating its evaluation.
+            if (std.debug.runtime_safety) std.debug.assert(self.pending.items.len == attempt_pending);
             // Back edges demoted their unsupplied leaves in place. Any slot that
             // still carries constructor structure is worth another split attempt.
             has_constructor = false;
@@ -5605,11 +6112,18 @@ const Cloner = struct {
         defer self.pass.allocator.free(forward_sources);
         const forward_finals = try self.pass.allocator.alloc(Ast.LocalId, params.len);
         defer self.pass.allocator.free(forward_finals);
-        for (params, whole_params, forward_sources, forward_finals) |param, *whole, *source, *final| {
+        for (params, whole_params, forward_sources, forward_finals, carried_identities) |param, *whole, *source, *final, carried_identity| {
             whole.* = .{
                 .local = try self.cloneBinder(param.local, param.ty, .bind_runtime),
                 .ty = param.ty,
             };
+            if (carried_identity) |identity| {
+                // The exact-local entry `cloneBinder` just installed for this
+                // param, not a binder-wide entry a sibling might hold.
+                const param_value = self.subst.getExact(param.local) orelse
+                    Common.invariant("carried whole-state param had no substitution after binding");
+                try self.subst.putLoopCarried(identity, param_value);
+            }
             source.* = param.local;
             final.* = whole.local;
         }
@@ -5651,20 +6165,6 @@ const Cloner = struct {
         }
     }
 
-    /// Remove the pre-loop `binder_subst` value for the variable carried by a
-    /// loop slot whose initial value is that variable. The removal is recorded on
-    /// the change log so it is restored when the loop clone finishes.
-    fn dropCarriedBinderValue(self: *Cloner, initial: Ast.ExprId) Allocator.Error!void {
-        const local = localExpr(self.pass.program, initial) orelse return;
-        const identity = self.binderIdentityOf(local) orelse return;
-        const previous = self.binder_subst.get(identity) orelse return;
-        try self.changes.append(self.pass.allocator, .{
-            .key = .{ .binder = identity },
-            .previous = previous,
-        });
-        _ = self.binder_subst.remove(identity);
-    }
-
     /// A block whose statements all dissolve — each binds a substitutable
     /// value, or names an effect-free computation that becomes a pending
     /// binding — is transparent to value flow: its result keeps the final
@@ -5673,7 +6173,7 @@ const Cloner = struct {
     /// then materializes as written. Returns null on a pinned block with all
     /// speculative work undone.
     fn cloneBlockValue(self: *Cloner, block: anytype) Common.LowerError!?Value {
-        const change_start = self.changes.items.len;
+        const change_start = self.subst.watermark();
         const pending_entry = self.pending.items.len;
 
         const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
@@ -5687,38 +6187,47 @@ const Cloner = struct {
                 // work, so the statement dissolves with the block.
                 .expr => |stmt_expr| {
                     if (exprHasNoObservableEffect(self.pass.program, self.pass.fn_effect_free, stmt_expr, false)) continue;
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     self.pending.shrinkRetainingCapacity(pending_entry);
                     return null;
                 },
                 else => {
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                     self.pending.shrinkRetainingCapacity(pending_entry);
                     return null;
                 },
             };
             const value = try self.cloneExprValue(let_.value);
             if (self.caseExprFromValue(value) != null) {
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 self.pending.shrinkRetainingCapacity(pending_entry);
                 return null;
             }
             if (try self.bindPatToReusableValue(let_.pat, value) == .match) continue;
             if (!try self.bindPatToPendingReusableValue(let_.pat, let_.value, let_.recursive, value)) {
-                self.restore(change_start);
+                self.subst.restore(change_start);
                 self.pending.shrinkRetainingCapacity(pending_entry);
                 return null;
             }
         }
 
         const final = try self.cloneExprValue(block.final_expr);
-        self.restore(change_start);
+        self.subst.restore(change_start);
         return final;
     }
 
     fn cloneBlock(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Ast.ExprId {
-        const change_start = self.changes.items.len;
-        defer self.restore(change_start);
+        const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
+
+        // Statement boundaries are sequencing points: bindings created by a
+        // later statement flush at that statement's own position, after every
+        // effect the earlier statements emitted, so window comparisons for
+        // those bindings restart at each boundary rather than spanning the
+        // whole block. The entry value is restored on exit so bindings in the
+        // enclosing region still compare against that region's entry.
+        const saved_entry_marks = self.region_entry_marks;
+        defer self.region_entry_marks = saved_entry_marks;
 
         const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
         defer self.pass.allocator.free(source);
@@ -5752,6 +6261,7 @@ const Cloner = struct {
             const cloned = try self.cloneStmt(stmt);
             try self.appendPendingStmtsSince(pending_start, &statements);
             if (cloned) |cloned_stmt| try statements.append(self.pass.allocator, cloned_stmt);
+            self.region_entry_marks = self.effect_marks;
         }
 
         return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
@@ -5818,7 +6328,6 @@ const Cloner = struct {
             const values = try self.pass.allocator.alloc(Value, args.len);
             defer self.pass.allocator.free(values);
             const callee_uses = self.pass.plans[raw].used_args;
-            const pending_before = self.pending.items.len;
             for (args, 0..) |arg, index| {
                 values[index] = if (callee_uses[index])
                     try self.cloneExprValueDemandingShape(arg)
@@ -5845,22 +6354,22 @@ const Cloner = struct {
             // argument values already produced above instead of re-cloning the
             // source arguments: a second clone re-descends every argument, so a
             // nested call chain (e.g. a long `+` sum) would clone each level
-            // twice and expand exponentially with depth. The reuse is exact when
-            // producing the values created no pending bindings, since a plain
-            // re-clone would then also create none and yield the same result.
-            if (self.pending.items.len == pending_before) {
-                const residual_args = try self.pass.allocator.alloc(Ast.ExprId, values.len);
-                defer self.pass.allocator.free(residual_args);
-                for (values, 0..) |value, index| {
-                    residual_args[index] = try self.materialize(value);
-                }
-                return .{ .call_proc = .{
-                    .callee = call.callee,
-                    .args = try self.pass.program.addExprSpan(residual_args),
-                    .captures = try self.cloneCaptureOperandSpan(call.captures),
-                    .is_cold = call.is_cold,
-                } };
+            // twice and expand exponentially with depth. The reuse is also
+            // required for correctness when producing the values delegated
+            // pending bindings: those flush once at the region boundary, where
+            // they dominate this call, and a re-clone of the source would emit
+            // their effects a second time.
+            const residual_args = try self.pass.allocator.alloc(Ast.ExprId, values.len);
+            defer self.pass.allocator.free(residual_args);
+            for (values, 0..) |value, index| {
+                residual_args[index] = try self.materialize(value);
             }
+            return .{ .call_proc = .{
+                .callee = call.callee,
+                .args = try self.pass.program.addExprSpan(residual_args),
+                .captures = try self.cloneCaptureOperandSpan(call.captures),
+                .is_cold = call.is_cold,
+            } };
         }
         return .{ .call_proc = .{
             .callee = call.callee,
@@ -6153,7 +6662,23 @@ const Cloner = struct {
     }
 
     fn cloneMatch(self: *Cloner, ty: Type.TypeId, match: @import("../monotype/ast.zig").MatchExpr) Common.LowerError!Ast.ExprId {
+        const pending_watermark = self.pending.items.len;
         const scrutinee = try self.cloneExprValueDemandingShape(match.scrutinee);
+        if (self.knownConstructorSize(scrutinee) == known_constructor_size_cap) {
+            // The scrutinee's measured size saturated the work budget: it is
+            // cyclic or too deep to materialize. Skip the known-match collapse
+            // and emit the residual match over a plain clone of the source
+            // scrutinee, finite by construction, rather than materializing a
+            // possibly self-referential value. Dropping the first clone's
+            // delegated pending bindings keeps the scrutinee's effect emitted
+            // only by the plain re-clone.
+            self.pending.shrinkRetainingCapacity(pending_watermark);
+            return try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
+                .scrutinee = try self.cloneExprPlain(match.scrutinee),
+                .branches = try self.cloneBranchSpan(match.branches),
+                .comptime_site = match.comptime_site,
+            } } });
+        }
         if (try self.simplifyKnownMatch(scrutinee, match.branches)) |body| return body;
 
         const scrutinee_expr = try self.materialize(scrutinee);
@@ -6189,12 +6714,14 @@ const Cloner = struct {
         decline_on_no_match: bool,
     ) Common.LowerError!?Value {
         if (scrutinee == .expr) return null;
-        const branches = self.pass.program.branchSpan(branches_span);
-        for (0..branches.len) |branch_index| {
-            const branch = GuardedList.at(branches, branch_index);
-            const match_change_start = self.changes.items.len;
+        // Read each branch by stable index rather than holding a `branchSpan`
+        // borrow: `cloneExprValue(branch.body)` below can append to `branches`
+        // through a nested match, which would invalidate a live borrow.
+        for (0..branches_span.len) |branch_index| {
+            const branch = self.pass.program.branchAt(branches_span, branch_index);
+            const match_change_start = self.subst.watermark();
             const verdict = try self.bindPatToValue(branch.pat, scrutinee);
-            self.restore(match_change_start);
+            self.subst.restore(match_change_start);
             switch (verdict) {
                 // This branch can be neither ruled in nor ruled out
                 // statically, so the whole fold aborts and the residual
@@ -6206,13 +6733,13 @@ const Cloner = struct {
             if (branch.guard != null) return null;
 
             const pending_start = self.pending.items.len;
-            const change_start = self.changes.items.len;
+            const change_start = self.subst.watermark();
             const unsafe_count = self.unsafeLeafCount(scrutinee);
             if (try self.bindPatToMatchValue(branch.pat, scrutinee, branch.body, unsafe_count) == null) {
                 Common.invariant("known constructor match changed after reusable payload binding");
             }
             const body = try self.cloneExprValue(branch.body);
-            self.restore(change_start);
+            self.subst.restore(change_start);
             return try self.resolvePending(pending_start, body);
         }
         if (decline_on_no_match) return null;
@@ -6230,7 +6757,7 @@ const Cloner = struct {
         switch (pat.data) {
             .bind => |local| {
                 const prepared = try self.valueForMatchLocal(local, value, body, unsafe_count);
-                try self.putSubst(local, prepared);
+                try self.subst.put(self.pass.program, local, prepared);
                 return prepared;
             },
             .wildcard => return try self.makeReusableForMatch(value),
@@ -6242,7 +6769,7 @@ const Cloner = struct {
                 else
                     try self.makeReusableForMatch(value);
                 const prepared = (try self.bindPatToMatchValue(as.pattern, base, body, unsafe_count)) orelse return null;
-                try self.putSubst(as.local, prepared);
+                try self.subst.put(self.pass.program, as.local, prepared);
                 return prepared;
             },
             .record => |fields_span| {
@@ -6275,7 +6802,7 @@ const Cloner = struct {
                             .fields = prepared_fields,
                         } };
                     },
-                    .nominal => |nominal| return try self.bindPatToMatchValue(pat_id, nominal.backing.*, body, unsafe_count),
+                    .nominal => |nominal| return try self.bindPatToMatchValueStripped(pat_id, nominal.backing.*, body, unsafe_count),
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return null;
                         for (0..fields.len) |index| {
@@ -6314,7 +6841,7 @@ const Cloner = struct {
                             .items = items,
                         } };
                     },
-                    .nominal => |nominal| return try self.bindPatToMatchValue(pat_id, nominal.backing.*, body, unsafe_count),
+                    .nominal => |nominal| return try self.bindPatToMatchValueStripped(pat_id, nominal.backing.*, body, unsafe_count),
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return null;
                         for (0..pats.len) |index| {
@@ -6370,7 +6897,7 @@ const Cloner = struct {
                     else => return null,
                 };
                 const backing = try self.pass.arena.allocator().create(Value);
-                backing.* = (try self.bindPatToMatchValue(backing_pat, nominal.backing.*, body, unsafe_count)) orelse return null;
+                backing.* = (try self.bindPatToMatchValueStripped(backing_pat, nominal.backing.*, body, unsafe_count)) orelse return null;
                 return Value{ .nominal = .{
                     .ty = nominal.ty,
                     .backing = backing,
@@ -6397,12 +6924,31 @@ const Cloner = struct {
         unsafe_count: usize,
     ) Common.LowerError!?Value {
         const runtime = try self.pass.arena.allocator().create(Value);
-        runtime.* = (try self.bindPatToMatchValue(pat_id, candidate.runtime.*, body, unsafe_count)) orelse return null;
+        runtime.* = (try self.bindPatToMatchValueStripped(pat_id, candidate.runtime.*, body, unsafe_count)) orelse return null;
         return Value{ .static_data_candidate = .{
             .ty = candidate.ty,
             .static_data = candidate.static_data,
             .runtime = runtime,
         } };
+    }
+
+    /// Recurse into a nominal backing or static-data runtime while binding a
+    /// known match value, counting the pointer-edge strip so a value that
+    /// references itself through those edges cannot loop forever. The caller's
+    /// static probe (`bindPatToValue` in `selectKnownMatchValue`) already
+    /// declines the collapse for such a value, so reaching the cap here is not
+    /// expected; returning null declines the reuse binding conservatively.
+    fn bindPatToMatchValueStripped(
+        self: *Cloner,
+        pat_id: Ast.PatId,
+        value: Value,
+        body: Ast.ExprId,
+        unsafe_count: usize,
+    ) Common.LowerError!?Value {
+        if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return null;
+        self.wrapper_strip_depth += 1;
+        defer self.wrapper_strip_depth -= 1;
+        return try self.bindPatToMatchValue(pat_id, value, body, unsafe_count);
     }
 
     /// Node-count threshold above which a known constructor value bound to an
@@ -6443,7 +6989,7 @@ const Cloner = struct {
         {
             return value;
         }
-        return try self.makeReusableForMatch(value);
+        return try self.makeReusableForMatchWindowed(value);
     }
 
     fn valueForInlineLocal(
@@ -6462,7 +7008,31 @@ const Cloner = struct {
         {
             return value;
         }
-        return try self.makeReusableForMatch(value);
+        return try self.makeReusableForMatchWindowed(value);
+    }
+
+    /// Clone a source expression to a known value for inlining, rebinding a
+    /// value whose measured constructor size saturated the work budget through
+    /// a plain clone of the source expression instead. A saturated size means
+    /// the value is cyclic or too deep to measure; boxing it would
+    /// deep-materialize a possibly self-referential value, whereas a plain
+    /// clone of the source expression is finite by construction. Dropping the
+    /// first clone's delegated pending bindings keeps its effect emitted only
+    /// by the plain re-clone: a leftover pending would flush the same effect a
+    /// second time. The discarded clone's dead nodes still counted toward
+    /// `effect_marks`, which only makes downstream delegation more conservative
+    /// and is deliberately left as-is.
+    fn cloneInlineValueBoundingCycles(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
+        const window_start = self.effect_marks;
+        const expr_watermark = self.pass.program.exprCount();
+        const pending_watermark = self.pending.items.len;
+        const value = try self.cloneExprValue(expr_id);
+        if (self.knownConstructorSize(value) == known_constructor_size_cap) {
+            self.pending.shrinkRetainingCapacity(pending_watermark);
+            return try self.makeReusableForMatch(.{ .expr = try self.cloneExprPlain(expr_id) });
+        }
+        try self.recordValueWindow(value, window_start, expr_watermark);
+        return value;
     }
 
     /// Reported size for a known value that exhausts the size work budget: a
@@ -6496,28 +7066,31 @@ const Cloner = struct {
     fn knownConstructorSizeBudgeted(self: *Cloner, value: Value, budget: *u32) usize {
         if (budget.* == 0) return known_constructor_size_cap;
         budget.* -= 1;
+        // Saturating sums so a child that reported the cap propagates it to the
+        // parent instead of overflowing: `knownConstructorSize(value) ==
+        // known_constructor_size_cap` is then a reliable exhaustion signal.
         return switch (value) {
             .expr => 0,
             .static_data_candidate => |candidate| self.knownConstructorSizeBudgeted(candidate.runtime.*, budget),
             .tag => |tag| blk: {
                 var count: usize = 1;
-                for (tag.payloads) |payload| count += self.knownConstructorSizeBudgeted(payload, budget);
+                for (tag.payloads) |payload| count +|= self.knownConstructorSizeBudgeted(payload, budget);
                 break :blk count;
             },
             .record => |record| blk: {
                 var count: usize = 1;
-                for (record.fields) |field| count += self.knownConstructorSizeBudgeted(field.value, budget);
+                for (record.fields) |field| count +|= self.knownConstructorSizeBudgeted(field.value, budget);
                 break :blk count;
             },
             .tuple => |tuple| blk: {
                 var count: usize = 1;
-                for (tuple.items) |item| count += self.knownConstructorSizeBudgeted(item, budget);
+                for (tuple.items) |item| count +|= self.knownConstructorSizeBudgeted(item, budget);
                 break :blk count;
             },
-            .nominal => |nominal| 1 + self.knownConstructorSizeBudgeted(nominal.backing.*, budget),
+            .nominal => |nominal| 1 +| self.knownConstructorSizeBudgeted(nominal.backing.*, budget),
             .callable => |callable| blk: {
                 var count: usize = 1;
-                for (callable.captures) |capture| count += self.knownConstructorSizeBudgeted(capture.value, budget);
+                for (callable.captures) |capture| count +|= self.knownConstructorSizeBudgeted(capture.value, budget);
                 break :blk count;
             },
         };
@@ -6531,10 +7104,7 @@ const Cloner = struct {
         const expr = self.pass.program.getExpr(expr_id);
         return switch (expr.data) {
             .local => |local| blk: {
-                if (self.subst.get(local)) |value| break :blk value;
-                if (self.binderIdentityOf(local)) |identity| {
-                    if (self.binder_subst.get(identity)) |value| break :blk value;
-                }
+                if (self.subst.get(self.pass.program, local)) |value| break :blk value;
                 break :blk null;
             },
             .field_access => |field| blk: {
@@ -6555,7 +7125,7 @@ const Cloner = struct {
         const args = self.pass.program.exprSpan(span);
         for (0..args.len) |index| {
             const arg = GuardedList.at(args, index);
-            if (self.peekKnownValue(arg)) |value| total += self.knownConstructorSize(value);
+            if (self.peekKnownValue(arg)) |value| total +|= self.knownConstructorSize(value);
         }
         return total;
     }
@@ -6565,7 +7135,7 @@ const Cloner = struct {
         const operands = self.pass.program.captureOperandSpan(span);
         for (0..operands.len) |index| {
             const operand = GuardedList.at(operands, index);
-            if (self.peekKnownValue(operand.value)) |value| total += self.knownConstructorSize(value);
+            if (self.peekKnownValue(operand.value)) |value| total +|= self.knownConstructorSize(value);
         }
         return total;
     }
@@ -6646,6 +7216,54 @@ const Cloner = struct {
         return try self.makeReusableForMatchBudgeted(value, &budget);
     }
 
+    /// Record the emission-window start for a value cloned from a known
+    /// point, keyed by its expression node. `expr_watermark` is the program's
+    /// expression count from just before the clone: only a node the clone
+    /// freshly emitted gets a window, because an existing node reached
+    /// through substitution was emitted elsewhere and a later recording
+    /// would claim marks that belong to other emissions.
+    fn recordValueWindow(self: *Cloner, value: Value, window_start: usize, expr_watermark: usize) Allocator.Error!void {
+        const expr = switch (value) {
+            .expr => |expr| expr,
+            else => return,
+        };
+        if (@intFromEnum(expr) < expr_watermark) return;
+        const entry = try self.expr_window_starts.getOrPut(expr);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = window_start;
+        }
+    }
+
+    /// Like `makeReusableForMatch`, but consults the value's recorded
+    /// emission window: the binding then carries `[marks_before, marks]`,
+    /// which lets `resolvePending` delegate it even when the value is
+    /// effectful — a window chaining from the region entry proves the hoist
+    /// to the region boundary crosses no other effect. Only a single opaque
+    /// `.expr` value has a well-defined window; every other shape, and any
+    /// value with no recorded window, takes the untracked path.
+    fn makeReusableForMatchWindowed(self: *Cloner, value: Value) Common.LowerError!Value {
+        const expr = switch (value) {
+            .expr => |expr| expr,
+            else => return try self.makeReusableForMatch(value),
+        };
+        const window_start = self.expr_window_starts.get(expr) orelse return try self.makeReusableForMatch(value);
+        if (self.valueCanSubstitute(value)) return value;
+        if (std.debug.runtime_safety) std.debug.assert(window_start <= self.effect_marks);
+        const ty = self.pass.program.getExpr(expr).ty;
+        const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
+        try self.pending.append(self.pass.allocator, .{
+            .local = local,
+            .ty = ty,
+            .value = expr,
+            .marks = self.effect_marks,
+            .marks_before = window_start,
+        });
+        return .{ .expr = try self.addExpr(.{
+            .ty = ty,
+            .data = .{ .local = local },
+        }) };
+    }
+
     fn makeReusableForMatchBudgeted(self: *Cloner, value: Value, budget: *u32) Common.LowerError!Value {
         if (budget.* == 0) return value;
         budget.* -= 1;
@@ -6659,6 +7277,7 @@ const Cloner = struct {
                     .ty = ty,
                     .value = expr,
                     .marks = self.effect_marks,
+                    .marks_before = null,
                 });
                 break :blk Value{ .expr = try self.addExpr(.{
                     .ty = ty,
@@ -6672,6 +7291,7 @@ const Cloner = struct {
                     .ty = candidate.ty,
                     .value = try self.materialize(value),
                     .marks = self.effect_marks,
+                    .marks_before = null,
                 });
                 break :blk Value{ .expr = try self.addExpr(.{
                     .ty = candidate.ty,
@@ -6780,27 +7400,45 @@ const Cloner = struct {
         self.pending.shrinkRetainingCapacity(start);
     }
 
+    /// Whether the pending bindings `[start..]` may delegate to the region
+    /// boundary under a structured body. The flushed let chain evaluates
+    /// oldest-first ahead of everything else in the region, so each
+    /// effect-carrying binding must be provably first among the effects that
+    /// remain: scanning oldest to newest, its emission window
+    /// `[marks_before, marks]` must begin exactly where the previous
+    /// effectful binding's window ended (the first at the region entry),
+    /// which proves no uncounted effect sits between them or before the
+    /// first. Bindings with effect-free values commute with every effect and
+    /// need no window. An effectful binding with no recorded window never
+    /// delegates.
+    fn pendingChainDelegates(self: *const Cloner, start: usize) bool {
+        var expected = self.region_entry_marks;
+        for (self.pending.items[start..]) |pending| {
+            if (exprHasNoObservableEffect(self.pass.program, self.pass.fn_effect_free, pending.value, false)) continue;
+            const window_start = pending.marks_before orelse {
+                return false;
+            };
+            if (window_start != expected) {
+                return false;
+            }
+            expected = pending.marks;
+        }
+        return true;
+    }
+
     /// Resolve the pending bindings a construct created while producing
-    /// `body`. A structured value whose bindings are all effect-free
-    /// computations, created in a region that has emitted no effect, keeps
-    /// its structure: the bindings stay pending and the region boundary
-    /// emits them, where they still dominate every leaf reference and cross
-    /// only effect-free evaluation. Anything else pins the value here — it
-    /// is materialized and wrapped so evaluation order and count stay
-    /// exactly as written.
+    /// `body`. A structured value keeps its structure when every binding it
+    /// created may move to the region boundary — effect-free bindings
+    /// commute with everything, and an effectful binding qualifies only when
+    /// its emission window chains from the region entry (see
+    /// `pendingChainDelegates`), so the hoist replays the region's effects
+    /// in source order. Anything else pins the value here — it is
+    /// materialized and wrapped so evaluation order and count stay exactly
+    /// as written.
     fn resolvePending(self: *Cloner, start: usize, body: Value) Common.LowerError!Value {
         if (self.pending.items.len <= start) return body;
-        if (body != .expr) {
-            var delegatable = true;
-            for (self.pending.items[start..]) |pending| {
-                if (pending.marks != self.region_entry_marks or
-                    !exprHasNoObservableEffect(self.pass.program, self.pass.fn_effect_free, pending.value, false))
-                {
-                    delegatable = false;
-                    break;
-                }
-            }
-            if (delegatable) return body;
+        if (body != .expr and self.pendingChainDelegates(start)) {
+            return body;
         }
         return .{ .expr = try self.flushPendingSince(start, try self.materialize(body)) };
     }
@@ -6845,11 +7483,11 @@ const Cloner = struct {
                     const saved_entry_marks = self.region_entry_marks;
                     self.region_entry_marks = self.effect_marks;
                     defer self.region_entry_marks = saved_entry_marks;
-                    const change_start = self.changes.items.len;
+                    const change_start = self.subst.watermark();
                     try self.shadowPatLocals(inner_branch.pat);
                     const inner_value = try self.cloneExprValue(inner_branch.body);
                     const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span)) orelse {
-                        self.restore(change_start);
+                        self.subst.restore(change_start);
                         self.pending.shrinkRetainingCapacity(pending_entry);
                         return null;
                     };
@@ -6858,7 +7496,7 @@ const Cloner = struct {
                         .guard = inner_branch.guard,
                         .body = try self.flushPendingSince(pending_start, try self.materialize(outer_value)),
                     };
-                    self.restore(change_start);
+                    self.subst.restore(change_start);
                 }
 
                 return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
@@ -6982,8 +7620,8 @@ const Cloner = struct {
         }
 
         const pending_start = self.pending.items.len;
-        const change_start = self.changes.items.len;
-        defer self.restore(change_start);
+        const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
 
         const prepared_captures = try self.pass.allocator.alloc(Value, callable.captures.len);
         defer self.pass.allocator.free(prepared_captures);
@@ -6991,14 +7629,14 @@ const Cloner = struct {
             const id = self.pass.program.captureIdOfLocal(source_capture.local);
             const capture_value = callableCaptureValueForId(callable.captures, id) orelse
                 Common.invariant("callable value had no value for a source capture slot");
-            prepared_captures[index] = try self.makeReusableForMatch(capture_value);
-            try self.putSubst(source_capture.local, prepared_captures[index]);
+            prepared_captures[index] = try self.makeReusableForMatchWindowed(capture_value);
+            try self.subst.put(self.pass.program, source_capture.local, prepared_captures[index]);
         }
 
         const arg_values = try self.pass.allocator.alloc(Value, args.len);
         defer self.pass.allocator.free(arg_values);
         for (args, 0..) |arg_expr, index| {
-            arg_values[index] = try self.cloneExprValue(arg_expr);
+            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr);
         }
 
         var unsafe_count: usize = 0;
@@ -7018,7 +7656,7 @@ const Cloner = struct {
         }
 
         for (source_args, prepared_args) |source_arg, arg_value| {
-            try self.putSubst(source_arg.local, arg_value);
+            try self.subst.put(self.pass.program, source_arg.local, arg_value);
         }
 
         return try self.resolvePending(pending_start, try self.cloneExprValue(body));
@@ -7054,8 +7692,8 @@ const Cloner = struct {
         if (source_args.len != args.len) Common.invariant("direct call arity differed from lifted function arity");
 
         const pending_start = self.pending.items.len;
-        const change_start = self.changes.items.len;
-        defer self.restore(change_start);
+        const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
 
         const captures = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
         defer self.pass.allocator.free(captures);
@@ -7073,14 +7711,14 @@ const Cloner = struct {
         for (operands, 0..) |operand, index| {
             capture_values[index] = .{
                 .id = operand.id,
-                .value = try self.cloneExprValue(operand.value),
+                .value = try self.cloneInlineValueBoundingCycles(operand.value),
             };
         }
 
         const arg_values = try self.pass.allocator.alloc(Value, args.len);
         defer self.pass.allocator.free(arg_values);
         for (args, 0..) |arg_expr, index| {
-            arg_values[index] = try self.cloneExprValue(arg_expr);
+            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr);
         }
 
         var unsafe_count: usize = 0;
@@ -7109,10 +7747,10 @@ const Cloner = struct {
         }
 
         for (captures, prepared_captures) |capture, capture_value| {
-            try self.putSubst(capture.local, capture_value);
+            try self.subst.put(self.pass.program, capture.local, capture_value);
         }
         for (source_args, prepared_args) |source_arg, arg_value| {
-            try self.putSubst(source_arg.local, arg_value);
+            try self.subst.put(self.pass.program, source_arg.local, arg_value);
         }
 
         return try self.resolvePending(pending_start, try self.cloneExprValue(body));
@@ -7122,14 +7760,14 @@ const Cloner = struct {
         const pat = self.pass.program.getPat(pat_id);
         switch (pat.data) {
             .bind => |local| {
-                try self.putSubst(local, value);
+                try self.subst.put(self.pass.program, local, value);
                 return .match;
             },
             .wildcard => return .match,
             .as => |as| {
                 const verdict = try self.bindPatToValue(as.pattern, value);
                 if (verdict != .match) return verdict;
-                try self.putSubst(as.local, value);
+                try self.subst.put(self.pass.program, as.local, value);
                 return .match;
             },
             .record => |fields_span| {
@@ -7237,6 +7875,12 @@ const Cloner = struct {
                 return verdict;
             },
             .nominal => |backing_pat| {
+                // Stripping a nominal or static-data wrapper follows a value
+                // pointer edge that a recursive construction can loop through;
+                // a cyclic value declines to a residual runtime match.
+                if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return .unknown;
+                self.wrapper_strip_depth += 1;
+                defer self.wrapper_strip_depth -= 1;
                 return switch (value) {
                     .static_data_candidate => |candidate| try self.bindPatToValue(pat_id, candidate.runtime.*),
                     .nominal => |nominal| try self.bindPatToValue(backing_pat, nominal.backing.*),
@@ -7270,13 +7914,13 @@ const Cloner = struct {
         const pat = self.pass.program.getPat(pat_id);
         switch (pat.data) {
             .bind => |local| {
-                try self.putSubst(local, value);
+                try self.subst.put(self.pass.program, local, value);
                 return true;
             },
             .wildcard => return true,
             .as => |as| {
                 if (!try self.bindPatToFlowValue(as.pattern, value)) return false;
-                try self.putSubst(as.local, value);
+                try self.subst.put(self.pass.program, as.local, value);
                 return true;
             },
             .record => |fields_span| {
@@ -7343,10 +7987,18 @@ const Cloner = struct {
                 }
                 return true;
             },
-            .nominal => |backing_pat| return switch (value) {
-                .static_data_candidate => |candidate| try self.bindPatToFlowValue(pat_id, candidate.runtime.*),
-                .nominal => |nominal| try self.bindPatToFlowValue(backing_pat, nominal.backing.*),
-                else => false,
+            .nominal => |backing_pat| {
+                // Stripping a nominal or static-data wrapper follows a value
+                // pointer edge that a recursive construction can loop through;
+                // a cyclic value declines the flow binding.
+                if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return false;
+                self.wrapper_strip_depth += 1;
+                defer self.wrapper_strip_depth -= 1;
+                return switch (value) {
+                    .static_data_candidate => |candidate| try self.bindPatToFlowValue(pat_id, candidate.runtime.*),
+                    .nominal => |nominal| try self.bindPatToFlowValue(backing_pat, nominal.backing.*),
+                    else => false,
+                };
             },
             .list,
             .int_lit,
@@ -7365,7 +8017,7 @@ const Cloner = struct {
     /// every emitted binder a fresh local instead.
     fn shadowLocal(self: *Cloner, local: Ast.LocalId) Common.LowerError!void {
         const ty = self.pass.program.getLocal(local).ty;
-        try self.putSubst(local, .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = local } }) });
+        try self.subst.put(self.pass.program, local, .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = local } }) });
     }
 
     fn shadowPatLocals(self: *Cloner, pat_id: Ast.PatId) Common.LowerError!void {
@@ -7428,7 +8080,7 @@ const Cloner = struct {
         const fresh = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
         if (mode == .bind_runtime) {
             const local_expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = fresh } });
-            try self.putSubst(source, .{ .expr = local_expr });
+            try self.subst.put(self.pass.program, source, .{ .expr = local_expr });
         }
         return fresh;
     }
@@ -7437,10 +8089,7 @@ const Cloner = struct {
     /// than in a child `.local` expression. These fields require a runtime
     /// local, so a structured substitution is an invalid cloned IR state.
     fn cloneLocalRef(self: *Cloner, source: Ast.LocalId) Ast.LocalId {
-        const value = self.subst.get(source) orelse blk: {
-            const identity = self.binderIdentityOf(source) orelse return source;
-            break :blk self.binder_subst.get(identity) orelse return source;
-        };
+        const value = self.subst.get(self.pass.program, source) orelse return source;
         const expr = switch (value) {
             .expr => |expr| expr,
             else => Common.invariant("SpecConstr local-id field referenced a non-local substituted value"),
@@ -7546,11 +8195,11 @@ const Cloner = struct {
                 if (!self_referential) {
                     // The drained bindings sit exactly where the statement
                     // sat, so no evaluation moves and no gate is needed.
-                    const change_before = self.changes.items.len;
+                    const change_before = self.subst.watermark();
                     const pending_before = self.pending.items.len;
                     const reusable = try self.makeReusableForMatch(value);
                     if (try self.bindPatToFlowValue(let_.pat, reusable)) return null;
-                    self.restore(change_before);
+                    self.subst.restore(change_before);
                     self.pending.shrinkRetainingCapacity(pending_before);
                 }
                 break :blk .{ .let_ = .{
@@ -7643,14 +8292,14 @@ const Cloner = struct {
         const values = try self.pass.allocator.alloc(Ast.Branch, source.len);
         defer self.pass.allocator.free(values);
         for (source, 0..) |branch, index| {
-            const change_start = self.changes.items.len;
+            const change_start = self.subst.watermark();
             const pat = try self.clonePat(branch.pat, .bind_runtime);
             values[index] = .{
                 .pat = pat,
                 .guard = if (branch.guard) |guard| try self.cloneExpr(guard) else null,
                 .body = try self.cloneExpr(branch.body),
             };
-            self.restore(change_start);
+            self.subst.restore(change_start);
         }
         return try self.pass.program.addBranchSpan(values);
     }
@@ -7673,10 +8322,17 @@ const Cloner = struct {
     fn materialize(self: *Cloner, value: Value) Common.LowerError!Ast.ExprId {
         switch (value) {
             .expr => |expr| return expr,
-            .static_data_candidate => |candidate| return try self.addExpr(.{ .ty = candidate.ty, .data = .{ .static_data_candidate = .{
-                .static_data = candidate.static_data,
-                .runtime_expr = try self.materialize(candidate.runtime.*),
-            } } }),
+            .static_data_candidate => |candidate| {
+                if (self.materialize_strip_depth >= value_wrapper_strip_cap) {
+                    Common.invariant("materialize followed a static-data runtime chain past the strip cap; a cyclic value reached materialization");
+                }
+                self.materialize_strip_depth += 1;
+                defer self.materialize_strip_depth -= 1;
+                return try self.addExpr(.{ .ty = candidate.ty, .data = .{ .static_data_candidate = .{
+                    .static_data = candidate.static_data,
+                    .runtime_expr = try self.materialize(candidate.runtime.*),
+                } } });
+            },
             .tag => |tag| {
                 const payloads = try self.pass.allocator.alloc(Ast.ExprId, tag.payloads.len);
                 defer self.pass.allocator.free(payloads);
@@ -7711,9 +8367,16 @@ const Cloner = struct {
                     .tuple = try self.pass.program.addExprSpan(items),
                 } });
             },
-            .nominal => |nominal| return try self.addExpr(.{ .ty = nominal.ty, .data = .{
-                .nominal = try self.materialize(nominal.backing.*),
-            } }),
+            .nominal => |nominal| {
+                if (self.materialize_strip_depth >= value_wrapper_strip_cap) {
+                    Common.invariant("materialize followed a nominal backing chain past the strip cap; a cyclic value reached materialization");
+                }
+                self.materialize_strip_depth += 1;
+                defer self.materialize_strip_depth -= 1;
+                return try self.addExpr(.{ .ty = nominal.ty, .data = .{
+                    .nominal = try self.materialize(nominal.backing.*),
+                } });
+            },
             .callable => |callable| return try self.materializeCallable(callable),
         }
     }
@@ -7802,30 +8465,37 @@ const Cloner = struct {
         try self.pass.callable_sources.put(worker_fn_id, source_fn_id);
         try self.pass.copyProcDebugName(source_fn.symbol, symbol);
 
-        const change_start = self.changes.items.len;
-        defer self.restore(change_start);
+        const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
 
         for (source_captures) |source_capture| {
             const local_expr = try self.addExpr(.{
                 .ty = source_capture.ty,
                 .data = .{ .local = source_capture.local },
             });
-            try self.putSubst(source_capture.local, .{ .expr = local_expr });
+            try self.subst.put(self.pass.program, source_capture.local, .{ .expr = local_expr });
         }
         for (source_args, args) |source_arg, arg| {
             const arg_expr = try self.addExpr(.{
                 .ty = arg.ty,
                 .data = .{ .local = arg.local },
             });
-            try self.putSubst(source_arg.local, .{ .expr = arg_expr });
+            try self.subst.put(self.pass.program, source_arg.local, .{ .expr = arg_expr });
         }
 
+        // The worker body is a fresh value tree, not a continuation of the
+        // capture chain that reached this worker, so its own materializations
+        // start their strip depth from zero.
+        const saved_strip_depth = self.materialize_strip_depth;
+        self.materialize_strip_depth = 0;
+        const worker_body = try self.cloneExpr(source_body);
+        self.materialize_strip_depth = saved_strip_depth;
         self.pass.program.setFn(worker_fn_id, .{
             .symbol = symbol,
             .source = source_fn.source,
             .args = args_span,
             .captures = captures_span,
-            .body = .{ .roc = try self.cloneExpr(source_body) },
+            .body = .{ .roc = worker_body },
             .ret = source_fn.ret,
         });
 
@@ -7856,7 +8526,14 @@ const Cloner = struct {
             const id = self.pass.program.captureIdOfLocal(capture.local);
             const value = callableCaptureValueForId(values, id) orelse
                 Common.invariant("specialized callable had no value for a capture slot");
-            const value_expr = try self.materialize(value);
+            const value_expr = blk: {
+                if (self.materialize_strip_depth >= value_wrapper_strip_cap) {
+                    Common.invariant("materialize followed a callable capture chain past the strip cap; a cyclic value reached materialization");
+                }
+                self.materialize_strip_depth += 1;
+                defer self.materialize_strip_depth -= 1;
+                break :blk try self.materialize(value);
+            };
             const value_local = localExpr(self.pass.program, value_expr);
             const operand_value = if (value_local != null and value_local.? == capture.local)
                 try self.addExpr(.{ .ty = capture.ty, .data = .{ .local = capture.local } })
@@ -7882,73 +8559,6 @@ const Cloner = struct {
         const out = try self.pass.arena.allocator().create(Value);
         out.* = value;
         return out;
-    }
-
-    fn putSubst(self: *Cloner, local: Ast.LocalId, value: Value) Allocator.Error!void {
-        const previous = self.subst.get(local);
-        try self.changes.append(self.pass.allocator, .{
-            .key = .{ .local = local },
-            .previous = previous,
-        });
-        try self.subst.put(local, value);
-
-        const subst_binder = switch (value) {
-            .tag,
-            .record,
-            .tuple,
-            .nominal,
-            => true,
-            .expr,
-            .static_data_candidate,
-            .callable,
-            => false,
-        };
-        if (subst_binder) if (self.binderIdentityOf(local)) |identity| {
-            const previous_binder = self.binder_subst.get(identity);
-            try self.changes.append(self.pass.allocator, .{
-                .key = .{ .binder = identity },
-                .previous = previous_binder,
-            });
-            try self.binder_subst.put(identity, value);
-        };
-    }
-
-    /// Identity a local's binder-scoped substitution is keyed by: the pattern
-    /// binder together with the digest of the local's monomorphic type. Two
-    /// locals that share a binder but were monomorphized at different types are
-    /// distinct bindings and must not read one another's substitution.
-    fn binderIdentityOf(self: *Cloner, local: Ast.LocalId) ?BinderIdentity {
-        const local_data = self.pass.program.getLocal(local);
-        const binder = local_data.binder orelse return null;
-        return .{
-            .binder = binder,
-            .digest = self.pass.program.types.typeDigest(&self.pass.program.names, local_data.ty),
-        };
-    }
-
-    fn restore(self: *Cloner, start: usize) void {
-        var index = self.changes.items.len;
-        while (index > start) {
-            index -= 1;
-            const change = self.changes.items[index];
-            switch (change.key) {
-                .local => |local| {
-                    if (change.previous) |previous| {
-                        self.subst.putAssumeCapacity(local, previous);
-                    } else {
-                        _ = self.subst.remove(local);
-                    }
-                },
-                .binder => |identity| {
-                    if (change.previous) |previous| {
-                        self.binder_subst.putAssumeCapacity(identity, previous);
-                    } else {
-                        _ = self.binder_subst.remove(identity);
-                    }
-                },
-            }
-        }
-        self.changes.shrinkRetainingCapacity(start);
     }
 
     fn addExpr(self: *Cloner, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
@@ -7990,6 +8600,14 @@ const Cloner = struct {
     }
 
     fn addStmt(self: *Cloner, stmt: Ast.Stmt) Allocator.Error!Ast.StmtId {
+        // Statement-position effects never pass through `addExpr`, so they
+        // advance the effect marks here: an emission window that spanned such
+        // a statement without counting it would let `pendingChainDelegates`
+        // hoist an effectful binding across it.
+        switch (stmt) {
+            .expect, .dbg, .crash => self.effect_marks += 1,
+            .uninitialized, .let_, .expr, .return_ => {},
+        }
         const saved_loc = self.pass.program.current_loc;
         defer self.pass.program.current_loc = saved_loc;
         const saved_region = self.pass.program.current_region;
@@ -7997,6 +8615,269 @@ const Cloner = struct {
         self.pass.program.current_loc = self.current_loc;
         self.pass.program.current_region = self.current_region;
         return try self.pass.program.addStmt(stmt);
+    }
+};
+
+/// Debug-only lexical-scope walk of a rewritten function body. Every `.local`
+/// reference must resolve to a binding still in scope; the initial scope is
+/// seeded with the function's arguments and recomputed captures. Binders enter
+/// scope as the walk descends into the region they govern and leave when it
+/// ascends, mirroring `lift.zig`'s capture walk (`collectExpr`/`collectStmt`/
+/// `bindPat`) so the same reference set is judged, but asserting membership
+/// rather than recording free variables.
+const BodyLocalScope = struct {
+    program: *const Ast.Program,
+    allocator: Allocator,
+    fn_index: usize,
+    bound: std.AutoHashMap(Ast.LocalId, u32),
+
+    fn checkUse(self: *BodyLocalScope, local: Ast.LocalId) void {
+        if (self.bound.contains(local)) return;
+        Common.invariantFmt(
+            "rewritten fn {d} references local {d} bound by no enclosing scope, argument, or capture",
+            .{ self.fn_index, @intFromEnum(local) },
+        );
+    }
+
+    fn bind(self: *BodyLocalScope, local: Ast.LocalId) Allocator.Error!void {
+        const entry = try self.bound.getOrPut(local);
+        entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
+    }
+
+    fn unbind(self: *BodyLocalScope, local: Ast.LocalId) void {
+        const entry = self.bound.getPtr(local) orelse return;
+        if (entry.* <= 1) {
+            _ = self.bound.remove(local);
+        } else {
+            entry.* -= 1;
+        }
+    }
+
+    fn unbindAll(self: *BodyLocalScope, locals: []const Ast.LocalId) void {
+        var index = locals.len;
+        while (index > 0) {
+            index -= 1;
+            self.unbind(locals[index]);
+        }
+    }
+
+    fn bindTypedLocals(self: *BodyLocalScope, span: Ast.Span(Ast.TypedLocal), added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
+        const locals = self.program.typedLocalSpan(span);
+        for (0..locals.len) |index| {
+            const local = GuardedList.at(locals, index).local;
+            try self.bind(local);
+            try added.append(self.allocator, local);
+        }
+    }
+
+    fn bindPat(self: *BodyLocalScope, pat_id: Ast.PatId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
+        switch (self.program.getPat(pat_id).data) {
+            .bind => |local| {
+                try self.bind(local);
+                try added.append(self.allocator, local);
+            },
+            .wildcard,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => {},
+            .str_pattern => |str| {
+                const steps = self.program.strPatternStepSpan(str.steps);
+                for (0..steps.len) |index| {
+                    if (GuardedList.at(steps, index).capture) |capture| try self.bindPat(capture, added);
+                }
+            },
+            .as => |as| {
+                try self.bindPat(as.pattern, added);
+                try self.bind(as.local);
+                try added.append(self.allocator, as.local);
+            },
+            .record => |fields| {
+                const destructs = self.program.recordDestructSpan(fields);
+                for (0..destructs.len) |index| try self.bindPat(GuardedList.at(destructs, index).pattern, added);
+            },
+            .tuple => |items| {
+                const children = self.program.patSpan(items);
+                for (0..children.len) |index| try self.bindPat(GuardedList.at(children, index), added);
+            },
+            .list => |list| {
+                const children = self.program.patSpan(list.patterns);
+                for (0..children.len) |index| try self.bindPat(GuardedList.at(children, index), added);
+                if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.bindPat(rest_pattern, added);
+            },
+            .tag => |tag| {
+                const payloads = self.program.patSpan(tag.payloads);
+                for (0..payloads.len) |index| try self.bindPat(GuardedList.at(payloads, index), added);
+            },
+            .nominal => |backing| try self.bindPat(backing, added),
+        }
+    }
+
+    fn walkExprSpan(self: *BodyLocalScope, span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
+        const values = self.program.exprSpan(span);
+        for (0..values.len) |index| try self.walkExpr(GuardedList.at(values, index));
+    }
+
+    fn walkStmt(self: *BodyLocalScope, stmt_id: Ast.StmtId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
+        switch (self.program.getStmt(stmt_id)) {
+            .uninitialized => |pat| try self.bindPat(pat, added),
+            .let_ => |let_| {
+                if (let_.recursive) {
+                    try self.bindPat(let_.pat, added);
+                    try self.walkExpr(let_.value);
+                } else {
+                    try self.walkExpr(let_.value);
+                    try self.bindPat(let_.pat, added);
+                }
+            },
+            .expr,
+            .expect,
+            .dbg,
+            => |expr| try self.walkExpr(expr),
+            .return_ => |ret| try self.walkExpr(ret.value),
+            .crash => {},
+        }
+    }
+
+    fn walkExpr(self: *BodyLocalScope, expr_id: Ast.ExprId) Allocator.Error!void {
+        switch (self.program.getExpr(expr_id).data) {
+            .local => |local| self.checkUse(local),
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .uninitialized,
+            .uninitialized_payload,
+            .crash,
+            .comptime_exhaustiveness_failed,
+            => {},
+            .lambda,
+            .def_ref,
+            .fn_def,
+            => Common.invariant("pre-lift function expression reached body-local validation"),
+            .fn_ref => |fn_ref| {
+                const operands = self.program.captureOperandSpan(fn_ref.captures);
+                for (0..operands.len) |index| try self.walkExpr(GuardedList.at(operands, index).value);
+            },
+            .list,
+            .tuple,
+            => |items| try self.walkExprSpan(items),
+            .record => |fields| {
+                const field_exprs = self.program.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| try self.walkExpr(GuardedList.at(field_exprs, index).value);
+            },
+            .tag => |tag| try self.walkExprSpan(tag.payloads),
+            .static_data_candidate => |candidate| try self.walkExpr(candidate.runtime_expr),
+            .nominal,
+            .dbg,
+            .expect,
+            => |child| try self.walkExpr(child),
+            .return_ => |ret| try self.walkExpr(ret.value),
+            .expect_err => |expect_err| try self.walkExpr(expect_err.msg),
+            .comptime_branch_taken => |taken| try self.walkExpr(taken.body),
+            .let_ => |let_| {
+                try self.walkExpr(let_.value);
+                var added: std.ArrayList(Ast.LocalId) = .empty;
+                defer added.deinit(self.allocator);
+                try self.bindPat(let_.bind, &added);
+                try self.walkExpr(let_.rest);
+                self.unbindAll(added.items);
+            },
+            .call_value => |call| {
+                try self.walkExpr(call.callee);
+                try self.walkExprSpan(call.args);
+            },
+            .call_proc => |call| {
+                try self.walkExprSpan(call.args);
+                const operands = self.program.captureOperandSpan(call.captures);
+                for (0..operands.len) |index| try self.walkExpr(GuardedList.at(operands, index).value);
+            },
+            .low_level => |call| try self.walkExprSpan(call.args),
+            .field_access => |field| try self.walkExpr(field.receiver),
+            .tuple_access => |access| try self.walkExpr(access.tuple),
+            .structural_eq => |eq| {
+                try self.walkExpr(eq.lhs);
+                try self.walkExpr(eq.rhs);
+            },
+            .structural_hash => |hash| {
+                try self.walkExpr(hash.value);
+                try self.walkExpr(hash.hasher);
+            },
+            .match_ => |match| {
+                try self.walkExpr(match.scrutinee);
+                const branches = self.program.branchSpan(match.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    var added: std.ArrayList(Ast.LocalId) = .empty;
+                    defer added.deinit(self.allocator);
+                    try self.bindPat(branch.pat, &added);
+                    if (branch.guard) |guard| try self.walkExpr(guard);
+                    try self.walkExpr(branch.body);
+                    self.unbindAll(added.items);
+                }
+            },
+            .if_ => |if_| {
+                const branches = self.program.ifBranchSpan(if_.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    try self.walkExpr(branch.cond);
+                    try self.walkExpr(branch.body);
+                }
+                try self.walkExpr(if_.final_else);
+            },
+            .if_initialized_payload => |payload_switch| {
+                try self.walkExpr(payload_switch.cond);
+                self.checkUse(payload_switch.payload);
+                try self.walkExpr(payload_switch.initialized);
+                try self.walkExpr(payload_switch.uninitialized);
+            },
+            .try_sequence => |sequence| {
+                try self.walkExpr(sequence.try_expr);
+                try self.bind(sequence.ok_local);
+                try self.walkExpr(sequence.ok_body);
+                self.unbind(sequence.ok_local);
+            },
+            .try_record_sequence => |sequence| {
+                try self.walkExpr(sequence.try_expr);
+                try self.bind(sequence.value_local);
+                try self.bind(sequence.rest_local);
+                try self.walkExpr(sequence.ok_body);
+                self.unbind(sequence.rest_local);
+                self.unbind(sequence.value_local);
+            },
+            .block => |block| {
+                var added: std.ArrayList(Ast.LocalId) = .empty;
+                defer added.deinit(self.allocator);
+                const statements = self.program.stmtSpan(block.statements);
+                for (0..statements.len) |index| try self.walkStmt(GuardedList.at(statements, index), &added);
+                try self.walkExpr(block.final_expr);
+                self.unbindAll(added.items);
+            },
+            .loop_ => |loop| {
+                try self.walkExprSpan(loop.initial_values);
+                var added: std.ArrayList(Ast.LocalId) = .empty;
+                defer added.deinit(self.allocator);
+                try self.bindTypedLocals(loop.params, &added);
+                try self.walkExpr(loop.body);
+                self.unbindAll(added.items);
+            },
+            .break_ => |maybe| if (maybe) |value| try self.walkExpr(value),
+            .continue_ => |continue_| try self.walkExprSpan(continue_.values),
+            .join_point => |join_point| {
+                var added: std.ArrayList(Ast.LocalId) = .empty;
+                defer added.deinit(self.allocator);
+                try self.bindTypedLocals(join_point.params, &added);
+                try self.walkExpr(join_point.body);
+                self.unbindAll(added.items);
+                try self.walkExpr(join_point.remainder);
+            },
+            .jump => |jump| try self.walkExprSpan(jump.args),
+        }
     }
 };
 
@@ -9090,11 +9971,23 @@ fn callableTargetMatches(program: *const Ast.Program, expected: Ast.FnId, actual
     return Mono.fnTemplateIdentityEql(expected_source, actual_source);
 }
 
+// The field, item, tag, record, and tuple readers below run only on values
+// already proven to be a record, tuple, or tag under some wrapper chain, so
+// following that chain to the read field, item, or tag terminates by
+// construction. A value that references itself through the
+// `nominal.backing`/`static_data_candidate.runtime` pointer edges would loop,
+// so each reader counts the edges it follows and treats reaching
+// `value_wrapper_strip_cap` as a compiler bug.
 fn fieldFromValue(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId) ?Value {
+    return fieldFromValueStripping(program, value, name, 0);
+}
+
+fn fieldFromValueStripping(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId, strip_depth: usize) ?Value {
+    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("fieldFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
-        .static_data_candidate => |candidate| fieldFromValue(program, candidate.runtime.*, name),
+        .static_data_candidate => |candidate| fieldFromValueStripping(program, candidate.runtime.*, name, strip_depth + 1),
         .record => |record| fieldFromRecord(program, record, name),
-        .nominal => |nominal| fieldFromValue(program, nominal.backing.*, name),
+        .nominal => |nominal| fieldFromValueStripping(program, nominal.backing.*, name, strip_depth + 1),
         else => null,
     };
 }
@@ -9115,37 +10008,57 @@ fn recordPatField(program: *const Ast.Program, fields: anytype, name: names.Reco
 }
 
 fn itemFromValue(value: Value, index: u32) ?Value {
+    return itemFromValueStripping(value, index, 0);
+}
+
+fn itemFromValueStripping(value: Value, index: u32, strip_depth: usize) ?Value {
+    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("itemFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
-        .static_data_candidate => |candidate| itemFromValue(candidate.runtime.*, index),
+        .static_data_candidate => |candidate| itemFromValueStripping(candidate.runtime.*, index, strip_depth + 1),
         .tuple => |tuple| if (index < tuple.items.len) tuple.items[index] else null,
-        .nominal => |nominal| itemFromValue(nominal.backing.*, index),
+        .nominal => |nominal| itemFromValueStripping(nominal.backing.*, index, strip_depth + 1),
         else => null,
     };
 }
 
 fn tagFromValue(value: Value) ?TagValue {
+    return tagFromValueStripping(value, 0);
+}
+
+fn tagFromValueStripping(value: Value, strip_depth: usize) ?TagValue {
+    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tagFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
-        .static_data_candidate => |candidate| tagFromValue(candidate.runtime.*),
+        .static_data_candidate => |candidate| tagFromValueStripping(candidate.runtime.*, strip_depth + 1),
         .tag => |tag| tag,
-        .nominal => |nominal| tagFromValue(nominal.backing.*),
+        .nominal => |nominal| tagFromValueStripping(nominal.backing.*, strip_depth + 1),
         else => null,
     };
 }
 
 fn recordFromValue(value: Value) ?RecordValue {
+    return recordFromValueStripping(value, 0);
+}
+
+fn recordFromValueStripping(value: Value, strip_depth: usize) ?RecordValue {
+    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("recordFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
-        .static_data_candidate => |candidate| recordFromValue(candidate.runtime.*),
+        .static_data_candidate => |candidate| recordFromValueStripping(candidate.runtime.*, strip_depth + 1),
         .record => |record| record,
-        .nominal => |nominal| recordFromValue(nominal.backing.*),
+        .nominal => |nominal| recordFromValueStripping(nominal.backing.*, strip_depth + 1),
         else => null,
     };
 }
 
 fn tupleFromValue(value: Value) ?TupleValue {
+    return tupleFromValueStripping(value, 0);
+}
+
+fn tupleFromValueStripping(value: Value, strip_depth: usize) ?TupleValue {
+    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tupleFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
-        .static_data_candidate => |candidate| tupleFromValue(candidate.runtime.*),
+        .static_data_candidate => |candidate| tupleFromValueStripping(candidate.runtime.*, strip_depth + 1),
         .tuple => |tuple| tuple,
-        .nominal => |nominal| tupleFromValue(nominal.backing.*),
+        .nominal => |nominal| tupleFromValueStripping(nominal.backing.*, strip_depth + 1),
         else => null,
     };
 }
@@ -9229,6 +10142,50 @@ test "call-pattern scans direct call and function reference capture operands" {
     try std.testing.expect(exprContainsReturn(&program, call_proc));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, local, call_proc));
     try std.testing.expect(localUseBeforeEffect(&program, local, call_proc));
+}
+
+test "issue 10313 value-aware analysis does not append lifted IR" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const arg_local = try program.addLocal(@enumFromInt(1), unit_ty);
+    const bound_local = try program.addLocal(@enumFromInt(2), unit_ty);
+    const arg_ref = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = arg_local } });
+    const bind_pat = try program.addPat(.{ .ty = unit_ty, .data = .{ .bind = bound_local } });
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
+        .bind = bind_pat,
+        .value = arg_ref,
+        .rest = unit_expr,
+    } } });
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(3),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = unit_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    const before_collect = program.markSpecConstrAnalysis();
+    const symbol_before_collect = pass.symbols.next;
+    const join_before_collect = pass.next_join_point;
+    try pass.collectValueAwareCallPatterns(1);
+    try std.testing.expectEqualDeep(before_collect, program.markSpecConstrAnalysis());
+    try std.testing.expectEqual(symbol_before_collect, pass.symbols.next);
+    try std.testing.expectEqual(join_before_collect, pass.next_join_point);
+
+    const before_rewrite = program.markSpecConstrAnalysis();
+    const symbol_before_rewrite = pass.symbols.next;
+    const join_before_rewrite = pass.next_join_point;
+    try pass.rewriteValueAwareCalls();
+    try std.testing.expectEqualDeep(before_rewrite, program.markSpecConstrAnalysis());
+    try std.testing.expectEqual(symbol_before_rewrite, pass.symbols.next);
+    try std.testing.expectEqual(join_before_rewrite, pass.next_join_point);
 }
 
 test "issue 10168 SpecConstr clones every capture when nested cloning grows the capture store" {
@@ -9480,6 +10437,49 @@ test "static match verdicts separate definite no-match from statically undecidab
     try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(nominal_pat, opaque_value));
 }
 
+test "static value matchers bound wrapper strips over a cyclic value" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+
+    // A static-data-candidate value whose runtime edge points back at itself:
+    // the fixpoint shape a recursively-constructed value takes when a `.local`
+    // resolves through the substitution maps to an ancestor of its own
+    // construction. Stripping the wrapper never reaches a constructor.
+    var cyclic: Value = undefined;
+    cyclic = .{
+        .static_data_candidate = .{
+            .ty = union_ty,
+            // Never read: every walk this test exercises follows the runtime edge
+            // and declines before any materialization would consume the id.
+            .static_data = undefined,
+            .runtime = &cyclic,
+        },
+    };
+
+    // The substitution check answers "cannot substitute" on exhaustion — the
+    // conservative direction, and correct, since a self-referential value
+    // cannot be substituted.
+    try std.testing.expect(!cloner.valueCanSubstitute(cyclic));
+
+    // A nominal pattern strips the wrapper chain looking for its backing. The
+    // static-data case keeps the same pattern, so the strip would loop forever
+    // on the cycle; the strip cap declines it to a residual runtime match
+    // (`.unknown`) and to a declined flow binding (`false`) rather than hanging.
+    const wildcard_pat = try program.addPat(.{ .ty = u8_ty, .data = .wildcard });
+    const nominal_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .nominal = wildcard_pat } });
+    try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(nominal_pat, cyclic));
+    try std.testing.expectEqual(false, try cloner.bindPatToFlowValue(nominal_pat, cyclic));
+}
+
 test "SpecConstr pattern clones bind fresh local identities" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -9496,7 +10496,7 @@ test "SpecConstr pattern clones bind fresh local identities" {
     const source_ref = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = source_local } });
     const source_payload_ref = try program.addExpr(.{ .ty = u8_ty, .data = .{ .uninitialized_payload = .{ .condition = source_local } } });
 
-    const first_change = cloner.changes.items.len;
+    const first_change = cloner.subst.watermark();
     const first_pat = try cloner.clonePat(source_pat, .bind_runtime);
     const first_local = switch (program.getPat(first_pat).data) {
         .bind => |local| local,
@@ -9506,9 +10506,9 @@ test "SpecConstr pattern clones bind fresh local identities" {
     try std.testing.expectEqual(first_local, program.getExpr(first_ref).data.local);
     const first_payload_ref = try cloner.cloneExpr(source_payload_ref);
     try std.testing.expectEqual(first_local, program.getExpr(first_payload_ref).data.uninitialized_payload.condition);
-    cloner.restore(first_change);
+    cloner.subst.restore(first_change);
 
-    const second_change = cloner.changes.items.len;
+    const second_change = cloner.subst.watermark();
     const second_pat = try cloner.clonePat(source_pat, .bind_runtime);
     const second_local = switch (program.getPat(second_pat).data) {
         .bind => |local| local,
@@ -9516,7 +10516,7 @@ test "SpecConstr pattern clones bind fresh local identities" {
     };
     const second_ref = try cloner.cloneExpr(source_ref);
     try std.testing.expectEqual(second_local, program.getExpr(second_ref).data.local);
-    cloner.restore(second_change);
+    cloner.subst.restore(second_change);
 
     try std.testing.expect(source_local != first_local);
     try std.testing.expect(source_local != second_local);
@@ -9524,8 +10524,8 @@ test "SpecConstr pattern clones bind fresh local identities" {
 
     const known_local = try program.addLocal(@enumFromInt(2), u8_ty);
     const known_ref = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = known_local } });
-    const known_change = cloner.changes.items.len;
-    try cloner.putSubst(source_local, .{ .expr = known_ref });
+    const known_change = cloner.subst.watermark();
+    try cloner.subst.put(cloner.pass.program, source_local, .{ .expr = known_ref });
     const output_pat = try cloner.clonePat(source_pat, .output_only);
     const output_local = switch (program.getPat(output_pat).data) {
         .bind => |local| local,
@@ -9535,12 +10535,10 @@ test "SpecConstr pattern clones bind fresh local identities" {
     try std.testing.expectEqual(known_local, program.getExpr(substituted_ref).data.local);
     try std.testing.expect(output_local != source_local);
     try std.testing.expect(output_local != known_local);
-    cloner.restore(known_change);
+    cloner.subst.restore(known_change);
 }
 
 test "known match fold aborts on undecidable branches and trips the invariant when every branch is excluded" {
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
-
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
@@ -9579,29 +10577,31 @@ test "known match fold aborts on undecidable branches and trips the invariant wh
     });
     try std.testing.expect((try cloner.simplifyKnownMatchValue(foo_value, folding_branches)) != null);
 
-    // Every branch a definite no-match violates checker exhaustiveness: the
-    // invariant must fire. The panic aborts, so probe it from a fork.
-    const excluded_branches = try program.addBranchSpan(&.{
-        .{ .pat = bar_pat, .body = body },
-    });
-    const pid = std.c.fork();
-    try std.testing.expect(pid >= 0);
-    if (pid == 0) {
-        const dev_null = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY });
-        if (dev_null >= 0) {
-            _ = std.c.dup2(dev_null, 2);
-            _ = std.c.close(dev_null);
+    // Every branch a definite no-match violates checker exhaustiveness. In
+    // Debug, the invariant panics; probe that abort from a fork on POSIX.
+    if (comptime @import("builtin").mode == .Debug and @import("builtin").os.tag != .windows) {
+        const excluded_branches = try program.addBranchSpan(&.{
+            .{ .pat = bar_pat, .body = body },
+        });
+        const pid = std.c.fork();
+        try std.testing.expect(pid >= 0);
+        if (pid == 0) {
+            const dev_null = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY });
+            if (dev_null >= 0) {
+                _ = std.c.dup2(dev_null, 2);
+                _ = std.c.close(dev_null);
+            }
+            _ = cloner.simplifyKnownMatchValue(foo_value, excluded_branches) catch std.c._exit(2);
+            // Reaching this line means the invariant did not fire.
+            std.c._exit(0);
         }
-        _ = cloner.simplifyKnownMatchValue(foo_value, excluded_branches) catch std.c._exit(2);
-        // Reaching this line means the invariant did not fire.
-        std.c._exit(0);
+        var status: c_int = 0;
+        _ = std.c.waitpid(pid, &status, 0);
+        const raw_status: u32 = @bitCast(status);
+        const failed = std.posix.W.IFSIGNALED(raw_status) or
+            (std.posix.W.IFEXITED(raw_status) and std.posix.W.EXITSTATUS(raw_status) != 0);
+        try std.testing.expect(failed);
     }
-    var status: c_int = 0;
-    _ = std.c.waitpid(pid, &status, 0);
-    const raw_status: u32 = @bitCast(status);
-    const failed = std.posix.W.IFSIGNALED(raw_status) or
-        (std.posix.W.IFEXITED(raw_status) and std.posix.W.EXITSTATUS(raw_status) != 0);
-    try std.testing.expect(failed);
 }
 
 test "call-pattern specialization declarations are referenced" {

@@ -2676,6 +2676,14 @@ pub fn builtinOwnerForPrimitive(primitive: Primitive) static_dispatch.BuiltinOwn
         .f32 => .f32,
         .f64 => .f64,
         .dec => .dec,
+        .u8x16 => .u8x16,
+        .i8x16 => .i8x16,
+        .u16x8 => .u16x8,
+        .i16x8 => .i16x8,
+        .u32x4 => .u32x4,
+        .i32x4 => .i32x4,
+        .u64x2 => .u64x2,
+        .i64x2 => .i64x2,
     };
 }
 

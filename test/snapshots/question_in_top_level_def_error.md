@@ -102,10 +102,9 @@ result = f(3)?
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 246)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 265)
 								(receiver
-									(e-lookup-local
-										(p-assign (ident "x"))))
+									(e-runtime-error (tag "erroneous_value_use")))
 								(args
 									(e-num (value "0"))))
 							(e-block
@@ -116,8 +115,7 @@ result = f(3)?
 						(e-block
 							(e-tag (name "Ok")
 								(args
-									(e-lookup-local
-										(p-assign (ident "x"))))))))))
+									(e-runtime-error (tag "erroneous_value_use")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))
@@ -127,29 +125,7 @@ result = f(3)?
 						(ty-tag-name (name "IsNegative")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-match
-			(match
-				(cond
-					(e-call (constraint-fn-var 286)
-						(e-lookup-local
-							(p-assign (ident "f")))
-						(e-num (value "3"))))
-				(branches
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-nominal-external (builtin)
-									(p-applied-tag))))
-						(value
-							(e-lookup-local
-								(p-assign (ident "#ok")))))
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-nominal-external (builtin)
-									(p-applied-tag))))
-						(value
-							(e-runtime-error (tag "return_outside_fn")))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

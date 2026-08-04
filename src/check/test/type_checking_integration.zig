@@ -4877,6 +4877,29 @@ test "check type - nominal destructure pattern in lambda arg binds the backing v
     try checkTypesModule(source, .{ .pass = .last_def }, "Distance -> U64");
 }
 
+test "check type - nominal record destructure syntax works in every pattern position" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Point := { x : U64, y : U64 }
+        \\
+        \\sum_arg : Point -> U64
+        \\sum_arg = |Point.{ x, y }| x + y
+        \\
+        \\sum_let : Point -> U64
+        \\sum_let = |point| {
+        \\    Point.{ x, y } = point
+        \\    x + y
+        \\}
+        \\
+        \\sum_match : Point -> U64
+        \\sum_match = |point| match point {
+        \\    Point.{ x, y } => x + y
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Point -> U64");
+}
+
 // LITERAL COERCION + STRUCTURAL LIFTING INTO NOMINALS (executable spec)
 //
 // Two DIFFERENT operations, deliberately kept separate:

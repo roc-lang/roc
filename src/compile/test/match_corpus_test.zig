@@ -1,7 +1,7 @@
 //! Generated-corpus tests for the decision-tree match compiler
 //! (src/postcheck/match_tree.zig). Each generated program runs through
 //! compilation (compile-time finalization executes tree-lowered LIR on the
-//! dev backend) and the LIR interpreter, catching lowering panics,
+//! dev backend) and, for diagnostic-free inputs, the LIR interpreter, catching lowering panics,
 //! statement-count lint violations, ARC issues, and evaluation crashes.
 //! Cross-executor agreement is covered by `zig build run-test-eval`.
 //!
@@ -29,14 +29,18 @@ fn appendf(buf: *Buf, alloc: std.mem.Allocator, comptime fmt: []const u8, args: 
 
 /// Compile `source` (a module whose `main` is inspect-wrapped) and run it
 /// through the LIR interpreter, capturing compile problems and crashes as
-/// strings. A rare COMPILE_ERROR (e.g. a generated redundant branch the
-/// checker rejects) is an acceptable outcome; a RUN_ERROR is not — every
-/// generated match ends in a wildcard branch and its bodies cannot crash.
+/// strings. A rare checker diagnostic (e.g. a generated incompatible partial
+/// record pattern) is an acceptable outcome after checked-artifact publication;
+/// diagnostic-free programs must run because every generated match ends in a
+/// wildcard branch and its bodies cannot crash.
 fn runProgram(alloc: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]u8 {
     var compiled = helpers.compileInspectedProgramForTarget(alloc, std.testing.io, .module, source, &.{}, .native) catch |err| {
         return try std.fmt.allocPrint(alloc, "COMPILE_ERROR:{s}", .{@errorName(err)});
     };
     defer compiled.deinit(alloc);
+    if (compiled.resources.checker.problems.problems.items.len > 0) {
+        return try alloc.dupe(u8, "COMPILE_ERROR:checker diagnostics");
+    }
     return helpers.lirInterpreterInspectedStr(alloc, &compiled.lowered) catch |err| {
         return try std.fmt.allocPrint(alloc, "RUN_ERROR:{s}", .{@errorName(err)});
     };

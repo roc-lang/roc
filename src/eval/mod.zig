@@ -98,11 +98,11 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
         allocation_count: u32,
     };
 
-    pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: bool) EvalError![]u8 {
+    pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: u32, _: bool) EvalError![]u8 {
         return error.WasmExecFailed;
     }
 
-    pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: bool) EvalError!RunWasmStrResult {
+    pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: u32, _: bool) EvalError!RunWasmStrResult {
         return error.WasmExecFailed;
     }
 
@@ -132,6 +132,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test_helpers.zig"));
+    std.testing.refAllDecls(@import("test/host_trampoline_assembly_test.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

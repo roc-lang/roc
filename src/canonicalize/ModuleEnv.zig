@@ -180,6 +180,14 @@ pub const CommonIdents = extern struct {
     f32_type: Ident.Idx,
     f64_type: Ident.Idx,
     dec_type: Ident.Idx,
+    u8x16_type: Ident.Idx,
+    i8x16_type: Ident.Idx,
+    u16x8_type: Ident.Idx,
+    i16x8_type: Ident.Idx,
+    u32x4_type: Ident.Idx,
+    i32x4_type: Ident.Idx,
+    u64x2_type: Ident.Idx,
+    i64x2_type: Ident.Idx,
     bool_type: Ident.Idx,
 
     // Field/tag names used during type checking and evaluation
@@ -300,6 +308,14 @@ pub const CommonIdents = extern struct {
             .f32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32")),
             .f64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64")),
             .dec_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec")),
+            .u8x16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8x16")),
+            .i8x16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8x16")),
+            .u16x8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16x8")),
+            .i16x8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I16x8")),
+            .u32x4_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U32x4")),
+            .i32x4_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I32x4")),
+            .u64x2_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U64x2")),
+            .i64x2_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I64x2")),
             .bool_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Bool")),
             .before_dot = try common.insertIdent(gpa, Ident.for_text("before_dot")),
             .after_dot = try common.insertIdent(gpa, Ident.for_text("after_dot")),
@@ -421,6 +437,14 @@ pub const CommonIdents = extern struct {
             .f32_type = common.findIdent("Builtin.Num.F32") orelse unreachable,
             .f64_type = common.findIdent("Builtin.Num.F64") orelse unreachable,
             .dec_type = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+            .u8x16_type = common.findIdent("Builtin.Num.U8x16") orelse unreachable,
+            .i8x16_type = common.findIdent("Builtin.Num.I8x16") orelse unreachable,
+            .u16x8_type = common.findIdent("Builtin.Num.U16x8") orelse unreachable,
+            .i16x8_type = common.findIdent("Builtin.Num.I16x8") orelse unreachable,
+            .u32x4_type = common.findIdent("Builtin.Num.U32x4") orelse unreachable,
+            .i32x4_type = common.findIdent("Builtin.Num.I32x4") orelse unreachable,
+            .u64x2_type = common.findIdent("Builtin.Num.U64x2") orelse unreachable,
+            .i64x2_type = common.findIdent("Builtin.Num.I64x2") orelse unreachable,
             .bool_type = common.findIdent("Builtin.Bool") orelse unreachable,
             .before_dot = common.findIdent("before_dot") orelse unreachable,
             .after_dot = common.findIdent("after_dot") orelse unreachable,
@@ -882,6 +906,9 @@ pub const ProvidesEntry = struct {
     ident: Ident.Idx,
     /// The FFI symbol string (e.g., "main")
     ffi_symbol: StringLiteral.Idx,
+    /// The platform-local definition selected by this declaration, or null
+    /// when canonicalization diagnosed an invalid target.
+    local_def: ?CIR.Def.Idx,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -1536,6 +1563,42 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("You can fix this by either defining ");
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" in this module, or by removing it from the list of exposed values.");
+
+            break :blk report;
+        },
+        .provided_value_is_required => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+            const is_effectful = std.mem.endsWith(u8, ident_name, "!");
+            const stem = if (is_effectful) ident_name[0 .. ident_name.len - 1] else ident_name;
+            const example = try std.fmt.allocPrint(
+                allocator,
+                "{s}_for_host{s} = {s}",
+                .{ stem, if (is_effectful) "!" else "", ident_name },
+            );
+            defer allocator.free(example);
+
+            var report = try Report.init(allocator, "Required Value in Provides", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is supplied by the app through the platform's ");
+            try report.headline.addInlineCode("requires");
+            try report.headline.addReflowingText(" section, so ");
+            try report.headline.addInlineCode("provides");
+            try report.headline.addReflowingText(" cannot expose it to the host directly.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.addSourceContext(region_info, owned_filename, self.getSourceAll(), self.getLineStartsAll());
+
+            try report.document.addReflowingText("Define a platform-local entrypoint which forwards to ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(", then reference that entrypoint from ");
+            try report.document.addInlineCode("provides");
+            try report.document.addReflowingText(". For example:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_example = try report.addOwnedString(example);
+            try report.document.addInlineCode(owned_example);
 
             break :blk report;
         },

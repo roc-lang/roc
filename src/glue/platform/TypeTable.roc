@@ -163,6 +163,14 @@ TypeTable := { entries : List(TypeInfo) }.{
 			RocU32 => "u32"
 			RocU64 => "u64"
 			RocU8 => "u8"
+			RocU8x16 => "u8x16"
+			RocI8x16 => "i8x16"
+			RocU16x8 => "u16x8"
+			RocI16x8 => "i16x8"
+			RocU32x4 => "u32x4"
+			RocI32x4 => "i32x4"
+			RocU64x2 => "u64x2"
+			RocI64x2 => "i64x2"
 			RocUnit => "unit"
 			RocUnknown(s) => Str.concat("unk:", s)
 		}
@@ -306,14 +314,19 @@ sample_table = TypeTable.from_list([
 
 ## Checks the sample `TypeTable.is_unit` behavior.
 expect sample_table.is_unit(0) == Bool.False
+
 ## Checks the sample `TypeTable.is_refcounted` behavior.
 expect sample_table.is_refcounted(1)
+
 ## Checks the sample `TypeTable.is_refcounted` behavior.
 expect sample_table.is_refcounted(2)
+
 ## Checks the sample `TypeTable.is_refcounted` behavior.
 expect sample_table.is_refcounted(3)
+
 ## Checks the sample `TypeTable.is_anonymous_record` behavior.
 expect sample_table.is_anonymous_record(4) == Bool.False
+
 ## Checks the sample `TypeTable.duplicate_tag_union_names` behavior.
 expect sample_table.duplicate_tag_union_names() == ["Try"]
 

@@ -30,6 +30,7 @@ ba = "ba" # Binop apply
 caf = "caf" # Part of the word "café"
 clos = "clos" # Closure
 ful = "ful" # Suffix, as in "effectful"
+Paeth = "Paeth" # PNG filter named for Alan W. Paeth
 rela = "rela" # Relative
 SEH = "SEH" # Structured Exception Handling
 ser = "ser" # Part of the word "serializing"

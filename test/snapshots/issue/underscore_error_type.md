@@ -329,16 +329,12 @@ quux = ("hello", 42)
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-num (value "42"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "BadType") (local))))
 	(d-let
 		(p-assign (ident "bar"))
-		(e-list
-			(elems
-				(e-num (value "1"))
-				(e-num (value "2"))
-				(e-num (value "3"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "BadList") (local))))
 	(d-let
@@ -354,20 +350,12 @@ quux = ("hello", 42)
 			(ty-lookup (name "BadRecord") (local))))
 	(d-let
 		(p-assign (ident "qux"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-lookup-local
-				(p-assign (ident "x"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "BadFunction") (local))))
 	(d-let
 		(p-assign (ident "quux"))
-		(e-tuple
-			(elems
-				(e-string
-					(e-literal (string "hello")))
-				(e-num (value "42"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "BadTuple") (local))))
 	(s-nominal-decl

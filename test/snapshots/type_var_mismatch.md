@@ -121,12 +121,12 @@ NO CHANGE
 			(e-block
 				(s-let
 					(p-assign (ident "item"))
-					(e-num (value "42")))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "ok_or") (constraint-fn-var 229)
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 248)
 						(receiver
-							(e-call (constraint-fn-var 228)
+							(e-call (constraint-fn-var 247)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local

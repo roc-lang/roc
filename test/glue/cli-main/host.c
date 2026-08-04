@@ -350,7 +350,7 @@ CliHostManyResult roc_cli_many(
     (void)arg13;
     roc_str_decref(arg14);
     record_failure("roc_cli_many was called");
-    CliHostManyResult result = {{0}};
+    CliHostManyResult result = {0};
     return result;
 }
 
@@ -358,7 +358,7 @@ CliHostNamedRecord roc_cli_shape(CircleOrEmptyOrRect arg0, CliHostShapeArg1 arg1
     (void)arg0;
     (void)arg1;
     record_failure("roc_cli_shape was called");
-    CliHostNamedRecord result = {{0}};
+    CliHostNamedRecord result = {0};
     return result;
 }
 
@@ -367,7 +367,7 @@ CliHostWide roc_cli_wide(RocDec arg0, __int128 arg1, unsigned __int128 arg2) {
     (void)arg1;
     (void)arg2;
     record_failure("roc_cli_wide was called");
-    CliHostWide result = {{0}};
+    CliHostWide result = {0};
     return result;
 }
 
@@ -375,8 +375,8 @@ int main(void) {
     RocList args = make_args();
     MainForHostResult result = roc_main(args);
 
-    const uint8_t tag = result.bytes[4];
-    if (tag != 1) {
+    const uint8_t tag = result.tag;
+    if (tag != MainForHostResultTag_Ok) {
         record_failure("roc_main returned Err tag=%u", (unsigned)tag);
     }
     if (log_count != 1) {

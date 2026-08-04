@@ -241,6 +241,14 @@ record_update_2 = |person| {
 	{ ..person, age: 31 }
 }
 
+# `..rest` in a record pattern binds every field you did not name as a new
+# record, so it doubles as a way to remove a field: `rest` is `person` without `email`.
+remove_record_field : { name : Str, age : I64, email : Str } -> { name : Str, age : I64 }
+remove_record_field = |person| {
+	{ email: _, ..rest } = person
+	rest
+}
+
 number_literals = {
 	usage_based: 5, # defaults to Dec
 	explicit_u8: 5.U8, # Note that most of the time you will want to specify the type in the type signature instead.
@@ -397,6 +405,8 @@ main! = |_args| {
 	print!({ x: 10, y: 20 }.x)
 
 	print!(record_update_2({ name: "Alice", age: 30 }))
+
+	print!(remove_record_field({ name: "Alice", age: 30, email: "alice@example.com" }))
 
 	print!(number_literals)
 

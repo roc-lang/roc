@@ -1,0 +1,29 @@
+diff --git a/src/postcheck/monotype_lifted/spec_constr.zig b/src/postcheck/monotype_lifted/spec_constr.zig
+index 3baa183212..85ae5344b5 100644
+--- a/src/postcheck/monotype_lifted/spec_constr.zig
++++ b/src/postcheck/monotype_lifted/spec_constr.zig
+@@ -3460,7 +3460,7 @@ const Subst = struct {
+         // also takes the binder-wide entry for any value variant: reassigned
+         // and state-merged copies share its binder but not its local id, so
+         // binder identity is the only path a later reference resolves through.
+-        const subst_binder = self.isLoopCarried(identity) or switch (value) {
++        const subst_binder = switch (value) {
+             .tag,
+             .record,
+             .tuple,
+@@ -3489,12 +3489,9 @@ const Subst = struct {
+     /// pre-loop local and capture recomputation turns the vanished binding into
+     /// a phantom root argument.
+     fn putLoopCarried(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
+-        const previous = self.binder_subst.get(identity);
+-        try self.changes.append(self.allocator, .{
+-            .key = .{ .binder = identity },
+-            .previous = previous,
+-        });
+-        try self.binder_subst.put(identity, value);
++        _ = self;
++        _ = identity;
++        _ = value;
+     }
+ 
+     /// Remove the pre-loop `binder_subst` value for the variable carried by a

@@ -55,6 +55,8 @@ test "backend tests" {
 }
 
 test "issue 10295: dev backend preserves deep structural equality under register pressure" {
+    if (comptime !dev.host_lir_codegen_available) return error.SkipZigTest;
+
     // https://github.com/roc-lang/roc/issues/10295
     const std = @import("std");
     const layout = @import("layout");
@@ -145,6 +147,8 @@ test "issue 10295: dev backend preserves deep structural equality under register
 }
 
 test "issue 10295: nested list equality has bounded register pressure" {
+    if (comptime !dev.host_lir_codegen_available) return error.SkipZigTest;
+
     const std = @import("std");
     const layout = @import("layout");
     const lir = @import("lir");

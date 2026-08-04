@@ -185,6 +185,7 @@ const MonoTestEnv = struct {
             .env = other_env.module_env,
             .statement_idx = statement_idx,
             .qualified_type_ident = other_qualified_ident,
+            .import_identity = .{ .module = other_module_ident },
         });
 
         const parse_ast = try parse.file(gpa, &module_env.common);
@@ -301,6 +302,7 @@ const MonoTestEnv = struct {
                 .env = imp.env.module_env,
                 .statement_idx = statement_idx,
                 .qualified_type_ident = other_qualified_ident,
+                .import_identity = .{ .module = other_module_ident },
             });
         }
 

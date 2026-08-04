@@ -118,14 +118,12 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "value"))
-		(e-string
-			(e-literal (string "test")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "BadDerived") (local))))
 	(d-let
 		(p-assign (ident "goodValue"))
-		(e-string
-			(e-literal (string "test")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "GoodDerived") (local))))
 	(s-nominal-decl

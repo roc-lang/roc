@@ -273,6 +273,19 @@ const InterpreterRocEnv = struct {
 /// Interprets statement-only LIR procs directly.
 pub const Interpreter = struct {
     const LirInterpreter = @This();
+    /// Debug-build-only call-depth guard. Release builds of the compiler must
+    /// never constrain what compile-time evaluation (or interpreted execution)
+    /// can do, including how deeply it recurses — an arbitrary depth budget
+    /// would make well-formed programs compile in Debug and fail in release,
+    /// or vice versa. In release builds recursion is bounded only by actual
+    /// native stack memory. Exhausting it is reported by whoever owns the
+    /// executing thread: compile-time evaluation runs on compiler threads
+    /// covered by the stack overflow guard in `src/base`, while runtime
+    /// interpretation runs in the shim/app process, where stack-overflow
+    /// reporting belongs to the platform host. The Debug check exists to turn
+    /// runaway recursion into a deterministic Roc crash with this
+    /// interpreter's context attached instead of a native fault. See
+    /// design.md ("Compile-Time Evaluation And Static Storage").
     const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
@@ -1971,8 +1984,10 @@ pub const Interpreter = struct {
         defer _ = self.call_stack.pop();
         errdefer self.recordFailedCallStackIfUnset() catch {};
 
-        if (self.call_depth >= max_call_depth) {
-            return self.triggerCrash(stack_overflow_message);
+        if (comptime builtin.mode == .Debug) {
+            if (self.call_depth >= max_call_depth) {
+                return self.triggerCrash(stack_overflow_message);
+            }
         }
         if (args.len != arg_layouts.len) {
             return self.invariantFailedError(
@@ -5215,6 +5230,7 @@ pub const Interpreter = struct {
             ll.ret_layout;
 
         return switch (ll.op) {
+            .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
             // ── String ops ──
             .str_is_eq => blk: {
                 const result = builtins.str.strEqual(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -5319,6 +5335,33 @@ pub const Interpreter = struct {
                     self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
                 {
                     return self.runtimeError("str_split_first expected fields after Str, before Str, found Bool");
+                }
+
+                const val = try self.alloc(ll.ret_layout);
+                @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.after));
+                @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.before));
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 2)).write(u8, if (result.found) 1 else 0);
+                break :blk val;
+            },
+            .str_split_last => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const result = builtins.str.splitLast(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
+
+                const layout_val = self.layout_store.getLayout(ll.ret_layout);
+                if (layout_val.tag != .struct_) {
+                    return self.runtimeError("str_split_last expected a record return layout");
+                }
+                const record_idx = layout_val.getStruct().idx;
+                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
+                if (fields.len != 3 or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
+                {
+                    return self.runtimeError("str_split_last expected fields after Str, before Str, found Bool");
                 }
 
                 const val = try self.alloc(ll.ret_layout);
@@ -6094,6 +6137,63 @@ pub const Interpreter = struct {
             .num_count_leading_zero_bits => self.numBitCountOp(args[0], ll.ret_layout, arg_layout, .count_leading_zeros),
             .num_count_trailing_zero_bits => self.numBitCountOp(args[0], ll.ret_layout, arg_layout, .count_trailing_zeros),
 
+            // ── Fixed-width integer SIMD ──
+            .simd_load_16_unchecked => self.evalSimdLoad(ll),
+            .simd_store_16_unchecked => self.evalSimdStore(ll),
+            .simd_append_16 => self.evalSimdAppend(ll),
+            .simd_splat,
+            .simd_get_lane_unchecked,
+            .simd_with_lane_unchecked,
+            .simd_to_u128_bits,
+            .simd_from_u128_bits,
+            .simd_add_wrap,
+            .simd_sub_wrap,
+            .simd_add_sat,
+            .simd_sub_sat,
+            .simd_neg_wrap,
+            .simd_abs_wrap,
+            .simd_min,
+            .simd_max,
+            .simd_abs_diff,
+            .simd_avg_rounded,
+            .simd_mul_wrap,
+            .simd_mul_high,
+            .simd_mul_q15_sat,
+            .simd_mul_wide_lo,
+            .simd_mul_wide_hi,
+            .simd_dot_pairs,
+            .simd_dot_pairs_sat,
+            .simd_sad,
+            .simd_and,
+            .simd_or,
+            .simd_xor,
+            .simd_not,
+            .simd_bit_select,
+            .simd_eq_lanes,
+            .simd_gt_lanes,
+            .simd_gte_lanes,
+            .simd_bitmask,
+            .simd_shl_wrap,
+            .simd_shr_wrap,
+            .simd_shr_zf_wrap,
+            .simd_shr_rounded,
+            .simd_interleave_lo,
+            .simd_interleave_hi,
+            .simd_even_lanes,
+            .simd_odd_lanes,
+            .simd_reverse_lanes,
+            .simd_table_lookup,
+            .simd_concat_shift_bytes,
+            .simd_widen_lo,
+            .simd_widen_hi,
+            .simd_pairwise_add_widen,
+            .simd_narrow_wrap,
+            .simd_narrow_sat,
+            .simd_sum_lanes,
+            .simd_sum_lanes_wrap,
+            .simd_clmul_lo,
+            .simd_clmul_hi,
+            => self.evalSimd(ll),
             // ── Comparison ──
             .num_is_eq => self.numCmpOp(args[0], args[1], arg_layout, .eq),
             .num_is_lt => self.numCmpOp(args[0], args[1], arg_layout, .lt),
@@ -6669,6 +6769,91 @@ pub const Interpreter = struct {
         dec,
     };
 
+    fn simdKind(self: *LirInterpreter, layout_idx: layout_mod.Idx) ?builtins.simd.Kind {
+        const value_layout = self.layout_store.getLayout(layout_idx);
+        if (value_layout.tag != .scalar or value_layout.getScalar().tag != .vector) return null;
+        return switch (value_layout.getScalar().getVector()) {
+            .u8x16 => .u8x16,
+            .i8x16 => .i8x16,
+            .u16x8 => .u16x8,
+            .i16x8 => .i16x8,
+            .u32x4 => .u32x4,
+            .i32x4 => .i32x4,
+            .u64x2 => .u64x2,
+            .i64x2 => .i64x2,
+        };
+    }
+
+    fn readLowBits(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) u128 {
+        var bits: u128 = 0;
+        const byte_count = @min(self.helper.sizeOf(layout_idx), @sizeOf(u128));
+        @memcpy(std.mem.asBytes(&bits)[0..byte_count], value.ptr[0..byte_count]);
+        return bits;
+    }
+
+    fn evalSimd(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
+        var arg_kind: ?builtins.simd.Kind = null;
+        for (ll.arg_layouts) |arg_layout_idx| {
+            arg_kind = self.simdKind(arg_layout_idx) orelse continue;
+            break;
+        }
+        const ret_kind = self.simdKind(ll.ret_layout);
+        const source_kind = arg_kind orelse ret_kind orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: SIMD op {s} has no vector argument or result",
+            .{@tagName(ll.op)},
+        );
+        const destination_kind = ret_kind orelse source_kind;
+        var operands = [_]u128{ 0, 0, 0 };
+        for (0..@min(ll.args.len, operands.len)) |i| {
+            operands[i] = self.readLowBits(ll.args[i], try self.lowLevelArgLayout(ll, i));
+        }
+        const simd_op: builtins.simd.Op = @enumFromInt(ll.op.simdOpIndex() orelse unreachable);
+        const result_bits = builtins.simd.eval(simd_op, source_kind, destination_kind, operands[0], operands[1], operands[2]);
+        const result = try self.alloc(ll.ret_layout);
+        const result_size = @min(self.helper.sizeOf(ll.ret_layout), @sizeOf(u128));
+        @memcpy(result.ptr[0..result_size], std.mem.asBytes(&result_bits)[0..result_size]);
+        return result;
+    }
+
+    fn evalSimdLoad(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
+        const list = self.valueToRocListForLayout(ll.args[0], try self.lowLevelArgLayout(ll, 0));
+        const index: usize = @intCast(ll.args[1].read(u64));
+        const result = try self.alloc(ll.ret_layout);
+        @memcpy(result.ptr[0..16], list.bytes.?[index..][0..16]);
+        return result;
+    }
+
+    fn evalSimdStore(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
+        var list = self.valueToRocListForLayout(ll.args[1], try self.lowLevelArgLayout(ll, 1));
+        if (updateModeForArg1(ll.unique_args) == .Immutable) {
+            list = builtins.list.listClone(list, 1, 1, false, null, builtins.utils.rcNone, null, builtins.utils.rcNone, &self.roc_ops);
+        }
+        const index: usize = @intCast(ll.args[2].read(u64));
+        @memcpy(list.bytes.?[index..][0..16], ll.args[0].ptr[0..16]);
+        return self.rocListToValue(list, ll.ret_layout);
+    }
+
+    fn evalSimdAppend(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
+        var list = self.valueToRocListForLayout(ll.args[1], try self.lowLevelArgLayout(ll, 1));
+        list = builtins.list.listReserve(
+            list,
+            1,
+            16,
+            1,
+            false,
+            null,
+            builtins.utils.rcNone,
+            null,
+            builtins.utils.rcNone,
+            updateModeForArg1(ll.unique_args),
+            &self.roc_ops,
+        );
+        for (ll.args[0].readBytes(16)) |*byte| {
+            list = builtins.list.listAppendUnsafe(list, @ptrCast(@constCast(byte)), 1, &builtins.list.copy_fallback);
+        }
+        return self.rocListToValue(list, ll.ret_layout);
+    }
+
     /// Determine if a layout index represents a Dec type.
     fn isDec(layout_idx: layout_mod.Idx) bool {
         return layout_idx == .dec;
@@ -6958,7 +7143,7 @@ pub const Interpreter = struct {
             },
             .float => |bits| switch (bits) {
                 32 => val.write(f32, builtins.float_math_f32.pow(a.read(f32), b.read(f32))),
-                64 => val.write(f64, std.math.pow(f64, a.read(f64), b.read(f64))),
+                64 => val.write(f64, builtins.float_math_f64.pow(a.read(f64), b.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float pow width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
@@ -7036,12 +7221,12 @@ pub const Interpreter = struct {
             };
         }
         return switch (op) {
-            .sin => std.math.sin(value),
-            .cos => std.math.cos(value),
-            .tan => std.math.tan(value),
-            .asin => std.math.asin(value),
-            .acos => std.math.acos(value),
-            .atan => std.math.atan(value),
+            .sin => builtins.float_math_f64.sin(value),
+            .cos => builtins.float_math_f64.cos(value),
+            .tan => builtins.float_math_f64.tan(value),
+            .asin => builtins.float_math_f64.asin(value),
+            .acos => builtins.float_math_f64.acos(value),
+            .atan => builtins.float_math_f64.atan(value),
         };
     }
 

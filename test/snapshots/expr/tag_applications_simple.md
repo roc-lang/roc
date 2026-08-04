@@ -112,7 +112,7 @@ EndOfFile,
 	(elems
 		(e-tag (name "Some")
 			(args
-				(e-num (value "42"))))
+				(e-runtime-error (tag "erroneous_value_expr"))))
 		(e-tag (name "None"))
 		(e-tag (name "Ok")
 			(args

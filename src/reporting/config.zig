@@ -1,9 +1,7 @@
 //! Configuration for formatting warning and error reports
 
 const std = @import("std");
-const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const CoreCtx = @import("ctx").CoreCtx;
 
 /// Color preference for reporting output
 pub const ColorPreference = enum {
@@ -54,72 +52,6 @@ pub const ReportingConfig = struct {
 
     /// Maximum bytes for truncating error messages
     max_message_bytes: usize,
-
-    pub fn initFromEnv(allocator: Allocator, roc_ctx: CoreCtx) Allocator.Error!ReportingConfig {
-        var config = ReportingConfig{
-            .color_preference = .auto,
-            .is_tty = false,
-            .render_target = .markdown,
-            .max_line_width = 80,
-            .show_line_numbers = true,
-            .context_lines = 3,
-            .validate_utf8 = true,
-            .max_message_bytes = 4096,
-        };
-
-        // Check if output is TTY
-        config.is_tty = roc_ctx.isTty();
-
-        // Environment variable checks only available on non-freestanding targets
-        if (comptime builtin.target.os.tag != .freestanding) {
-            // Check NO_COLOR environment variable
-            const no_color = std.process.getEnvVarOwned(allocator, "NO_COLOR") catch null;
-            if (no_color) |value| {
-                defer allocator.free(value);
-                if (value.len > 0) {
-                    config.color_preference = .never;
-                }
-            }
-
-            // Check FORCE_COLOR environment variable
-            const force_color = std.process.getEnvVarOwned(allocator, "FORCE_COLOR") catch null;
-            if (force_color) |value| {
-                defer allocator.free(value);
-                if (value.len > 0) {
-                    config.color_preference = .always;
-                }
-            }
-
-            // Check ROC_HIGH_CONTRAST environment variable
-            const high_contrast = std.process.getEnvVarOwned(allocator, "ROC_HIGH_CONTRAST") catch null;
-            if (high_contrast) |value| {
-                defer allocator.free(value);
-                if (std.mem.eql(u8, value, "1")) {
-                    config.color_preference = .high_contrast;
-                }
-            }
-
-            // Check ROC_MAX_LINE_WIDTH environment variable
-            const max_width = std.process.getEnvVarOwned(allocator, "ROC_MAX_LINE_WIDTH") catch null;
-            if (max_width) |value| {
-                defer allocator.free(value);
-                if (std.fmt.parseInt(u32, value, 10)) |width| {
-                    config.max_line_width = @max(40, @min(200, width)); // Clamp between 40-200
-                } else |_| {
-                    // Invalid value, keep default
-                }
-            }
-        }
-
-        // Set render target based on color preference and TTY status
-        config.render_target = switch (config.color_preference) {
-            .never => .markdown,
-            .auto => if (config.is_tty) .color_terminal else .markdown,
-            .always, .high_contrast => .color_terminal,
-        };
-
-        return config;
-    }
 
     pub fn initMarkdown() ReportingConfig {
         return ReportingConfig{
