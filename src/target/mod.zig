@@ -466,12 +466,13 @@ pub const RocTarget = enum {
                     .architecture_baseline_features = .empty,
                 },
             },
-            .wasm32 => .{
-                // Pin WebAssembly 1.0 instead of inheriting Zig's evolving
-                // cross-compilation baseline.
-                .codegen_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
-                .architecture_baseline_features = .empty,
-            },
+            .wasm32 => if (level == .v1)
+                .{
+                    .codegen_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
+                    .architecture_baseline_features = .empty,
+                }
+            else
+                .{},
             else => .{},
         };
 
