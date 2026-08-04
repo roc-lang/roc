@@ -6205,6 +6205,40 @@ const Builder = struct {
         var nested_ctx = try source_ctx.nestedInstantiationContext(source_fn_key);
         nested_ctx.evidence = requested_evidence;
         defer nested_ctx.deinit();
+        // Debug/probe-only: a nested specialization gets a frame of its own,
+        // resolved from the innermost edge when that edge names this use, so
+        // the nested body's positions bind exactly as a template body's do
+        // (reunify.md 13.2d: the nested flow needs what template records
+        // hold). The graph's trace stays with the enclosing specialization.
+        const nested_frame_open = if (self.rehearsal) |rehearsal| frame: {
+            const nested_scheme = nested_scheme: {
+                if (source_ctx.view.types.schemeIdForOwnerNode(@intFromEnum(expr_id))) |scheme_id| {
+                    census.bump("rehearsal_nested_scheme_by_root");
+                    break :nested_scheme scheme_id;
+                }
+                for (source_ctx.view.types.schemes) |scheme| {
+                    if (scheme.root == source_fn_ty) {
+                        census.bump("rehearsal_nested_scheme_by_root");
+                        break :nested_scheme scheme.id;
+                    }
+                }
+                census.bump("rehearsal_nested_scheme_absent");
+                break :frame false;
+            };
+            _ = rehearsal.claimRequestEdgeForUse(@intFromEnum(fn_id), source_ctx.view.key.bytes, expr_id);
+            rehearsal.beginNestedSpecialization(.{
+                .graph = source_ctx.graph,
+                .cursor = directTranslateCursor(source_ctx.view),
+                .reserved_fn_id = @intFromEnum(fn_id),
+                .target_kind = .roc,
+                .template_name = "",
+                .template_scheme = nested_scheme,
+            });
+            break :frame true;
+        } else false;
+        defer if (nested_frame_open) {
+            if (self.rehearsal) |rehearsal| rehearsal.endNestedSpecialization();
+        };
         const root_node = try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
             const owned_body_node = try nested_ctx.lowerExprTypeNode(expr_id);

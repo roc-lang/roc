@@ -3067,6 +3067,75 @@ pub const Rehearsal = struct {
         }
     }
 
+    /// Bind the innermost open request's edge to a reserved function id only
+    /// when that edge names exactly this use expression, so a reservation made
+    /// while an enclosing call's edge is innermost cannot steal it. Reports
+    /// whether the claim was made.
+    pub fn claimRequestEdgeForUse(
+        self: *Rehearsal,
+        fn_id: u32,
+        module_bytes: [32]u8,
+        use_expr: checked.CheckedExprId,
+    ) bool {
+        if (self.disabled) return false;
+        if (self.requests.items.len == 0) {
+            census.bump("rehearsal_nested_claim_without_scope");
+            return false;
+        }
+        const top = self.requests.items[self.requests.items.len - 1];
+        const edge = switch (top) {
+            .checked => |edge| edge,
+            else => {
+                census.bump("rehearsal_nested_claim_top_not_checked");
+                return false;
+            },
+        };
+        if (edge.use_expr != use_expr or !std.mem.eql(u8, &edge.module_bytes, &module_bytes)) {
+            census.bump("rehearsal_nested_claim_edge_differs");
+            return false;
+        }
+        self.claimRequestEdge(fn_id);
+        census.bump("rehearsal_nested_claim_matched");
+        return true;
+    }
+
+    /// Open a frame for a nested specialization lowered inline in its
+    /// requester's graph: the frame resolves from the claimed edge exactly as
+    /// a template specialization's does, but the graph's trace and seal probe
+    /// stay with the enclosing specialization that owns the graph.
+    pub fn beginNestedSpecialization(self: *Rehearsal, start: SpecializationStart) void {
+        if (self.disabled) return;
+        census.bump("rehearsal_nested_spec_attempted");
+        var frame = Frame{
+            .trace = null,
+            .env_module_bytes = start.cursor.module_bytes,
+            .scheme = .{ .module_bytes = start.cursor.module_bytes, .scheme = 0 },
+            .owner_node = checked.checked_residual_disposition_module_body_owner,
+            .binders = &.{},
+            .chain = EnvironmentChain.none,
+            .interface_root = null,
+            .request_root = null,
+            .ret_mint = null,
+            .env_ready = false,
+        };
+        self.resolveEnvironment(start, &frame);
+        if (frame.env_ready) census.bump("rehearsal_nested_spec_resolved");
+        self.frames.append(self.allocator, frame) catch {
+            self.releaseFrame(&frame);
+            self.disabled = true;
+            return;
+        };
+    }
+
+    /// Close the innermost frame a `beginNestedSpecialization` opened. The
+    /// enclosing specialization's graph comparison is untouched.
+    pub fn endNestedSpecialization(self: *Rehearsal) void {
+        if (self.disabled) return;
+        if (self.frames.items.len == 0) return;
+        var frame = self.frames.pop() orelse return;
+        self.releaseFrame(&frame);
+    }
+
     /// Take the innermost open request scope out of the stack and keep it under
     /// a fresh token, for a body-lowering request whose specialization is
     /// recorded now and reserved only after the requesting graph freezes
@@ -5417,12 +5486,25 @@ pub const Rehearsal = struct {
             error.Skip => {
                 census.bump("rehearsal_skip_actual_untranslatable");
                 if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                    std.debug.print("ACTUAL-SKIP actual={d} reason={s} env={s} payload={s}\n", .{
+                    std.debug.print("ACTUAL-SKIP actual={d} reason={s} env={s} payload={s}", .{
                         @intFromEnum(actual),
                         @tagName(reason),
                         if (env == null) "null" else "present",
                         @tagName(caller.view.payload(actual)),
                     });
+                    switch (caller.view.payload(actual)) {
+                        .rigid, .flex => |v| {
+                            std.debug.print(" phase={s} constraints={d}:", .{
+                                if (v.numeric_default_phase) |phase| @tagName(phase) else "-",
+                                v.constraints.len,
+                            });
+                            for (v.constraints) |constraint| {
+                                std.debug.print(" {s}", .{caller.source_names.methodNameText(constraint.fn_name)});
+                            }
+                        },
+                        else => {},
+                    }
+                    std.debug.print("\n", .{});
                 }
                 return null;
             },

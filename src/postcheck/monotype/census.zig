@@ -534,6 +534,14 @@ pub const Census = struct {
     spec_root_declined_site_ambiguous: Counter = Counter.init(0),
     spec_root_declined_module_differs: Counter = Counter.init(0),
     spec_root_declined_edge_unusable: Counter = Counter.init(0),
+    rehearsal_nested_claim_without_scope: Counter = Counter.init(0),
+    rehearsal_nested_claim_top_not_checked: Counter = Counter.init(0),
+    rehearsal_nested_claim_edge_differs: Counter = Counter.init(0),
+    rehearsal_nested_claim_matched: Counter = Counter.init(0),
+    rehearsal_nested_spec_attempted: Counter = Counter.init(0),
+    rehearsal_nested_spec_resolved: Counter = Counter.init(0),
+    rehearsal_nested_scheme_by_root: Counter = Counter.init(0),
+    rehearsal_nested_scheme_absent: Counter = Counter.init(0),
     spec_root_declined_emission_null: Counter = Counter.init(0),
     iter_chain_link_underived: Counter = Counter.init(0),
     iter_declare_identity_emit_failed: Counter = Counter.init(0),
@@ -1422,6 +1430,7 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     if (enabled) {
+        @setEvalBranchQuota(4000);
         inline for (@typeInfo(Census).@"struct".fields) |field| {
             const value = @field(global, field.name).load(.monotonic);
             const line = try std.fmt.allocPrint(allocator, "{s} {d}\n", .{ field.name, value });
