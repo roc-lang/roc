@@ -1563,8 +1563,14 @@ pub const Rehearsal = struct {
         // position re-emits after the body: every input the body declared is
         // live under the frame's floor, so the position the start emission
         // could not state may state now.
-        const scheme_root = frame.scheme_root_checked orelse return null;
-        if (!frame.env_ready) return null;
+        const scheme_root = frame.scheme_root_checked orelse {
+            census.bump("value_declined_no_scheme_root");
+            return null;
+        };
+        if (!frame.env_ready) {
+            census.bump("value_declined_env_unready");
+            return null;
+        }
         const cursor = self.lookup.cursor(frame.env_module_bytes) orelse return null;
         // A scheme whose return shares its checked id with an argument holds
         // two roles at one address; a declared input for the argument would
@@ -1586,9 +1592,36 @@ pub const Rehearsal = struct {
             frame.environment(),
             frame.owner_node,
             @enumFromInt(scheme_root),
-        ) orelse return null;
+        ) orelse {
+            census.bump("value_declined_reemission_skip");
+            return null;
+        };
         census.bump("value_sealed_by_reemission");
         return sealed;
+    }
+
+    /// Whether a callable root shares one checked id between an argument and
+    /// its return: two roles at one address, which no address-keyed read may
+    /// serve (reunify.md 13.2c).
+    fn rootSharesArgRet(cursor: direct_translate.ModuleCursor, root: checked.CheckedTypeId) bool {
+        switch (cursor.view.payload(root)) {
+            .function => |root_fn| {
+                for (root_fn.args) |arg| {
+                    if (arg != root_fn.ret) continue;
+                    // Only a position whose representation the checked data
+                    // does not dictate can answer differently per role; a
+                    // ground shared id carries one value for both.
+                    switch (cursor.view.payload(root_fn.ret)) {
+                        .nominal => |n| {
+                            if (direct_translate.nominalIsOpenRepresentation(n)) return true;
+                        },
+                        else => {},
+                    }
+                }
+            },
+            else => {},
+        }
+        return false;
     }
 
     fn rehearsalSlotFinal(self: *Rehearsal, slot: closure.RepresentationSlotId) ?Type.TypeId {
@@ -4850,6 +4883,10 @@ pub const Rehearsal = struct {
         }
 
         if (comptime census.enabled) provisional: {
+            if (rootSharesArgRet(caller, site.instantiated_root)) {
+                census.bump("value_reemission_shared_position");
+                break :provisional;
+            }
             const drafts = self.allocator.create(direct_translate.MonoDraftStore) catch break :provisional;
             drafts.* = direct_translate.MonoDraftStore.init(self.allocator);
             var provisional_reason: direct_translate.SkipReason = undefined;
@@ -5258,6 +5295,10 @@ pub const Rehearsal = struct {
         // emitted under the empty binding is the requested callable itself.
         frame.request_root = frame.interface_root;
         if (comptime census.enabled) provisional: {
+            if (rootSharesArgRet(start.cursor, scheme.root)) {
+                census.bump("value_reemission_shared_position");
+                break :provisional;
+            }
             const drafts = self.allocator.create(direct_translate.MonoDraftStore) catch break :provisional;
             drafts.* = direct_translate.MonoDraftStore.init(self.allocator);
             var provisional_reason: direct_translate.SkipReason = undefined;
@@ -5419,6 +5460,10 @@ pub const Rehearsal = struct {
             else => {},
         }
         if (comptime census.enabled) provisional: {
+            if (rootSharesArgRet(caller, site.instantiated_root)) {
+                census.bump("value_reemission_shared_position");
+                break :provisional;
+            }
             const drafts = self.allocator.create(direct_translate.MonoDraftStore) catch break :provisional;
             drafts.* = direct_translate.MonoDraftStore.init(self.allocator);
             var provisional_reason: direct_translate.SkipReason = undefined;

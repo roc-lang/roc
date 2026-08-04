@@ -3480,6 +3480,12 @@ pub const ProvisionalType = union(enum) {
 /// component that owns the store.
 pub const MonoDraftId = enum(u32) { _ };
 
+/// Whether a nominal's runtime encoding is one the checked data does not
+/// dictate, so its representation may join after emission.
+pub fn nominalIsOpenRepresentation(n: checked.CheckedNominalType) bool {
+    return Walk.builtinDisposition(n) == .open_representation;
+}
+
 /// The compound shapes a draft models. Grown by need: a shape appears here
 /// when a production compound first carries a slot-holding child.
 pub const MonoDraftContent = union(enum) {
