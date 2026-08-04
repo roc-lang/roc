@@ -6,6 +6,7 @@
 //! without floating-point precision issues.
 const std = @import("std");
 const i128h = @import("compiler_rt_128.zig");
+const decimal_parse = @import("decimal_parse.zig");
 
 const U256 = @import("num.zig").U256;
 const TestEnv = @import("utils.zig").TestEnv;
@@ -213,83 +214,7 @@ pub const RocDec = extern struct {
 
     // This a separate function because the compiler uses it.
     pub fn fromNonemptySlice(roc_str_slice: []const u8) ?RocDec {
-        const length = roc_str_slice.len;
-        const is_negative: bool = roc_str_slice[0] == '-';
-        const initial_index: usize = @intFromBool(is_negative);
-
-        var point_index: ?usize = null;
-        var index: usize = initial_index;
-        while (index < length) {
-            const byte: u8 = roc_str_slice[index];
-            if (byte == '.' and point_index == null) {
-                point_index = index;
-                index += 1;
-                continue;
-            }
-
-            if (!isDigit(byte)) {
-                return null;
-            }
-            index += 1;
-        }
-
-        // Sign is folded into the magnitude before multiplication and addition,
-        // rather than negating at the end. This is required for the lowest Dec
-        // value: its magnitude is 2^127, which overflows positive i128 even
-        // though -2^127 is itself representable.
-        var before_str_length = length;
-        var after_val_i128: ?i128 = null;
-        if (point_index) |point_idx| {
-            before_str_length = point_idx;
-
-            const after_str_len = (length - 1) - point_idx;
-            if (after_str_len > decimal_places) {
-                // More than 18 fractional digits cannot be represented exactly.
-                return null;
-            }
-            const diff_decimal_places = decimal_places - after_str_len;
-
-            const after_str = roc_str_slice[point_idx + 1 .. length];
-            const after_u64 = @import("num.zig").parseUnsignedDecimal(u64, after_str);
-            if (after_u64) |f| {
-                const unsigned = i128h.mul_i128(@as(i128, @intCast(f)), i128h.pow10_i128(@intCast(diff_decimal_places)));
-                after_val_i128 = if (is_negative) -unsigned else unsigned;
-            }
-        }
-
-        const before_str = roc_str_slice[initial_index..before_str_length];
-        var before_val_i128: ?i128 = null;
-        if (before_str.len > 0) {
-            const before = @import("num.zig").parseUnsignedDecimal(i128, before_str) orelse return null;
-            const signed_before: i128 = if (is_negative) -before else before;
-            const mul_ans = @import("num.zig").mulWithOverflow(i128, signed_before, one_point_zero_i128);
-            if (mul_ans.has_overflowed) {
-                // The whole-number part is outside Dec's scaled i128 range.
-                return null;
-            }
-            before_val_i128 = mul_ans.value;
-        }
-
-        if (before_val_i128) |before| {
-            if (after_val_i128) |after| {
-                const answer = @addWithOverflow(before, after);
-                if (answer[1] == 1) {
-                    // Combining whole and fractional parts exceeded Dec's range.
-                    return null;
-                }
-                return .{ .num = answer[0] };
-            } else {
-                return .{ .num = before };
-            }
-        } else if (after_val_i128) |after| {
-            return .{ .num = after };
-        } else {
-            return null;
-        }
-    }
-
-    inline fn isDigit(c: u8) bool {
-        return (c -% 48) <= 9;
+        return .{ .num = decimal_parse.parseScaledI128(roc_str_slice, decimal_places) orelse return null };
     }
 
     /// Format this Dec value into the provided buffer, returning the slice containing the result.
@@ -1847,6 +1772,14 @@ test "F32 and Dec convert directly without binary64 intermediates" {
     );
 }
 
+fn expectParseDecText(text: []const u8, expected: ?i128, roc_ops: *RocOps) error{TestExpectedEqual}!void {
+    const roc_str = RocStr.fromSlice(text, roc_ops);
+    defer roc_str.decref(roc_ops);
+
+    const expected_dec: ?RocDec = if (expected) |num| .{ .num = num } else null;
+    try std.testing.expectEqual(expected_dec, RocDec.fromStr(roc_str));
+}
+
 test "fromStr: empty" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -1875,6 +1808,52 @@ test "fromStr: 123.45" {
     const dec = RocDec.fromStr(roc_str);
 
     try std.testing.expectEqual(RocDec{ .num = 123450000000000000000 }, dec.?);
+}
+
+test "fromStr: decimal exponent notation issue 10550" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/10550.
+    try expectParseDecText("2e5", 200_000_000_000_000_000_000_000, test_env.getOps());
+    try expectParseDecText("+2E5", 200_000_000_000_000_000_000_000, test_env.getOps());
+    try expectParseDecText("2_0e4", 200_000_000_000_000_000_000_000, test_env.getOps());
+    try expectParseDecText("1.25e2", 125_000_000_000_000_000_000, test_env.getOps());
+    try expectParseDecText("1e-18", 1, test_env.getOps());
+    try expectParseDecText("10e-19", 1, test_env.getOps());
+    try expectParseDecText("1e-19", null, test_env.getOps());
+    try expectParseDecText("0e999999999999999999999999999999999999", 0, test_env.getOps());
+    try expectParseDecText("0e-999999999999999999999999999999999999", 0, test_env.getOps());
+}
+
+test "fromStr: exponent notation preserves exact Dec boundaries" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    try expectParseDecText("170141183460469231731687303715884105727e-18", std.math.maxInt(i128), test_env.getOps());
+    try expectParseDecText("-170141183460469231731687303715884105728e-18", std.math.minInt(i128), test_env.getOps());
+    try expectParseDecText("170141183460469231731687303715884105728e-18", null, test_env.getOps());
+    try expectParseDecText("-170141183460469231731687303715884105729e-18", null, test_env.getOps());
+
+    try expectParseDecText(
+        "0.123456789012345678000000000000000000000000000000000000000000",
+        123_456_789_012_345_678,
+        test_env.getOps(),
+    );
+    try expectParseDecText(
+        "0.123456789012345678000000000000000000000000000000000000000001",
+        null,
+        test_env.getOps(),
+    );
+}
+
+test "fromStr: rejects malformed decimal exponent notation" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (.{ "e5", ".e5", "2e", "2e+", "2_e5", "2e_5", "2e5_", "2ee5", "2e5.0" }) |text| {
+        try expectParseDecText(text, null, test_env.getOps());
+    }
 }
 
 test "fromStr: .45" {
