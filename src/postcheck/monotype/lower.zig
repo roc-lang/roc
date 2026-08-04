@@ -3025,6 +3025,7 @@ const Builder = struct {
             .count,
             null,
             null,
+            .open_own,
         );
     }
 
@@ -3142,6 +3143,11 @@ const Builder = struct {
             Common.invariant("procedure specialization did not receive its complete checked evidence vector");
     }
 
+    /// Whether the caller already resolved this specialization's rehearsal
+    /// frame ahead of the cache probe; the lowering then attaches its graph to
+    /// that frame instead of opening one.
+    const CallerFrame = enum { open_own, provided };
+
     fn lowerTemplateWithMono(
         self: *Builder,
         template_ref: names.ProcTemplate,
@@ -3154,6 +3160,7 @@ const Builder = struct {
         request_accounting: TemplateRequestAccounting,
         precomputed_request_digest: ?names.TypeDigest,
         retained_topology: ?EvidenceChain,
+        caller_frame: CallerFrame,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
@@ -3310,6 +3317,7 @@ const Builder = struct {
                         .count,
                         null,
                         null,
+                        .open_own,
                     );
                     const adapter_template = Ast.FnTemplate{
                         .fn_def = .{ .checked_generated = template_ref },
@@ -3374,14 +3382,17 @@ const Builder = struct {
         // its binder environment from the requesting edge and records what the
         // graph seals so the two can be compared once the body is sealed
         // (reunify.md sections 9, 11.2; Slice 7 flip-prep step b).
-        if (self.rehearsal) |rehearsal| rehearsal.beginSpecialization(.{
-            .graph = graph,
-            .cursor = directTranslateCursor(view),
-            .reserved_fn_id = @intFromEnum(reservation.fn_id),
-            .target_kind = std.meta.activeTag(template.target),
-            .template_name = templateExportName(view, template_ref),
-            .template_scheme = template.schemeId(),
-        });
+        if (self.rehearsal) |rehearsal| switch (caller_frame) {
+            .open_own => rehearsal.beginSpecialization(.{
+                .graph = graph,
+                .cursor = directTranslateCursor(view),
+                .reserved_fn_id = @intFromEnum(reservation.fn_id),
+                .target_kind = std.meta.activeTag(template.target),
+                .template_name = templateExportName(view, template_ref),
+                .template_scheme = template.schemeId(),
+            }),
+            .provided => rehearsal.attachSpecializationGraph(graph),
+        };
         defer if (self.rehearsal) |rehearsal| rehearsal.endSpecialization(graph);
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -5756,6 +5767,7 @@ const Builder = struct {
             .count,
             null,
             null,
+            .open_own,
         );
         return .{ .local = self.defFnId(def) };
     }
@@ -5844,6 +5856,7 @@ const Builder = struct {
                     .count,
                     null,
                     retained,
+                    .open_own,
                 );
                 return self.defFnId(def);
             },
@@ -7215,6 +7228,41 @@ const Builder = struct {
             // scope closes unclaimed exactly like any other that bound none.
             if (self.rehearsal) |rehearsal| rehearsal.reopenHeldRequest(spec.request_hold);
             defer if (self.rehearsal) |rehearsal| rehearsal.closeRequest();
+            // The frame resolves ahead of the cache probe, from the reopened
+            // scope's edge, so the directed request identity is readable
+            // before the stored-spec lookup; the lowering attaches its graph
+            // to this frame and ends it, and a request a stored record serves
+            // ends it here.
+            const frame_view = self.moduleForDigest(names.procTemplateModuleDigest(spec.template_ref));
+            const hoisted_frame = self.rehearsal != null and
+                @intFromEnum(spec.template_ref.template) < frame_view.templates.templates.len;
+            if (hoisted_frame) {
+                const rehearsal = self.rehearsal.?;
+                const frame_template = frame_view.templates.get(spec.template_ref.template);
+                rehearsal.claimRequestEdge(@intFromEnum(spec.fn_id));
+                rehearsal.beginSpecializationFrame(.{
+                    .graph = null,
+                    .cursor = directTranslateCursor(frame_view),
+                    .reserved_fn_id = @intFromEnum(spec.fn_id),
+                    .target_kind = std.meta.activeTag(frame_template.target),
+                    .template_name = templateExportName(frame_view, spec.template_ref),
+                    .template_scheme = frame_template.schemeId(),
+                });
+                if (comptime census.enabled) {
+                    if (rehearsal.currentFrameRequestRoot()) |directed_root| {
+                        const directed_digest = self.specializationTypeDigest(directed_root);
+                        if (std.mem.eql(u8, &directed_digest.bytes, &request_digest.bytes)) {
+                            census.bump("deferred_identity_directed_agrees");
+                        } else if (self.program.types.typeEql(&self.program.names, directed_root, fn_ty) catch false) {
+                            census.bump("deferred_identity_directed_eql_not_digest");
+                        } else {
+                            census.bump("deferred_identity_directed_differs");
+                        }
+                    } else {
+                        census.bump("deferred_identity_directed_absent");
+                    }
+                }
+            }
 
             spec.resolved_slot = loaded_slot orelse blk: {
                 const def = try self.lowerTemplateWithMono(
@@ -7228,9 +7276,13 @@ const Builder = struct {
                     .already_counted,
                     request_digest,
                     null,
+                    if (hoisted_frame) .provided else .open_own,
                 );
                 break :blk .{ .local = self.defFnId(def) };
             };
+            if (loaded_slot != null and hoisted_frame) {
+                self.rehearsal.?.endNestedSpecialization();
+            }
             spec.state = .resolved;
         }
     }
@@ -8985,6 +9037,7 @@ const Builder = struct {
             .count,
             null,
             null,
+            .open_own,
         );
 
         const args = [_]Ast.ExprId{value};

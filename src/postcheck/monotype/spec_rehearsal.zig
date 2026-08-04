@@ -757,8 +757,10 @@ pub const ModuleLookup = struct {
 
 /// The inputs one specialization's rehearsal starts from.
 pub const SpecializationStart = struct {
-    /// The graph lowering this specialization; the rehearsal attaches its trace.
-    graph: *solve.InstGraph,
+    /// The graph lowering this specialization; the rehearsal attaches its
+    /// trace. Null when the frame is resolved before the graph exists — the
+    /// caller attaches the graph once it is created.
+    graph: ?*solve.InstGraph,
     /// The module the specialized template's body reads its checked types from.
     cursor: direct_translate.ModuleCursor,
     /// The function id this specialization reserved. The requesting edge is
@@ -1932,6 +1934,19 @@ pub const Rehearsal = struct {
                     edge.adopted_mint = mint;
                     break :capture;
                 }
+            }
+            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+                std.debug.print("FS-EDGE expr={d} captured={s} stack:", .{
+                    @intFromEnum(use_expr),
+                    if (edge.adopted_mint) |m| @tagName(m.iterator_kind) else "-",
+                });
+                var walk = self.frames.items.len;
+                while (walk > 0) {
+                    walk -= 1;
+                    const f = &self.frames.items[walk];
+                    std.debug.print(" s{d}/{s}", .{ f.scheme.scheme, if (f.ret_mint) |m| @tagName(m.iterator_kind) else "-" });
+                }
+                std.debug.print("\n", .{});
             }
         }
         self.requests.append(self.allocator, .{ .checked = edge }) catch {
@@ -3239,6 +3254,17 @@ pub const Rehearsal = struct {
     /// matching `endSpecialization` is unconditional.
     pub fn beginSpecialization(self: *Rehearsal, start: SpecializationStart) void {
         if (self.disabled) return;
+        self.beginSpecializationFrame(start);
+        if (start.graph) |graph| self.attachSpecializationGraph(graph);
+    }
+
+    /// Resolve and push this specialization's frame: the binder environment
+    /// from the requesting edge and everything the frame carries. Separated
+    /// from graph attachment so a caller can resolve the frame before the
+    /// specialization's graph exists — the directed request identity is read
+    /// off the frame ahead of the cache probe.
+    pub fn beginSpecializationFrame(self: *Rehearsal, start: SpecializationStart) void {
+        if (self.disabled) return;
         census.bump("rehearsal_spec_attempted");
         const trace: ?*SealTrace = if (self.comparing) blk: {
             const owned = self.allocator.create(SealTrace) catch return self.fail();
@@ -3258,13 +3284,29 @@ pub const Rehearsal = struct {
             .env_ready = false,
         };
         self.resolveEnvironment(start, &frame);
+        if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+            std.debug.print("FRAME name={s} scheme=s{d} ready={s} mint={s}\n", .{
+                start.template_name,
+                frame.scheme.scheme,
+                if (frame.env_ready) "y" else "-",
+                if (frame.ret_mint) |m| @tagName(m.iterator_kind) else "-",
+            });
+        }
         self.frames.append(self.allocator, frame) catch {
             self.releaseFrame(&frame);
             self.disabled = true;
             return;
         };
-        start.graph.trace = trace;
-        start.graph.seal_probe = self;
+    }
+
+    /// Attach the specialization's graph to the innermost frame's trace, once
+    /// the graph exists. Paired with `beginSpecializationFrame`.
+    pub fn attachSpecializationGraph(self: *Rehearsal, graph: *solve.InstGraph) void {
+        if (self.disabled) return;
+        if (self.frames.items.len == 0) return;
+        const frame = &self.frames.items[self.frames.items.len - 1];
+        graph.trace = frame.trace;
+        graph.seal_probe = self;
     }
 
     /// Debug/probe-only: name the checked position behind a divergence, once
