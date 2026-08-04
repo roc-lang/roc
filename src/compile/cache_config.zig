@@ -69,7 +69,9 @@ pub const Constants = struct {
     /// 45: Where-clause owners persist rooted annotation ownership semantics.
     /// 46: Where alias declarations are their own statement kind.
     /// 47: Type descriptors carry the static-dispatch rejection marker.
-    pub const CACHE_VERSION = 47;
+    /// 48: Source imports retain parser-owned bindings and type-module owners
+    ///     instead of reconstructing them from normalized module identities.
+    pub const CACHE_VERSION = 48;
 };
 
 /// Configuration for the Roc cache system.
