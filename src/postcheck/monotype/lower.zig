@@ -16077,6 +16077,13 @@ const BodyContext = struct {
             return;
         }
         census.bump("value_parity_diverge");
+        if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+            std.debug.print("VALUE-DIVERGE tpl\n  directed: ", .{});
+            debugTypeSummary(types, name_store, sealed, 0);
+            std.debug.print("\n  sealed:   ", .{});
+            debugTypeSummary(types, name_store, request_fn_ty, 0);
+            std.debug.print("\n", .{});
+        }
     }
 
     fn measureSpecRootParity(self: *BodyContext, checked_fn_root: checked.CheckedTypeId, request_fn_ty: Type.TypeId) void {

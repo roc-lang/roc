@@ -558,6 +558,7 @@ pub const Census = struct {
     rehearsal_provisional_slot_joined: Counter = Counter.init(0),
     value_sealed_by_drafts: Counter = Counter.init(0),
     value_sealed_by_reemission: Counter = Counter.init(0),
+    value_reemission_shared_position: Counter = Counter.init(0),
     value_parity_agree: Counter = Counter.init(0),
     value_parity_eql_not_digest: Counter = Counter.init(0),
     value_parity_diverge: Counter = Counter.init(0),

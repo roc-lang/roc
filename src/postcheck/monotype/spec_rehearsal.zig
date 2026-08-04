@@ -1566,6 +1566,21 @@ pub const Rehearsal = struct {
         const scheme_root = frame.scheme_root_checked orelse return null;
         if (!frame.env_ready) return null;
         const cursor = self.lookup.cursor(frame.env_module_bytes) orelse return null;
+        // A scheme whose return shares its checked id with an argument holds
+        // two roles at one address; a declared input for the argument would
+        // answer at the return too, which 13.2c's law forbids a read to do.
+        // Exactly that scheme declines instead.
+        switch (cursor.view.payload(@enumFromInt(scheme_root))) {
+            .function => |root_fn| {
+                for (root_fn.args) |arg| {
+                    if (arg == root_fn.ret) {
+                        census.bump("value_reemission_shared_position");
+                        return null;
+                    }
+                }
+            },
+            else => {},
+        }
         const sealed = self.emitQuietly(
             cursor,
             frame.environment(),
