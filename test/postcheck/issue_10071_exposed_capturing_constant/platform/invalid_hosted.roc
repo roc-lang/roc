@@ -11,7 +11,9 @@ platform ""
         x64mac: { inputs: [app], output: Archive },
         arm64mac: { inputs: [app], output: Archive },
         x64musl: { inputs: [app], output: Archive },
+        x64v1musl: { inputs: [app], output: Archive },
         arm64musl: { inputs: [app], output: Archive },
+        arm64v1musl: { inputs: [app], output: Archive },
     }
 
 import Elem exposing [Elem]
