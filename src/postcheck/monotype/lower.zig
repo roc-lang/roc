@@ -7188,7 +7188,23 @@ const Builder = struct {
                 .frames = self.program.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
                 .head = draft_fn.source.const_evidence_frame_head,
             };
-            const request_digest = self.specializationTypeDigest(fn_ty);
+            const sealed_request_digest = self.specializationTypeDigest(fn_ty);
+            const request_digest = digest: {
+                // The directed request identity keys the specialization where
+                // the frame resolved one (reunify.md 11.5: the identity is
+                // what is known before lowering; the sealed body is the
+                // value). The representation-erased mode keeps the digest
+                // independent of producer declarations, so one request
+                // digests identically however its mints resolved.
+                if (self.rehearsal) |rehearsal| {
+                    if (rehearsal.currentFrameRequestRoot()) |directed_root| {
+                        census.bump("deferred_identity_keyed_directed");
+                        break :digest self.specializationTypeDigest(directed_root);
+                    }
+                }
+                census.bump("deferred_identity_keyed_sealed");
+                break :digest sealed_request_digest;
+            };
             const identity = templateSpecIdentity(
                 spec.template_ref,
                 spec.method_scope,
@@ -7251,7 +7267,7 @@ const Builder = struct {
                 if (comptime census.enabled) {
                     if (rehearsal.currentFrameRequestRoot()) |directed_root| {
                         const directed_digest = self.specializationTypeDigest(directed_root);
-                        if (std.mem.eql(u8, &directed_digest.bytes, &request_digest.bytes)) {
+                        if (std.mem.eql(u8, &directed_digest.bytes, &sealed_request_digest.bytes)) {
                             census.bump("deferred_identity_directed_agrees");
                         } else if (self.program.types.typeEql(&self.program.names, directed_root, fn_ty) catch false) {
                             census.bump("deferred_identity_directed_eql_not_digest");
