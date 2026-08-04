@@ -44704,14 +44704,6 @@ const BodyContext = struct {
         try self.registerPatternBindersAtNodeInMap(pattern_id, node, &self.binders, false);
     }
 
-    fn rebindPreRegisteredPatternBindersAtNode(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        node: NodeId,
-    ) Allocator.Error!void {
-        try self.registerPatternBindersAtNodeInMap(pattern_id, node, &self.binders, true);
-    }
-
     fn registerPatternBindersAtNodeInMap(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
