@@ -552,6 +552,7 @@ pub const Census = struct {
     deferred_identity_keyed_sealed: Counter = Counter.init(0),
     dispatch_result_directed_final: Counter = Counter.init(0),
     dispatch_result_directed_declined: Counter = Counter.init(0),
+    emission_joinable_slots_opened: Counter = Counter.init(0),
     spec_root_declined_emission_null: Counter = Counter.init(0),
     iter_chain_link_underived: Counter = Counter.init(0),
     iter_declare_identity_emit_failed: Counter = Counter.init(0),

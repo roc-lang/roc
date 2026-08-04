@@ -481,6 +481,27 @@ const Emission = struct {
         return @enumFromInt(gop.value_ptr.*);
     }
 
+    /// Open a representation slot at one position and leave it joinable: the
+    /// slot is created with the declared shape, no input is consumed and
+    /// nothing seals, so a mint arriving later in the component can still
+    /// move it. The provisional walk returns exactly this slot for a
+    /// position whose runtime encoding the checked data does not dictate
+    /// (reunify.md 9.1, 10.2).
+    fn openJoinableSlot(
+        self: *Emission,
+        store: *const MonoType.Store,
+        name_store: *const names.NameStore,
+        declared: policy.NamedDescriptor,
+        args: []const TypeId,
+        backing: ?TypeId,
+    ) Allocator.Error!?closure.RepresentationSlotId {
+        census.bump("emission_joinable_slots_opened");
+        const identity = identityDigest(store, name_store, declared, args);
+        const token = try self.tokenForDigest(identity);
+        const shape = try self.shapeAt(store, name_store, declared, token, args, backing);
+        return self.engine.createSlot(token, self.freshProducer(), shape) catch null;
+    }
+
     /// Open a representation slot at one position, run the declared relation to
     /// its fixpoint, and return the sealed type definition the position emits.
     ///
@@ -910,6 +931,36 @@ pub const Translator = struct {
             },
             else => return err,
         };
+    }
+
+    /// Section 9.1's provisional entry: the root translates with a position
+    /// whose runtime encoding the checked data does not dictate returning its
+    /// joinable representation slot, and every compound holding a provisional
+    /// child riding a draft in `drafts`. Ground content interns exactly as
+    /// `translateUnderEnvironment` interns it.
+    pub fn translateProvisionalUnderEnvironment(
+        self: *Translator,
+        cursor: ModuleCursor,
+        binding_env: ?*const BindingEnvironment,
+        scheme_owner_node: u32,
+        root: checked.CheckedTypeId,
+        drafts: *MonoDraftStore,
+        skip_reason: *SkipReason,
+    ) WalkError!ProvisionalType {
+        var walk = Walk{
+            .owner = self,
+            .cursor = cursor,
+            .build_store = self.store,
+            .binding_env = binding_env,
+            .scheme_owner_node = scheme_owner_node,
+            .active = std.AutoHashMap(ActiveNode, void).init(self.allocator),
+            .recursion_slots = null,
+            .slot_journal = null,
+            .nominal_instances = null,
+            .skip_reason = skip_reason,
+        };
+        defer walk.active.deinit();
+        return try walk.provisional(root, drafts);
     }
 
     /// Run one acyclic (eager, child-first interning) walk. A recursive cycle
@@ -1996,6 +2047,62 @@ const Walk = struct {
             args,
             if (backing) |present| present.ty else null,
         );
+    }
+
+    /// Section 9.1's provisional walk. A position whose runtime encoding the
+    /// checked data does not dictate returns its joinable slot; a function,
+    /// list, alias-backed, or nominal compound holding a provisional child
+    /// builds a draft; everything else interns through the eager walk
+    /// unchanged, including its skip classes.
+    fn provisional(self: *Walk, checked_ty: checked.CheckedTypeId, drafts: *MonoDraftStore) WalkError!ProvisionalType {
+        switch (self.cursor.view.payload(checked_ty)) {
+            .function => |fn_ty| {
+                const refs = try self.owner.allocator.alloc(ProvisionalType, fn_ty.args.len);
+                errdefer self.owner.allocator.free(refs);
+                var any_provisional = false;
+                for (fn_ty.args, 0..) |arg, index| {
+                    refs[index] = try self.provisional(arg, drafts);
+                    if (std.meta.activeTag(refs[index]) != .interned) any_provisional = true;
+                }
+                const ret = try self.provisional(fn_ty.ret, drafts);
+                if (!any_provisional and std.meta.activeTag(ret) == .interned) {
+                    self.owner.allocator.free(refs);
+                    return .{ .interned = try self.node(checked_ty) };
+                }
+                const draft_id = try drafts.add(.{
+                    .logical = [_]u8{0} ** 32,
+                    .content = .{ .func = .{ .args = refs, .ret = ret } },
+                });
+                return .{ .draft = draft_id };
+            },
+            .alias => |alias_ty| return try self.provisional(alias_ty.backing, drafts),
+            .nominal => |n| {
+                if (builtinDisposition(n) == .open_representation and !self.emitting_representation) {
+                    var args = std.ArrayList(TypeId).empty;
+                    defer args.deinit(self.owner.allocator);
+                    for (n.args) |arg| {
+                        try args.append(self.owner.allocator, try self.node(arg));
+                    }
+                    const declared_def = try self.owner.typeDef(self.cursor, n.origin_module, n.name, n.source_decl);
+                    const declared: policy.NamedDescriptor = .{
+                        .kind = if (n.is_opaque) .@"opaque" else .nominal,
+                        .def = declared_def,
+                        .builtin_owner = self.owner.resolver.builtinOwner(self.cursor, n),
+                    };
+                    if (try self.owner.emission.openJoinableSlot(
+                        self.build_store,
+                        self.owner.target_names,
+                        declared,
+                        args.items,
+                        null,
+                    )) |slot| {
+                        return .{ .representation_slot = slot };
+                    }
+                }
+                return .{ .interned = try self.node(checked_ty) };
+            },
+            else => return .{ .interned = try self.node(checked_ty) },
+        }
     }
 
     // --- Reserve-fill content assembly (reunify.md section 9.2, 10.6) ---
