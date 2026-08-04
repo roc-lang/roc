@@ -6698,8 +6698,8 @@ fn canonicalizeAutoImport(
 }
 
 /// Resolve the source-visible binding from the parser's explicit alias or its
-/// final source-module token. The complete import path is dependency identity,
-/// not a source binding to reconstruct by splitting strings.
+/// final source-module token. The complete import path is dependency identity;
+/// the source binding comes directly from parser output.
 fn resolveModuleAlias(
     self: *Self,
     alias_tok: ?Token.Idx,
