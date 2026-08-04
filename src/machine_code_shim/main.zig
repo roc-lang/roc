@@ -77,9 +77,7 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
     VirtualProtectFailed,
 };
 
-const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError || error{
-    PageSizeQueryFailed,
-};
+const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError;
 
 var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
 var runtime_state: RuntimeState = undefined;
@@ -112,8 +110,7 @@ fn viewRuntimeImage(
 }
 
 fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
-    const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
+    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo());
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);

@@ -96,9 +96,15 @@ pub const build_c_platform_main_source =
     \\        arm64mac: { inputs: [app] },
     \\        x64win: { inputs: [app] },
     \\        arm64win: { inputs: [app] },
+    \\        x64freebsd: { inputs: [app] },
+    \\        x64openbsd: { inputs: [app] },
+    \\        x64netbsd: { inputs: [app] },
     \\        x64v1mac: { inputs: [app] },
     \\        x64v1win: { inputs: [app] },
     \\        arm64v1win: { inputs: [app] },
+    \\        x64v1freebsd: { inputs: [app] },
+    \\        x64v1openbsd: { inputs: [app] },
+    \\        x64v1netbsd: { inputs: [app] },
     \\    }
     \\
     \\import Echo

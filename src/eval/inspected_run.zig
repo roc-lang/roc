@@ -112,6 +112,11 @@ const LlvmOptionsError = Allocator.Error || error{UnsupportedTarget};
 const LlvmError = Allocator.Error || std.DynLib.Error || error{
     BitcodeParseError,
     CompilationFailed,
+    NoBitcodeModules,
+    UnsupportedLlvmTriple,
+    MissingBuiltinBitcode,
+    LlvmModuleVerificationFailed,
+    LlvmObjectEmitFailed,
     Internal,
     InvalidUtf8,
     LinkFailed,
