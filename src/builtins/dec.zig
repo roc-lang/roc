@@ -2160,6 +2160,10 @@ test "div: Dec.lowest boundary operands" {
     try std.testing.expectEqual(RocDec.one_point_zero, RocDec.min.div(RocDec.min, test_env.getOps()));
     try std.testing.expectEqual(RocDec{ .num = 0 }, RocDec.one_point_zero.div(RocDec.min, test_env.getOps()));
     try expectRocDecConstant(
+        RocDec.min.div(RocDec.fromWholeInt(-2).?, test_env.getOps()),
+        "85070591730234615865.843651857942052864",
+    );
+    try expectRocDecConstant(
         RocDec.max.div(RocDec.min, test_env.getOps()),
         "-0.999999999999999999",
     );
