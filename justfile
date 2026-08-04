@@ -2,7 +2,7 @@
 #   see .git/info/exclude
 
 # list all available just recipes
-list:
+_default:
    @ just --list --unsorted
 
 alias install := install-latest-release
@@ -24,7 +24,6 @@ install-release: clean && install-rust-glue
     cp ./zig-out/bin/roc ~/.local/bin/
 
 # install src/glue/src/RustGlue.roc as the `rust_glue` shorthand for the roc on PATH
-# (roc install only accepts URLs, so this serves the bundle over loopback HTTP)
 [linux]
 install-rust-glue:
     #!/usr/bin/env bash
@@ -56,10 +55,12 @@ install-rust-glue:
 test: clean
     zig build test
 
+# clean local build artifacts and the cache
 [linux]
 clean:
-    git clean -dfx -e justfile -e .sprite -e .claude
+    git clean -dfx -e justfile -e .claude
     rm -rf ~/.cache/roc
 
+# rebase this local justfile branch onto upstream main
 rebase:
     git fetch origin && git rebase origin/main
