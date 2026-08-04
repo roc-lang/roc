@@ -455,6 +455,9 @@ const CalleeLevel = struct {
 const GeneratedRequest = struct {
     edge: GeneratedEdge,
     caller: ?CapturedEnvironment,
+    /// The enclosing producer's declared mint, captured while its frame was
+    /// live, exactly as a checked edge captures it (`RequestEdge.adopted_mint`).
+    adopted_mint: ?direct_translate.ProducerRepresentation = null,
     /// Where the translator's declared representation inputs stood when a
     /// callee under this scope declared its own; closing the scope retracts
     /// back to it. The scope outlives the callee level, and the consumers of
@@ -1825,13 +1828,24 @@ pub const Rehearsal = struct {
     /// under which requesting environment.
     pub fn openGeneratedRequest(self: *Rehearsal, edge: GeneratedEdge) void {
         if (self.disabled) return;
-        const request = GeneratedRequest{
+        var request = GeneratedRequest{
             .edge = edge,
             .caller = if (edge.source) |source|
                 self.captureCallerEnvironment(source.module_bytes)
             else
                 null,
         };
+        if (edge.source) |source| capture: {
+            if (source.procedure != .iter_from_step) break :capture;
+            var index = self.frames.items.len;
+            while (index > 0) {
+                index -= 1;
+                if (self.frames.items[index].ret_mint) |mint| {
+                    request.adopted_mint = mint;
+                    break :capture;
+                }
+            }
+        }
         self.requests.append(self.allocator, .{ .generated = request }) catch {
             self.releaseGeneratedRequest(request);
             self.fail();
@@ -4357,7 +4371,7 @@ pub const Rehearsal = struct {
             request.edge,
             if (request.caller) |*captured| captured.environment() else null,
             if (request.caller) |captured| captured.owner_node else checked.checked_residual_disposition_module_body_owner,
-            null,
+            request.adopted_mint,
         );
         if (frame.input_floor != null) census.bump("rehearsal_rule_path_mint_declared");
         frame.ret_mint = self.last_declared_mint;
@@ -4789,6 +4803,7 @@ pub const Rehearsal = struct {
         census.bump("rehearsal_foreign_witness_differs");
         return false;
     }
+
 
     fn noteUnresolvedDetail(
         self: *Rehearsal,
