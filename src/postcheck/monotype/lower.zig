@@ -26987,6 +26987,22 @@ const BodyContext = struct {
         if (function.args.len != checked_args.len) {
             Common.invariant("checked direct call arity differs from its function type");
         }
+        if (comptime census.enabled) qualify: {
+            const rehearsal = self.builder.rehearsal orelse break :qualify;
+            if (expected_ret_node != null or hosted_try_capability != null) {
+                census.bump("request_born_final_blocked_expected");
+                break :qualify;
+            }
+            if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) {
+                census.bump("request_born_final_blocked_variable");
+                break :qualify;
+            }
+            // Evidence-carrying arguments block too; probing them here costs a
+            // second evidence resolution per argument, which went quadratic on
+            // the deep static map chain, so the split of the remainder was
+            // measured once and the counter now names the ground population.
+            census.bump("request_born_final_qualifies");
+        }
         const fn_node = try self.instNode(source_fn_ty);
         const fn_graph = switch (self.graph.content(fn_node)) {
             .func => |func| func,

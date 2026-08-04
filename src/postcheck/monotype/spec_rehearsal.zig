@@ -5778,6 +5778,16 @@ pub const Rehearsal = struct {
     /// Whether a checked scheme root reaches any checked variable payload —
     /// the structure a binder would name. A scheme whose root reaches none is
     /// monomorphic, so an empty binder vector describes it exactly.
+    /// Whether a checked root reaches any variable payload, for callers
+    /// judging whether a callable is ground.
+    pub fn checkedRootReachesVariable(
+        self: *Rehearsal,
+        view: checked.CheckedTypeStoreView,
+        root: checked.CheckedTypeId,
+    ) bool {
+        return self.schemeRootReachesVariable(view, root);
+    }
+
     fn schemeRootReachesVariable(
         self: *Rehearsal,
         view: checked.CheckedTypeStoreView,
