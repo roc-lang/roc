@@ -1814,13 +1814,9 @@ pub const CtxFetcher = struct {
     /// component keeps concurrent downloads of the same package out of each
     /// other's way.
     fn stagingDirPath(self: *CtxFetcher, allocator: Allocator, package_dir: []const u8) Allocator.Error![]u8 {
-        const charset = "abcdefghijklmnopqrstuvwxyz0123456789";
-        var suffix: [16]u8 = undefined;
+        var suffix: [8]u8 = undefined;
         self.fs.std_io.random(&suffix);
-        for (&suffix) |*byte| {
-            byte.* = charset[byte.* % charset.len];
-        }
-        return std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ package_dir, suffix });
+        return std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ package_dir, std.fmt.bytesToHex(suffix, .lower) });
     }
 
     fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage {
