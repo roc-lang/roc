@@ -78,6 +78,7 @@ pub const LowLevel = enum(u16) {
     list_release_excess_capacity,
     list_split_first,
     list_split_last,
+    list_map_prepare_reuse,
     list_map_can_reuse,
     list_map_cast_unsafe,
     list_map_extract_unsafe,
@@ -838,6 +839,16 @@ pub const LowLevel = enum(u16) {
                 .result_unique = true,
             };
         }
+
+        /// Move consumed ownership units into the result without claiming that
+        /// their allocations are unique.
+        pub fn consumesArgsReturningConsumedArgs(mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = mask != 0,
+                .consume_args = mask,
+                .result_aliases_consumed_args = mask,
+            };
+        }
     };
 
     /// Return the explicit RC metadata for this primitive. The masks identify
@@ -900,7 +911,12 @@ pub const LowLevel = enum(u16) {
 
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
-            // Reads the list's refcount (and slice bit) without changing it.
+            // Moves the list's ownership unit into a new local before the
+            // reuse query, forcing ARC to preserve every later use first.
+            .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
+
+            // Reads the prepared list's refcount (and slice bit) without
+            // changing it.
             .list_map_can_reuse => RcEffect.none(),
 
             // Retypes a unique non-slice list to the output element type,

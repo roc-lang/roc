@@ -2990,6 +2990,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
             .list_replace_unsafe => try self.emitListReplaceUnsafe(target, arg_locals, unique_args),
+            .list_map_prepare_reuse => try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals, interchangeable),
             .list_map_cast_unsafe => try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),

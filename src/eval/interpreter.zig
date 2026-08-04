@@ -5411,6 +5411,7 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
+            .list_map_prepare_reuse => args[0],
             .list_map_can_reuse => blk: {
                 const val = try self.alloc(ll.ret_layout);
                 if (!ll.interchangeable.get(self.layout_store.targetUsize())) {

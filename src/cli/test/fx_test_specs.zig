@@ -336,6 +336,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: List.map with fallible function (U64.from_str)",
     },
     .{
+        .roc_file = "test/fx/issue_10368_list_map_reuse.roc",
+        .io_spec = "1>one map 0803c9e914002577bbfa01bae7cf9e32a7ef9d1c9e07d19542be4df2c190cbaf|1>two maps f0e5e7a2abe3428a08147f2fbb9eaad2261990945cbfbfcaf37149c6002e215d",
+        .description = "Regression test: optimized List.map reuse preserves a shared parameter-derived input",
+    },
+    .{
         .roc_file = "test/fx/list_append_stdin_uaf.roc",
         .io_spec = "0<000000010000000100000001|1>000000010000000100000001",
         .description = "Regression test: List.append with effectful call on big string (24+ chars)",
