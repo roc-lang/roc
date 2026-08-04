@@ -83,6 +83,7 @@ pub const LirLoweringOptions = struct {
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     list_in_place_map: bool = false,
     proc_debug_names: bool = false,
+    prove_ranges: bool = false,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -121,6 +122,13 @@ pub fn runAppPathLirInspection(app_path: []const u8, opts: LirLoweringOptions, i
 /// check against the actual lowered store and layout store.
 pub fn expectLirInspection(app_body: []const u8, inspect: LirInspectFn) LowerToLirHarnessError!void {
     try runToLir(app_body, null, .{}, inspect);
+}
+
+/// Lower an app whose body is `app_body` to LIR with explicit lowering
+/// options, then run a focused invariant check against the actual lowered
+/// store and layout store.
+pub fn expectLirInspectionWithOptions(app_body: []const u8, opts: LirLoweringOptions, inspect: LirInspectFn) LowerToLirHarnessError!void {
+    try runToLir(app_body, null, opts, inspect);
 }
 
 /// Lower `app_body` twice and assert the two LIR dumps are byte-identical, so
@@ -277,6 +285,7 @@ fn lowerAppPathToLir(
             .inline_mode = opts.inline_mode,
             .list_in_place_map = opts.list_in_place_map,
             .proc_debug_names = opts.proc_debug_names,
+            .prove_ranges = opts.prove_ranges,
         },
     );
     defer lowered.deinit();

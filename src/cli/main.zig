@@ -10460,6 +10460,13 @@ fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+fn proveRangesForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 fn optimizedDbgWarningsForBuild(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -10564,6 +10571,7 @@ fn lowerCheckedSourceToLir(
             },
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
+            .prove_ranges = proveRangesForOpt(opt),
             .proc_debug_names = proc_debug_names,
             .timing = timing,
         },

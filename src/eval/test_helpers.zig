@@ -742,6 +742,7 @@ pub fn compileAllocationProgram(
     return compileProgramWithOptions(allocator, io, source_kind, source, imports, .{
         .inline_mode = .wrappers,
         .tag_reachability = true,
+        .prove_ranges = true,
     });
 }
 
@@ -1581,6 +1582,7 @@ fn lowerParsedProgramToLir(
 const LowerToLirOptions = struct {
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     tag_reachability: bool = false,
+    prove_ranges: bool = false,
     /// Match optimized builds so every backend exercises the in-place
     /// List.map path; the copy path is still covered by shared-list,
     /// slice, and layout-mismatch cases. The Lambda Mono differential
@@ -1671,6 +1673,7 @@ fn lowerCheckedRootWithViews(
             .list_in_place_map = options.list_in_place_map,
             .monotype_cache = options.monotype_cache,
             .tag_reachability = options.tag_reachability,
+            .prove_ranges = options.prove_ranges,
             .debug_materialized_out = options.debug_materialized_out,
         },
     );
