@@ -1075,9 +1075,25 @@ pub const Store = struct {
         return self.record_fields.sliceRange(range);
     }
 
+    /// Get a record field at a specific offset within a range.
+    /// Use this for index-based iteration when checking can trigger reallocations.
+    pub fn getRecordFieldAt(self: *const Self, range: RecordFieldSafeMultiList.Range, offset: u32) RecordField {
+        std.debug.assert(offset < range.count);
+        const idx: RecordFieldSafeMultiList.Idx = @enumFromInt(@intFromEnum(range.start) + offset);
+        return self.record_fields.get(idx);
+    }
+
     /// Given a range, get a slice of tags from the backing array
     pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
         return self.tags.sliceRange(range);
+    }
+
+    /// Get a tag at a specific offset within a range.
+    /// Use this for index-based iteration when checking can trigger reallocations.
+    pub fn getTagAt(self: *const Self, range: TagSafeMultiList.Range, offset: u32) Tag {
+        std.debug.assert(offset < range.count);
+        const idx: TagSafeMultiList.Idx = @enumFromInt(@intFromEnum(range.start) + offset);
+        return self.tags.get(idx);
     }
 
     /// Given a range, get a slice of interpolation part metadata from the backing array
