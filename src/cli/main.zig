@@ -11168,6 +11168,7 @@ fn runCompiledTestRoots(
     root_runs: []const CliTestRootRun,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
 ) Allocator.Error!void {
     var bool_roots = try ctx.gpa.alloc(eval.test_helpers.BoolRoot, root_runs.len);
     defer ctx.gpa.free(bool_roots);
@@ -11182,11 +11183,12 @@ fn runCompiledTestRoots(
     }
 
     const eval_results = switch (mode) {
-        .dev => eval.test_helpers.devEvalBoolRoots(
+        .dev => eval.test_helpers.devEvalBoolRootsWithTiming(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             bool_roots,
+            dev_timing,
         ),
         .llvm_size => eval.test_helpers.llvmEvalBoolRoots(
             ctx.gpa,
@@ -11224,6 +11226,7 @@ fn lowerPlannedTestModule(
     planned: *const CliTestPlanModule,
     plan_entries: []const CliTestPlanEntry,
     opt: cli_args.OptLevel,
+    timing: ?*lir.CheckedPipeline.Timing,
 ) Allocator.Error!CliLoweredTestModule {
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, planned.artifact);
     defer ctx.gpa.free(imported_artifacts);
@@ -11262,7 +11265,7 @@ fn lowerPlannedTestModule(
         opt,
         base.target.TargetUsize.native,
         false,
-        null,
+        timing,
     );
     errdefer lowered.deinit();
 
@@ -11284,10 +11287,12 @@ fn runCheckedArtifactTests(
     opt: cli_args.OptLevel,
     cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
+    timing: ?*lir.CheckedPipeline.Timing,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
 ) (Allocator.Error || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
-    var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt);
+    var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt, timing);
     defer lowered_module.deinit(ctx.gpa);
 
     var results = std.ArrayList(CliTestResultItem).empty;
@@ -11300,7 +11305,7 @@ fn runCheckedArtifactTests(
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .interpreter => try runInterpreterTestRoots(ctx, &lowered_module.lowered, lowered_module.root_runs, &results, &summary),
-        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary),
+        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing),
         .llvm_size, .llvm_speed => unreachable,
     }
     summary.modules_with_tests = 1;
@@ -11482,6 +11487,7 @@ fn runOptimizedTestPlan(
     module_results: *std.ArrayList(CliModuleTestResult),
     total: *CliTestRunSummary,
     live_output: ?*CliOptimizedLiveTestOutput,
+    timing: ?*lir.CheckedPipeline.Timing,
 ) (ReportRenderError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
@@ -11528,7 +11534,7 @@ fn runOptimizedTestPlan(
 
         try lowered_modules.append(
             ctx.gpa,
-            try lowerPlannedTestModule(ctx, build_env, planned_index, planned, test_plan.entries, opt),
+            try lowerPlannedTestModule(ctx, build_env, planned_index, planned, test_plan.entries, opt, timing),
         );
     }
 
@@ -12424,6 +12430,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             try argv.append(ctx.gpa, "test");
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--opt={s}", .{@tagName(args.opt)});
             if (args.main) |main_path| try appendOwnedArg(ctx.gpa, &argv, &owned, "--main={s}", .{main_path});
+            if (args.timings) try argv.append(ctx.gpa, "--timings");
             if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
@@ -12626,6 +12633,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
+    var reporter = makeReporter(ctx, "roc test", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+    errdefer reporter.fail();
+
+    reporter.begin("Type Checking");
+
     // --- Normal compilation path ---
 
     var build_env = try initCliBuildEnv(ctx, .{
@@ -12674,6 +12688,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     const modules = try build_env.getCompiledModules(ctx.gpa);
     defer ctx.gpa.free(modules);
 
+    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
+
+    reporter.begin("Test Planning");
+
     const report_config = testReportingConfig(ctx);
 
     var module_results = std.ArrayList(CliModuleTestResult).empty;
@@ -12699,6 +12717,11 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             planned.cached_summary = cached.summary;
         }
     }
+    reporter.end();
+
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
+    var dev_timing = eval.test_helpers.DevBoolRootTiming.init(ctx.io.std_io);
 
     var total = CliTestRunSummary{};
     const test_mode = cliTestExecutionMode(args.opt);
@@ -12733,6 +12756,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         live_output = try CliOptimizedLiveTestOutput.init(ctx, &live_coordinator.?, test_plan.entries.len);
     }
 
+    // This wall-time phase includes lowering, backend code generation, and
+    // execution. The completed timing rows recorded below split out the
+    // expensive subsets without pretending their durations are extra work.
+    reporter.begin("Compile + Run Tests (wall)");
     switch (test_mode) {
         .llvm_size, .llvm_speed => try runOptimizedTestPlan(
             ctx,
@@ -12744,6 +12771,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             &module_results,
             &total,
             if (live_output) |*output| output else null,
+            &spec_timing,
         ),
         .interpreter, .dev => {
             for (test_plan.modules) |*planned| {
@@ -12759,6 +12787,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     args.opt,
                     build_env.cache_manager,
                     &module_results,
+                    &spec_timing,
+                    &dev_timing,
                 );
                 total.passed += summary.passed;
                 total.failed += summary.failed;
@@ -12768,6 +12798,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             }
         },
     }
+    reporter.end();
+    recordPostCheckLowering(&reporter, &spec_timing);
+    if (test_mode == .dev) recordDevTestExecution(&reporter, &dev_timing);
+    reporter.finish();
 
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
@@ -14051,6 +14085,57 @@ fn finishPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.Chec
     reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+}
+
+fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
+    return timing.monotype_ns +|
+        timing.lift_ns +|
+        timing.spec_constr_ns +|
+        timing.lambda_solve_ns +|
+        timing.inline_plan_ns +|
+        timing.lir_gen_ns +|
+        timing.lir_passes_ns +|
+        timing.arc_ns;
+}
+
+fn recordPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.CheckedPipeline.Timing) void {
+    const snapshot = timing.snapshot();
+    reporter.recordCompletedWithBreakdown(
+        post_check_lowering_phase_name,
+        postCheckLoweringTotalNs(snapshot),
+        .{},
+        &postCheckLoweringBreakdown(snapshot),
+    );
+    reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+}
+
+fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot) [6]progress.SubTiming {
+    return .{
+        .{ .name = "Static Strings", .ns = timing.static_strings_ns },
+        .{ .name = "Codegen Setup", .ns = timing.codegen_setup_ns },
+        .{ .name = "Procedure Codegen", .ns = timing.procedure_codegen_ns },
+        .{ .name = "Entrypoint Codegen", .ns = timing.entrypoint_codegen_ns },
+        .{ .name = "Executable Memory", .ns = timing.executable_memory_ns },
+        .{ .name = "Root Execution", .ns = timing.root_execution_ns },
+    };
+}
+
+fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test_helpers.DevBoolRootTiming) void {
+    const snapshot = timing.snapshot();
+    const total_ns = snapshot.static_strings_ns +|
+        snapshot.codegen_setup_ns +|
+        snapshot.procedure_codegen_ns +|
+        snapshot.entrypoint_codegen_ns +|
+        snapshot.executable_memory_ns +|
+        snapshot.root_execution_ns;
+    reporter.recordCompletedWithBreakdown(
+        "Dev Codegen + Execution",
+        total_ns,
+        .{},
+        &devTestExecutionBreakdown(snapshot),
+    );
 }
 
 fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [17]progress.Counter {
