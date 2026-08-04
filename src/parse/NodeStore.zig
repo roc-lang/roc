@@ -684,6 +684,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
                 .alias => .type_decl,
                 .nominal => .type_decl_nominal,
                 .@"opaque" => .type_decl_opaque,
+                .where_alias => .type_decl_where_alias,
             };
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.header);
@@ -1290,7 +1291,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
             node.tag = .where_mod_alias;
             node.region = c.region;
             node.main_token = c.var_tok;
-            node.data.lhs = c.name_tok;
+            node.data.lhs = @intFromEnum(c.alias);
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -1805,6 +1806,18 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .@"opaque",
+                .where = extra.where,
+                .associated = extra.associated,
+            } };
+        },
+        .type_decl_where_alias => {
+            const extra = store.decodeTypeDeclExtra(node.main_token);
+
+            return .{ .type_decl = .{
+                .region = node.region,
+                .header = @enumFromInt(node.data.lhs),
+                .anno = @enumFromInt(node.data.rhs),
+                .kind = .where_alias,
                 .where = extra.where,
                 .associated = extra.associated,
             } };
@@ -2462,7 +2475,7 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
             return .{ .mod_alias = .{
                 .region = node.region,
                 .var_tok = node.main_token,
-                .name_tok = node.data.lhs,
+                .alias = @enumFromInt(node.data.lhs),
             } };
         },
         .malformed => {

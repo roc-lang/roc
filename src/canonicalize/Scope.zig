@@ -30,6 +30,7 @@ pub const ExternalTypeBinding = struct {
 pub const TypeBinding = union(enum) {
     local_nominal: CIR.Statement.Idx,
     local_alias: CIR.Statement.Idx,
+    local_where_alias: CIR.Statement.Idx,
     associated_nominal: CIR.Statement.Idx,
     external_nominal: ExternalTypeBinding,
 };
@@ -193,6 +194,7 @@ pub const IntroduceResult = union(enum) {
 pub const TypeBindingInput = union(enum) {
     local_nominal: CIR.Statement.Idx,
     local_alias: CIR.Statement.Idx,
+    local_where_alias: CIR.Statement.Idx,
     associated_nominal: CIR.Statement.Idx,
     external_nominal: ExternalTypeBinding,
 };
@@ -290,6 +292,7 @@ pub fn typeBindingStatement(binding: TypeBinding) ?CIR.Statement.Idx {
     return switch (binding) {
         .local_nominal => |stmt| stmt,
         .local_alias => |stmt| stmt,
+        .local_where_alias => |stmt| stmt,
         .associated_nominal => |stmt| stmt,
         .external_nominal => null,
     };
@@ -300,6 +303,7 @@ pub fn inputToBinding(input: TypeBindingInput) TypeBinding {
     return switch (input) {
         .local_nominal => |stmt| TypeBinding{ .local_nominal = stmt },
         .local_alias => |stmt| TypeBinding{ .local_alias = stmt },
+        .local_where_alias => |stmt| TypeBinding{ .local_where_alias = stmt },
         .associated_nominal => |stmt| TypeBinding{ .associated_nominal = stmt },
         .external_nominal => |external| TypeBinding{ .external_nominal = external },
     };
@@ -309,6 +313,7 @@ fn inputStatement(input: TypeBindingInput) ?CIR.Statement.Idx {
     return switch (input) {
         .local_nominal => |stmt| stmt,
         .local_alias => |stmt| stmt,
+        .local_where_alias => |stmt| stmt,
         .associated_nominal => |stmt| stmt,
         .external_nominal => null,
     };
@@ -332,11 +337,11 @@ fn currentCollisionDecision(existing: TypeBinding, incoming: TypeBindingInput) T
                 .idempotent_current
             else
                 TypeBindingDecision{ .rejected_current_conflict = existing },
-            .local_nominal, .local_alias, .associated_nominal => TypeBindingDecision{ .rejected_current_conflict = existing },
+            .local_nominal, .local_alias, .local_where_alias, .associated_nominal => TypeBindingDecision{ .rejected_current_conflict = existing },
         },
-        .local_nominal, .local_alias => switch (existing) {
+        .local_nominal, .local_alias, .local_where_alias => switch (existing) {
             .external_nominal => |existing_external| TypeBindingDecision{ .replaced_current_external = existing_external },
-            .local_nominal, .local_alias, .associated_nominal => TypeBindingDecision{ .redeclared_current = existing },
+            .local_nominal, .local_alias, .local_where_alias, .associated_nominal => TypeBindingDecision{ .redeclared_current = existing },
         },
         .associated_nominal => TypeBindingDecision{ .redeclared_current = existing },
     };

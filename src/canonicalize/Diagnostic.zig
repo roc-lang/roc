@@ -11,6 +11,23 @@ const Report = reporting.Report;
 
 const Allocator = std.mem.Allocator;
 
+/// The kind of declaration a diagnostic is reported against, so its message can
+/// name what the user actually wrote.
+pub const DeclaredTypeKind = enum(u8) {
+    alias,
+    @"opaque",
+    where_alias,
+
+    /// The noun to use when describing this declaration to the user.
+    pub fn label(self: DeclaredTypeKind) []const u8 {
+        return switch (self) {
+            .alias => "alias",
+            .@"opaque" => "opaque type",
+            .where_alias => "where alias",
+        };
+    }
+};
+
 /// Different types of diagnostic errors
 pub const Diagnostic = union(enum) {
     not_implemented: struct {
@@ -137,6 +154,12 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     where_clause_not_allowed_in_type_decl: struct {
+        region: Region,
+    },
+    /// A where alias declaration constrains exactly its receiver, so a clause
+    /// written against another type variable has no home.
+    where_alias_constraint_not_on_receiver: struct {
+        receiver_name: Ident.Idx,
         region: Region,
     },
     open_ext_not_allowed_in_type_decl: struct {
@@ -338,7 +361,7 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     underscore_in_type_declaration: struct {
-        is_alias: bool,
+        declared: DeclaredTypeKind,
         region: Region,
     },
     unused_type_var_name: struct {
@@ -425,6 +448,7 @@ pub const Diagnostic = union(enum) {
             .malformed_type_annotation => |d| d.region,
             .malformed_where_clause => |d| d.region,
             .where_clause_not_allowed_in_type_decl => |d| d.region,
+            .where_alias_constraint_not_on_receiver => |d| d.region,
             .open_ext_not_allowed_in_type_decl => |d| d.region,
             .unnamed_field_not_allowed_in_structural_record => |d| d.region,
             .var_across_function_boundary => |d| d.region,

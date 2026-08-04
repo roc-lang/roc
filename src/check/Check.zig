@@ -1194,6 +1194,7 @@ const HoistSelectionTransaction = struct {
                 .s_import,
                 .s_alias_decl,
                 .s_nominal_decl,
+                .s_where_alias_decl,
                 .s_type_anno,
                 .s_type_var_alias,
                 .s_var,
@@ -2548,6 +2549,7 @@ fn markHoistInvalidatedStatementExprs(
         .s_import,
         .s_alias_decl,
         .s_nominal_decl,
+        .s_where_alias_decl,
         .s_type_anno,
         .s_type_var_alias,
         .s_runtime_error,
@@ -5530,7 +5532,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
 
         switch (stmt) {
-            .s_alias_decl, .s_nominal_decl => {
+            .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
                 _ = try self.ensureTypeDeclGenerated(stmt_idx, &env);
             },
             .s_runtime_error => {
@@ -5629,6 +5631,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
             .s_import,
             .s_alias_decl,
             .s_nominal_decl,
+            .s_where_alias_decl,
             .s_type_anno,
             .s_type_var_alias,
             .s_runtime_error,
@@ -6435,6 +6438,7 @@ fn hoistedStatementAllowsStoredConst(
         .s_import,
         .s_alias_decl,
         .s_nominal_decl,
+        .s_where_alias_decl,
         .s_type_anno,
         .s_type_var_alias,
         .s_crash,
@@ -6591,6 +6595,7 @@ fn hoistedRootStatementDependenciesAreKept(
         .s_import,
         .s_alias_decl,
         .s_nominal_decl,
+        .s_where_alias_decl,
         .s_type_anno,
         .s_type_var_alias,
         => true,
@@ -9839,6 +9844,9 @@ fn generateStmtTypeDeclType(
         .s_nominal_decl => |nominal| {
             try self.generateNominalDecl(decl_idx, decl_var, nominal, env);
         },
+        .s_where_alias_decl => |where_alias| {
+            try self.generateWhereAliasDecl(decl_var, where_alias, env);
+        },
         .s_runtime_error => {
             try self.unifyWith(decl_var, .err, env);
         },
@@ -9856,7 +9864,9 @@ fn ensureTypeDeclGenerated(
     switch (self.typeDeclGenerationState(decl_idx)) {
         .generated => return true,
         .generating => return switch (self.cir.store.getStatement(decl_idx)) {
-            .s_alias_decl => false,
+            // Neither aliases nor where aliases can refer to themselves, so
+            // re-entering one means the declaration is cyclic.
+            .s_alias_decl, .s_where_alias_decl => false,
             .s_nominal_decl => true,
             else => true,
         },
@@ -10050,6 +10060,47 @@ fn generateAliasDecl(
     }
 }
 
+/// Generate the type of a where alias declaration.
+///
+/// A where alias's type is its receiver: a rigid variable carrying every
+/// constraint the declaration names. Referencing the alias instantiates those
+/// constraints onto the referencing signature's own variable, so the receiver
+/// is the whole of what the declaration contributes.
+fn generateWhereAliasDecl(
+    self: *Self,
+    decl_var: Var,
+    where_alias: std.meta.fieldInfo(CIR.Statement, .s_where_alias_decl).type,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // A where alias is generated on demand, which can happen part way through
+    // building a referencing signature's constraints. Its own scratch entries
+    // must not land in that signature's range.
+    const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
+    defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
+
+    self.seen_annos.unsetAll();
+    const ctx = GenTypeAnnoCtx{ .annotation = where_alias.where };
+
+    // Parameters are generated the same way as the receiver rather than as
+    // plain header variables, because a constraint can be written against a
+    // parameter and must end up on that parameter's own variable.
+    const header = self.cir.store.getTypeHeader(where_alias.header);
+    for (self.cir.store.sliceTypeAnnos(header.args)) |param_idx| {
+        try self.generateAnnoTypeInPlace(param_idx, env, ctx);
+    }
+    try self.generateAnnoTypeInPlace(where_alias.receiver, env, ctx);
+
+    if (try self.generateRemainingWhereConstraintOwners(where_alias.where, env, ctx)) {
+        try self.unifyWithTargetRank(decl_var, .err, env);
+        return;
+    }
+
+    _ = try self.unify(decl_var, ModuleEnv.varFrom(where_alias.receiver), env);
+}
+
 /// Generate types for nominal type declaration
 fn generateNominalDecl(
     self: *Self,
@@ -10145,7 +10196,6 @@ fn generateStandaloneTypeAnno(
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(anno_var, .err, env);
         }
-        try self.reportUnsupportedWhereAliases(where_span);
     }
 
     // Unify the statement variable with the generated annotation type
@@ -10259,14 +10309,17 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(ModuleEnv.varFrom(annotation.anno), .err, env);
         }
-        try self.reportUnsupportedWhereAliases(where_span);
     }
 
     // Redirect the root annotation to inner annotation
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
 }
 
-fn declareOwnedStaticDispatchConstraint(
+/// Push every constraint one where clause places on `owner_var`. A method
+/// clause declares exactly one, left for `completeOwnedStaticDispatchConstraint`
+/// to type from its annotation; a where alias contributes each constraint it
+/// names, already typed by instantiating the declaration.
+fn declareOwnedStaticDispatchConstraints(
     self: *Self,
     where_idx: CIR.WhereClause.Idx,
     owner_var: Var,
@@ -10288,7 +10341,10 @@ fn declareOwnedStaticDispatchConstraint(
                 .state = .declared,
             });
         },
-        .w_alias, .w_malformed => {},
+        .w_alias => |alias| try self.declareWhereAliasConstraints(where_idx, alias, owner_var, env),
+        .w_malformed => {
+            try self.unifyWith(owner_var, .err, env);
+        },
     }
 }
 
@@ -10361,18 +10417,239 @@ fn generateRemainingWhereConstraintOwners(
     return invalid_receiver;
 }
 
-fn reportUnsupportedWhereAliases(self: *Self, where_span: CIR.WhereClause.Span) std.mem.Allocator.Error!void {
-    for (self.cir.store.sliceWhereClauses(where_span)) |where_idx| {
-        switch (self.cir.store.getWhereClause(where_idx)) {
-            .w_alias => |alias| {
-                _ = try self.problems.appendProblem(self.gpa, .{ .unsupported_alias_where_clause = .{
-                    .alias_name = alias.alias_name,
-                    .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(where_idx)),
+/// Report and poison a type reference that names a where alias, which is a set
+/// of method constraints rather than a type. Returns true once reported.
+fn rejectWhereAliasInTypePosition(
+    self: *Self,
+    name: Ident.Idx,
+    base_ref: CIR.TypeAnno.LocalOrExternal,
+    anno_var: Var,
+    anno_region: Region,
+    env: *Env,
+) std.mem.Allocator.Error!bool {
+    const names_where_alias = switch (base_ref) {
+        .local => |local| self.cir.store.getStatement(local.decl_idx) == .s_where_alias_decl,
+        .external => |ext| blk: {
+            const ext_ref = (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) orelse break :blk false;
+            const stmt: CIR.Statement.Idx = @enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx));
+            break :blk ext_ref.other_cir.store.getStatement(stmt) == .s_where_alias_decl;
+        },
+        .builtin, .pending => false,
+    };
+    if (!names_where_alias) return false;
+
+    _ = try self.problems.appendProblem(self.gpa, .{ .where_alias_in_type_position = .{
+        .name = name,
+        .region = anno_region,
+    } });
+    try self.unifyWith(anno_var, .err, env);
+    return true;
+}
+
+/// A where alias declaration, resolved from a reference to it. Every variable
+/// is in this module's type store, so a reference to an imported alias has
+/// already been copied across the module boundary.
+const ResolvedWhereAlias = struct {
+    /// The name the where clause used to refer to the declaration.
+    name: Ident.Idx,
+    /// The receiver, a rigid variable carrying the alias's own constraints.
+    receiver: Var,
+    /// The declaration's parameters, in declared order. Each is a rigid
+    /// variable, and may carry constraints of its own.
+    params: []const Var,
+};
+
+/// Resolve a where clause's reference to a where alias declaration. Returns
+/// null once the reason it could not resolve has been reported.
+fn resolveWhereAliasReference(
+    self: *Self,
+    alias_anno_idx: CIR.TypeAnno.Idx,
+    params_scratch: *std.ArrayListUnmanaged(Var),
+    env: *Env,
+) std.mem.Allocator.Error!?ResolvedWhereAlias {
+    const anno = self.cir.store.getTypeAnno(alias_anno_idx);
+    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias_anno_idx));
+    const name, const base_ref = switch (anno) {
+        .lookup => |lookup| .{ lookup.name, lookup.base },
+        .apply => |apply| .{ apply.name, apply.base },
+        // Canonicalization already reported why this name has no referent.
+        .malformed => return null,
+        else => unreachable, // canonicalization only builds a name reference here
+    };
+
+    switch (base_ref) {
+        .local => |local| {
+            const decl = switch (self.cir.store.getStatement(local.decl_idx)) {
+                .s_where_alias_decl => |decl| decl,
+                else => return try self.reportNotAWhereAlias(name, region),
+            };
+
+            if (!try self.ensureTypeDeclGenerated(local.decl_idx, env)) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .recursive_where_alias = .{
+                    .name = name,
+                    .region = region,
                 } });
-            },
-            .w_method, .w_malformed => {},
+                return null;
+            }
+
+            for (self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(decl.header).args)) |param_anno_idx| {
+                try params_scratch.append(self.gpa, ModuleEnv.varFrom(param_anno_idx));
+            }
+            return ResolvedWhereAlias{
+                .name = name,
+                .receiver = ModuleEnv.varFrom(decl.receiver),
+                .params = params_scratch.items,
+            };
+        },
+        .external => |ext| {
+            const ext_ref = (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) orelse {
+                // Canonicalization already reported the unresolved import.
+                return null;
+            };
+            const decl = switch (ext_ref.other_cir.store.getStatement(@enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx)))) {
+                .s_where_alias_decl => |decl| decl,
+                else => return try self.reportNotAWhereAlias(name, region),
+            };
+
+            // Each parameter is copied on its own. Every type variable a where
+            // alias's constraints can mention is either the receiver or a
+            // parameter, and both are substituted by name below, so the copies
+            // do not need to share variables with each other.
+            for (ext_ref.other_cir.store.sliceTypeAnnos(ext_ref.other_cir.store.getTypeHeader(decl.header).args)) |param_anno_idx| {
+                const param_ref = (try self.resolveVarFromExternal(ext.module_idx, @intFromEnum(param_anno_idx))) orelse return null;
+                try params_scratch.append(self.gpa, param_ref.local_var);
+            }
+            return ResolvedWhereAlias{
+                .name = name,
+                .receiver = ext_ref.local_var,
+                .params = params_scratch.items,
+            };
+        },
+        .builtin => return try self.reportNotAWhereAlias(name, region),
+        // An unresolvable import; canonicalization already reported it.
+        .pending => return null,
+    }
+}
+
+/// Report that a where clause named something other than a where alias. Always
+/// returns null, so resolution can `return` it directly.
+fn reportNotAWhereAlias(self: *Self, name: Ident.Idx, region: Region) std.mem.Allocator.Error!?ResolvedWhereAlias {
+    _ = try self.problems.appendProblem(self.gpa, .{ .not_a_where_alias = .{
+        .name = name,
+        .region = region,
+    } });
+    return null;
+}
+
+/// Expand a where alias reference into the constraints it names, applied to the
+/// referencing signature's own type variables.
+fn declareWhereAliasConstraints(
+    self: *Self,
+    where_idx: CIR.WhereClause.Idx,
+    alias: std.meta.fieldInfo(CIR.WhereClause, .w_alias).type,
+    owner_var: Var,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(where_idx));
+
+    var params_scratch: std.ArrayListUnmanaged(Var) = .empty;
+    defer params_scratch.deinit(self.gpa);
+    const resolved = (try self.resolveWhereAliasReference(alias.alias, &params_scratch, env)) orelse {
+        try self.unifyWith(owner_var, .err, env);
+        return;
+    };
+
+    // Already generated by `generateWhereAliasReferenceArgs`.
+    const arg_vars: []const Var = @ptrCast(self.whereAliasReferenceArgs(alias));
+
+    if (arg_vars.len != resolved.params.len) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+            .type_name = resolved.name,
+            .region = region,
+            .num_expected_args = @intCast(resolved.params.len),
+            .num_actual_args = @intCast(arg_vars.len),
+        } });
+        try self.unifyWith(owner_var, .err, env);
+        return;
+    }
+
+    // Every rigid variable in the declaration is either the receiver or a
+    // parameter, so substituting all of them by name rewrites the declaration's
+    // constraints into this signature's variables.
+    var subs = std.AutoHashMapUnmanaged(Ident.Idx, Var){};
+    defer subs.deinit(self.gpa);
+    const receiver_rigid = self.resolvedRigid(resolved.receiver) orelse return;
+    try subs.put(self.gpa, receiver_rigid.name, owner_var);
+    for (resolved.params, arg_vars) |param_var, arg_var| {
+        if (self.resolvedRigid(param_var)) |param_rigid| {
+            try subs.put(self.gpa, param_rigid.name, arg_var);
         }
     }
+
+    // Canonicalization rejects a declaration whose constraints are not all on
+    // its receiver, so the receiver carries the whole set. Instantiating one
+    // appends to the constraint store, so iterate rather than hold a slice.
+    var constraints = self.types.iterStaticDispatchConstraints(receiver_rigid.constraints);
+    while (constraints.next()) |constraint| {
+        try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
+            .where_clause = where_idx,
+            .var_ = owner_var,
+            .constraint = try self.instantiateWhereAliasConstraint(constraint, &subs, region, env),
+            .state = .completed,
+        });
+    }
+}
+
+/// The arguments a where clause supplies for a where alias's parameters.
+fn whereAliasReferenceArgs(self: *Self, alias: std.meta.fieldInfo(CIR.WhereClause, .w_alias).type) []const CIR.TypeAnno.Idx {
+    return switch (self.cir.store.getTypeAnno(alias.alias)) {
+        .apply => |apply| self.cir.store.sliceTypeAnnos(apply.args),
+        // A name canonicalization could not resolve carries no arguments; it is
+        // reported when the reference is resolved.
+        .lookup, .malformed => &.{},
+        else => unreachable, // canonicalization only builds a name reference here
+    };
+}
+
+/// Generate the types of the arguments a where alias reference supplies.
+fn generateWhereAliasReferenceArgs(
+    self: *Self,
+    alias: std.meta.fieldInfo(CIR.WhereClause, .w_alias).type,
+    env: *Env,
+    ctx: GenTypeAnnoCtx,
+) std.mem.Allocator.Error!void {
+    for (self.whereAliasReferenceArgs(alias)) |arg_anno_idx| {
+        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+    }
+}
+
+/// Rewrite one of a where alias declaration's constraints into the referencing
+/// signature's variables.
+fn instantiateWhereAliasConstraint(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    region: Region,
+    env: *Env,
+) std.mem.Allocator.Error!StaticDispatchConstraint {
+    return StaticDispatchConstraint{
+        .fn_name = constraint.fn_name,
+        .fn_var = try self.instantiateVarWithSubs(constraint.fn_var, subs, env, .{ .explicit = region }),
+        .origin = .{ .where_clause = .{} },
+        // The reference is what the user wrote, so an unmet constraint points
+        // at the where alias rather than at its declaration.
+        .provenance = .{ .expect_region = StaticDispatchConstraint.Provenance.OptRegion.some(region) },
+    };
+}
+
+/// The rigid variable a where alias declaration's receiver or parameter
+/// resolved to. Null when the declaration was poisoned, in which case it
+/// names no constraints and binds no name to substitute.
+fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .rigid => |rigid| rigid,
+        else => null,
+    };
 }
 
 /// Given an annotation, generate the corresponding type based on the CIR
@@ -10429,21 +10706,34 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 .type_decl => &.{},
             };
 
+            // A where alias reference's arguments can be this annotation's own
+            // constrained type variables, whose generation declares constraints
+            // of their own. Generate them before opening this dispatcher's
+            // scratch range so those constraints cannot land inside it.
+            for (owned_where_clauses) |where_idx| {
+                switch (self.cir.store.getWhereClause(where_idx)) {
+                    .w_alias => |alias| try self.generateWhereAliasReferenceArgs(alias, env, ctx),
+                    .w_method, .w_malformed => {},
+                }
+            }
+
+            // One source clause can declare more than one constraint: a where
+            // alias contributes every constraint it names.
             const scratch_constraints_start = self.scratch_static_dispatch_constraints.top();
             for (owned_where_clauses) |where_idx| {
-                try self.declareOwnedStaticDispatchConstraint(where_idx, anno_var, env);
+                try self.declareOwnedStaticDispatchConstraints(where_idx, anno_var, env);
             }
+            const scratch_constraints_end = self.scratch_static_dispatch_constraints.top();
 
             var constraint_representatives = std.AutoHashMap(Ident.Idx, usize).init(self.gpa);
             defer constraint_representatives.deinit();
-            try constraint_representatives.ensureTotalCapacity(@intCast(owned_where_clauses.len));
+            try constraint_representatives.ensureTotalCapacity(@intCast(scratch_constraints_end - scratch_constraints_start));
 
             // A dispatcher's requirements are a method-keyed set. Keep the
             // first source occurrence as its stable evidence position, and
             // share its callable type with every repeated source constraint.
             const static_dispatch_constraints_start = self.types.static_dispatch_constraints.len();
-            for (0..owned_where_clauses.len) |offset| {
-                const scratch_index = scratch_constraints_start + offset;
+            for (scratch_constraints_start..scratch_constraints_end) |scratch_index| {
                 const scratch_constraint = self.scratch_static_dispatch_constraints.items.items[scratch_index];
                 const representative = try constraint_representatives.getOrPut(scratch_constraint.constraint.fn_name);
                 if (representative.found_existing) {
@@ -10463,19 +10753,23 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 .constraints = static_dispatch_constraints_range,
             } }, env);
 
-            for (owned_where_clauses, 0..) |where_idx, offset| {
-                switch (self.cir.store.getWhereClause(where_idx)) {
+            // Where-alias constraints were typed as they were declared; only a
+            // written method signature still needs its annotation generated,
+            // which requires the dispatcher above to already be rigid.
+            for (scratch_constraints_start..scratch_constraints_end) |scratch_index| {
+                const scratch_constraint = self.scratch_static_dispatch_constraints.items.items[scratch_index];
+                if (scratch_constraint.state != .declared) continue;
+                switch (self.cir.store.getWhereClause(scratch_constraint.where_clause)) {
                     .w_method => |method| try self.completeOwnedStaticDispatchConstraint(
-                        where_idx,
+                        scratch_constraint.where_clause,
                         method,
                         anno_var,
-                        scratch_constraints_start + offset,
+                        scratch_index,
                         env,
                         ctx,
                     ),
-                    .w_alias, .w_malformed => {
-                        try self.unifyWith(anno_var, .err, env);
-                    },
+                    // Only method clauses are left declared.
+                    .w_alias, .w_malformed => unreachable,
                 }
             }
         },
@@ -10486,6 +10780,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             try self.unifyWith(anno_var, .{ .flex = Flex.init() }, env);
         },
         .lookup => |lookup| {
+            if (try self.rejectWhereAliasInTypePosition(lookup.name, lookup.base, anno_var, anno_region, env)) return;
             switch (lookup.base) {
                 .builtin => |builtin_type| {
                     try self.setBuiltinTypeContent(anno_var, lookup.name, builtin_type, &.{}, anno_region, env);
@@ -10590,6 +10885,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             }
         },
         .apply => |a| {
+            if (try self.rejectWhereAliasInTypePosition(a.name, a.base, anno_var, anno_region, env)) return;
+
             // Generate the types for the arguments
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             for (anno_args) |anno_arg| {
@@ -15406,7 +15703,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
-            .s_nominal_decl, .s_alias_decl, .s_type_anno => {
+            .s_nominal_decl, .s_alias_decl, .s_where_alias_decl, .s_type_anno => {
                 // Local type declarations are preprocessed before type checking.
                 // Avoid re-processing them inside block statements to prevent
                 // duplicate unifications and spurious type mismatches.

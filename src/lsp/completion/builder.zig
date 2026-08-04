@@ -422,10 +422,11 @@ pub const CompletionBuilder = struct {
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
             switch (stmt) {
-                .s_alias_decl, .s_nominal_decl => {
+                .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
                     const header_idx = switch (stmt) {
                         .s_alias_decl => |a| a.header,
                         .s_nominal_decl => |n| n.header,
+                        .s_where_alias_decl => |w| w.header,
                         else => unreachable,
                     };
                     const header = module_env.store.getTypeHeader(header_idx);
@@ -1715,7 +1716,7 @@ fn getStatementParts(stmt: CIR.Statement) StatementParts {
         .s_dbg => |dbg_stmt| .{ .pattern = null, .expr = dbg_stmt.expr, .expr2 = null },
         .s_return => |return_stmt| .{ .pattern = null, .expr = return_stmt.expr, .expr2 = null },
         .s_crash => .{ .pattern = null, .expr = null, .expr2 = null },
-        .s_import, .s_alias_decl, .s_nominal_decl, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => .{ .pattern = null, .expr = null, .expr2 = null },
+        .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => .{ .pattern = null, .expr = null, .expr2 = null },
     };
 }
 
