@@ -246,17 +246,17 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "bar"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "baz"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-tuple
 				(ty-rigid-var (name "_a"))
@@ -264,7 +264,7 @@ NO CHANGE
 				(ty-rigid-var (name "_c")))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-parens
 				(ty-fn (effectful false)
@@ -273,7 +273,7 @@ NO CHANGE
 					(ty-lookup (name "U32") (builtin))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -283,19 +283,19 @@ NO CHANGE
 					(ty-underscore)))))
 	(d-let
 		(p-assign (ident "tag_tuple"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "closed_record_with_comma"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-record
 				(field (field "a")
 					(ty-lookup (name "U8") (builtin))))))
 	(d-let
 		(p-assign (ident "open_record_with_comma"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-record
 				(field (field "a")

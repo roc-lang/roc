@@ -1780,7 +1780,7 @@ main! = |_| { # Yeah Ie
 (can-ir
 	(d-let
 		(p-assign (ident "line"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-tuple
 				(ty-malformed)

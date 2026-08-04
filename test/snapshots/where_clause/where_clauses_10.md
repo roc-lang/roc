@@ -92,7 +92,7 @@ decode_things # After member name
 (can-ir
 	(d-let
 		(p-assign (ident "decode_things"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

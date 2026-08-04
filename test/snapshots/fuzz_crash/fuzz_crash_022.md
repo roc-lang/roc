@@ -335,12 +335,12 @@ getUser = |id| if
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "ser"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "UserId") (local))

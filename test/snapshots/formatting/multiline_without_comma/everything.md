@@ -662,7 +662,7 @@ h = |x, y| {
 (can-ir
 	(d-let
 		(p-assign (ident "g"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "e"))

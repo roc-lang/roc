@@ -97,7 +97,7 @@ b : S
 (can-ir
 	(d-let
 		(p-assign (ident "b"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-malformed))))
 ~~~

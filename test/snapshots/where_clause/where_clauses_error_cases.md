@@ -279,7 +279,7 @@ broken_fn3 : a -> b
 (can-ir
 	(d-let
 		(p-assign (ident "broken_fn1"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
@@ -288,7 +288,7 @@ broken_fn3 : a -> b
 				(malformed))))
 	(d-let
 		(p-assign (ident "broken_fn2"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
@@ -297,7 +297,7 @@ broken_fn3 : a -> b
 				(malformed))))
 	(d-let
 		(p-assign (ident "broken_fn3"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

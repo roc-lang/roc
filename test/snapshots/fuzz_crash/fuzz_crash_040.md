@@ -125,7 +125,7 @@ o :
 (can-ir
 	(d-let
 		(p-assign (ident "o"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-malformed))))
 ~~~

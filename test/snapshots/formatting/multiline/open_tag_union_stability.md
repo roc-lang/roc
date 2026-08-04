@@ -69,7 +69,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-tag-union
 				(ty-malformed)

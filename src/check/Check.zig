@@ -13965,10 +13965,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     else
                         expr_region,
                 } });
-                if (expected.annotation != null) {
-                    // Preserve the declared type graph; only the missing value is erroneous.
-                    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-                } else {
+                // e_anno_only is its own non-executable artifact state; preserve the declared graph.
+                if (expected.annotation == null) {
                     try self.unifyWith(expr_var, .err, env);
                 }
             }

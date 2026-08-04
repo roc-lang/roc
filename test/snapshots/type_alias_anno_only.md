@@ -51,7 +51,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "hey"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-lookup (name "MyType") (local))))
 	(s-alias-decl

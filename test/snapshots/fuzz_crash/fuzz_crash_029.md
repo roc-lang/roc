@@ -410,7 +410,7 @@ pkg :
 (can-ir
 	(d-let
 		(p-assign (ident "pkg"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-malformed))))
 ~~~

@@ -118,14 +118,14 @@ b! : Str => Str
 (can-ir
 	(d-let
 		(p-assign (ident "a!"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful true)
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "b!"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful true)
 				(ty-lookup (name "Str") (builtin))

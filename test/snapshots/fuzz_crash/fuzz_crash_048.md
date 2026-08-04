@@ -205,17 +205,17 @@ tag_tuple : Value((a, b, c))
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "bar"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "biz"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-tuple
 				(ty-rigid-var (name "a"))
@@ -223,7 +223,7 @@ tag_tuple : Value((a, b, c))
 				(ty-rigid-var (name "c")))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-parens
 				(ty-fn (effectful false)
@@ -232,7 +232,7 @@ tag_tuple : Value((a, b, c))
 					(ty-lookup (name "U32") (builtin))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -242,7 +242,7 @@ tag_tuple : Value((a, b, c))
 					(ty-underscore)))))
 	(d-let
 		(p-assign (ident "tag_tuple"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-anno-only)
 		(annotation
 			(ty-malformed))))
 ~~~
