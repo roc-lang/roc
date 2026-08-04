@@ -7295,6 +7295,13 @@ Under these floors both native architectures guarantee the same capability
 set: full 128-bit integer SIMD, a one-instruction byte shuffle, carryless
 multiply, and AES rounds. Floors only ever affect speed, never results.
 
+Each `RocTarget` has one `CpuContract` in `src/target/mod.zig`. Its architecture
+baseline and explicit instruction features are the sole source for both the
+LLVM target query and runtime host compatibility. A named LLVM CPU model may
+supply scheduling information, but all model features outside that contract
+are explicitly disabled, so choosing a platform host and choosing instructions
+cannot drift apart.
+
 Every target for which Roc raises the architecture floor has a `v1` twin. On
 x86-64, `x64v1*` means the psABI x86-64-v1 floor (SSE2 and no later
 extensions). On AArch64, `arm64v1*` means Armv8.0-A; Apple Silicon has no v1
@@ -7594,10 +7601,10 @@ The generic `dot_pairs_saturated` lowering widens unsigned and signed bytes to
 32-bit lanes, multiplies and pairwise-adds at that width, clamps to signed
 16-bit bounds, and narrows only after saturation; no intermediate 16-bit sum
 is permitted to wrap.
-`src/target/mod.zig` is the single authority for the LLVM target query, CPU
-name, and feature delta. Linked builds, optimized tests, and LLVM evaluation
-therefore all compile under the same x86-64-v3 plus AES/PCLMULQDQ, AArch64, or
-wasm simd128 floor.
+`src/target/mod.zig` is the single authority for the CPU contract, LLVM target
+query, CPU name, and feature delta. Linked builds, optimized tests, LLVM
+evaluation, and platform host selection therefore consume the same x86-64-v3
+plus AES/PCLMULQDQ, AArch64, or wasm simd128 floor.
 
 The former pure-Roc `{ bits : U128 }` implementations live only in the SIMD
 test oracle. They define each operation lane by lane without depending on the
