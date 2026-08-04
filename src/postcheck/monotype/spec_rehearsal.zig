@@ -5788,6 +5788,74 @@ pub const Rehearsal = struct {
         return self.schemeRootReachesVariable(view, root);
     }
 
+    /// Whether a checked root reaches a variable that would DEFAULT under
+    /// directed translation - a numeral or row default - which is the class
+    /// whose value the graph takes from the other operand instead (the
+    /// literal-leaves law). A plain binder either binds under the reading
+    /// frame or declines; only a defaultable one can answer wrongly.
+    pub fn checkedRootReachesDefaultableVariable(
+        self: *Rehearsal,
+        view: checked.CheckedTypeStoreView,
+        root: checked.CheckedTypeId,
+    ) bool {
+        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(checked.CheckedTypeId).empty;
+        defer stack.deinit(self.allocator);
+        stack.append(self.allocator, root) catch return true;
+        while (stack.pop()) |ty| {
+            const gop = visited.getOrPut(ty) catch return true;
+            if (gop.found_existing) continue;
+            switch (view.payload(ty)) {
+                .flex, .rigid => |v| {
+                    if (v.numeric_default_phase != null or v.row_default != null) return true;
+                },
+                else => {},
+            }
+            self.pushCheckedChildren(view, ty, &stack) catch return true;
+        }
+        return false;
+    }
+
+    fn pushCheckedChildren(
+        self: *Rehearsal,
+        view: checked.CheckedTypeStoreView,
+        ty: checked.CheckedTypeId,
+        stack: *std.ArrayList(checked.CheckedTypeId),
+    ) Allocator.Error!void {
+        switch (view.payload(ty)) {
+            .flex, .rigid, .pending, .err, .empty_record, .empty_tag_union => {},
+            .alias => |alias_ty| {
+                try stack.append(self.allocator, alias_ty.backing);
+                for (alias_ty.args) |arg| try stack.append(self.allocator, arg);
+            },
+            .record => |record_ty| {
+                for (record_ty.fields) |field| try stack.append(self.allocator, field.ty);
+                try stack.append(self.allocator, record_ty.ext);
+            },
+            .record_unbound => |fields| {
+                for (fields) |field| try stack.append(self.allocator, field.ty);
+            },
+            .tuple => |elems| {
+                for (elems) |elem| try stack.append(self.allocator, elem);
+            },
+            .function => |fn_ty| {
+                for (fn_ty.args) |arg| try stack.append(self.allocator, arg);
+                try stack.append(self.allocator, fn_ty.ret);
+            },
+            .nominal => |nominal_ty| {
+                for (nominal_ty.args) |arg| try stack.append(self.allocator, arg);
+                for (nominal_ty.padding_field_types) |field| try stack.append(self.allocator, field);
+            },
+            .tag_union => |tag_ty| {
+                for (tag_ty.tags) |tag| {
+                    for (tag.argsSlice(view)) |arg| try stack.append(self.allocator, arg);
+                }
+                try stack.append(self.allocator, tag_ty.ext);
+            },
+        }
+    }
+
     fn schemeRootReachesVariable(
         self: *Rehearsal,
         view: checked.CheckedTypeStoreView,
