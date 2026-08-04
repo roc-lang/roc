@@ -145,6 +145,26 @@ pub const U64Span = extern struct {
     }
 };
 
+/// Span into flat u32 storage.
+pub const U32Span = extern struct {
+    start: u32,
+    len: u32,
+
+    pub fn empty() U32Span {
+        return .{ .start = 0, .len = 0 };
+    }
+};
+
+/// Identifier of one interned erased-call argument layout plan.
+pub const ErasedCallArgsPlanId = enum(u32) { _ };
+
+/// Exact packed-argument struct layout shared by an erased caller and callee.
+pub const ErasedCallArgsPlan = extern struct {
+    offsets: U32Span,
+    size: u32,
+    alignment: u32,
+};
+
 /// Builtin low-level operations reused from `base`.
 pub const LowLevel = base.LowLevel;
 
@@ -457,6 +477,7 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
+        arg_plan: ErasedCallArgsPlanId,
         /// Consume the allocation denoted by `closure` as the destination for
         /// an erased-callable result.
         /// The erased callee may repack it when the returned capture payload has
@@ -707,6 +728,8 @@ pub const LirProcSpec = struct {
     /// caller declines reuse. Internal Roc-ABI destination variants preserve
     /// this marker when they forward the same input.
     erased_reuse_arg: ?LocalId = null,
+    /// Packed explicit-argument layout required by the erased-callable ABI.
+    erased_call_args: ?ErasedCallArgsPlanId = null,
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: ?CFStmtId = null,

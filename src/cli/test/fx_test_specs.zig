@@ -321,6 +321,11 @@ pub const io_spec_tests = [_]TestSpec{
     },
     // Bug regression tests
     .{
+        .roc_file = "test/fx/erased_small_first_arg.roc",
+        .io_spec = "1>2",
+        .description = "Regression test: LLVM erased callable ABI preserves a sub-word first argument (issue #10364)",
+    },
+    .{
         .roc_file = "test/fx/unify_scratch_fresh_vars_rank_bug.roc",
         .io_spec = "1>ok",
         .description = "Regression test: unify scratch fresh_vars must be cleared between calls",

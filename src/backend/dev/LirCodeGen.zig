@@ -13690,6 +13690,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self: *Self,
             closure_local: LocalId,
             call_args: LocalSpan,
+            arg_plan: lir.LIR.ErasedCallArgsPlanId,
             ret_layout: layout.Idx,
             reuse_closure: bool,
         ) Allocator.Error!ValueLocation {
@@ -13730,27 +13731,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 arg_layouts[i] = arg_layout;
             }
 
-            var total_args_size: u32 = 0;
-            for (arg_layouts) |arg_layout| {
-                const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
-                const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
-                total_args_size = std.mem.alignForward(u32, total_args_size, @intCast(@max(size_align.alignment.toByteUnits(), 1)));
-                total_args_size += size_align.size;
-            }
+            const plan = self.store.getErasedCallArgsPlan(arg_plan);
+            const arg_offsets = self.store.getErasedCallArgOffsets(plan);
+            if (arg_offsets.len != arg_refs.len) unreachable;
             const args_slot = if (arg_refs.len == 0)
                 0
             else
-                self.codegen.allocStackSlot(if (total_args_size == 0) 8 else total_args_size);
+                self.codegen.allocStackSlot(@max(plan.size, 1));
 
-            var arg_offset: u32 = 0;
-            for (arg_locs, arg_layouts) |arg_loc, arg_layout| {
+            for (arg_locs, arg_layouts, 0..) |arg_loc, arg_layout, i| {
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
                 const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
-                arg_offset = std.mem.alignForward(u32, arg_offset, @intCast(@max(size_align.alignment.toByteUnits(), 1)));
                 if (size_align.size > 0) {
-                    try self.copyBytesToStackOffset(args_slot + @as(i32, @intCast(arg_offset)), arg_loc, size_align.size);
+                    try self.copyBytesToStackOffset(args_slot + @as(i32, @intCast(GuardedList.at(arg_offsets, i))), arg_loc, size_align.size);
                 }
-                arg_offset += size_align.size;
             }
 
             const capture_ptr_reg = try self.allocTempGeneral();
@@ -16686,7 +16680,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const ret_ptr_reg = self.getArgumentRegister(1);
                 try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
-                try self.bindErasedCallableAdapterParams(proc.args);
+                try self.bindErasedCallableAdapterParams(proc.args, proc.erased_call_args orelse unreachable);
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
             } else {
                 if (needs_ret_ptr) {
@@ -17539,7 +17533,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn bindErasedCallableAdapterParams(self: *Self, params: LocalSpan) Allocator.Error!void {
+        fn bindErasedCallableAdapterParams(
+            self: *Self,
+            params: LocalSpan,
+            arg_plan: lir.LIR.ErasedCallArgsPlanId,
+        ) Allocator.Error!void {
             const locals = self.store.getLocalSpan(params);
             if (locals.len < 2) {
                 if (builtin.mode == .Debug) {
@@ -17565,15 +17563,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.saveIncomingPointerArg(capture_ptr_slot, 3);
             try self.saveIncomingPointerArg(reuse_ptr_slot, 4);
 
-            var arg_offset: u32 = 0;
             const explicit_count = locals.len - 2;
+            const plan = self.store.getErasedCallArgsPlan(arg_plan);
+            const arg_offsets = self.store.getErasedCallArgOffsets(plan);
+            if (arg_offsets.len != explicit_count) unreachable;
             for (0..explicit_count) |local_index| {
                 const local = GuardedList.at(locals, local_index);
                 const local_layout = self.localLayout(local);
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(local_layout);
                 const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
-                const arg_align: u32 = @intCast(@max(size_align.alignment.toByteUnits(), 1));
-                arg_offset = std.mem.alignForward(u32, arg_offset, arg_align);
                 if (size_align.size == 0) {
                     try self.local_locations.put(localKey(local), .{ .immediate_i64 = 0 });
                 } else {
@@ -17584,7 +17582,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.copyChunked(
                         temp_reg,
                         args_ptr_reg,
-                        @intCast(arg_offset),
+                        @intCast(GuardedList.at(arg_offsets, local_index)),
                         frame_ptr,
                         local_offset,
                         size_align.size,
@@ -17593,7 +17591,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(args_ptr_reg);
                     try self.local_locations.put(localKey(local), self.stackLocationForLayout(local_layout, local_offset));
                 }
-                arg_offset += size_align.size;
             }
 
             const capture_local = GuardedList.at(locals, explicit_count);
@@ -18248,6 +18245,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const value_loc = try self.generateErasedCall(
                                 assign.closure,
                                 assign.args,
+                                assign.arg_plan,
                                 self.localLayout(assign.target),
                                 assign.reuse_closure,
                             );
@@ -20947,6 +20945,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     const capture_arg = try addLocal(&store, .opaque_ptr);
     const reuse_arg = try addLocal(&store, .opaque_ptr);
     const args = try store.addLocalSpan(&.{ explicit_arg, capture_arg, reuse_arg });
+    const arg_plan = try store.internErasedCallArgsPlan(&test_state.layout_store, &.{.u64});
 
     var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
@@ -20954,7 +20953,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     const InnerCodeGen = @TypeOf(codegen.codegen);
     codegen.codegen.stack_offset = -InnerCodeGen.CALLEE_SAVED_AREA_SIZE;
 
-    try codegen.bindErasedCallableAdapterParams(args);
+    try codegen.bindErasedCallableAdapterParams(args, arg_plan);
 
     _ = codegen.local_locations.get(@intFromEnum(reuse_arg)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(codegen.codegen.getCode().len > 0);

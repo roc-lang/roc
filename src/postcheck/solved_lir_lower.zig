@@ -1167,6 +1167,10 @@ const Lowerer = struct {
             .name = lirSymbol(entry.symbol),
             .args = args_span,
             .erased_reuse_arg = erased_reuse_arg,
+            .erased_call_args = if (spec.abi == .erased)
+                try self.erasedCallArgsPlan(arg_locals[0..lifted_args.len])
+            else
+                null,
             .body = null,
             .ret_layout = ret_layout,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
@@ -4246,6 +4250,7 @@ const Lowerer = struct {
             .target = call_target,
             .closure = callee,
             .args = try self.result.store.addLocalSpan(args.ids),
+            .arg_plan = try self.erasedCallArgsPlan(args.ids),
             .reuse_closure = reuse_closure,
             .reuse_source = if (reuse_closure) callee else null,
             .next = after_call,
@@ -4259,6 +4264,15 @@ const Lowerer = struct {
         var current = call_stmt;
         current = try self.prependExprsAtTypes(args, arg_tys, current);
         return try self.lowerExprIntoAtType(callee, callee_expr, callee_ty, current);
+    }
+
+    fn erasedCallArgsPlan(self: *Lowerer, args: []const LIR.LocalId) Common.LowerError!LIR.ErasedCallArgsPlanId {
+        const arg_layouts = try self.allocator.alloc(layout.Idx, args.len);
+        defer self.allocator.free(arg_layouts);
+        for (args, arg_layouts) |arg, *arg_layout| {
+            arg_layout.* = self.result.store.getLocal(arg).layout_idx;
+        }
+        return try self.result.store.internErasedCallArgsPlan(&self.result.layouts, arg_layouts);
     }
 
     /// Resolve the ownership unit consumed by erased calls from provenance
