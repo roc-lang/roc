@@ -452,13 +452,6 @@ jobs:
   # once. This builds one binary and one host lib, so it stays clear of the
   # failure those entries were disabled for.
   #
-  # What it covers: `roc` picking a target on its own, on aarch64 Linux, for a
-  # program that then has to run. That combination had no coverage anywhere,
-  # and it broke the day host-CPU detection landed -- the AT_HWCAP lookup
-  # answered 0 in a libc-linked binary, so `roc` read the machine as `.v1`,
-  # chose arm64v1musl, and every platform rejected it with UNSUPPORTED TARGET.
-  # A published nightly shipped that. See the twin job in ci_zig.yml, which
-  # gives the same check to the daily Nightly Gate.
   arm64-linux-hello-world:
     needs: check-changes
     if: needs.check-changes.outputs.zig == 'true'
@@ -511,16 +504,10 @@ jobs:
           command: zig build build-test-hosts -Dplatform=fx
           retry_count: 3
 
-      - name: Print CPU model
-        run: lscpu | grep "Model name"
-
       - name: run hello_world.roc
         run: |
           set -euo pipefail
 
-          # No `--target`: the compiler choosing it is the thing under test.
-          # A wrong choice fails here rather than silently building something
-          # this machine cannot run.
           output="$(./zig-out/bin/roc test/fx/hello_world.roc)"
           echo "$output"
 
