@@ -192,6 +192,9 @@ import_cache: ImportCache,
 /// speculative probes an exact rollback boundary.
 imported_method_schemes: std.ArrayListUnmanaged(ImportedMethodScheme) = .empty,
 imported_method_scheme_by_source: std.AutoHashMapUnmanaged(ImportedMethodSchemeKey, u32) = .empty,
+/// Exact associated-item targets keyed by the alias declaration type var and
+/// item. Alias traversal and owner-scope lookup happen once per declaration.
+associated_lookup_cache: std.AutoHashMapUnmanaged(AssociatedLookupCacheKey, ?AssociatedLookupResolution) = .empty,
 /// Copied Bool type from Bool module (for use in if conditions, etc.)
 bool_var: Var,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
@@ -1070,6 +1073,9 @@ const HoistSelectionTransaction = struct {
                 _ = try self.stageBindingRoot(lookup.pattern_idx);
             },
             .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_str_segment,
             .e_bytes_literal,
@@ -1554,6 +1560,7 @@ fn initAssumePrepared(
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .import_cache = ImportCache{},
+        .associated_lookup_cache = .empty,
         .bool_var = undefined,
         .str_var = undefined,
         .u64_var = undefined,
@@ -1702,6 +1709,7 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
     self.imported_method_schemes.deinit(self.gpa);
     self.imported_method_scheme_by_source.deinit(self.gpa);
+    self.associated_lookup_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.checked_interpolation_part_constraints.deinit();
     self.int_unbound_vars.deinit();
@@ -2643,6 +2651,9 @@ fn markHoistInvalidatedExprChildren(
         .e_bytes_literal,
         .e_lookup_local,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_lookup_required,
         .e_empty_list,
         .e_empty_record,
@@ -2766,6 +2777,9 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
             => return expr_idx,
             .e_lookup_local,
             .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_str_segment,
             .e_bytes_literal,
@@ -3092,6 +3106,9 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => false,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_lookup_required,
         .e_str_segment,
         .e_bytes_literal,
@@ -3161,6 +3178,9 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_lookup_required,
         .e_str_segment,
         .e_bytes_literal,
@@ -3249,6 +3269,9 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_break,
         => false,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_str_segment,
         .e_bytes_literal,
         .e_frac_f32,
@@ -6048,6 +6071,9 @@ fn hoistedRootDependenciesAreKeptInternal(
             context.contains(lookup.pattern_idx) or
             (keep_oracle.selectedPatternIsKept(lookup.pattern_idx) orelse false),
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_str_segment,
         .e_bytes_literal,
         .e_num,
@@ -6189,6 +6215,9 @@ fn hoistedExprAllowsStoredConst(
             try self.hoistedExprSpanAllowsStoredConst(module, run.args, context),
         .e_lookup_local,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_lookup_required,
         .e_str_segment,
         .e_bytes_literal,
@@ -6278,6 +6307,11 @@ fn hoistedCallableDefForExpr(
             const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
             break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
         },
+        .e_lookup_associated_resolved => |resolved| blk: {
+            const target_module = self.moduleEnvForIdentity(resolved.module_identity) orelse break :blk null;
+            break :blk HoistedCallableDef{ .module = target_module.env, .def = resolved.target_def_idx };
+        },
+        .e_lookup_associated_local, .e_lookup_associated => null,
         .e_str,
         .e_str_segment,
         .e_bytes_literal,
@@ -13310,6 +13344,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, .err, env);
             }
         },
+        .e_lookup_associated_local => |lookup| {
+            try self.checkLocalAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
+        },
+        .e_lookup_associated => |lookup| {
+            try self.checkAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
+        },
+        .e_lookup_associated_resolved => |lookup| {
+            try self.checkResolvedAssociatedLookup(expr_var, lookup, expr_region, env);
+        },
         .e_lookup_required => |req| {
             self.markCurrentHoistRuntimeDependency();
             // Look up the type from the platform's requires clause
@@ -14582,6 +14625,16 @@ const StaticDispatchMethodBinding = struct {
     binding: ModuleEnv.MethodBinding,
 };
 
+const AssociatedLookupCacheKey = struct {
+    owner_var: Var,
+    item_ident: Ident.Idx,
+};
+
+const AssociatedLookupResolution = struct {
+    target: StaticDispatchMethodBinding,
+    module_identity: base.ModuleIdentity.Idx,
+};
+
 fn staticDispatchBindingIsDerivedMarker(lookup: StaticDispatchMethodBinding) bool {
     return generatedDerivedMethodDef(lookup.env, lookup.binding.def_idx);
 }
@@ -14777,8 +14830,22 @@ fn methodVarFromOriginalEnv(
     env: *Env,
     region: Region,
 ) Allocator.Error!ToInspectMethodVar {
+    return .{
+        .var_ = try self.methodTypeVarFromOriginalEnv(original_env, is_this_module, type_node_idx, env, region),
+        .dispatcher_name = dispatcher_name,
+    };
+}
+
+fn methodTypeVarFromOriginalEnv(
+    self: *Self,
+    original_env: *const ModuleEnv,
+    is_this_module: bool,
+    type_node_idx: CIR.Node.Idx,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
     const def_var: Var = ModuleEnv.varFrom(type_node_idx);
-    const method_var = if (is_this_module) blk: {
+    return if (is_this_module) blk: {
         if (self.types.resolveVar(def_var).desc.rank == .generalized) {
             break :blk try self.instantiateVar(def_var, env, .use_last_var);
         }
@@ -14787,7 +14854,6 @@ fn methodVarFromOriginalEnv(
         const imported_scheme = try self.importedMethodSchemeFromSource(original_env, type_node_idx);
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
     };
-    return .{ .var_ = method_var, .dispatcher_name = dispatcher_name };
 }
 
 fn derivedMethodValidationVar(
@@ -17619,6 +17685,233 @@ fn resolveVarFromExternal(
         // producing type errors instead of crashing.
         return null;
     }
+}
+
+fn checkAssociatedLookup(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    lookup: @FieldType(CIR.Expr, "e_lookup_associated"),
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    const external_type = (try self.resolveVarFromExternal(lookup.module_idx, lookup.type_node_idx)) orelse {
+        try self.unifyWith(expr_var, .err, env);
+        return;
+    };
+
+    try self.checkAssociatedLookupFromOwnerVar(
+        expr_idx,
+        expr_var,
+        external_type.local_var,
+        lookup.type_ident,
+        lookup.item_ident,
+        region,
+        env,
+    );
+}
+
+fn checkLocalAssociatedLookup(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    lookup: @FieldType(CIR.Expr, "e_lookup_associated_local"),
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    try self.checkAssociatedLookupFromOwnerVar(
+        expr_idx,
+        expr_var,
+        @enumFromInt(lookup.type_node_idx),
+        lookup.type_ident,
+        lookup.item_ident,
+        region,
+        env,
+    );
+}
+
+fn checkAssociatedLookupFromOwnerVar(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    initial_owner_var: Var,
+    type_ident: Ident.Idx,
+    item_ident: Ident.Idx,
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    const resolution = (try self.resolveAssociatedLookup(initial_owner_var, item_ident)) orelse {
+        try self.failAssociatedLookup(expr_idx, expr_var, type_ident, item_ident, region, env);
+        return;
+    };
+    const source_ident = try self.cir.insertQualifiedIdent(
+        self.cir.getIdent(type_ident),
+        self.cir.getIdent(item_ident),
+    );
+
+    self.cir.store.replaceExprWithResolvedAssociatedLookup(
+        expr_idx,
+        resolution.module_identity,
+        resolution.target.binding.type_node_idx,
+        resolution.target.binding.def_idx,
+        source_ident,
+    );
+
+    try self.checkResolvedAssociatedTarget(
+        expr_var,
+        resolution.target.env,
+        resolution.target.is_this_module,
+        resolution.target.binding.type_node_idx,
+        resolution.target.binding.def_idx,
+        region,
+        env,
+    );
+}
+
+fn resolveAssociatedLookup(
+    self: *Self,
+    initial_owner_var: Var,
+    item_ident: Ident.Idx,
+) Allocator.Error!?AssociatedLookupResolution {
+    const cache_key = AssociatedLookupCacheKey{ .owner_var = initial_owner_var, .item_ident = item_ident };
+    if (self.associated_lookup_cache.get(cache_key)) |cached| return cached;
+
+    var owner_var = initial_owner_var;
+    const nominal = while (true) {
+        const owner = self.types.resolveVar(owner_var);
+        switch (owner.desc.content) {
+            .alias => |alias| owner_var = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| break nominal,
+                else => {
+                    try self.associated_lookup_cache.put(self.gpa, cache_key, null);
+                    return null;
+                },
+            },
+            .err, .flex, .rigid => {
+                try self.associated_lookup_cache.put(self.gpa, cache_key, null);
+                return null;
+            },
+        }
+    };
+
+    const owner_env, _ = self.ownerEnvForOriginModule(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+        "associated value lookup",
+    );
+    const target = self.lookupStaticDispatchMethodBinding(
+        owner_env,
+        nominal.sourceDeclOptional(),
+        self.cir,
+        item_ident,
+    ) orelse {
+        try self.associated_lookup_cache.put(self.gpa, cache_key, null);
+        return null;
+    };
+    const resolution = AssociatedLookupResolution{
+        .target = target,
+        .module_identity = try self.internCheckedTargetModuleIdentity(target.env),
+    };
+    try self.associated_lookup_cache.put(self.gpa, cache_key, resolution);
+    return resolution;
+}
+
+fn checkResolvedAssociatedLookup(
+    self: *Self,
+    expr_var: Var,
+    lookup: @FieldType(CIR.Expr, "e_lookup_associated_resolved"),
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    const target = self.moduleEnvForIdentity(lookup.module_identity) orelse {
+        std.debug.panic("type checker invariant violated: resolved associated lookup target is unavailable", .{});
+    };
+    try self.checkResolvedAssociatedTarget(
+        expr_var,
+        target.env,
+        target.is_this_module,
+        @enumFromInt(lookup.target_node_idx),
+        lookup.target_def_idx,
+        region,
+        env,
+    );
+}
+
+fn checkResolvedAssociatedTarget(
+    self: *Self,
+    expr_var: Var,
+    target_env: *const ModuleEnv,
+    is_this_module: bool,
+    target_node_idx: CIR.Node.Idx,
+    target_def_idx: CIR.Def.Idx,
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    if (generatedDerivedMethodDef(target_env, target_def_idx)) {
+        try self.reportAnnotationOnlyValueUse(expr_var, region, env);
+        return;
+    }
+
+    const target_var = try self.methodTypeVarFromOriginalEnv(
+        target_env,
+        is_this_module,
+        target_node_idx,
+        env,
+        region,
+    );
+    _ = try self.unify(expr_var, target_var, env);
+}
+
+fn failAssociatedLookup(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    type_ident: Ident.Idx,
+    item_ident: Ident.Idx,
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    _ = try self.problems.appendProblem(self.gpa, .{ .associated_item_not_found = .{
+        .type_name = type_ident,
+        .item_name = item_ident,
+        .region = region,
+    } });
+    const diagnostic_idx = try self.cir.store.addDiagnosticUnregistered(.{ .nested_value_not_found = .{
+        .parent_name = type_ident,
+        .nested_name = item_ident,
+        .region = region,
+    } });
+    try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    try self.unifyWith(expr_var, .err, env);
+}
+
+fn internCheckedTargetModuleIdentity(
+    self: *Self,
+    target_env: *const ModuleEnv,
+) Allocator.Error!base.ModuleIdentity.Idx {
+    if (target_env == self.cir) return self.cir.selfModuleIdentity();
+    const target_hash = target_env.contentIdentityHash() orelse {
+        std.debug.panic("type checker invariant violated: associated lookup target has no content identity", .{});
+    };
+    const display_ident = try self.cir.insertIdent(base.Ident.for_text(target_env.module_name));
+    return try self.cir.internModuleIdentity(target_hash, display_ident);
+}
+
+fn moduleEnvForIdentity(
+    self: *const Self,
+    module_identity: base.ModuleIdentity.Idx,
+) ?OwnerEnvCandidate {
+    const target_hash = self.cir.moduleIdentityHash(module_identity);
+    if (ownerEnvIdentityMatches(self.cir, target_hash)) return .{ .env = self.cir, .is_this_module = true };
+    for (self.imported_modules) |imported_env| {
+        if (ownerEnvIdentityMatches(imported_env, target_hash)) return .{ .env = imported_env, .is_this_module = false };
+    }
+    for (self.owner_modules) |owner_env| {
+        if (ownerEnvIdentityMatches(owner_env, target_hash)) return .{ .env = owner_env, .is_this_module = false };
+    }
+    return null;
 }
 
 /// Copy a variable from another module into this module

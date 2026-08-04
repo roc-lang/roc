@@ -80,6 +80,7 @@ const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
+const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulExpect = problem_mod.EffectfulExpect;
@@ -931,6 +932,9 @@ pub const ReportBuilder = struct {
             },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
+            },
+            .associated_item_not_found => |data| {
+                return self.buildAssociatedItemNotFoundReport(data);
             },
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
@@ -3973,6 +3977,21 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
         }, self, &report);
+        return report;
+    }
+
+    fn buildAssociatedItemNotFoundReport(self: *Self, data: AssociatedItemNotFound) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Associated Item Not Found", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The type"),
+            D.ident(data.type_name).withAnnotation(.inline_code),
+            D.bytes("does not have an associated item named"),
+            D.ident(data.item_name).withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report, &report.headline);
+        try self.addSourceHighlightRegion(&report, data.region);
         return report;
     }
 

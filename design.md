@@ -462,6 +462,28 @@ encountering malformed template data for one is an invariant violation.
 `CheckedTypeStore` construction and public-API dependency collection both omit
 nominal declarations that checking explicitly marked invalid.
 
+### Associated Item Lookup Through Aliases
+
+Canonicalization resolves ordinary nominal associated items whose declaration
+is already known, but it does not interpret an alias annotation to rediscover
+the nominal owner. A lookup through a local or imported alias is explicit CIR
+carrying the alias declaration and requested item. Checking follows the solved
+alias backing to its terminal nominal, resolves that nominal's owner by module
+content identity, and performs the exact owner-and-item method lookup. It then
+replaces the source node with the exact target module identity, type node, and
+definition. Alias traversal has no source-text reconstruction or fixed hop
+limit; invalid and cyclic aliases must already resolve to the checker error
+type.
+
+The checker memoizes this resolution by alias declaration type variable and
+item, while each use still instantiates the selected method scheme separately.
+`CheckedBodyPayloadCopier.copyExprData` treats any unresolved associated lookup
+as an invariant violation. For a resolved target reached through a re-export,
+checked module data stores the exact imported procedure or imported constant
+identity selected by checking. `buildImportedTemplateClosure` and
+`collectPublicApiDependencies` receive defining checked module data explicitly
+when no lexical import exists.
+
 ### Compile-Time Evaluation And Static Storage
 
 Compile-time evaluation must evaluate every checked top-level expression and

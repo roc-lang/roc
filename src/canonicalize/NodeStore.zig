@@ -494,7 +494,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 88;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 56;
+pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 21;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -1094,6 +1094,32 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = store.getRegionAt(node_idx),
             } };
         },
+        .expr_associated_lookup_local => {
+            const p = payload.expr_associated_lookup_local;
+            return CIR.Expr{ .e_lookup_associated_local = .{
+                .type_node_idx = p.type_node_idx,
+                .type_ident = @bitCast(p.type_ident),
+                .item_ident = @bitCast(p.item_ident),
+            } };
+        },
+        .expr_associated_lookup => {
+            const p = payload.expr_associated_lookup;
+            return CIR.Expr{ .e_lookup_associated = .{
+                .module_idx = @enumFromInt(p.module_idx),
+                .type_node_idx = p.type_node_idx,
+                .type_ident = @bitCast(p.type_ident),
+                .item_ident = @bitCast(p.item_ident),
+            } };
+        },
+        .expr_associated_lookup_resolved => {
+            const p = payload.expr_associated_lookup_resolved;
+            return CIR.Expr{ .e_lookup_associated_resolved = .{
+                .module_identity = @enumFromInt(p.module_identity),
+                .target_node_idx = p.target_node_idx,
+                .target_def_idx = @enumFromInt(p.target_def_idx),
+                .source_ident = @bitCast(p.source_ident),
+            } };
+        },
         .expr_required_lookup => {
             const p = payload.expr_required_lookup;
             // Handle required lookups (platform requires clause)
@@ -1625,6 +1651,26 @@ pub fn replaceExprWithZeroArgumentTag(
     var node = Node.init(.expr_zero_argument_tag);
     node.setPayload(.{ .expr_zero_argument_tag = .{
         .zero_arg_tag_idx = zero_arg_tag_idx,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an imported-type associated lookup with its exact checked target.
+pub fn replaceExprWithResolvedAssociatedLookup(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    module_identity: base.ModuleIdentity.Idx,
+    target_node_idx: CIR.Node.Idx,
+    target_def_idx: CIR.Def.Idx,
+    source_ident: Ident.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_associated_lookup_resolved);
+    node.setPayload(.{ .expr_associated_lookup_resolved = .{
+        .module_identity = @intFromEnum(module_identity),
+        .target_node_idx = @intFromEnum(target_node_idx),
+        .target_def_idx = @intFromEnum(target_def_idx),
+        .source_ident = @bitCast(source_ident),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2648,6 +2694,32 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .module_idx = @intFromEnum(e.module_idx),
                 .target_node_idx = e.target_node_idx,
                 .ident_idx = @bitCast(e.ident_idx),
+            } });
+        },
+        .e_lookup_associated_local => |e| {
+            node.tag = .expr_associated_lookup_local;
+            node.setPayload(.{ .expr_associated_lookup_local = .{
+                .type_node_idx = e.type_node_idx,
+                .type_ident = @bitCast(e.type_ident),
+                .item_ident = @bitCast(e.item_ident),
+            } });
+        },
+        .e_lookup_associated => |e| {
+            node.tag = .expr_associated_lookup;
+            node.setPayload(.{ .expr_associated_lookup = .{
+                .module_idx = @intFromEnum(e.module_idx),
+                .type_node_idx = e.type_node_idx,
+                .type_ident = @bitCast(e.type_ident),
+                .item_ident = @bitCast(e.item_ident),
+            } });
+        },
+        .e_lookup_associated_resolved => |e| {
+            node.tag = .expr_associated_lookup_resolved;
+            node.setPayload(.{ .expr_associated_lookup_resolved = .{
+                .module_identity = @intFromEnum(e.module_identity),
+                .target_node_idx = e.target_node_idx,
+                .target_def_idx = @intFromEnum(e.target_def_idx),
+                .source_ident = @bitCast(e.source_ident),
             } });
         },
         .e_lookup_required => |e| {
