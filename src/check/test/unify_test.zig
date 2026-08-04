@@ -2142,6 +2142,52 @@ fn copyIntoConsumer(consumer: *TestEnv, source: *DeclaringModule, var_: Var) std
     );
 }
 
+test "cross-module copy substitutes exact source vars without conflating equal rigid names" {
+    const gpa = std.testing.allocator;
+    var source = try TestEnv.init(gpa);
+    defer source.deinit();
+    var consumer = try TestEnv.init(gpa);
+    defer consumer.deinit();
+
+    const rigid_name = try source.module_env.insertIdent(Ident.for_text("shared"));
+    const substituted_source = try source.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_name) });
+    const copied_source = try source.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_name) });
+    const source_tuple = try source.module_env.types.freshFromContent(try source.mkTuple(&.{ substituted_source, copied_source }));
+
+    const replacement = try consumer.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    var var_mapping = std.AutoHashMap(Var, Var).init(gpa);
+    defer var_mapping.deinit();
+    try var_mapping.put(substituted_source, replacement);
+
+    const copied_tuple_root = try copy_import.copyVar(
+        &source.module_env.types,
+        &consumer.module_env.types,
+        source_tuple,
+        &var_mapping,
+        source.module_env,
+        consumer.module_env,
+        gpa,
+    );
+    const copied_tuple = switch (consumer.module_env.types.resolveVar(copied_tuple_root).desc.content) {
+        .structure => |flat_type| switch (flat_type) {
+            .tuple => |tuple| tuple,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    const copied_elems = consumer.module_env.types.sliceVars(copied_tuple.elems);
+
+    try std.testing.expectEqual(
+        consumer.module_env.types.resolveVar(replacement).var_,
+        consumer.module_env.types.resolveVar(copied_elems[0]).var_,
+    );
+    try std.testing.expect(
+        consumer.module_env.types.resolveVar(replacement).var_ !=
+            consumer.module_env.types.resolveVar(copied_elems[1]).var_,
+    );
+    try std.testing.expect(consumer.module_env.types.resolveVar(copied_elems[1]).desc.content == .rigid);
+}
+
 test "content identity: same module content reached as two envs unifies (two URLs / mirrors / vendored copies)" {
     const gpa = std.testing.allocator;
     var consumer = try TestEnv.init(gpa);

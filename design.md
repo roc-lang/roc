@@ -1731,12 +1731,13 @@ declarations also produce source diagnostics.
 A platform requirement's for-clause alias is a binder over an app-supplied
 type: the requirement's `Model` IS the app's `Model` by the for-clause's own
 definition, so identity provenance follows meaning provenance. After the
-requirement surface is checked, copied occurrences of a platform-root-owned
-for-clause alias resolve to the app's own type declaration (the checker
-redirects those solved vars, cited as
-`RedirectRule.for_clause_alias_identity`). Nothing in the app's checked
-output needs the platform root's checked module as a type owner, which is
-what lets an app build's platform root defer its checked-module output.
+requirement surface is checked, the checker supplies the platform alias root
+and its backing identity root as exact source substitutions while copying each
+requirement into the app store. Every copied occurrence and recorded identity
+slot therefore receives the app's own type declaration directly; no copied
+platform-owned alias enters the solved app graph. Nothing in the app's checked
+output needs the platform root's checked module as a type owner, which is what
+lets an app build's platform root defer its checked-module output.
 
 The platform root's checked module is output exactly once per build:
 relation-bearing at finalization when an app root is paired (keyed by the
@@ -3172,10 +3173,6 @@ site to any family below must classify it here.
 
 - `widenTryConditionForExpectedReturn` — policy: Hosted Try Question
   Widening (above).
-- `resolveForClauseAliasOccurrences` — policy: for-clause alias identity
-  (see Platform/App Relation): copied occurrences of a platform
-  requirement's for-clause alias resolve to the app's own type declaration,
-  because the alias is a binder over the app-supplied type.
 - `markErroneousBranchWithExpected` — mechanism: diagnostic recovery. The
   expression already has a reported error; its var is redirected to a fresh
   var unified with the expected return so checking can continue past it.

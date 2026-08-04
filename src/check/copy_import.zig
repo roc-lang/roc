@@ -34,9 +34,9 @@ const RecordField = types_mod.RecordField;
 const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 
-/// A mapping from source type variables to destination type variables
-/// This is only used during the copy operation to ensure consistent mapping
-/// of type variables that appear multiple times in the same type structure.
+/// A mapping from source type variables to destination type variables.
+/// Callers may preseed exact source substitutions; copying reuses those
+/// destination roots and memoizes every newly copied root in the same map.
 const VarMapping = std.AutoHashMap(Var, Var);
 
 /// All state threaded through a single cross-module copy operation.
@@ -76,7 +76,8 @@ const CopyContext = struct {
 };
 
 /// Copy a type from one module's type store to another module's type store.
-/// This creates a completely fresh copy with new variable indices in the destination store.
+/// Unmapped source roots receive fresh destination variables. Roots already in
+/// `var_mapping` are exact substitutions and are reused without copying.
 ///
 /// Imported identifiers are interned directly into the destination module's
 /// authoritative identifier store so all copied types in that module reference
@@ -123,8 +124,8 @@ fn copyVarCtx(ctx: *const CopyContext, source_var: Var) std.mem.Allocator.Error!
     // NOTE: a copied var whose content is a flex carrying a literal-conversion
     // constraint is an open literal in the destination module. Registering it on
     // the checker's open-literal worklist is the CALLER's job (see `Check.copyVar`,
-    // which walks `var_mapping` after the copy) — this module only copies type
-    // data between stores.
+    // which post-processes the destination store's allocation range) — this
+    // module only copies type data between stores.
     return placeholder_var;
 }
 
