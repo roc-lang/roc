@@ -3683,7 +3683,12 @@ const Builder = struct {
                 }
             }
         }
-        if (selection.selected() == null) {
+        // A resolved request keys on its structural digest alone: the graph
+        // walk below exists to find still-open specializations a resolved
+        // request could join, and joining them is the cross-flavor merging
+        // the stored-id dedup replaces (reunify.md 11.5, 13.2e step 3). A
+        // digest miss for a resolved request is a new specialization.
+        if (selection.selected() == null and resolved_request_ty == null) {
             census.bump("template_dedup_graph_walk");
             var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
             defer seen_specs.deinit();
