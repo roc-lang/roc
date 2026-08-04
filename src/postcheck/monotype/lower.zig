@@ -15937,7 +15937,57 @@ const BodyContext = struct {
             census.bump("spec_root_parity_eql_not_digest");
             return;
         }
+        if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+            const ret_id: i64 = switch (checkedPayload(self.view, checked_fn_root)) {
+                .function => |f| @intFromEnum(f.ret),
+                else => -1,
+            };
+            std.debug.print("PARITY-DIVERGE checked_root={d} ret_id={d}\n  directed: ", .{ @intFromEnum(checked_fn_root), ret_id });
+            debugTypeSummary(types, name_store, directed, 0);
+            std.debug.print("\n  sealed:   ", .{});
+            debugTypeSummary(types, name_store, request_fn_ty, 0);
+            std.debug.print("\n", .{});
+        }
+    }
 
+    fn debugTypeSummary(types: *const Type.Store, name_store: *const names.NameStore, ty: Type.TypeId, depth: usize) void {
+        if (depth > 3) {
+            std.debug.print("..", .{});
+            return;
+        }
+        switch (types.get(ty)) {
+            .named => |named| {
+                std.debug.print("N[{s} ir={s} k={s} d={d} g={s} topo={s} args(", .{
+                    name_store.typeNameText(named.def.type_name),
+                    @tagName(named.def.iterator_representation),
+                    @tagName(named.def.iterator_kind),
+                    named.def.iterator_depth,
+                    if (named.def.generated != null) "y" else "-",
+                    if (named.def.iterator_topology != null) "y" else "-",
+                });
+                const args = types.span(named.args);
+                const len = GuardedList.borrowLen(args);
+                var index: usize = 0;
+                while (index < len) : (index += 1) {
+                    if (index != 0) std.debug.print(",", .{});
+                    debugTypeSummary(types, name_store, GuardedList.at(args, index), depth + 1);
+                }
+                std.debug.print(")]", .{});
+            },
+            .func => |func| {
+                std.debug.print("fn(", .{});
+                const args = types.span(func.args);
+                const len = GuardedList.borrowLen(args);
+                var index: usize = 0;
+                while (index < len) : (index += 1) {
+                    if (index != 0) std.debug.print(",", .{});
+                    debugTypeSummary(types, name_store, GuardedList.at(args, index), depth + 1);
+                }
+                std.debug.print(")->", .{});
+                debugTypeSummary(types, name_store, func.ret, depth + 1);
+            },
+            else => |payload| std.debug.print("{s}", .{@tagName(payload)}),
+        }
     }
 
     /// Debug/probe-only: measure one read at a graph exit against directed
@@ -33153,6 +33203,16 @@ const BodyContext = struct {
         };
         const evidence_node = self.view.static_dispatch_plans.evidenceNode(evidence_id);
         const lookup = self.methodLookupForResolvedTarget(evidence_node.target);
+        // The closed direct call instantiates the selected procedure's scheme,
+        // so its expression names the request edge the callee frame resolves;
+        // an iterator-procedure target hands over this site's dispatcher and
+        // callable so the specialization derives its minted representation.
+        if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(
+            self.view.key.bytes,
+            plan.expr,
+            self.dispatchPlanCoveringRule(plan) orelse self.iteratorProducerHint(lookup, plan),
+        );
+        defer self.closeRequestEdge();
         const direct_key = ClosedDirectCallIdentity{
             .callable = checkedTypeAddress(self.view, plan.callable_ty),
             .evidence = evidence_id,
@@ -35832,8 +35892,10 @@ const BodyContext = struct {
         // where checking could name the callee scheme; the edge additionally
         // cites section 9.6's constrained-dispatch rule, which covers it where
         // no site was recorded, and hands over the plan's own checked dispatcher
-        // and callable types.
-        const covering_rule = self.dispatchPlanCoveringRule(plan);
+        // and callable types. A target that is an iterator procedure instead
+        // carries the producer hint, so the specialization it requests derives
+        // its minted representation from this site's dispatcher and callable.
+        const covering_rule = self.dispatchPlanCoveringRule(plan) orelse self.iteratorProducerHint(lookup, plan);
         if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(self.view.key.bytes, plan.expr, covering_rule);
         defer self.closeRequestEdge();
         const contextual_lookup = try self.withLocalProcContext(lookup);
@@ -35863,6 +35925,17 @@ const BodyContext = struct {
             fn_nodes.args,
             pre_lowered,
         );
+        // The resolved direct target instantiates the selected callee's
+        // scheme, and the plan's checked expression is the `use_node` half of
+        // that edge's identity (reunify.md sections 7.2, 9.7); an
+        // iterator-procedure target carries the producer hint for the
+        // specialization it requests.
+        if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(
+            self.view.key.bytes,
+            plan.expr,
+            self.dispatchPlanCoveringRule(plan) orelse self.iteratorProducerHint(lookup, plan),
+        );
+        defer self.closeRequestEdge();
         const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeDirectAtNode(
