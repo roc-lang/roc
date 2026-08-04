@@ -327,6 +327,12 @@ my @categories = (
             # of a requesting edge to the callee's scheme root emitted under the
             # binding, which is that specialization's representation interface
             # edge (reunify.md 10.3, 11.1). It deletes with the rehearsal.
+            # $SREH gained a second `relate(` for the draft layer's join: a
+            # joinable slot the provisional walk opened at an undictated
+            # position relates to the emitted tree's slot for the same position
+            # under the public-meets-minted rule, which is how the slot learns
+            # the final the draft seal projects (reunify.md 10.2, 10.6). It is
+            # representation closure and stays past the flip.
             # $DTRAN gained one `relate(` in the section 10 emission layer: a
             # position whose runtime encoding the checked data does not dictate
             # relates its declared encoding to the one a producer stated there
@@ -334,7 +340,7 @@ my @categories = (
             # representation back out of the resulting class. It is the flip's own
             # representation closure and stays past the flip.
             { label => 'relate(', re => qr/\brelate\(/,
-              counts => { $RCLO => 18, $RSHAD => 1, $RMIRR => 1, $FSID => 1, $SREH => 1, $DTRAN => 1 } },
+              counts => { $RCLO => 18, $RSHAD => 1, $RMIRR => 1, $FSID => 1, $SREH => 2, $DTRAN => 1 } },
             { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
               counts => { $RCLO => 4 } },
         ],

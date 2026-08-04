@@ -853,6 +853,9 @@ const Frame = struct {
     /// body relates the slots (reunify.md 9.1, 10.6).
     request_provisional: ?direct_translate.ProvisionalType = null,
     request_drafts: ?*direct_translate.MonoDraftStore = null,
+    /// The defining scheme's root, kept so the post-body value read can
+    /// re-emit it under every input the body declared.
+    scheme_root_checked: ?u32 = null,
     /// The requesting module and the instantiated callable's return position,
     /// kept so a mint the body produces can be emitted there after lowering.
     request_ret_module: [32]u8 = [_]u8{0} ** 32,
@@ -1544,20 +1547,98 @@ pub const Rehearsal = struct {
     pub fn currentFrameRequestSealed(self: *Rehearsal) ?Type.TypeId {
         if (self.frames.items.len == 0) return null;
         const frame = &self.frames.items[self.frames.items.len - 1];
-        const provisional_root = frame.request_provisional orelse return null;
-        const drafts = frame.request_drafts orelse return null;
-        const sealed = drafts.seal(
-            self.types,
-            self.program_names,
-            provisional_root,
-            self,
-            rehearsalSlotFinal,
-        ) catch return null;
+        if (frame.request_provisional) |provisional_root| seal: {
+            const drafts = frame.request_drafts orelse break :seal;
+            const sealed = (drafts.seal(
+                self.types,
+                self.program_names,
+                provisional_root,
+                self,
+                rehearsalSlotFinal,
+            ) catch null) orelse break :seal;
+            census.bump("value_sealed_by_drafts");
+            return sealed;
+        }
+        // A frame whose start-of-frame emission skipped at an undictated
+        // position re-emits after the body: every input the body declared is
+        // live under the frame's floor, so the position the start emission
+        // could not state may state now.
+        const scheme_root = frame.scheme_root_checked orelse return null;
+        if (!frame.env_ready) return null;
+        const cursor = self.lookup.cursor(frame.env_module_bytes) orelse return null;
+        const sealed = self.emitQuietly(
+            cursor,
+            frame.environment(),
+            frame.owner_node,
+            @enumFromInt(scheme_root),
+        ) orelse return null;
+        census.bump("value_sealed_by_reemission");
         return sealed;
     }
 
     fn rehearsalSlotFinal(self: *Rehearsal, slot: closure.RepresentationSlotId) ?Type.TypeId {
         return self.slotFinal(slot);
+    }
+
+    /// Relate each slot in a frame's provisional request tree to the slot of
+    /// the same position in its emitted request tree, under the
+    /// public-meets-minted rule: the emitted side carries whatever mint the
+    /// declared inputs stated, so the relation is exactly how a joinable slot
+    /// learns its final (reunify.md 10.2, 10.3). The trees share one shape by
+    /// construction; a shape the walk does not model stops quietly.
+    fn relateProvisionalToEmitted(
+        self: *Rehearsal,
+        provisional_root: direct_translate.ProvisionalType,
+        drafts: *const direct_translate.MonoDraftStore,
+        emitted: Type.TypeId,
+        depth: u32,
+    ) void {
+        if (depth >= 16) return;
+        switch (provisional_root) {
+            .interned => {},
+            .representation_slot => |slot| {
+                const emitted_slot = self.slotForEmitted(emitted, depth) orelse return;
+                if (self.engine.related(slot, emitted_slot)) return;
+                self.engine.relate(slot, emitted_slot, .iterator_public_minted) catch return;
+                self.recordClassFinal(emitted_slot);
+                census.bump("rehearsal_provisional_slot_joined");
+            },
+            .draft => |draft_id| {
+                const draft = drafts.drafts.items[@intFromEnum(draft_id)];
+                switch (draft.content) {
+                    .func => |func| {
+                        const emitted_fn = switch (self.types.get(emitted)) {
+                            .func => |emitted_func| emitted_func,
+                            else => return,
+                        };
+                        const emitted_args = self.types.span(emitted_fn.args);
+                        if (func.args.len != GuardedList.borrowLen(emitted_args)) return;
+                        for (func.args, 0..) |arg, index| {
+                            self.relateProvisionalToEmitted(arg, drafts, GuardedList.at(emitted_args, index), depth + 1);
+                        }
+                        self.relateProvisionalToEmitted(func.ret, drafts, emitted_fn.ret, depth + 1);
+                    },
+                    .list => |elem| {
+                        const emitted_elem = switch (self.types.get(emitted)) {
+                            .list => |list_elem| list_elem,
+                            else => return,
+                        };
+                        self.relateProvisionalToEmitted(elem, drafts, emitted_elem, depth + 1);
+                    },
+                    .named => |named| {
+                        const emitted_named = switch (self.types.get(emitted)) {
+                            .named => |emitted_value| emitted_value,
+                            else => return,
+                        };
+                        const emitted_args = self.types.span(emitted_named.args);
+                        if (named.args.len > GuardedList.borrowLen(emitted_args)) return;
+                        for (named.args, 0..) |arg, index| {
+                            self.relateProvisionalToEmitted(arg, drafts, GuardedList.at(emitted_args, index), depth + 1);
+                        }
+                    },
+                }
+            },
+        }
     }
 
     fn openJoinableSlotInEngine(context: *anyopaque, declared: policy.NamedDescriptor, args: []const Type.TypeId) ?closure.RepresentationSlotId {
@@ -4710,6 +4791,7 @@ pub const Rehearsal = struct {
         frame.owner_node = scheme.owner_node;
         frame.binders = binders;
         frame.env_ready = true;
+        frame.scheme_root_checked = @intFromEnum(scheme.root);
         census.bump("rehearsal_env_resolved");
         noteEnvironmentScheme(scheme);
         if (binders.len == 0) {
@@ -4772,6 +4854,9 @@ pub const Rehearsal = struct {
             frame.request_provisional = provisional_root;
             frame.request_drafts = drafts;
             census.bump("rehearsal_request_provisional_emitted");
+            if (frame.request_root) |emitted_root| {
+                self.relateProvisionalToEmitted(provisional_root, drafts, emitted_root, 0);
+            }
         }
 
         // The requesting context's own emission of the instantiated callable
@@ -5149,6 +5234,7 @@ pub const Rehearsal = struct {
         frame.owner_node = scheme.owner_node;
         frame.binders = &.{};
         frame.env_ready = true;
+        frame.scheme_root_checked = @intFromEnum(scheme.root);
         census.bump("rehearsal_env_resolved");
         census.bump("rehearsal_env_resolved_edgeless_ground");
         noteEnvironmentScheme(scheme);
@@ -5176,6 +5262,9 @@ pub const Rehearsal = struct {
             frame.request_provisional = provisional_root;
             frame.request_drafts = drafts;
             census.bump("rehearsal_request_provisional_emitted");
+            if (frame.request_root) |emitted_root| {
+                self.relateProvisionalToEmitted(provisional_root, drafts, emitted_root, 0);
+            }
         }
     }
 
@@ -5304,6 +5393,7 @@ pub const Rehearsal = struct {
         frame.owner_node = scheme.owner_node;
         frame.binders = binders;
         frame.env_ready = true;
+        frame.scheme_root_checked = @intFromEnum(scheme.root);
         frame.interface_root = declared;
         frame.request_root = requested;
         switch (caller.view.payload(site.instantiated_root)) {
@@ -5333,6 +5423,9 @@ pub const Rehearsal = struct {
             frame.request_provisional = provisional_root;
             frame.request_drafts = drafts;
             census.bump("rehearsal_request_provisional_emitted");
+            if (frame.request_root) |emitted_root| {
+                self.relateProvisionalToEmitted(provisional_root, drafts, emitted_root, 0);
+            }
         }
         census.bump("rehearsal_env_resolved");
         census.bump("rehearsal_env_resolved_foreign_scheme");
