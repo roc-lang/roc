@@ -14224,7 +14224,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     else
                         expr_region,
                 } });
-                try self.unifyWith(expr_var, .err, env);
+                // e_anno_only is its own non-executable artifact state; preserve the declared graph.
+                if (expected.annotation == null) {
+                    try self.unifyWith(expr_var, .err, env);
+                }
             }
         },
         .e_derived_method => {
