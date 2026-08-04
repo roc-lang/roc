@@ -320,21 +320,26 @@ pub fn canonicalizeAndTypeCheckModule(
     return checker;
 }
 
-/// Determine the statement_idx for a sibling module in the module_envs_map.
-/// For type modules (where methods are stored under qualified names like "Color.to_str"),
-/// returns the type declaration statement index so Can.zig uses qualified lookup.
-/// For regular modules (where members are stored under plain names like "to_str"),
-/// returns null so Can.zig uses bare-name lookup.
-fn computeSiblingStatementIdx(sibling_env: *const ModuleEnv) ?can.CIR.Statement.Idx {
+const ImportedTypeModule = struct {
+    source_ident: base.Ident.Idx,
+    statement_idx: can.CIR.Statement.Idx,
+};
+
+/// Return the exact type identity and declaration owned by an imported type
+/// module. The module name is dependency identity and may include a normalized
+/// source path, so it is not a source type name to parse or look up.
+fn importedTypeModule(sibling_env: *const ModuleEnv) ?ImportedTypeModule {
     // Only type modules store associated functions under qualified names.
     // Regular modules (deprecated_module, etc.) store them under plain names.
-    switch (sibling_env.module_kind) {
-        .type_module => {},
+    const type_ident_in_module = switch (sibling_env.module_kind) {
+        .type_module => |type_ident| type_ident,
         else => return null,
-    }
-    const type_ident_in_module = sibling_env.common.findIdent(sibling_env.module_name) orelse return null;
+    };
     const type_node_idx = sibling_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse return null;
-    return @enumFromInt(type_node_idx);
+    return .{
+        .source_ident = type_ident_in_module,
+        .statement_idx = @enumFromInt(type_node_idx),
+    };
 }
 
 /// Canonicalization function that also discovers sibling .roc files in the same directory
@@ -397,12 +402,16 @@ pub fn canonicalizeModuleWithSiblings(
         const pre_resolved_env = resolved_import_envs.get(sibling_name);
 
         if (pre_resolved_env) |sibling_env| {
-            const type_ident = try env.insertIdent(base.Ident.for_text(sibling_env.module_name));
-            const statement_idx = computeSiblingStatementIdx(sibling_env);
+            const type_module = importedTypeModule(sibling_env);
+            const qualified_type_name = if (type_module) |info|
+                sibling_env.getIdent(info.source_ident)
+            else
+                sibling_env.module_name;
+            const qualified_type_ident = try env.insertIdent(base.Ident.for_text(qualified_type_name));
             try module_envs_map.put(sibling_ident, .{
                 .env = sibling_env,
-                .statement_idx = statement_idx,
-                .qualified_type_ident = type_ident,
+                .statement_idx = if (type_module) |info| info.statement_idx else null,
+                .qualified_type_ident = qualified_type_ident,
                 .import_identity = .{ .module = sibling_ident },
             });
             continue;
@@ -425,18 +434,17 @@ pub fn canonicalizeModuleWithSiblings(
 
         const actual_env = resolved_import_envs.get(km.import_name) orelse continue;
 
-        // For platform type modules, set statement_idx so method lookups work correctly
-        const statement_idx: ?can.CIR.Statement.Idx = stmt_blk: {
-            // Look up the type in the module's exposed_items to get the actual node index
-            const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
-            const type_node_idx = actual_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
-            break :stmt_blk @enumFromInt(type_node_idx);
-        };
+        // Type-module identity already carries the exact declaration ident.
+        const type_module = importedTypeModule(actual_env);
+        const qualified_type_ident = if (type_module) |info|
+            try env.insertIdent(base.Ident.for_text(actual_env.getIdent(info.source_ident)))
+        else
+            base_ident;
 
         const entry = Can.AutoImportedType{
             .env = actual_env,
-            .statement_idx = statement_idx,
-            .qualified_type_ident = base_ident,
+            .statement_idx = if (type_module) |info| info.statement_idx else null,
+            .qualified_type_ident = qualified_type_ident,
             .import_identity = .{ .module = import_ident },
         };
 
