@@ -450,6 +450,11 @@ pub fn CirVisitor(comptime Context: type) type {
                 .s_nominal_decl => |n| {
                     self.walkTypeAnno(store, n.anno);
                 },
+                .s_where_alias_decl => |w| {
+                    self.walkTypeAnno(store, w.receiver);
+                    if (self.stopped) return;
+                    self.walkWhereClauses(store, w.where);
+                },
                 // Leaf statements - no children to traverse
                 .s_crash,
                 .s_break,
@@ -676,6 +681,8 @@ pub fn CirVisitor(comptime Context: type) type {
                     },
                     .w_alias => |a| {
                         self.walkTypeAnno(store, a.var_);
+                        if (self.stopped) return;
+                        self.walkTypeAnno(store, a.alias);
                     },
                     .w_malformed => {},
                 }

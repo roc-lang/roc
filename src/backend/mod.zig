@@ -6,6 +6,7 @@
 //! - Wasm: WebAssembly backend that generates wasm bytecode
 
 const StructuralTest = @import("structural_test.zig");
+const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
@@ -126,7 +127,7 @@ test "issue 10295: dev backend preserves deep structural equality under register
         .ret_layout = .bool,
     });
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, .default);
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const generated = try codegen.generateCode(root, .bool, 1);
@@ -197,7 +198,7 @@ test "issue 10295: nested list equality has bounded register pressure" {
         .ret_layout = .bool,
     });
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, .default);
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const generated = try codegen.generateCode(root, .bool, 1);

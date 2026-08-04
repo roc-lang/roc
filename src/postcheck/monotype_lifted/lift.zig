@@ -631,6 +631,10 @@ const Lifter = struct {
             .tuple,
             => |items| try self.rewriteExprSpan(items),
             .record => |fields| try self.rewriteFieldExprSpan(fields),
+            .record_update => |update| {
+                try self.rewriteExpr(update.base);
+                try self.rewriteFieldExprSpan(update.fields);
+            },
             .tag => |tag| try self.rewriteExprSpan(tag.payloads),
             .static_data_candidate => |candidate| try self.rewriteExpr(candidate.runtime_expr),
             .nominal,
@@ -1339,6 +1343,11 @@ const CaptureSet = struct {
             },
             .record => |fields| {
                 const field_exprs = input.fieldExprSpan(fields);
+                for (0..field_exprs.len) |field_index| try self.collectExpr(GuardedList.at(field_exprs, field_index).value, bound);
+            },
+            .record_update => |update| {
+                try self.collectExpr(update.base, bound);
+                const field_exprs = input.fieldExprSpan(update.fields);
                 for (0..field_exprs.len) |field_index| try self.collectExpr(GuardedList.at(field_exprs, field_index).value, bound);
             },
             .tag => |tag| {
@@ -2275,6 +2284,11 @@ const CaptureGraphBuilder = struct {
             => |items| try self.collectExprSpan(items, node),
             .record => |fields| {
                 const field_exprs = input.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| try self.collectExpr(GuardedList.at(field_exprs, index).value, node);
+            },
+            .record_update => |update| {
+                try self.collectExpr(update.base, node);
+                const field_exprs = input.fieldExprSpan(update.fields);
                 for (0..field_exprs.len) |index| try self.collectExpr(GuardedList.at(field_exprs, index).value, node);
             },
             .tag => |tag| try self.collectExprSpan(tag.payloads, node),

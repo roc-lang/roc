@@ -647,6 +647,23 @@ const Formatter = struct {
                 }
             },
             .type_decl => |d| {
+                if (d.kind == .where_alias) {
+                    try fmt.formatTypeAnnoDiscard(d.anno);
+                    try fmt.push('.');
+                    try fmt.formatTypeHeader(d.header);
+                    try fmt.pushAll(" :");
+                    if (d.where) |w| {
+                        if (multiline) {
+                            try fmt.ensureNewline();
+                            fmt.curr_indent += 1;
+                            try fmt.pushIndent();
+                        } else {
+                            try fmt.push(' ');
+                        }
+                        try fmt.formatWhereConstraint(w, multiline);
+                    }
+                    return;
+                }
                 const header_region = fmt.nodeRegion(@intFromEnum(d.header));
                 try fmt.formatTypeHeader(d.header);
                 if (multiline and try fmt.flushCommentsBefore(header_region.end)) {
@@ -659,6 +676,7 @@ const Formatter = struct {
                     .nominal => try fmt.pushAll(":="),
                     .@"opaque" => try fmt.pushAll("::"),
                     .alias => try fmt.push(':'),
+                    .where_alias => unreachable, // handled above
                 }
                 const anno_region = fmt.nodeRegion(@intFromEnum(d.anno));
                 if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
@@ -3010,14 +3028,14 @@ const Formatter = struct {
                 try fmt.formatTypeAnnoDiscard(c.ret_anno);
             },
             .mod_alias => |c| {
-                // Format as: a.TypeAlias
+                // Format as: a.WhereAlias
                 try fmt.pushTokenText(c.var_tok);
                 if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
                     fmt.curr_indent = start_indent;
                     try fmt.pushIndent();
                 }
                 try fmt.push('.');
-                try fmt.pushTokenText(c.name_tok);
+                try fmt.formatTypeAnnoDiscard(c.alias);
             },
             .malformed => {
                 // Output nothing for malformed node
