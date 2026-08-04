@@ -6916,10 +6916,11 @@ fn addMainExe(
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
         if (!cross_is_wasm) {
-            const default_platform_root_source = if (cross_target.query.os_tag == .linux)
-                b.path("src/default_platform/linux_runtime.zig")
-            else
-                b.path("src/default_platform/c_runtime.zig");
+            const default_platform_root_source = switch (cross_target.query.os_tag orelse .freestanding) {
+                .linux => b.path("src/default_platform/linux_runtime.zig"),
+                .freebsd, .netbsd => b.path("src/default_platform/bsd_runtime.zig"),
+                else => b.path("src/default_platform/c_runtime.zig"),
+            };
 
             const default_platform_runtime_obj = b.addObject(.{
                 .name = b.fmt("roc_default_runtime_{s}", .{cross_target.name}),

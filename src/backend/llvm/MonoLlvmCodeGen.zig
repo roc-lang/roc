@@ -9782,7 +9782,7 @@ pub const MonoLlvmCodeGen = struct {
         if (!std.mem.eql(u8, self.store.getString(hosted.symbol), shim_symbols.roc_default_echo_line)) return false;
 
         switch (self.target.os.tag) {
-            .linux, .macos, .windows => {},
+            .linux, .macos, .windows, .freebsd, .netbsd => {},
             else => return error.CompilationFailed,
         }
         if (arg_ptrs.len != 1 or arg_layouts.len != 1 or arg_layouts[0] != .str or ret_layout != .zst) {
@@ -9825,6 +9825,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitDefaultPlatformWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
         switch (self.target.os.tag) {
             .linux => try self.emitLinuxWriteStdout(ptr, len),
+            .freebsd, .netbsd => try self.emitX86_64BsdWriteStdout(ptr, len),
             .macos, .windows => try self.emitCWriteStdout(ptr, len),
             else => return error.CompilationFailed,
         }
@@ -9877,6 +9878,30 @@ pub const MonoLlvmCodeGen = struct {
             builder.string("={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}") catch return error.OutOfMemory,
             &.{
                 builder.intValue(.i64, 1) catch return error.OutOfMemory,
+                builder.intValue(.i64, 1) catch return error.OutOfMemory,
+                ptr,
+                len,
+            },
+            "",
+        ) catch return error.OutOfMemory;
+    }
+
+    fn emitX86_64BsdWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
+        if (self.target.cpu.arch != .x86_64) return error.CompilationFailed;
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const fn_ty = builder.fnType(.i64, &.{ .i64, .i64, try self.ptrType(), usize_ty }, .normal) catch return error.OutOfMemory;
+
+        _ = wip.callAsm(
+            .none,
+            fn_ty,
+            .{ .sideeffect = true },
+            builder.string("syscall") catch return error.OutOfMemory,
+            builder.string("={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}") catch return error.OutOfMemory,
+            &.{
+                builder.intValue(.i64, 4) catch return error.OutOfMemory,
                 builder.intValue(.i64, 1) catch return error.OutOfMemory,
                 ptr,
                 len,
