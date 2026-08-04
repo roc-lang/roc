@@ -27010,7 +27010,14 @@ const BodyContext = struct {
         // answer does not cover instantiates exactly as before.
         const fn_node = fn_node: {
             born_final: {
-                if (expected_ret_node != null or hosted_try_capability != null) break :born_final;
+                if (hosted_try_capability != null) break :born_final;
+                // A generated expected return carries producer representation
+                // the request must adopt through the graph; a plain expected
+                // relates against the constant's components exactly as any
+                // relation below does.
+                if (expected_ret_node) |expected| {
+                    if (try self.graph.containsGeneratedPrivate(expected)) break :born_final;
+                }
                 const rehearsal = self.builder.rehearsal orelse break :born_final;
                 if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) break :born_final;
                 const address = self.typeAddress(source_fn_ty);
@@ -27164,7 +27171,9 @@ const BodyContext = struct {
         // constrain against its components.
         const fn_node = fn_node: {
             born_final: {
-                if (expected_ret_node != null) break :born_final;
+                if (expected_ret_node) |expected| {
+                    if (try self.graph.containsGeneratedPrivate(expected)) break :born_final;
+                }
                 const rehearsal = self.builder.rehearsal orelse break :born_final;
                 if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) break :born_final;
                 const address = self.typeAddress(source_fn_ty);
