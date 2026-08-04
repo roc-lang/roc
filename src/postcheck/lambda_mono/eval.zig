@@ -1567,7 +1567,10 @@ pub const Evaluator = struct {
                 return .{ .dec = result.value.num };
             },
             .negate => return .{ .dec = -%a },
-            .abs => return .{ .dec = if (a < 0) -%a else a },
+            .abs => {
+                if (a == std.math.minInt(i128)) return self.crashAbort("Decimal absolute value overflow!");
+                return .{ .dec = if (a < 0) -a else a };
+            },
             .abs_diff => return .{ .dec = if (a > b) a -% b else b -% a },
             .div => return .{ .dec = try self.decDiv(a, b) },
             .div_trunc => return .{ .dec = decTrunc(try self.decDiv(a, b)) },
@@ -1590,26 +1593,20 @@ pub const Evaluator = struct {
         if (a == 0) return 0;
 
         const one = RocDec.one_point_zero_i128;
-        const max_i128: u128 = @intCast(std.math.maxInt(i128));
         const is_negative = (a < 0) != (b < 0);
         const numerator = absU128(a);
-        if (numerator > max_i128) {
-            if (b == one) return a;
-            return self.crashAbort("Decimal division overflow in numerator!");
-        }
-
         const denominator = absU128(b);
-        if (denominator > max_i128) {
-            if (a == one) return b;
-            return self.crashAbort("Decimal division overflow in denominator!");
-        }
 
         const scaled: u256 = @as(u256, numerator) * @as(u256, @intCast(one));
         const quotient: u256 = scaled / @as(u256, denominator);
-        if (quotient > @as(u256, max_i128)) return self.crashAbort("Decimal division overflow!");
+        const limit: u256 = if (is_negative)
+            @as(u256, 1) << 127
+        else
+            @as(u256, @intCast(std.math.maxInt(i128)));
+        if (quotient > limit) return self.crashAbort("Decimal division overflow!");
 
-        const magnitude: i128 = @intCast(quotient);
-        return if (is_negative) -magnitude else magnitude;
+        const magnitude: u128 = @intCast(quotient);
+        return if (is_negative) @bitCast(0 -% magnitude) else @intCast(magnitude);
     }
 
     // transcendental / rounding

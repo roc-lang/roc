@@ -11271,8 +11271,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitCheckedSignedLowestValue(self: *Self, loc: ValueLocation, operand_layout: layout.Idx, op: lir.LowLevel) Allocator.Error!void {
-            const message = checkedOverflowMessage(op);
-            if (operand_layout == .i128) {
+            const message = CheckedArithmetic.overflowMessageForLayout(op, operand_layout) orelse unreachable;
+            if (operand_layout == .i128 or operand_layout == .dec) {
                 const parts = try self.getI128Parts(loc, .signed);
                 const high_lowest = try self.allocTempGeneral();
                 try self.emitCmpImm(parts.low, 0);

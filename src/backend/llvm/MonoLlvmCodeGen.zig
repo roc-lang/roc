@@ -4435,7 +4435,7 @@ pub const MonoLlvmCodeGen = struct {
             if (isFloatLayout(target_layout)) return error.UnsupportedLowLevel;
             const lowest = builder.intValue(value.typeOfWip(wip), CheckedArithmetic.signedLowestValue(target_layout) orelse unreachable) catch return error.OutOfMemory;
             const is_lowest = wip.icmp(.eq, value, lowest, "") catch return error.OutOfMemory;
-            try self.emitCrashIf(is_lowest, checkedOverflowMessage(checked));
+            try self.emitCrashIf(is_lowest, CheckedArithmetic.overflowMessageForLayout(checked, target_layout) orelse unreachable);
         }
         const zero = builder.zeroInitValue(value.typeOfWip(wip)) catch return error.OutOfMemory;
         const is_neg = if (isFloatLayout(target_layout))
