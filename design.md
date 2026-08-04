@@ -3589,6 +3589,14 @@ strings, deriving names, inspecting layouts, or using incidental expression
 shape. It must also not attach a contextual monotype to a checked expression id
 as if that checked expression were a reusable runtime value.
 
+Type-only instantiation contexts do not materialize module-sized body tables.
+The dense checked-binder-to-draft-local table is allocated only when a body
+actually installs its first binding. Checked string literals are shared by the
+specialization draft under the exact `(checked module id, checked literal id)`
+address, so child and call contexts neither allocate parallel literal tables nor
+append duplicate draft literals. Generated strings remain ordinary distinct
+draft entries because they have no checked literal identity.
+
 This distinction matters most for lambdas and closures. Expression-position
 functions are checked templates. Lowering a lambda or closure at an expected
 function type creates or reuses a nested Monotype function specialization keyed

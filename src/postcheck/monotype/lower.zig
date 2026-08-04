@@ -1485,11 +1485,13 @@ const HostedBindingView = struct {
     names: *const names.NameStore,
 };
 
-/// Pattern binders are dense IDs allocated by `CheckedBodyStore`, so their
-/// active local bindings belong in indexed storage rather than a hash table.
+/// Pattern binders are dense IDs allocated by `CheckedBodyStore`. Most
+/// short-lived contexts only instantiate types and never bind a pattern, so
+/// defer materializing the dense table until the first binding is installed.
 const BinderMap = struct {
     allocator: Allocator,
-    locals: []?DraftLocalId,
+    binder_count: usize,
+    locals: ?[]?DraftLocalId = null,
     active_count: usize = 0,
 
     const Entry = struct {
@@ -1514,34 +1516,42 @@ const BinderMap = struct {
     };
 
     fn init(allocator: Allocator, binder_count: usize) Allocator.Error!BinderMap {
-        const locals = try allocator.alloc(?DraftLocalId, binder_count);
-        @memset(locals, null);
-        return .{ .allocator = allocator, .locals = locals };
+        return .{ .allocator = allocator, .binder_count = binder_count };
     }
 
     fn deinit(self: *BinderMap) void {
-        self.allocator.free(self.locals);
+        if (self.locals) |locals| self.allocator.free(locals);
         self.* = undefined;
     }
 
     fn index(self: *const BinderMap, binder: checked.PatternBinderId) usize {
         const raw = @intFromEnum(binder);
-        if (raw >= self.locals.len) Common.invariant("pattern binder was outside its checked body store");
+        if (raw >= self.binder_count) Common.invariant("pattern binder was outside its checked body store");
         return raw;
     }
 
     fn get(self: *const BinderMap, binder: checked.PatternBinderId) ?DraftLocalId {
-        return self.locals[self.index(binder)];
+        const index_ = self.index(binder);
+        const locals = self.locals orelse return null;
+        return locals[index_];
     }
 
     fn put(self: *BinderMap, binder: checked.PatternBinderId, local: DraftLocalId) Allocator.Error!void {
-        const slot = &self.locals[self.index(binder)];
+        const index_ = self.index(binder);
+        if (self.locals == null) {
+            const locals = try self.allocator.alloc(?DraftLocalId, self.binder_count);
+            @memset(locals, null);
+            self.locals = locals;
+        }
+        const slot = &self.locals.?[index_];
         if (slot.* == null) self.active_count += 1;
         slot.* = local;
     }
 
     fn remove(self: *BinderMap, binder: checked.PatternBinderId) bool {
-        const slot = &self.locals[self.index(binder)];
+        const index_ = self.index(binder);
+        const locals = self.locals orelse return false;
+        const slot = &locals[index_];
         if (slot.* == null) return false;
         slot.* = null;
         self.active_count -= 1;
@@ -1557,7 +1567,7 @@ const BinderMap = struct {
     }
 
     fn iterator(self: *const BinderMap) Iterator {
-        return .{ .locals = self.locals };
+        return .{ .locals = self.locals orelse &.{} };
     }
 };
 const TypedBinder = struct {
@@ -10312,6 +10322,11 @@ const DraftOwnerRun = struct {
     ends: DraftCoreLengths,
 };
 
+const CheckedStringLiteralAddress = struct {
+    module_bytes: [32]u8,
+    literal: checked.CheckedStringLiteralId,
+};
+
 const BodyDraftStore = struct {
     allocator: Allocator,
     fns: std.ArrayList(DraftFn),
@@ -10367,6 +10382,9 @@ const BodyDraftStore = struct {
     if_branches: std.ArrayList(DraftIfBranch),
     string_literals: std.ArrayList(DraftStringLiteral),
     string_bytes: std.ArrayList(u8),
+    /// Checked literal identities are immutable and shared by every lowering
+    /// context that writes into this specialization draft.
+    checked_string_literals: std.AutoHashMap(CheckedStringLiteralAddress, DraftStringLiteralId),
     proc_debug_names: std.ArrayList(Ast.ProcDebugName),
     roots: std.ArrayList(DraftRoot),
     layout_requests: std.ArrayList(DraftLayoutRequest),
@@ -10442,6 +10460,7 @@ const BodyDraftStore = struct {
             .if_branches = .empty,
             .string_literals = .empty,
             .string_bytes = .empty,
+            .checked_string_literals = std.AutoHashMap(CheckedStringLiteralAddress, DraftStringLiteralId).init(allocator),
             .proc_debug_names = .empty,
             .roots = .empty,
             .layout_requests = .empty,
@@ -10539,6 +10558,7 @@ const BodyDraftStore = struct {
         self.materialized_const_nodes.deinit(self.allocator);
         self.materialized_const_node_indices.deinit();
         self.active_const_bindings.deinit(self.allocator);
+        self.checked_string_literals.deinit();
         self.string_bytes.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -10901,6 +10921,17 @@ const BodyDraftStore = struct {
 
     fn addStringLiteral(self: *BodyDraftStore, text: []const u8) Allocator.Error!DraftStringLiteralId {
         return try self.addStringView(text, 0, @intCast(text.len));
+    }
+
+    fn addCheckedStringLiteral(
+        self: *BodyDraftStore,
+        address: CheckedStringLiteralAddress,
+        text: []const u8,
+    ) Allocator.Error!DraftStringLiteralId {
+        if (self.checked_string_literals.get(address)) |existing| return existing;
+        const lowered = try self.addStringLiteral(text);
+        try self.checked_string_literals.put(address, lowered);
+        return lowered;
     }
 
     fn addStringView(self: *BodyDraftStore, backing: []const u8, offset: u32, len: u32) Allocator.Error!DraftStringLiteralId {
@@ -12116,7 +12147,6 @@ const BodyContext = struct {
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*std.AutoHashMap(CheckedTypeAddress, NodeId)) = .empty,
-    string_literals: []?DraftStringLiteralId,
     loop_contexts: std.ArrayList(LoopContext),
     /// Literal sub-patterns on non-builtin number types collected while
     /// lowering a match branch's pattern; each becomes an equality condition
@@ -12671,9 +12701,6 @@ const BodyContext = struct {
         errdefer ctx.deinit();
         ctx.method_scope = method_scope;
         ctx.source_file_id = try draft.sourceFileIdFor(view.module_identity.module_idx, view.module_env.module_name);
-        const string_literals = try allocator.alloc(?DraftStringLiteralId, view.bodies.stringLiteralCount());
-        @memset(string_literals, null);
-        ctx.string_literals = string_literals;
         return ctx;
     }
 
@@ -12711,7 +12738,6 @@ const BodyContext = struct {
             .evidence = rootEvidence(owner_template, &.{}),
             .restore_evidence = rootEvidence(owner_template, &.{}),
             .node_map = std.AutoHashMap(CheckedTypeAddress, NodeId).init(allocator),
-            .string_literals = &[_]?DraftStringLiteralId{},
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
             .equality_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
@@ -12740,7 +12766,6 @@ const BodyContext = struct {
         self.equality_expansion_stack.deinit();
         self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
-        self.allocator.free(self.string_literals);
         self.decl_scopes.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
         self.node_map.deinit();
@@ -17714,10 +17739,8 @@ const BodyContext = struct {
         if (index >= self.view.bodies.stringLiteralCount()) {
             Common.invariant("checked string literal id outside checked body string store");
         }
-        if (self.string_literals[index]) |existing| return existing;
-        const lowered = try self.addStringLiteral(self.view.bodies.stringLiteral(@enumFromInt(index)));
-        self.string_literals[index] = lowered;
-        return lowered;
+        const address: CheckedStringLiteralAddress = .{ .module_bytes = self.view.key.bytes, .literal = id };
+        return try self.draft.addCheckedStringLiteral(address, self.view.bodies.stringLiteral(@enumFromInt(index)));
     }
 
     fn lowerCallExpr(
@@ -48229,6 +48252,45 @@ test "record parser presence words cover fields wider than one u64" {
     try std.testing.expectEqual(@as(u64, 2), BodyContext.recordPresenceMask(65));
     try std.testing.expectEqual(@as(u64, 1) << 63, BodyContext.recordPresenceMask(127));
     try std.testing.expectEqual(@as(u64, 1), BodyContext.recordPresenceMask(128));
+}
+
+test "binder map materializes dense storage only on first binding" {
+    var binders = try BinderMap.init(std.testing.allocator, 4);
+    defer binders.deinit();
+
+    const binder: checked.PatternBinderId = @enumFromInt(2);
+    const local: DraftLocalId = @enumFromInt(7);
+    try std.testing.expect(binders.locals == null);
+    try std.testing.expectEqual(@as(?DraftLocalId, null), binders.get(binder));
+    try std.testing.expect(!binders.remove(binder));
+    try std.testing.expect(binders.locals == null);
+
+    try binders.put(binder, local);
+    try std.testing.expect(binders.locals != null);
+    try std.testing.expectEqual(@as(?DraftLocalId, local), binders.get(binder));
+    try std.testing.expectEqual(@as(usize, 1), binders.count());
+}
+
+test "checked string literal cache is shared by exact module identity" {
+    var draft = BodyDraftStore.init(std.testing.allocator);
+    defer draft.deinit();
+
+    const literal: checked.CheckedStringLiteralId = @enumFromInt(3);
+    const first_address: CheckedStringLiteralAddress = .{
+        .module_bytes = [_]u8{1} ** 32,
+        .literal = literal,
+    };
+    const other_module_address: CheckedStringLiteralAddress = .{
+        .module_bytes = [_]u8{2} ** 32,
+        .literal = literal,
+    };
+
+    const first = try draft.addCheckedStringLiteral(first_address, "same");
+    const reused = try draft.addCheckedStringLiteral(first_address, "same");
+    const other_module = try draft.addCheckedStringLiteral(other_module_address, "same");
+    try std.testing.expectEqual(first, reused);
+    try std.testing.expect(first != other_module);
+    try std.testing.expectEqual(@as(usize, 2), draft.string_literals.items.len);
 }
 
 test "function context identity excludes draft local allocation ids" {

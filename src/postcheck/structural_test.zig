@@ -878,7 +878,8 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "const BinderMap = struct",
         "const TypedBinder = struct",
     );
-    try expectContains(binder_map, "locals: []?DraftLocalId");
+    try expectContains(binder_map, "locals: ?[]?DraftLocalId = null");
+    try expectContains(binder_map, "if (self.locals == null)");
     try expectNotContains(binder_map, "AutoHashMap");
 
     const source_mapping = sourceSliceBetween(
