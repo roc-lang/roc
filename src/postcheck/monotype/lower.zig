@@ -7205,6 +7205,7 @@ const Builder = struct {
                 census.bump("deferred_identity_keyed_sealed");
                 break :digest sealed_request_digest;
             };
+            spec.directed_request_digest = request_digest;
             const identity = templateSpecIdentity(
                 spec.template_ref,
                 spec.method_scope,
@@ -7363,7 +7364,14 @@ const Builder = struct {
             var lexical_owner: ?DraftOwner = null;
             if (template_spec) |spec| {
                 if (!spec.local_context_dependent) {
-                    identity = templateSpecIdentity(spec.template_ref, spec.method_scope, spec.source_fn_key, sealed_template.evidence_digest, fn_ty, digest);
+                    identity = templateSpecIdentity(
+                        spec.template_ref,
+                        spec.method_scope,
+                        spec.source_fn_key,
+                        sealed_template.evidence_digest,
+                        fn_ty,
+                        spec.directed_request_digest orelse digest,
+                    );
                 }
                 lexical_owner = spec.lexical_owner;
                 allow_imported[raw_index] = !spec.requires_local;
@@ -10645,6 +10653,10 @@ const DraftTemplateSpec = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
+    /// The directed request-emission digest this specialization was keyed by
+    /// at its deferred probe, so its stored record registers under the same
+    /// key the probe reads.
+    directed_request_digest: ?names.TypeDigest = null,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     evidence: []const SpecEvidence,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
