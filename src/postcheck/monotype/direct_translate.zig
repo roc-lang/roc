@@ -385,6 +385,12 @@ const Emission = struct {
     engine: closure.Engine,
     /// The representation inputs the caller declared for this translation.
     inputs: std.ArrayList(RepresentationInput),
+    /// One producer atom per minted-content tuple — the graph's occurrence
+    /// identity is `findGeneratedIterator`'s dedup key (public source, kind,
+    /// components, callable evidence), a content tuple, so two emissions of
+    /// one mint share one atom exactly as two call sites share one graph
+    /// instance (reunify.md 13.2e cut order, step 1).
+    minted_atoms: std.AutoHashMap([32]u8, closure.ProducerAtom),
     /// Representation-erased identity digests -> dense engine token. The engine
     /// refuses to relate two slots with unequal tokens, so a token is exactly
     /// the identity a representation relation may not move.
@@ -406,6 +412,7 @@ const Emission = struct {
             .allocator = allocator,
             .engine = closure.Engine.init(allocator),
             .inputs = .empty,
+            .minted_atoms = std.AutoHashMap([32]u8, closure.ProducerAtom).init(allocator),
             .tokens = .empty,
             .next_token = 1,
             .next_producer = 1,
@@ -416,6 +423,7 @@ const Emission = struct {
     fn deinit(self: *Emission) void {
         self.engine.deinit();
         self.inputs.deinit(self.allocator);
+        self.minted_atoms.deinit();
         self.tokens.deinit(self.allocator);
     }
 
@@ -430,6 +438,32 @@ const Emission = struct {
             if (stated[index].position.eql(address)) return stated[index].representation;
         }
         return null;
+    }
+
+    /// The producer atom for one position: minted content shares the atom of
+    /// its content tuple; everything else is a fresh occurrence.
+    fn producerFor(self: *Emission, input: ?ProducerRepresentation) closure.ProducerAtom {
+        const stated = input orelse return self.freshProducer();
+        if (stated.iterator_representation != .minted) return self.freshProducer();
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(@tagName(stated.iterator_kind));
+        hasher.update(&[_]u8{stated.iterator_depth});
+        for (stated.components) |component| {
+            hasher.update(std.mem.asBytes(&component));
+        }
+        if (stated.generated) |generated| {
+            hasher.update("generated");
+            hasher.update(&generated.bytes);
+        } else if (stated.minting) |minting| {
+            if (minting.callable_evidence) |evidence| {
+                hasher.update("evidence");
+                hasher.update(&evidence.bytes);
+            }
+        }
+        const key = hasher.finalResult();
+        const gop = self.minted_atoms.getOrPut(key) catch return self.freshProducer();
+        if (!gop.found_existing) gop.value_ptr.* = self.freshProducer();
+        return gop.value_ptr.*;
     }
 
     fn freshProducer(self: *Emission) closure.ProducerAtom {
@@ -467,9 +501,9 @@ const Emission = struct {
         const identity = identityDigest(store, name_store, declared, args);
         const token = try self.tokenForDigest(identity);
         const shape = try self.shapeAt(store, name_store, declared, token, args, backing);
-        const slot = try self.engine.createSlot(token, self.freshProducer(), shape);
-
         const input = self.inputFor(address);
+        const slot = try self.engine.createSlot(token, self.producerFor(input), shape);
+
         var produced_stands = false;
         if (input) |stated| {
             census.bump("emission_input_declared");
