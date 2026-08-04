@@ -14266,7 +14266,9 @@ Builtin :: [].{
 			to_f64 : I128 -> F64
 
 			## Convert an [I128] to a [Dec], returning `Err(OutOfRange)` if the
-			## integer value does not fit in [Dec]'s fixed-point range.
+			## integer value does not fit in [Dec]'s fixed-point range. See
+			## [Dec.from_attos] to read an [I128] already scaled by 10^18, matching
+			## [Dec]'s internal representation.
 			to_dec_try : I128 -> Try(Dec, [OutOfRange])
 			to_dec_try = |num| out_of_range_try(i128_to_dec_try_unsafe(num))
 
@@ -14331,6 +14333,26 @@ Builtin :: [].{
 			## decimal places.
 			tau : Dec
 			tau = 6.283185307179586476
+
+			## Convert a [Dec] to a count of attos (units of 10^-18). This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.to_attos(1.5) == 1500000000000000000
+			##
+			## expect Dec.to_attos(Dec.highest) == I128.highest
+			## ```
+			to_attos : Dec -> I128
+
+			## Convert a count of attos (units of 10^-18) to a [Dec]. This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.from_attos(1500000000000000000) == 1.5
+			##
+			## expect Dec.from_attos(Dec.to_attos(-0.25)) == -0.25
+			## ```
+			from_attos : I128 -> Dec
 
 			## Convert a [Dec] to its decimal string representation.
 			## ```roc
@@ -15008,7 +15030,8 @@ Builtin :: [].{
 
 			## Convert a [Dec] to an [I128]. The fractional part is truncated
 			## toward zero. The entire integer part of any [Dec] fits in an
-			## [I128], so no wrapping occurs in practice.
+			## [I128], so no wrapping occurs in practice. See [Dec.to_attos] to get
+			## the exact value (scaled by 10^18) instead.
 			## ```roc
 			## expect Dec.to_i128_wrap(42.5) == 42
 			## ```
@@ -15016,7 +15039,8 @@ Builtin :: [].{
 
 			## Convert a [Dec] to an [I128], returning `Err(OutOfRange)` if the
 			## integer part does not fit. The fractional part is truncated toward
-			## zero.
+			## zero. See [Dec.to_attos] to get the exact value (scaled by 10^18)
+			## instead.
 			## ```roc
 			## expect Dec.to_i128_try(42.5) == Ok(42)
 			## ```

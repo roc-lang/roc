@@ -5256,6 +5256,11 @@ pub const Interpreter = struct {
                 val.write(f64, @bitCast(args[0].read(u64)));
                 break :blk val;
             },
+            .dec_from_attos, .dec_to_attos => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(i128, args[0].read(i128));
+                break :blk val;
+            },
             .num_to_str => blk: {
                 // Generic num_to_str uses arg layout to determine type
                 const size = self.helper.sizeOf(arg_layout);
