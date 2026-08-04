@@ -4549,7 +4549,17 @@ pub const Rehearsal = struct {
                 census.bump("rehearsal_skip_unreached_actual");
                 return .edge_unusable;
             }
-            const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse return .edge_unusable;
+            const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse {
+                // An actual the site cannot state — a generically-recorded
+                // instantiation whose variable no open binding disposes —
+                // is where the edge's declared covering rule states the
+                // binding instead (reunify.md sections 7.2, 9.6).
+                if (edge.covering_rule != null) {
+                    census.bump("rehearsal_site_actual_routes_to_rule");
+                    return self.resolveEnvironmentFromCoveringRule(start, frame, edge);
+                }
+                return .edge_unusable;
+            };
             if (self.carriesResidualMaterialization(translated)) {
                 noteResidualOrigin(frame, self.classifyResidualActual(
                     caller,
@@ -4977,6 +4987,13 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_edgeless_scheme_has_binders");
             noteEdgelessWithBinders(start, scheme, skip);
             self.noteUnresolvedDetail(start, scheme, skip);
+            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+                std.debug.print("SEED-UNRESOLVED name={s} skip={s} gv={d}\n", .{
+                    start.template_name,
+                    @tagName(skip),
+                    scheme.gv_len,
+                });
+            }
             return;
         }
         if (scheme.captured_len != 0) {
@@ -5071,7 +5088,15 @@ pub const Rehearsal = struct {
                 census.bump("rehearsal_skip_unreached_actual");
                 return false;
             }
-            const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse return false;
+            const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse {
+                // As on the same-module path: an actual the site cannot state
+                // routes to the rule the edge declares (reunify.md 7.2, 9.6).
+                if (edge.covering_rule != null) {
+                    census.bump("rehearsal_site_actual_routes_to_rule");
+                    return self.resolveEnvironmentFromCoveringRule(start, frame, edge) == null;
+                }
+                return false;
+            };
             if (self.carriesResidualMaterialization(translated)) {
                 noteResidualOrigin(frame, self.classifyResidualActual(
                     caller,
@@ -5494,12 +5519,20 @@ pub const Rehearsal = struct {
                     });
                     switch (caller.view.payload(actual)) {
                         .rigid, .flex => |v| {
-                            std.debug.print(" phase={s} constraints={d}:", .{
+                            std.debug.print(" phase={s} constraints={d}", .{
                                 if (v.numeric_default_phase) |phase| @tagName(phase) else "-",
                                 v.constraints.len,
                             });
-                            for (v.constraints) |constraint| {
-                                std.debug.print(" {s}", .{caller.source_names.methodNameText(constraint.fn_name)});
+                            for (caller.view.schemes) |scheme| {
+                                for (scheme.generalizedVars(caller.view)) |binder| {
+                                    if (binder == actual) {
+                                        std.debug.print(" owner_scheme={d}/gv{d}/owner_node={d}", .{
+                                            @intFromEnum(scheme.id),
+                                            scheme.gv_len,
+                                            scheme.owner_node,
+                                        });
+                                    }
+                                }
                             }
                         },
                         else => {},
