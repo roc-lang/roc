@@ -481,6 +481,11 @@ const BuiltinsObjects = struct {
     const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins.o");
     const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins.o");
 
+    /// Cross-compilation target builtins (BSD targets)
+    const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_builtins.o");
+    const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_builtins.o");
+    const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_builtins.o");
+
     /// Extern-symbol-mode builtins: host operations are linker-resolved
     /// symbols (the symbol ABI) instead of RocOps vtable calls.
     const native_extern = if (builtin.is_test)
@@ -499,6 +504,9 @@ const BuiltinsObjects = struct {
     const arm64win_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins_extern.obj");
     const x64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins_extern.o");
     const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins_extern.o");
+    const x64freebsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_builtins_extern.o");
+    const x64openbsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_builtins_extern.o");
+    const x64netbsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_builtins_extern.o");
 
     /// Get the appropriate builtins object bytes for the given target
     ///
@@ -518,6 +526,9 @@ const BuiltinsObjects = struct {
             .arm64win => arm64win,
             .x64mac => x64mac,
             .arm64mac => arm64mac,
+            .x64freebsd => x64freebsd,
+            .x64openbsd => x64openbsd,
+            .x64netbsd => x64netbsd,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native,
         };
@@ -537,6 +548,9 @@ const BuiltinsObjects = struct {
             .arm64win => arm64win_extern,
             .x64mac => x64mac_extern,
             .arm64mac => arm64mac_extern,
+            .x64freebsd => x64freebsd_extern,
+            .x64openbsd => x64openbsd_extern,
+            .x64netbsd => x64netbsd_extern,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native_extern,
         };
@@ -569,6 +583,9 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
         const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/" ++ base_name ++ ".o");
         const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/" ++ base_name ++ ".obj");
         const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/" ++ base_name ++ ".obj");
+        const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/" ++ base_name ++ ".o");
+        const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/" ++ base_name ++ ".o");
+        const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/" ++ base_name ++ ".o");
 
         pub fn forTarget(requested: RocTarget) ?[]const u8 {
             const target = requested.defaultCpuTarget();
@@ -581,6 +598,9 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
                 .arm64mac => arm64mac,
                 .x64win => x64win,
                 .arm64win => arm64win,
+                .x64freebsd => x64freebsd,
+                .x64openbsd => x64openbsd,
+                .x64netbsd => x64netbsd,
                 else => null,
             };
         }
