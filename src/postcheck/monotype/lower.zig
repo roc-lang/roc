@@ -33249,7 +33249,7 @@ const BodyContext = struct {
             return try self.applyDispatchResultMode(
                 plan.result_mode,
                 call_expr,
-                try self.activeTypeFromNode(plan_ret_node),
+                try self.activeTypeFromCell(call_ret_cell),
             );
         }
         const call_data = if (direct_graph_call)
@@ -33277,7 +33277,7 @@ const BodyContext = struct {
         return switch (plan.result_mode) {
             .value, .parser_for, .encoder_for, .map, .map_effectful => call_expr,
             .equality, .hash => blk: {
-                const ret_ty = try self.activeTypeFromNode(plan_ret_node);
+                const ret_ty = try self.activeTypeFromCell(call_ret_cell);
                 if (expected_ret_ty) |expected| {
                     const expected_ty = try self.activeTypeFromType(expected);
                     if (!self.sameType(expected_ty, ret_ty)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
