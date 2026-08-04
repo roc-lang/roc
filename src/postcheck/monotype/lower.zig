@@ -34274,6 +34274,19 @@ const BodyContext = struct {
     ) Allocator.Error!?Type.TypeId {
         const ret_node = try self.dispatchResultTypeNode(checked_ret_ty, maybe_plan, expected_ret_ty);
         if (expected_ret_ty) |expected| return expected;
+        // A generated return reads the directed final the consumer's declared
+        // input states, exactly as the call's own result cell does; the node
+        // answers where the emission declines (reunify.md 13.2e).
+        if (maybe_plan) |plan_id| {
+            if (try self.graph.containsGeneratedPrivate(ret_node)) {
+                const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+                if (self.generatedDispatchReturnFinal(checked_ret_ty, plan)) |final| {
+                    census.bump("dispatch_result_directed_final");
+                    return final;
+                }
+                census.bump("dispatch_result_directed_declined");
+            }
+        }
         return try self.activeTypeFromNode(ret_node);
     }
 
