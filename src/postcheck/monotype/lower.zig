@@ -20990,6 +20990,14 @@ const BodyContext = struct {
         };
         const mint_depth = self.generatedIteratorMintDepth(kind, components) orelse
             return try self.forcedDynamicIteratorNode(public_iterator, public_named.args[0], public_source);
+        if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+            std.debug.print("GRAPH-MINT kind={s} depth={d} components={d} evidence={s}\n", .{
+                @tagName(kind),
+                mint_depth,
+                components.len,
+                if (callable_evidence != null) "y" else "-",
+            });
+        }
         if (self.graph.findGeneratedIterator(public_iterator, kind, components, callable_evidence)) |existing| {
             return existing;
         }
