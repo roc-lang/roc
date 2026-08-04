@@ -15918,6 +15918,12 @@ const BodyContext = struct {
         // deferred lowering, so only the frame's own emission answers here.
         const directed = rehearsal.currentFrameRequestRootFinal() orelse {
             census.bump("spec_root_parity_declined");
+            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+                std.debug.print("PARITY-DECLINE checked_root={d} skip={s}\n", .{
+                    @intFromEnum(checked_fn_root),
+                    rehearsal.currentFrameSkipName(),
+                });
+            }
             return;
         };
         const types = &self.builder.program.types;

@@ -1609,6 +1609,14 @@ pub const Rehearsal = struct {
         census.bump("rehearsal_body_root_mint_declared");
     }
 
+    /// The innermost frame's skip-class name, for the probe's decline trace.
+    pub fn currentFrameSkipName(self: *const Rehearsal) []const u8 {
+        if (self.frames.items.len == 0) return "no_frame";
+        const frame = &self.frames.items[self.frames.items.len - 1];
+        const skip = frame.skip orelse return "none";
+        return @tagName(skip);
+    }
+
     pub fn innermostRequestEdge(self: *const Rehearsal) ?RequestEdgeName {
         if (self.disabled) return null;
         if (self.requests.items.len == 0) return null;
@@ -5408,6 +5416,14 @@ pub const Rehearsal = struct {
         return self.translator.translateUnderEnvironment(caller, env, owner_node, actual, &reason) catch |err| switch (err) {
             error.Skip => {
                 census.bump("rehearsal_skip_actual_untranslatable");
+                if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+                    std.debug.print("ACTUAL-SKIP actual={d} reason={s} env={s} payload={s}\n", .{
+                        @intFromEnum(actual),
+                        @tagName(reason),
+                        if (env == null) "null" else "present",
+                        @tagName(caller.view.payload(actual)),
+                    });
+                }
                 return null;
             },
             else => {
