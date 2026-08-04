@@ -5122,8 +5122,8 @@ span that runs after the structural pattern succeeds and before the guard; its
 locals remain in scope for the branch body. A remainder used only by the body
 is an ordinary body-local statement. The decision-tree emitter assigns all
 successful pattern locals before lowering the branch statement span, so later
-stages consume this ordering directly and never reconstruct record-rest
-semantics from a surviving source pattern.
+stages consume this ordering directly; no source record-rest pattern survives
+Monotype lowering.
 
 **The sharing invariant.** Monotype is a DAG: an expression id referenced from
 multiple positions is re-lowered at each reference, so downstream control
