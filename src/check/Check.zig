@@ -15609,7 +15609,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // If unification fails, we get a nice type mismatch error explaining that
                 // statement expressions must return {}.
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
-                _ = try self.unifyInContext(empty_rec, expr_var, env, .statement_value);
+                const statement_result = try self.unifyInContext(empty_rec, expr_var, env, .statement_value);
+                if (statement_result.isProblem()) {
+                    try self.erroneous_value_exprs.put(self.gpa, expr.expr, {});
+                }
 
                 _ = try self.unify(stmt_var, expr_var, env);
                 if (self.exprIsAllCrashConditional(expr.expr)) {
