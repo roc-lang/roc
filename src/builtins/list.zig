@@ -1048,6 +1048,42 @@ pub fn listSwap(
     return newList;
 }
 
+/// Construct a sublist view borrowed from `list`.
+///
+/// This operation never changes a reference count or consumes `list`. ARC
+/// keeps `list` live for the complete lifetime of the returned view. For
+/// refcounted elements it initializes whole-allocation teardown metadata, so a
+/// later owned occurrence can safely retain the view.
+pub fn listSublistBorrowed(
+    list: RocList,
+    element_width: usize,
+    start_u64: u64,
+    len_u64: u64,
+    elements_refcounted: bool,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const size = list.len();
+    if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
+        return RocList.empty();
+    }
+
+    const source_ptr = list.bytes orelse return RocList.empty();
+    const start: usize = @intCast(start_u64);
+    const size_minus_start = size - start;
+    const keep_len: usize = @intCast(@min(len_u64, @as(u64, @intCast(size_minus_start))));
+    list.setAllocationElementCount(elements_refcounted, roc_ops);
+    const list_alloc_ptr = RocList.encodeSliceAllocationPtr(source_ptr);
+    const slice_alloc_ptr = list.capacity_or_alloc_ptr;
+    const slice_mask = list.seamlessSliceMask();
+    const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+
+    return .{
+        .bytes = source_ptr + start * element_width,
+        .length = keep_len,
+        .capacity_or_alloc_ptr = alloc_ptr,
+    };
+}
+
 /// List.sublist - returns a sublist of the given list.
 ///
 /// ## Ownership
@@ -2666,6 +2702,22 @@ test "listSublist basic functionality" {
     try std.testing.expectEqual(@as(u8, 4), elements[1]); // data[3]
     try std.testing.expectEqual(@as(u8, 5), elements[2]); // data[4]
     try std.testing.expectEqual(@as(u8, 6), elements[3]); // data[5]
+}
+
+test "borrowed sublist leaves source unique and initializes teardown metadata" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const list = RocList.fromSlice(u8, &.{ 10, 20, 30, 40 }, true, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), true, null, rcNone, test_env.getOps());
+
+    const sublist = listSublistBorrowed(list, @sizeOf(u8), 1, 2, true, test_env.getOps());
+
+    try std.testing.expect(list.isUnique(test_env.getOps()));
+    try std.testing.expectEqual(@as(usize, 4), sublist.getAllocationElementCount(true, test_env.getOps()));
+    try std.testing.expect(sublist.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 2), sublist.len());
+    try std.testing.expectEqualSlices(u8, &.{ 20, 30 }, sublist.elements(u8).?[0..sublist.len()]);
 }
 
 test "listSublist edge cases" {
