@@ -759,6 +759,17 @@ fn componentAgreementOf(left: policy.NamedDescriptor, right: policy.NamedDescrip
 /// checking owns plus the identities of the already-emitted arguments. Every
 /// field section 10.1 owns is left out, so two representations of one
 /// declaration digest equal here and the engine will relate them.
+/// The representation-erased identity a slot is opened with, shared with
+/// callers that open joinable slots in their own engine.
+pub fn slotIdentityDigest(
+    store: *const MonoType.Store,
+    name_store: *const names.NameStore,
+    descriptor: policy.NamedDescriptor,
+    args: []const TypeId,
+) [32]u8 {
+    return identityDigest(store, name_store, descriptor, args);
+}
+
 fn identityDigest(
     store: *const MonoType.Store,
     name_store: *const names.NameStore,
@@ -938,6 +949,14 @@ pub const Translator = struct {
     /// joinable representation slot, and every compound holding a provisional
     /// child riding a draft in `drafts`. Ground content interns exactly as
     /// `translateUnderEnvironment` interns it.
+    /// Opens one joinable slot for an undictated position, in whichever
+    /// engine owns the component's relations, so the seal's slot finals and
+    /// the walk's slots live together.
+    pub const JoinableSlotOpener = struct {
+        context: *anyopaque,
+        open: *const fn (context: *anyopaque, declared: policy.NamedDescriptor, args: []const TypeId) ?closure.RepresentationSlotId,
+    };
+
     pub fn translateProvisionalUnderEnvironment(
         self: *Translator,
         cursor: ModuleCursor,
@@ -945,6 +964,7 @@ pub const Translator = struct {
         scheme_owner_node: u32,
         root: checked.CheckedTypeId,
         drafts: *MonoDraftStore,
+        opener: JoinableSlotOpener,
         skip_reason: *SkipReason,
     ) WalkError!ProvisionalType {
         var walk = Walk{
@@ -960,7 +980,7 @@ pub const Translator = struct {
             .skip_reason = skip_reason,
         };
         defer walk.active.deinit();
-        return try walk.provisional(root, drafts);
+        return try walk.provisional(root, drafts, opener);
     }
 
     /// Run one acyclic (eager, child-first interning) walk. A recursive cycle
@@ -2054,17 +2074,17 @@ const Walk = struct {
     /// list, alias-backed, or nominal compound holding a provisional child
     /// builds a draft; everything else interns through the eager walk
     /// unchanged, including its skip classes.
-    fn provisional(self: *Walk, checked_ty: checked.CheckedTypeId, drafts: *MonoDraftStore) WalkError!ProvisionalType {
+    fn provisional(self: *Walk, checked_ty: checked.CheckedTypeId, drafts: *MonoDraftStore, opener: Translator.JoinableSlotOpener) WalkError!ProvisionalType {
         switch (self.cursor.view.payload(checked_ty)) {
             .function => |fn_ty| {
                 const refs = try self.owner.allocator.alloc(ProvisionalType, fn_ty.args.len);
                 errdefer self.owner.allocator.free(refs);
                 var any_provisional = false;
                 for (fn_ty.args, 0..) |arg, index| {
-                    refs[index] = try self.provisional(arg, drafts);
+                    refs[index] = try self.provisional(arg, drafts, opener);
                     if (std.meta.activeTag(refs[index]) != .interned) any_provisional = true;
                 }
-                const ret = try self.provisional(fn_ty.ret, drafts);
+                const ret = try self.provisional(fn_ty.ret, drafts, opener);
                 if (!any_provisional and std.meta.activeTag(ret) == .interned) {
                     self.owner.allocator.free(refs);
                     return .{ .interned = try self.node(checked_ty) };
@@ -2075,7 +2095,7 @@ const Walk = struct {
                 });
                 return .{ .draft = draft_id };
             },
-            .alias => |alias_ty| return try self.provisional(alias_ty.backing, drafts),
+            .alias => |alias_ty| return try self.provisional(alias_ty.backing, drafts, opener),
             .nominal => |n| {
                 if (builtinDisposition(n) == .open_representation and !self.emitting_representation) {
                     var args = std.ArrayList(TypeId).empty;
@@ -2089,13 +2109,7 @@ const Walk = struct {
                         .def = declared_def,
                         .builtin_owner = self.owner.resolver.builtinOwner(self.cursor, n),
                     };
-                    if (try self.owner.emission.openJoinableSlot(
-                        self.build_store,
-                        self.owner.target_names,
-                        declared,
-                        args.items,
-                        null,
-                    )) |slot| {
+                    if (opener.open(opener.context, declared, args.items)) |slot| {
                         return .{ .representation_slot = slot };
                     }
                 }

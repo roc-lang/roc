@@ -3488,6 +3488,7 @@ const Builder = struct {
         // reached the frame's return by now, which the start-of-frame
         // emission could not carry.
         body_ctx.measureSpecRootParity(template.checked_fn_root, lower_fn_ty);
+        body_ctx.measureValueParity(lower_fn_ty);
         const sealed_root_node, const draft_end = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
@@ -16051,6 +16052,33 @@ const BodyContext = struct {
     /// off the graph: the request IS the callee's instantiated interface, so
     /// agreement here says the whole per-argument relation the graph runs to
     /// build one is redundant (reunify.md sections 7.2, 11).
+    /// Debug/probe-only: whether the frame's provisional request emission,
+    /// sealed through the class finals the body's relations recorded, states
+    /// the very request value the graph sealed — the value-side certification
+    /// the definition's recorded type needs before it moves off the graph
+    /// (reunify.md 10.6, 11.5).
+    fn measureValueParity(self: *BodyContext, request_fn_ty: Type.TypeId) void {
+        if (comptime !census.enabled) return;
+        const rehearsal = self.builder.rehearsal orelse return;
+        const sealed = rehearsal.currentFrameRequestSealed() orelse {
+            census.bump("value_parity_declined");
+            return;
+        };
+        const types = &self.builder.program.types;
+        const name_store = &self.builder.program.names;
+        const left = types.typeDigest(name_store, sealed);
+        const right = types.typeDigest(name_store, request_fn_ty);
+        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
+            census.bump("value_parity_agree");
+            return;
+        }
+        if (types.typeEql(name_store, sealed, request_fn_ty) catch false) {
+            census.bump("value_parity_eql_not_digest");
+            return;
+        }
+        census.bump("value_parity_diverge");
+    }
+
     fn measureSpecRootParity(self: *BodyContext, checked_fn_root: checked.CheckedTypeId, request_fn_ty: Type.TypeId) void {
         if (comptime !census.enabled) return;
         const rehearsal = self.builder.rehearsal orelse return;

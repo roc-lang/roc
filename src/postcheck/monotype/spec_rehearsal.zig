@@ -848,6 +848,11 @@ const Frame = struct {
     /// The use-mint entries recorded while this frame was the requesting
     /// context, removed when it closes.
     recorded_uses: std.ArrayList(RequestingSite) = .empty,
+    /// The requesting emission walked provisionally at resolution: joinable
+    /// slots at undictated positions, drafts above them, sealed after the
+    /// body relates the slots (reunify.md 9.1, 10.6).
+    request_provisional: ?direct_translate.ProvisionalType = null,
+    request_drafts: ?*direct_translate.MonoDraftStore = null,
     /// The requesting module and the instantiated callable's return position,
     /// kept so a mint the body produces can be emitted there after lowering.
     request_ret_module: [32]u8 = [_]u8{0} ** 32,
@@ -1533,6 +1538,52 @@ pub const Rehearsal = struct {
     /// reservation claimed cannot be read by a later, unrelated request.
     /// Debug/probe-only: the innermost open request scope's checked edge, if it
     /// names one (reunify.md 13.2 2a).
+    /// Seal the innermost frame's provisional request emission through the
+    /// class finals the body's relations recorded (reunify.md 10.6). Null
+    /// where no provisional emission ran or a slot's class carries no final.
+    pub fn currentFrameRequestSealed(self: *Rehearsal) ?Type.TypeId {
+        if (self.frames.items.len == 0) return null;
+        const frame = &self.frames.items[self.frames.items.len - 1];
+        const provisional_root = frame.request_provisional orelse return null;
+        const drafts = frame.request_drafts orelse return null;
+        const sealed = drafts.seal(
+            self.types,
+            self.program_names,
+            provisional_root,
+            self,
+            rehearsalSlotFinal,
+        ) catch return null;
+        return sealed;
+    }
+
+    fn rehearsalSlotFinal(self: *Rehearsal, slot: closure.RepresentationSlotId) ?Type.TypeId {
+        return self.slotFinal(slot);
+    }
+
+    fn openJoinableSlotInEngine(context: *anyopaque, declared: policy.NamedDescriptor, args: []const Type.TypeId) ?closure.RepresentationSlotId {
+        const self: *Rehearsal = @ptrCast(@alignCast(context));
+        const identity = direct_translate.slotIdentityDigest(self.types, self.program_names, declared, args);
+        const token = token: {
+            const gop = self.logical_tokens.getOrPut(self.allocator, identity) catch return null;
+            if (!gop.found_existing) {
+                gop.value_ptr.* = self.next_token;
+                self.next_token +%= 1;
+            }
+            break :token @as(closure.LogicalToken, @enumFromInt(gop.value_ptr.*));
+        };
+        const item = if (args.len != 0) (self.slotForEmitted(args[0], 1) orelse return null) else (self.standInBacking() orelse return null);
+        const backing = self.standInBacking() orelse return null;
+        const slot = self.engine.createSlot(token, self.freshProducer(), .{ .iterator = .{
+            .descriptor = declared,
+            .item = item,
+            .backing = backing,
+        } }) catch return null;
+        self.slots.append(self.allocator, slot) catch return null;
+        self.slot_descriptors.put(self.allocator, @intFromEnum(slot), declared) catch return null;
+        census.bump("rehearsal_joinable_slots_opened");
+        return slot;
+    }
+
     /// The requesting context's own emission of the innermost open
     /// specialization's instantiated callable, when its frame resolved one.
     pub fn currentFrameRequestRoot(self: *const Rehearsal) ?Type.TypeId {
@@ -4308,6 +4359,10 @@ pub const Rehearsal = struct {
         for (frame.recorded_uses.items) |key| _ = self.use_mints.remove(key);
         frame.recorded_uses.deinit(self.allocator);
         frame.body_tails.deinit(self.allocator);
+        if (frame.request_drafts) |drafts| {
+            drafts.deinit();
+            self.allocator.destroy(drafts);
+        }
         if (frame.trace) |trace| {
             trace.deinit();
             self.allocator.destroy(trace);
@@ -4695,6 +4750,28 @@ pub const Rehearsal = struct {
                 frame.request_ret_checked = @intFromEnum(request_function.ret);
             },
             else => {},
+        }
+
+        if (comptime census.enabled) provisional: {
+            const drafts = self.allocator.create(direct_translate.MonoDraftStore) catch break :provisional;
+            drafts.* = direct_translate.MonoDraftStore.init(self.allocator);
+            var provisional_reason: direct_translate.SkipReason = undefined;
+            const provisional_root = self.translator.translateProvisionalUnderEnvironment(
+                caller,
+                caller_env,
+                caller_owner_node,
+                site.instantiated_root,
+                drafts,
+                .{ .context = @ptrCast(self), .open = openJoinableSlotInEngine },
+                &provisional_reason,
+            ) catch {
+                drafts.deinit();
+                self.allocator.destroy(drafts);
+                break :provisional;
+            };
+            frame.request_provisional = provisional_root;
+            frame.request_drafts = drafts;
+            census.bump("rehearsal_request_provisional_emitted");
         }
 
         // The requesting context's own emission of the instantiated callable
