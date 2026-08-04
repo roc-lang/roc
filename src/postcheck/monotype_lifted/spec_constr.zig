@@ -4269,7 +4269,14 @@ const Cloner = struct {
     current_region: Region,
     current_inline_scope: Ast.InlineScopeId,
 
-    const case_of_case_work_budget: u32 = 256;
+    // Sized so realistic hot procedures never exhaust it: a saturated budget
+    // leaves the remaining match-of-match results materialized as real tag
+    // unions mid-procedure, whose per-iteration refcount pairs and payload
+    // copies then poison every loop below the cutoff (measured 10-25%
+    // slowdowns on deflate decode shapes at 256). The budget still bounds
+    // pathological distribution cascades; it is generated-code fuel, not a
+    // legality condition.
+    const case_of_case_work_budget: u32 = 65536;
 
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
