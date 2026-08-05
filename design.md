@@ -2354,8 +2354,8 @@ records ordinary procedure targets, annotation-only compiler intrinsics whose
 monomorphic implementation is emitted at the checked call site, and operations
 whose runtime representation must participate in a Monotype graph. Graph participation
 covers both producers and representation-sensitive consumers: for example, an
-`Iter` method that consumes a generated-private iterator must preserve that
-representation even when it returns an ordinary value. An optional exact graph
+`Iter` method that consumes an exact generated iterator type must preserve that
+type even when it returns an ordinary value. An optional exact graph
 protocol identifies operations that construct or directly interpret a compiler
 representation; other graph-sensitive procedures carry no protocol. No
 consumer may inspect a procedure body, builtin name, owner type, or result shape
@@ -2533,6 +2533,66 @@ no public chain type, iterator trait, extra public step tag, or source-visible
 compiler representation. Internal representation data is attached only after
 checking, when Monotype creates concrete iterator call results.
 
+#### Exact Produced Monotypes
+
+Checking is the final authority for Roc type correctness. A checked expression
+type, checked procedure interface, dispatch plan, and producer identity are
+immutable facts consumed by Monotype; they are never propositions that
+post-check lowering validates again. No post-check stage can report a type
+mismatch. An inconsistency in checked producer data or Monotype construction is
+a compiler invariant violation.
+
+Every value-producing Monotype operation returns the exact Monotype of the
+runtime value it produced. A representation producer constructs that type from
+its explicit checked operation identity, exact input Monotypes, callable
+specialization identities, state types, and other representation-determining
+inputs. Runtime values themselves are not type-identity inputs. A tuple, record,
+tag payload, list, box, function result, local, pattern binder, and capture use
+the exact produced types of their children directly; they do not retain a
+second checked-public Monotype graph and reconcile it with the produced graph.
+
+Generated representation identity is content-addressed and interned at its
+construction boundary. Equal complete representation inputs select one dense
+in-session type identity before backing construction or body lowering is
+repeated. A stable `TypeDigest` is computed once when durable or cross-store
+identity requires it; repeated in-session access uses the dense identity rather
+than rehashing a type graph. Different representation inputs remain different
+exact types even when checking assigned them the same public Roc type.
+
+Checked types still provide the explicit type-argument and type-variable
+mapping used to instantiate a specialization. Applying an exact produced
+argument or result to that mapping is directed request-to-produced
+substitution, not type checking and not symmetric type equality. It consumes
+the checked mapping and the producer-authored exact type once, binds the
+declared polymorphic slots, and keeps the produced root as the runtime type. At
+a generated nominal it consumes the nominal's recorded public source and
+ordered public arguments directly. It never merges the generated nominal with
+the public nominal.
+
+No Monotype operation may ask whether a compound type contains a generated
+representation. In particular, there is no generated-private containment
+query, cache, ancestor mark, or preliminary structural probe whose answer
+chooses between ordinary unification and a representation-aware operation.
+Ordinary exact equality and directed request-to-produced substitution are
+different operations at their call sites. The directed operation visits the
+ordinary compound structure already required by substitution and handles a
+generated nominal only at the exact edge where it occurs. It does not propagate
+a generated-private classification to parents.
+
+If independently produced values meet, equal exact identities need no
+representation selection. Different exact identities require an explicit
+producer-authored common representation before the values share storage or a
+single continuation; alternatively, lowering may explicitly clone the
+continuation so the values never join. A growing recursive edge selects the
+declared finite fixed-point representation. These are deterministic runtime
+representation decisions over already-valid checked values, never post-check
+type validation.
+
+After Monotype seals an exact produced type, Monotype Lifted, Lambda Solved,
+LIR, ARC, and every backend consume that exact type and its layout. They do not
+receive a checked-public/generated-private distinction and cannot reconstruct
+one by scanning type structure.
+
 #### Explicit Iterator Representation Tiers
 
 A Monotype named type definition records an explicit iterator representation
@@ -2607,11 +2667,11 @@ before any durable Monotype type is sealed. Together they compute:
   its components;
 - a hard minted depth limit of 16.
 
-A public `Iter` expected type constrains the checked result type; it does not
-veto producer-owned representation evidence. A source or adapter whose inputs
-prove a bounded chain mints its concrete result and relates that result to the
-public type during checking. This keeps constant and non-constant chains on the
-same representation path.
+A public `Iter` expected type has already constrained the expression during
+checking. The checked producer identity and checked item arguments direct
+Monotype to mint the concrete result from the exact inputs; Monotype does not
+relate that result back to a public type graph. This keeps constant and
+non-constant chains on the same representation path.
 
 A `minted` child contributes its recorded depth. A `forced_dynamic` child
 contributes the cap, so every adapter above it remains dynamic. Ordinary named
@@ -2676,44 +2736,25 @@ interface and topology only; it cannot replace or merge the producer-owned
 private `rest` representation. This keeps the loop's initial state and every
 back-edge state in the same explicit representation family.
 
-Nested call and dispatch operands carry producer evidence through the active
-instantiation graph until that graph's single final seal. Relation production
-passes the exact result node to the consuming call request; it does not seal an
-intermediate `TypeId`, re-import that snapshot, or fall back to the checked
-public cell after discarding private representation evidence.
+Nested call and dispatch operands carry their exact produced types through the
+active instantiation graph until that graph's single final seal. A call or
+dispatch returns its exact result cell directly to its consumer; it does not
+seal an intermediate `TypeId`, re-import that snapshot, or fall back to a
+checked-public cell. A finished expected Monotype is an immutable request, not
+the output cell: the produced result remains the expression's exact output.
+ConstStore preserves that exact output beside the stored value, and restoration
+uses it directly.
 
-When a dispatch expression produces generated-private evidence for a live
-checked-public result cell, Monotype selects that representation through the
-dedicated `selectGeneratedPrivateRepresentation` capability before lowering
-the dispatch. The capability exists only during relation production, requires
-an explicitly directed public-to-private edge, and rejects every class that
-contains an imported finished Monotype. Ordinary graph unification rejects the
-same edge. This preserves producer selection for branch results without making
-public/private merging—or reopening a durable Monotype—available as a general
-unification behavior. If the requested public interface is already a finished
-Monotype, the producer relates its distinct private result to that immutable
-interface without merging either class, and the enclosing procedure or
-compile-time wrapper carries the private result cell as its exact output
-witness. ConstStore preserves that witness beside the stored value, and restore
-relates the checked public interface to it without ordinary unification.
-
-A value-producing `if` or `match` likewise owns one explicit result selection
-for all of its inhabited branches. An exact generated-private request already
-supplied by the caller remains authoritative. Otherwise, before emitting any
-branch body, Monotype asks every branch's checked producer for its exact result
-evidence and joins all generated-private evidence into the shared live result
-selection. Public-only evidence does not settle the selection. Match patterns
-first project their exact binder cells from the shared scrutinee, so a branch
-producer reached through a pattern lookup participates in the same pre-emission
-pass. Every branch is then emitted once against the settled request. Distinct
-minted iterator producers therefore use the ordinary graph representation join,
-which keeps a compatible static representation and reaches the defined
-forced-dynamic fixed point only when the producer topology requires it. Source
-order cannot make one already-emitted branch authoritative, and lowering never
-needs to revise emitted branch code. Only after all branches have been lowered
-does the selected result relate to the outer interface and seal. Representation
-selection never reconstructs branch evidence from finished output IR or
-reopens a durable Monotype.
+A value-producing `if` or `match` owns one explicit exact result selection for
+all of its inhabited branches. Before emitting branch bodies, Monotype obtains
+each branch producer's exact result identity. Equal identities are already one
+type. Distinct identities select the explicit common representation required by
+their producer topology, or the continuation is explicitly cloned so no shared
+result storage exists. Match patterns first project their exact binder cells
+from the exact scrutinee, so a branch producer reached through a pattern lookup
+participates in the same pre-emission decision. Source order cannot make one
+already-emitted branch authoritative, and lowering never revises emitted branch
+code or relates the selected result back to a public interface.
 
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:
@@ -2721,58 +2762,46 @@ its checked result variable remains unconstrained, no result relation is
 created, and the expression carries the enclosing continuation's declared cell.
 An unobservable continuation type is not representation evidence.
 
-Record constructors preserve that distinction structurally. If a field is a
-finished generated-private witness, the constructor emits a distinct record
-witness that references the field directly and relates that record to the
-checked-public container. It never merges the child into the public field cell
-or asks a later consumer to recover the child's runtime representation from the
-public container shape.
+Record, tuple, tag, list, and box constructors build their exact container type
+from the exact child cells they emit. They never first construct a
+checked-public container, scan it for private descendants, or emit a second
+witness related to that container.
 
-Each generated-private request also retains its exact checked-source function
-node. That source node can itself contain upstream private arguments, so a
-callee relates its fresh checked root to the source through opaque interface
-relations; it never fully unifies the two function graphs. Expected private
-results remain request-owned nodes while their checked result cells stay fresh
-public interfaces. This keeps an adapter's input and output identities distinct
-even when the source signature uses one public `Iter` type variable for both.
+A procedure specialization retains its exact checked source scheme and the
+explicit substitution from that scheme to its exact argument and result types.
+Input and output identities therefore remain distinct when the source signature
+uses one public `Iter` type variable for both; no source-interface graph is
+merged with the produced function graph.
 
-Match lowering likewise relates each checked pattern interface to the exact
-scrutinee node without merging a generated-private root into that public
-interface. Once all pattern relations have settled, record-field/tag-payload
-traversal walks the checked pattern and rebinds its pre-registered locals to the
-exact child graph cells before the guard or branch body is lowered. Later pattern
-materialization consumes those same cells. Branch code therefore specializes
-from producer-owned representation evidence rather than from the checked
-pattern's public approximation.
+Match lowering projects exact field and payload cells from the exact scrutinee
+and binds its pre-registered locals to those cells before the guard or branch
+body is lowered. Later pattern materialization consumes the same cells. It does
+not relate a checked pattern graph to the scrutinee or recover representation
+evidence from the public pattern type.
 
 The cap is a type-universe bound, not a call-depth or specialization-request
 counter. Every generated iterator passes through the same graph-owned producer
 and pre-seal finalizer, so recursive functions, loops, and ordinary calls all
 receive the same finite representation decision.
 
-#### Tier Unification And Callable Flow
+#### Exact Tier Joins And Callable Flow
 
-Monotype instantiation and Lambda Solved unification consume the representation
-tier explicitly:
+Monotype representation joins and Lambda Solved consume the representation tier
+explicitly:
 
-- a forced-dynamic iterator wins when related to a minted or ordinary public
-  iterator with the same source declaration and item type;
-- a minted iterator wins when related to its ordinary public source type;
+- a forced-dynamic iterator wins an explicit exact join with a minted iterator
+  that has the same public source declaration and item type;
 - distinct minted iterator identities join their item and backing information
   without discarding callable members;
-- equal tiers use ordinary named-type equality.
+- equal generated identities are ordinary named-type equality;
+- an ordinary public iterator never participates in a runtime representation
+  join.
 
-At a forced-dynamic relation, Lambda Solved always unifies the public item type.
-A minted peer also joins its generated-private backing into the dynamic backing;
-an ordinary public peer has no private representation authority, so its backing
-is not merged or reinterpreted.
-
-Lambda Solved transfers callable evidence across a public-to-generated relation
-with a separate structure-preserving walk. That walk validates corresponding
-public and private structure while retaining both sealed Monotype roots, and it
-unifies only callable slots and still-open Lambda Solved slots. This makes a
-SpecConstr-authored callable worker visible in the exact private representation
-that contains it without using the public representation as a replacement.
+At a forced-dynamic join, Lambda Solved unifies the exact item types and carries
+the minted peer's callable members into the dynamic backing. Callable evidence
+already resides in the exact produced Monotype; Lambda Solved does not perform a
+second public-to-generated structural walk. A SpecConstr-authored callable
+worker becomes visible by updating the callable slots of that exact type.
 
 When a complete Monotype type clone contains a forced-dynamic iterator,
 Lambda Solved marks the callable in that iterator's backing as erased. The mark
@@ -3030,9 +3059,9 @@ allocation.
 The direct LIR const plan also records the root's exact Monotype return type.
 Finalization clones that type into the durable `ConstStore` type store and saves
 its id beside the stored root node. Restoration lowers the saved root type first
-and restores the node at that exact type; the checked public type is used only
-to assert that the saved representation has the checked root type.
-Representation evidence therefore survives CTFE without a consumer
+and restores the node at that exact type. The checked public type remains
+provenance from checking and does not participate in a post-check compatibility
+assertion. Representation evidence therefore survives CTFE without a consumer
 reconstructing it from constant node shape.
 
 For a finite callable inside that exact witness, the Lambda Solved function
@@ -3539,8 +3568,8 @@ independent.
 
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
-and a generated-private request's source interface are therefore dense parallel
-columns, not hash tables keyed by node id. Union-find redirects may change which
+are therefore dense parallel columns, not hash tables keyed by node id.
+Union-find redirects may change which
 node is a class root, but they never renumber a node; root-owned columns are
 updated explicitly when a union moves that ownership.
 
@@ -4862,8 +4891,8 @@ when their complete definition identities and builtin owners agree. It unifies
 their type arguments and checked-public runtime backings for callable flow, but
 keeps the opaque view as the representative; the relation therefore cannot
 grant structural inspectability. Different definitions, aliases, missing
-representation authority, and generated-private backings are never accepted by
-this visibility relation.
+representation authority, and exact generated representation identities are
+never accepted by this visibility relation.
 
 The solved type graph is the callable representation source of truth. There is
 no descriptor replacement, no callable repointing, no post-demand payload
