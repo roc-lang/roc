@@ -7550,8 +7550,7 @@ pub const Interpreter = struct {
 
     fn decToInt(self: *LirInterpreter, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        const dec = RocDec{ .num = arg.read(i128) };
-        val.write(Dst, builtins.dec.toIntWrap(Dst, dec));
+        val.write(Dst, builtins.numeric_conversions.decToIntWrap(Dst, arg.read(i128)));
         return val;
     }
 

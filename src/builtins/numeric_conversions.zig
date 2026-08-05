@@ -188,6 +188,15 @@ pub fn decToIntWrapBits(dec_value: i128, target_bits: u32) u128 {
     return magnitude & (i128h.shl(1, @intCast(target_bits)) - 1);
 }
 
+/// Convert a Roc Dec payload to an integer using Roc's wrapping Dec-to-integer
+/// semantics (see `decToIntWrapBits`).
+pub fn decToIntWrap(comptime Int: type, dec_value: i128) Int {
+    const int_info = @typeInfo(Int).int;
+    const bits = decToIntWrapBits(dec_value, int_info.bits);
+    const U = std.meta.Int(.unsigned, int_info.bits);
+    return @bitCast(@as(U, @truncate(bits)));
+}
+
 /// Convert a Roc Dec payload to raw target integer bits after truncating.
 pub fn decToIntTryBits(dec_value: i128, target_bits: u32, target_signed: bool) ?u128 {
     const whole_part = i128h.divTrunc_i128(dec_value, dec.RocDec.one_point_zero_i128);

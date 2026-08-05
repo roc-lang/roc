@@ -1407,17 +1407,6 @@ pub fn toF32Try(arg: RocDec) ?f32 {
     return toF32(arg);
 }
 
-/// Convert Dec to integer by truncating the fractional part (wrapping on overflow)
-pub fn toIntWrap(comptime T: type, arg: RocDec) T {
-    // Divide by one_point_zero_i128 to get the integer part
-    const whole_part = i128h.divTrunc_i128(arg.num, RocDec.one_point_zero_i128);
-    // Truncate to the target type (wrapping)
-    // First cast the i128 to u128, then truncate to the target size, then cast back to T if needed
-    const as_u128: u128 = @bitCast(whole_part);
-    const truncated = @as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(as_u128));
-    return @bitCast(truncated);
-}
-
 /// Convert Dec to integer by truncating the fractional part (returns null if out of range)
 pub fn toIntTry(comptime T: type, arg: RocDec) ?T {
     // Divide by one_point_zero_i128 to get the integer part
