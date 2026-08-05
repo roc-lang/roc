@@ -9,9 +9,10 @@
 //! only a runtime query answers that: CPUID on x86-64, the OS feature report
 //! on aarch64.
 //!
-//! `llvmTargetQuery` defines what the `.default` CPU level promises. This
-//! module states that same promise as the runtime queries which confirm it,
-//! and the comptime check below fails the build if the two stop agreeing.
+//! `RocTarget.requiredRuntimeCpuFeatures` defines what the `.default` CPU
+//! level promises. This module only maps those features to runtime CPU queries,
+//! and the comptime check below fails the build if the mapping stops covering
+//! the contract exactly.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -21,10 +22,9 @@ const target_mod = @import("mod.zig");
 const CpuLevel = target_mod.CpuLevel;
 const RocTarget = target_mod.RocTarget;
 
-/// Where CPUID reports one feature `.default` code generation may use.
+/// Where CPUID reports one feature the CPU contract may require.
 const X86Feature = struct {
-    /// The LLVM feature this bit stands for, which is how `llvmTargetQuery`
-    /// names it.
+    /// The LLVM feature this bit stands for.
     feature: std.Target.x86.Feature,
     leaf: u32,
     subleaf: u32 = 0,
@@ -39,9 +39,6 @@ const X86Feature = struct {
 /// `x86-64-v3` psABI levels, plus the two extensions Roc names on top of them
 /// for its SIMD builtins.
 ///
-/// `x86-64-v3` also implies `crc32`, which is absent here on purpose: Intel
-/// reports it in the SSE4.2 bit below, and no Roc code generation emits the
-/// instruction in the first place.
 const x86_64_default_level_features = [_]X86Feature{
     // x86-64-v2
     .{ .feature = .sse3, .leaf = 0x1, .register = .ecx, .bit = 0 },
@@ -77,43 +74,60 @@ const hwcap_aes = 1 << 3;
 const hwcap_pmull = 1 << 4;
 const hwcap_asimddp = 1 << 20;
 
+fn detectedX86Features() std.Target.Cpu.Feature.Set {
+    var detected = std.Target.Cpu.Feature.Set.empty;
+    for (x86_64_default_level_features) |required| {
+        detected.addFeature(@intFromEnum(required.feature));
+    }
+    detected.populateDependencies(std.Target.Cpu.Arch.x86_64.allFeaturesList());
+    return detected;
+}
+
+fn detectedAarch64Features() std.Target.Cpu.Feature.Set {
+    var detected = std.Target.Cpu.Feature.Set.empty;
+    detected.addFeature(@intFromEnum(std.Target.aarch64.Feature.aes));
+    detected.addFeature(@intFromEnum(std.Target.aarch64.Feature.dotprod));
+    detected.populateDependencies(std.Target.Cpu.Arch.aarch64.allFeaturesList());
+    return detected;
+}
+
 comptime {
     // A target with a `v1` twin promises two floors, and this module decides
-    // which of them a machine gets. Pin the shape of the `.default` floor, so
-    // that raising it fails here rather than emitting instructions the runtime
-    // query never asked the CPU about.
+    // which of them a machine gets. Every native detector must cover exactly
+    // the features from the target's shared CPU contract.
     for (std.enums.values(RocTarget)) |target| {
         if (target.cpuLevel() != .default) continue;
         if (target.baselineCpuTarget() == null) continue;
 
-        const query = target.llvmTargetQuery();
-        var expected_features = std.Target.Cpu.Feature.Set.empty;
-        const expected_model = switch (target.toCpuArch()) {
-            .x86_64 => model: {
-                expected_features.addFeature(@intFromEnum(std.Target.x86.Feature.aes));
-                expected_features.addFeature(@intFromEnum(std.Target.x86.Feature.pclmul));
-                break :model &std.Target.x86.cpu.x86_64_v3;
-            },
-            .aarch64, .aarch64_be => model: {
-                expected_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.aes));
-                expected_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.dotprod));
-                break :model &std.Target.aarch64.cpu.generic;
-            },
+        const detected_features = switch (target.toCpuArch()) {
+            .x86_64 => detectedX86Features(),
+            .aarch64, .aarch64_be => detectedAarch64Features(),
             // A wasm runtime's feature set is the embedder's to decide and is
             // not reportable from inside the module, so `detect` answers with
             // the level every runtime executes and nothing here constrains it.
             else => continue,
         };
 
-        const model_matches = switch (query.cpu_model) {
-            .explicit => |model| model == expected_model,
-            .baseline, .determined_by_arch_os, .native => false,
-        };
-        if (!model_matches or !query.cpu_features_add.eql(expected_features)) {
-            @compileError("the CPU floor of " ++ target.toName() ++
-                " moved; teach src/target/host_cpu.zig to detect the features it now requires");
+        if (!detected_features.eql(target.requiredRuntimeCpuFeatures())) {
+            @compileError("the runtime CPU detector for " ++ target.toName() ++
+                " does not exactly cover its CpuContract");
         }
     }
+}
+
+/// A Linux auxiliary-vector lookup that answers in the released binary.
+///
+/// `std.os.linux.getauxval` resolves to Zig's own implementation whenever libc
+/// is linked, and that implementation reads `std.os.linux.elf_aux_maybe` — a
+/// variable assigned only by `posixCallMainAndExit`, the startup path Zig uses
+/// when it owns `_start`. The `roc` binary sets `link_libc = true`, so libc
+/// owns `_start`, Zig never sees the auxiliary vector, and every lookup
+/// answers 0 rather than failing to build. Ask libc itself in that case: it
+/// captured the vector during its own startup, and both musl and glibc expose
+/// it under this name.
+fn getauxval(index: usize) usize {
+    if (comptime builtin.link_libc) return @intCast(std.c.getauxval(@intCast(index)));
+    return std.os.linux.getauxval(index);
 }
 
 /// `0` means "not detected yet"; every other value is `encode`d.
@@ -263,7 +277,7 @@ fn detectAarch64() CpuLevel {
     switch (comptime builtin.os.tag) {
         .linux => {
             const required = hwcap_aes | hwcap_pmull | hwcap_asimddp;
-            const hwcap = std.os.linux.getauxval(std.elf.AT_HWCAP);
+            const hwcap = getauxval(std.elf.AT_HWCAP);
             return if (hwcap & required == required) .default else .v1;
         },
         .windows => {
@@ -274,6 +288,28 @@ fn detectAarch64() CpuLevel {
         },
         else => return .v1,
     }
+}
+
+test "the auxiliary vector is readable however this binary was started" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+
+    // `AT_PAGESZ` is present in every Linux process on every architecture and
+    // is never 0, so a 0 here is the lookup coming back empty rather than the
+    // machine lacking something. That is the failure this wrapper exists for:
+    // aarch64 detection reads `AT_HWCAP`, and a lookup that always answers 0
+    // reports every aarch64 machine as `.v1` without any sign of trouble.
+    try std.testing.expect(getauxval(std.elf.AT_PAGESZ) != 0);
+}
+
+test "libc-linked builds do not read the auxiliary vector through Zig's startup path" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    if (comptime !builtin.link_libc) return error.SkipZigTest;
+
+    // The reason `getauxval` above exists, pinned so that a Zig upgrade which
+    // makes `std.os.linux.getauxval` work under libc shows up here as a
+    // failing test rather than as a wrapper nobody can justify removing.
+    try std.testing.expect(std.os.linux.elf_aux_maybe == null);
+    try std.testing.expectEqual(@as(usize, 0), std.os.linux.getauxval(std.elf.AT_PAGESZ));
 }
 
 test "detection answers a level the native target has a spelling for" {
@@ -301,18 +337,9 @@ test "detection is cached rather than repeated" {
 test "every CPUID bit this checks belongs to a feature the default level names" {
     if (comptime builtin.cpu.arch != .x86_64) return error.SkipZigTest;
 
-    // The floor is `x86_64_v3` plus the two extensions named on top of it, and
-    // the table below is how a machine is asked whether it has that floor. A
-    // feature in the table that the floor does not include would reject CPUs
-    // over an instruction Roc never emits.
-    var floor = std.Target.x86.cpu.x86_64_v3.features;
-    floor.addFeature(@intFromEnum(std.Target.x86.Feature.aes));
-    floor.addFeature(@intFromEnum(std.Target.x86.Feature.pclmul));
-    floor.populateDependencies(std.Target.Cpu.Arch.x86_64.allFeaturesList());
-
-    for (x86_64_default_level_features) |required| {
-        try std.testing.expect(floor.isEnabled(@intFromEnum(required.feature)));
-    }
+    try std.testing.expect(
+        detectedX86Features().eql(RocTarget.x64linux.requiredRuntimeCpuFeatures()),
+    );
 }
 
 test "CPUID reports every feature this binary was built to use" {

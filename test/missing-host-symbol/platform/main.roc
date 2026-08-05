@@ -13,7 +13,9 @@ platform ""
         inputs_dir: "../../dylib/platform/targets/",
         arm64mac: { inputs: ["libhost.a", app], output: Shared },
         x64musl: { inputs: ["libhost.a", app], output: Shared },
+        x64v1musl: { inputs: ["libhost.a", app], output: Shared },
         arm64musl: { inputs: ["libhost.a", app], output: Shared },
+        arm64v1musl: { inputs: ["libhost.a", app], output: Shared },
         x64win: { inputs: ["host.lib", app], output: Shared },
         arm64win: { inputs: ["host.lib", app], output: Shared },
     }

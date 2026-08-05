@@ -5454,7 +5454,7 @@ pub const Interpreter = struct {
                 @memcpy(elem_ptr[0..info.width], args[2].ptr[0..info.width]);
                 break :blk self.rocListToValue(rl, ll.ret_layout);
             },
-            .list_sublist => blk: {
+            .list_sublist, .list_sublist_borrowed => blk: {
                 if (args.len != 2 or ll.arg_layouts.len != 2) {
                     return self.runtimeError("list_sublist expected 2 arguments");
                 }
@@ -5476,6 +5476,11 @@ pub const Interpreter = struct {
                 if (info.width == 0) {
                     const result_len = zstSublistLen(source_list.len(), start, len);
                     break :blk self.rocListToValue(canonicalZstList(result_len), ll.ret_layout);
+                }
+
+                if (ll.op == .list_sublist_borrowed) {
+                    const result = builtins.list.listSublistBorrowed(source_list, info.width, start, len, elems_rc, &self.roc_ops);
+                    break :blk self.rocListToValue(result, ll.ret_layout);
                 }
 
                 var crash_boundary = self.enterCrashBoundary();
@@ -6626,7 +6631,7 @@ pub const Interpreter = struct {
                 64 => val.write(f64, floatBinOp(f64, a.read(f64), b.read(f64), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float width {d}", .{bits}),
             },
-            .dec => val.write(i128, try self.decBinOp(a.read(i128), b.read(i128), op)),
+            .dec => val.write(i128, try self.decBinOp(a.read(i128), b.read(i128), op, checked_op)),
         }
         return val;
     }
@@ -7669,12 +7674,18 @@ pub const Interpreter = struct {
     }
 
     /// Dec (fixed-point i128 with 10^18 scale) binary operation.
-    fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp) Error!i128 {
+    fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp, checked_op: ?LIR.LowLevel) Error!i128 {
         return switch (op) {
             .add => av +% bv,
             .sub => av -% bv,
             .negate => -%av,
-            .abs => if (av < 0) -%av else av,
+            .abs => blk: {
+                if (checked_op != null and av == std.math.minInt(i128)) {
+                    const message = CheckedArithmetic.overflowMessageForLayout(checked_op.?, .dec) orelse unreachable;
+                    return self.triggerCrash(message);
+                }
+                break :blk if (av < 0) -%av else av;
+            },
             .abs_diff => if (av > bv) av -% bv else bv -% av,
             .mul => blk: {
                 const result = RocDec.mulWithOverflow(RocDec{ .num = av }, RocDec{ .num = bv });

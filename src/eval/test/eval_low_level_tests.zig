@@ -699,6 +699,28 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - Dec boundary rounding to integers",
+        .source =
+        \\{
+        \\Dec.round_to_i128_try(Dec.highest) == Ok(170141183460469231732)
+        \\    and Dec.floor_to_i128_try(Dec.lowest) == Ok(-170141183460469231732)
+        \\    and Dec.ceiling_to_i128_try(Dec.highest) == Ok(170141183460469231732)
+        \\    and Dec.round_to_i64_try(Dec.highest) == Err(OutOfRange)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - Dec.abs lowest crashes on overflow",
+        .source = "Dec.abs(Dec.lowest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "low_level - Dec.lowest divided by negative one crashes on overflow",
+        .source = "Dec.lowest / -1.0",
+        .expected = .{ .crash = {} },
+    },
+    .{
         .name = "low_level - Str.is_empty returns True for empty string",
         .source =
         \\{
@@ -1988,6 +2010,23 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"12.5\"" },
+    },
+    .{
+        .name = "low_level - exact from_str accepts exponent notation issue 10550",
+        .source =
+        \\{
+        \\u32 = match U32.from_str("2e5") {
+        \\    Ok(value) => U32.to_str(value)
+        \\    Err(_) => "bad int"
+        \\}
+        \\dec = match Dec.from_str("2e5") {
+        \\    Ok(value) => Dec.to_str(value)
+        \\    Err(_) => "bad dec"
+        \\}
+        \\"${u32}:${dec}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"200000:200000.0\"" },
     },
     .{
         .name = "low_level - I64.from_str preserves explicit error path",

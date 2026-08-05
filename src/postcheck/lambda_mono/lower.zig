@@ -1454,6 +1454,7 @@ const Lowerer = struct {
             const branch = GuardedList.at(input_items, i);
             lowered[i] = .{
                 .pat = try self.lowerPat(branch.pat),
+                .bindings = try self.lowerStmtSpan(branch.bindings),
                 .guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null,
                 .body = try self.lowerExpr(branch.body),
             };

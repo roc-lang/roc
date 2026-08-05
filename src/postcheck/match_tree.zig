@@ -123,7 +123,7 @@ pub const OccId = enum(u32) {
 /// `Ctx` supplies pattern access, type queries, and constructor identity:
 ///
 /// ```
-/// const PatId/TypeId/ExprId/LocalId  — input IR id types
+/// const PatId/TypeId/ExprId/LocalId/BindingSpan — input IR id/span types
 /// patKind(pat) PatKind
 /// bindLocal(pat) LocalId                                  // .bind
 /// asInfo(pat) struct { pattern: PatId, local: LocalId }   // .as_pattern
@@ -159,10 +159,12 @@ pub fn Compiler(comptime Ctx: type) type {
         pub const TypeId = Ctx.TypeId;
         pub const ExprId = Ctx.ExprId;
         pub const LocalId = Ctx.LocalId;
+        pub const BindingSpan = Ctx.BindingSpan;
 
         /// A match branch, in source order.
         pub const Branch = struct {
             pat: PatId,
+            bindings: BindingSpan = BindingSpan.empty(),
             guard: ?ExprId,
             body: ExprId,
             branch_index: u32,
@@ -185,12 +187,14 @@ pub fn Compiler(comptime Ctx: type) type {
 
         pub const Leaf = struct {
             binds: []const Bind,
+            bindings: BindingSpan,
             body: ExprId,
             branch_index: u32,
         };
 
         pub const GuardNode = struct {
             binds: []const Bind,
+            bindings: BindingSpan,
             guard: ExprId,
             body: ExprId,
             branch_index: u32,
@@ -284,6 +288,7 @@ pub fn Compiler(comptime Ctx: type) type {
         const Row = struct {
             cols: []const Col,
             binds: []const Bind,
+            bindings: BindingSpan,
             guard: ?ExprId,
             body: ExprId,
             branch_index: u32,
@@ -533,6 +538,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -564,6 +570,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -577,6 +584,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = try self.colsWithout(row, col.occ),
                     .binds = row.binds,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -595,6 +603,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -613,6 +622,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -751,6 +761,7 @@ pub fn Compiler(comptime Ctx: type) type {
                                 const otherwise = acc orelse try self.missTree(miss);
                                 acc = try self.mk(.{ .guard = .{
                                     .binds = row.binds,
+                                    .bindings = row.bindings,
                                     .guard = guard,
                                     .body = row.body,
                                     .branch_index = row.branch_index,
@@ -759,6 +770,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             } else {
                                 acc = try self.mk(.{ .leaf = .{
                                     .binds = row.binds,
+                                    .bindings = row.bindings,
                                     .body = row.body,
                                     .branch_index = row.branch_index,
                                 } });
@@ -929,6 +941,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 row.* = .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = branch.bindings,
                     .guard = branch.guard,
                     .body = branch.body,
                     .branch_index = branch.branch_index,
@@ -972,6 +985,7 @@ pub fn Compiler(comptime Ctx: type) type {
         /// buildStrArm(pat, capture_locals, on_match) StrArm
         /// strMatchSet(source, arms, on_miss) CFStmtId
         /// bindPatternLocal(local, ty, source, next) CFStmtId
+        /// lowerBindings(bindings, next) CFStmtId          // before guard/body
         /// lowerBody(body, next) CFStmtId                 // into the result local
         /// guardTemp(guard) LirLocal
         /// lowerGuard(cond, guard, next) CFStmtId
@@ -1298,10 +1312,18 @@ pub fn Compiler(comptime Ctx: type) type {
                 return result;
             }
 
+            fn lowerBindingsCounted(self: *Emitter, bindings: BindingSpan, next: CtxStmt) Ctx.LowerError!CtxStmt {
+                const before = self.ctx.stmtCount();
+                const result = try self.ctx.lowerBindings(bindings, next);
+                self.delegated_stmts += self.ctx.stmtCount() - before;
+                return result;
+            }
+
             fn emitTree(self: *Emitter, tree: *const Tree, env: *Env) Ctx.LowerError!CtxStmt {
                 switch (tree.*) {
                     .leaf => |leaf| {
-                        const body = try self.lowerBodyCounted(leaf.body, try self.ctx.joinJump(self.done));
+                        var body = try self.lowerBodyCounted(leaf.body, try self.ctx.joinJump(self.done));
+                        body = try self.lowerBindingsCounted(leaf.bindings, body);
                         return try self.emitBinds(leaf.binds, env, body);
                     },
                     .guard => |g| {
@@ -1310,8 +1332,9 @@ pub fn Compiler(comptime Ctx: type) type {
                         const cond = try self.ctx.guardTemp(g.guard);
                         const guard_switch = try self.ctx.boolSwitch(cond, body, otherwise);
                         const before = self.ctx.stmtCount();
-                        const guarded = try self.ctx.lowerGuard(cond, g.guard, guard_switch);
+                        var guarded = try self.ctx.lowerGuard(cond, g.guard, guard_switch);
                         self.delegated_stmts += self.ctx.stmtCount() - before;
+                        guarded = try self.lowerBindingsCounted(g.bindings, guarded);
                         return try self.emitBinds(g.binds, env, guarded);
                     },
                     .test_ => |t| return try self.emitTest(t, env),
@@ -1494,6 +1517,14 @@ const MockCtx = struct {
     pub const TypeId = u32;
     pub const ExprId = u32;
     pub const LocalId = u32;
+    pub const BindingSpan = struct {
+        start: u32 = 0,
+        len: u32 = 0,
+
+        pub fn empty() @This() {
+            return .{};
+        }
+    };
     pub const LowerError = error{OutOfMemory};
 
     fn get(self: MockCtx, pat: u32) MockPat {

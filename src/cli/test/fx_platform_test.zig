@@ -1933,6 +1933,36 @@ test "default app resolves a sibling type module imported with exposing" {
 test "slash-qualified imports resolve local, root, parent, nested, and package targets" {
     const allocator = testing.allocator;
 
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    const first_check = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/directory_qualified_local_module/main.roc",
+        &cache_env,
+    );
+    defer allocator.free(first_check.stdout);
+    defer allocator.free(first_check.stderr);
+    try util.checkSuccess(first_check);
+
+    const cached_check = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/directory_qualified_local_module/main.roc",
+        &cache_env,
+    );
+    defer allocator.free(cached_check.stdout);
+    defer allocator.free(cached_check.stderr);
+    try util.checkSuccess(cached_check);
+
     const app_result = try util.runRoc(
         std.testing.io,
         allocator,

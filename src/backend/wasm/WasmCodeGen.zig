@@ -5186,7 +5186,7 @@ fn emitCompositeIsSignedMinNegOne(self: *Self, lhs_local: u32, rhs_local: u32) A
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
 }
 
-fn emitCheckedCompositeSignedLowestValue(self: *Self, value_local: u32, checked_op: LIR.LowLevel) Allocator.Error!void {
+fn emitCheckedCompositeSignedLowestValue(self: *Self, value_local: u32, checked_op: LIR.LowLevel, operand_layout: layout.Idx) Allocator.Error!void {
     try self.emitLocalGet(value_local);
     try self.emitLoadOp(.i64, 0);
     try self.emitI64Const(0);
@@ -5196,7 +5196,7 @@ fn emitCheckedCompositeSignedLowestValue(self: *Self, value_local: u32, checked_
     try self.emitI64Const(std.math.minInt(i64));
     self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-    try self.emitCrashIfStackBool(checkedOverflowMessage(checked_op));
+    try self.emitCrashIfStackBool(CheckedArithmetic.overflowMessageForLayout(checked_op, operand_layout) orelse unreachable);
 }
 
 fn emitI128SignedAddSubOverflowCondition(self: *Self, plain_op: LIR.LowLevel, lhs_local: u32, rhs_local: u32, result_local: u32) Allocator.Error!void {
@@ -5269,11 +5269,11 @@ fn emitCheckedCompositeNumericOp(self: *Self, checked_op: LIR.LowLevel, plain_op
     if (args.len == 1) {
         switch (plain_op) {
             .num_negate => {
-                try self.emitCheckedCompositeSignedLowestValue(lhs_local, checked_op);
+                try self.emitCheckedCompositeSignedLowestValue(lhs_local, checked_op, operand_layout);
                 try self.emitCompositeI128NegateFromLocal(lhs_local);
             },
             .num_abs => {
-                try self.emitCheckedCompositeSignedLowestValue(lhs_local, checked_op);
+                try self.emitCheckedCompositeSignedLowestValue(lhs_local, checked_op, operand_layout);
                 if (operand_layout == .u128) {
                     try self.emitLocalGet(lhs_local);
                 } else {
@@ -12171,7 +12171,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateLLListSplitLast(args, ll.ret_layout);
         },
         // list_sublist(list, {len: U64, start: U64}) -> list
-        .list_sublist => {
+        .list_sublist, .list_sublist_borrowed => {
             // Shared layout uses canonical alphabetical field indices for records.
             // For { start : U64, len : U64 }, that means index 0 = len and index 1 = start.
             const ls = self.getLayoutStore();

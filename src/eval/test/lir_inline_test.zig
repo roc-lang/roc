@@ -1408,6 +1408,10 @@ fn markReachableLiftedExpr(
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |i| {
                 const branch = GuardedList.at(branches, i);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    markReachableLiftedStmt(program, GuardedList.at(bindings, binding_index), reachable);
+                }
                 if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
                 markReachableLiftedExpr(program, branch.body, reachable);
             }

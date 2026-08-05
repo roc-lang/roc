@@ -124,8 +124,15 @@ pub fn shouldUpgrade(pinned: []const u8, current: []const u8) bool {
 ///
 /// A pin the compiler cannot read is not a mismatch: parsing already rejected
 /// it, and one mistake should not produce two diagnostics.
+///
+/// Neither is anything a mismatch when the running compiler reports a local
+/// development version (e.g. `debug-c6dfe61b`): a build from source is not a
+/// version any header could pin, so no pin can name it, and `roc fmt` will not
+/// write it either. Reporting every pinned file the developer touches would
+/// only be noise.
 pub fn isMismatch(pinned: []const u8, current: []const u8) bool {
     if (parse(pinned) == null) return false;
+    if (parse(current) == null) return false;
     return !std.mem.eql(u8, pinned, current);
 }
 
@@ -242,13 +249,15 @@ test "nightly date ordering" {
 test "report a pin that does not name the running compiler" {
     try std.testing.expect(isMismatch("nightly-2026-July-30-aaaaaaa", "nightly-2026-July-31-bbbbbbb"));
     try std.testing.expect(isMismatch("0.1.0", "nightly-2026-July-31-bbbbbbb"));
-    try std.testing.expect(isMismatch("nightly-2026-July-31-aaaaaaa", "debug-c6dfe61b"));
 }
 
 test "stay quiet when there is nothing to report about a pin" {
     try std.testing.expect(!isMismatch("nightly-2026-July-31-aaaaaaa", "nightly-2026-July-31-aaaaaaa"));
     // Already reported as an invalid version by the parser.
     try std.testing.expect(!isMismatch("nonsense", "nightly-2026-July-31-bbbbbbb"));
+    // No pin can name a build from source, so none disagrees with one.
+    try std.testing.expect(!isMismatch("nightly-2026-July-31-aaaaaaa", "debug-c6dfe61b"));
+    try std.testing.expect(!isMismatch("0.1.0", "release-fast-7fdb318d"));
 }
 
 test "upgrade a pin to a newer nightly" {

@@ -5178,6 +5178,18 @@ its last arm as the switch default (a single-variant union emits no dispatch at
 all); open matches keep the `comptime_exhaustiveness_failed` / `runtime_error`
 terminal.
 
+Named record-rest binders are derived values, not durable pattern decisions.
+Monotype pattern lowering removes the rest binder from the record pattern,
+captures that exact record occurrence in a compiler-generated local, and
+constructs the remainder record explicitly from the solved field cells. When
+the guard uses the remainder, the match branch owns an irrefutable statement
+span that runs after the structural pattern succeeds and before the guard; its
+locals remain in scope for the branch body. A remainder used only by the body
+is an ordinary body-local statement. The decision-tree emitter assigns all
+successful pattern locals before lowering the branch statement span, so later
+stages consume this ordering directly; no source record-rest pattern survives
+Monotype lowering.
+
 **The sharing invariant.** Monotype is a DAG: an expression id referenced from
 multiple positions is re-lowered at each reference, so downstream control
 sharing must go through typed lifted join points or LIR join points, never
@@ -5409,6 +5421,16 @@ generates constraints per statement:
   borrow arg 0); the result's mode is then solved like a payload read, with
   the lifetime constraint tied to those args. Ops whose results never alias
   a retained arg produce fresh owned results as today.
+  A low-level operation may also declare one explicit ARC-only borrowed-result
+  variant. Neutral LIR retains the ordinary source operation, but constraint
+  generation uses the borrowed variant's `RcEffect`. After modes solve, an
+  actually borrowed result materializes the borrowed operation and its effect;
+  an owned result materializes the ordinary consuming operation and its
+  effect. If the ordinary operation needs to consume an argument whose solved
+  binding is borrowed, ARC emits one retain immediately before the operation
+  to supply that consumed unit. Every post-ARC statement therefore contains
+  the exact concrete operation and effect the backend executes. The variant
+  mapping is static low-level-op data, and only ARC may select from it.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
@@ -5468,8 +5490,10 @@ before solving and never weakened:
 - hosted procs: every refcounted arg owned by the host, result owned. This
   keeps the LirImage And Hosted Functions contract unchanged.
 - erased-callable procs (`ProcAbi.erased_callable`): all-owned, as above.
-- low-level ops: their `RcEffect` is the signature; it is explicit static
-  data on the op, never inferred.
+- low-level ops: each concrete operation's `RcEffect` is its signature; it is
+  explicit static data on the op, never inferred. An ARC-only borrowed-result
+  variant is likewise an explicit operation and signature, selected only by
+  the ARC rule above.
 
 ### Interprocedural Solving
 
@@ -5568,8 +5592,10 @@ plans when keep/common states change. Once the fixed point converges, direct
 call demands are mapped to final variants and every reachable plan is complete.
 
 Each plan records every concrete move/retain/release decision and call-variant
-or uniqueness choice. Materialization receives neither ownership state nor
-liveness and only follows completed plans to rebuild statement chains:
+or uniqueness choice. For a low-level operation with an ARC-only borrowed
+variant, the plan also records the selected concrete operation and `RcEffect`.
+Materialization receives neither ownership state nor liveness and only follows
+completed plans to rebuild statement chains:
 
 - borrowed occurrence: no statements.
 - owned occurrence that is not the final occurrence on its path: `incref`
@@ -7368,11 +7394,11 @@ Instead, each (architecture, OS) target has a static floor:
   multiply is required for competitive CRC-32. As of 2026 this floor covers
   ~95% of the consumer installed base and 100% of what Windows 11 supports;
   RHEL 10 already requires v3.
-- **AArch64:** ARMv8.2-class with the crypto extension — Cortex-A76 /
-  Neoverse-N1 (2018) and later. Covers every Apple Silicon Mac, every
-  Windows-on-ARM machine, every major ARM cloud chip (Graviton2+, Ampere,
-  Cobalt, Axion), and Raspberry Pi 5. Excludes Raspberry Pi 3/4 (their
-  cores lack the crypto extension carrying `pmull`).
+- **AArch64:** Armv8.0-A plus AES and DotProd. This names exactly the two
+  extensions the builtins lower to instead of selecting a CPU model that would
+  pull in unrelated architecture revisions. It covers every Apple Silicon Mac,
+  every major ARM cloud chip, and Raspberry Pi 5. Raspberry Pi 3/4 lack these
+  extensions.
 - **wasm:** the `simd128` feature (universally shipped in engines since
   2021; the wasm backend already assumes it). wasm has no carryless
   multiply and no AES instructions, so those two operations get slower —
@@ -7380,9 +7406,43 @@ Instead, each (architecture, OS) target has a static floor:
 
 Under these floors both native architectures guarantee the same capability
 set: full 128-bit integer SIMD, a one-instruction byte shuffle, carryless
-multiply, and AES rounds. Floors only ever affect speed, never results, so
-adding a more conservative x64 variant target later would not violate
-anything.
+multiply, and AES rounds. Floors only ever affect speed, never results.
+
+Each `RocTarget` has one `CpuContract` in `src/target/mod.zig`. Its architecture
+baseline and explicit instruction features are the sole source for both the
+LLVM target query and runtime host compatibility. A named LLVM CPU model may
+supply scheduling information, but all model features outside that contract
+are explicitly disabled, so choosing a platform host and choosing instructions
+cannot drift apart. `host_cpu.zig` maps the contract's features to CPUID or OS
+feature queries, and a compile-time equality check rejects any detector mapping
+that does not cover the contract exactly.
+
+Every target for which Roc raises the architecture floor has a `v1` twin. On
+x86-64, `x64v1*` means the psABI x86-64-v1 floor (SSE2 and no later
+extensions). On AArch64, `arm64v1*` means Armv8.0-A; Apple Silicon has no v1
+twin because every supported Mac already implements the macOS floor. On wasm,
+`wasm32v1` means the WebAssembly 1.0 core instruction set without simd128.
+Operations unavailable at v1 use exact alternate instruction sequences or the
+target-independent builtin implementation; the source-level result is
+unchanged.
+
+A default-level target and its v1 twin are separate platform target names with
+separate host inputs. A compiler must never link the default target's host into
+a v1 application or reinterpret an old default-target host as baseline: either
+would silently reintroduce instructions above the promised floor. Platform
+authors that support both levels build and declare both entries explicitly.
+
+For build or execution without an explicit `--target`, the CLI detects the CPU
+features of the machine running the compiler and considers targets in platform
+declaration order. A native target is eligible only when every feature in its
+static instruction-set floor is present; LLVM scheduling and tuning flags are
+not hardware capabilities and do not participate. Wasm remains eligible for
+build regardless of host CPU. The default `roc` command additionally requires
+`output: Exe`. If the platform declares only a native target whose CPU floor
+the host does not meet, selection reports the missing v1 target before code
+generation or execution. An explicit `roc build --target` remains a
+cross-compilation request and does not require the selected CPU features to be
+present on the machine invoking the CLI.
 
 ### Type design
 
@@ -7656,10 +7716,10 @@ The generic `dot_pairs_saturated` lowering widens unsigned and signed bytes to
 32-bit lanes, multiplies and pairwise-adds at that width, clamps to signed
 16-bit bounds, and narrows only after saturation; no intermediate 16-bit sum
 is permitted to wrap.
-`src/target/mod.zig` is the single authority for the LLVM target query, CPU
-name, and feature delta. Linked builds, optimized tests, and LLVM evaluation
-therefore all compile under the same x86-64-v3 plus AES/PCLMULQDQ, AArch64, or
-wasm simd128 floor.
+`src/target/mod.zig` is the single authority for the CPU contract, LLVM target
+query, CPU name, and feature delta. Linked builds, optimized tests, LLVM
+evaluation, and platform host selection therefore consume the same x86-64-v3
+plus AES/PCLMULQDQ, AArch64, or wasm simd128 floor.
 
 The former pure-Roc `{ bits : U128 }` implementations live only in the SIMD
 test oracle. They define each operation lane by lane without depending on the

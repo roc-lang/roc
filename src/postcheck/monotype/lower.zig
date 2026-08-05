@@ -6067,19 +6067,9 @@ const Builder = struct {
             ctx.frozen_sealed_emission = true;
             ctx.frozen_type_finals = sealer;
 
-            var frozen_codec_calls = std.ArrayList(FrozenPreparedCodecCall).empty;
+            var frozen_codec_calls = try ctx.sealedPreparedCodecCallsForBoundary(boundary.expr, sealer);
             defer frozen_codec_calls.deinit(self.allocator);
-            for (body_draft.prepared_codec_calls.items) |prepared| {
-                if (prepared.boundary_expr != boundary.expr) continue;
-                try frozen_codec_calls.append(self.allocator, .{
-                    .kind = prepared.kind,
-                    .shape_ty = try sealer.sealNode(prepared.shape_node),
-                    .lookup = prepared.lookup,
-                    .callable_ty = try sealer.sealNode(prepared.callable_node),
-                    .callee = prepared.callee,
-                });
-            }
-            ctx.frozen_codec_calls = frozen_codec_calls.items;
+            ctx.frozen_codec_calls = &frozen_codec_calls;
 
             const callable_ty = try sealer.sealNode(boundary.callable_node);
             const callable = self.functionShape(callable_ty, "deferred structural serialization callable was not a function");
@@ -6146,19 +6136,9 @@ const Builder = struct {
             ctx.frozen_sealed_emission = true;
             ctx.frozen_type_finals = sealer;
 
-            var frozen_codec_calls = std.ArrayList(FrozenPreparedCodecCall).empty;
+            var frozen_codec_calls = try ctx.sealedPreparedCodecCallsForBoundary(boundary.expr, sealer);
             defer frozen_codec_calls.deinit(self.allocator);
-            for (body_draft.prepared_codec_calls.items) |prepared| {
-                if (prepared.boundary_expr != boundary.expr) continue;
-                try frozen_codec_calls.append(self.allocator, .{
-                    .kind = prepared.kind,
-                    .shape_ty = try sealer.sealNode(prepared.shape_node),
-                    .lookup = prepared.lookup,
-                    .callable_ty = try sealer.sealNode(prepared.callable_node),
-                    .callee = prepared.callee,
-                });
-            }
-            ctx.frozen_codec_calls = frozen_codec_calls.items;
+            ctx.frozen_codec_calls = &frozen_codec_calls;
 
             const callable = try graph.functionNodes(boundary.callable_node);
             var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
@@ -7133,6 +7113,9 @@ const Builder = struct {
                     defer added.deinit(self.allocator);
                     try self.bindPatLocals(branch.pat, bound, &added);
                     defer removeBoundLocals(bound, added.items);
+                    for (self.program.stmtSpan(branch.bindings)) |stmt| {
+                        if (try self.stmtDependsOnFreeLocal(stmt, target, bound, active_fns, &added)) return true;
+                    }
                     if (branch.guard) |guard| {
                         if (try self.exprDependsOnFreeLocalInner(guard, target, bound, active_fns)) return true;
                     }
@@ -9342,6 +9325,7 @@ const DraftListRestPattern = struct {
 
 const DraftBranch = struct {
     pat: DraftPatId,
+    bindings: DraftSpan(DraftStmtId) = DraftSpan(DraftStmtId).empty(),
     guard: ?DraftExprId = null,
     body: DraftExprId,
 };
@@ -9964,6 +9948,13 @@ const CodecKind = enum {
     encoder,
 };
 
+const CodecCallPurpose = enum {
+    format,
+    custom,
+};
+
+const PreparedCodecCallId = enum(u32) { _ };
+
 /// One exact codec request prepared while the specialization graph still
 /// accepts relations. The callable node owns every checked/private component;
 /// ordinary procedure targets use the same deferred specialization slot as
@@ -9971,6 +9962,7 @@ const CodecKind = enum {
 const DraftPreparedCodecCall = struct {
     boundary_expr: DraftExprId,
     kind: CodecKind,
+    purpose: CodecCallPurpose = .format,
     shape_node: NodeId,
     lookup: MethodLookup,
     callable_node: NodeId,
@@ -9979,10 +9971,53 @@ const DraftPreparedCodecCall = struct {
 
 const FrozenPreparedCodecCall = struct {
     kind: CodecKind,
+    purpose: CodecCallPurpose,
     shape_ty: Type.TypeId,
     lookup: MethodLookup,
     callable_ty: Type.TypeId,
     callee: DraftFnSlot,
+};
+
+const CustomCodecCallAddress = struct {
+    kind: CodecKind,
+    shape_ty: Type.TypeId,
+};
+
+const FrozenPreparedCodecCalls = struct {
+    calls: []FrozenPreparedCodecCall,
+    custom_call_ids: std.AutoHashMap(CustomCodecCallAddress, PreparedCodecCallId),
+
+    fn init(allocator: Allocator, calls: []FrozenPreparedCodecCall) Allocator.Error!FrozenPreparedCodecCalls {
+        errdefer allocator.free(calls);
+        var custom_call_ids = std.AutoHashMap(CustomCodecCallAddress, PreparedCodecCallId).init(allocator);
+        errdefer custom_call_ids.deinit();
+
+        for (calls, 0..) |call, index| {
+            if (call.purpose != .custom) continue;
+            if (index > std.math.maxInt(u32)) Common.invariant("prepared codec call index exceeded its identity range");
+            const entry = try custom_call_ids.getOrPut(.{ .kind = call.kind, .shape_ty = call.shape_ty });
+            if (entry.found_existing) Common.invariant("frozen codec plan had multiple custom calls for one shape");
+            entry.value_ptr.* = @enumFromInt(index);
+        }
+
+        return .{ .calls = calls, .custom_call_ids = custom_call_ids };
+    }
+
+    fn deinit(self: *FrozenPreparedCodecCalls, allocator: Allocator) void {
+        self.custom_call_ids.deinit();
+        allocator.free(self.calls);
+    }
+
+    fn customCall(
+        self: *const FrozenPreparedCodecCalls,
+        kind: CodecKind,
+        shape_ty: Type.TypeId,
+    ) ?*const FrozenPreparedCodecCall {
+        const id = self.custom_call_ids.get(.{ .kind = kind, .shape_ty = shape_ty }) orelse return null;
+        const index = @intFromEnum(id);
+        if (index >= self.calls.len) Common.invariant("prepared codec call identity was outside its frozen plan");
+        return &self.calls[index];
+    }
 };
 
 const DraftDeferredInspect = struct {
@@ -11110,6 +11145,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.branches, index)) continue;
             program.branches.appendAssumeCapacity(.{
                 .pat = ids.pat(branch.pat),
+                .bindings = ids.stmtSpan(branch.bindings),
                 .guard = if (branch.guard) |guard| ids.expr(guard) else null,
                 .body = ids.expr(branch.body),
             });
@@ -12161,10 +12197,9 @@ const BodyContext = struct {
     /// Exact custom parser/encoder callees prepared before the graph froze.
     /// Phase-B structural serialization may consume these sealed requests but
     /// may not instantiate or lower another checked callable.
-    frozen_codec_calls: ?[]const FrozenPreparedCodecCall = null,
-    /// Final structural serialization emission consumes only durable types.
-    /// Type instantiation and generated method callees therefore use isolated
-    /// closed lowering rather than mutating this body's frozen graph.
+    frozen_codec_calls: ?*const FrozenPreparedCodecCalls = null,
+    /// Final structural serialization emission consumes only durable types and
+    /// exact prepared call identities instead of reconstructing checked requests.
     frozen_sealed_emission: bool = false,
     /// The one finalizer that owns Phase-B materialization for this frozen
     /// graph. Checked defaults are applied here, never by an eager consumer.
@@ -12505,6 +12540,26 @@ const BodyContext = struct {
         pattern: checked.CheckedPatternId,
         local: DraftLocalId,
         cell: DraftTypeCell,
+    };
+
+    const PendingMatchRecordRestBinding = struct {
+        source_local: DraftLocalId,
+        source_node: NodeId,
+        rest_local: DraftLocalId,
+        rest_node: NodeId,
+        rest_cell: DraftTypeCell,
+        before_guard: bool,
+    };
+
+    const MatchPatternLowering = struct {
+        guard: ?DraftExprId,
+        body: DraftExprId,
+        record_rests: *std.ArrayList(PendingMatchRecordRestBinding),
+    };
+
+    const LoweredMatchRecordRestBindings = struct {
+        guard_bindings: DraftSpan(DraftStmtId),
+        body: DraftExprId,
     };
 
     const PatternSuccessGuard = struct {
@@ -13025,6 +13080,7 @@ const BodyContext = struct {
                 for (self.branchSpan(match_.branches)) |branch| {
                     try alternatives.append(self.allocator, try self.anyImpossibilityProof(&.{
                         self.patternSuccessImpossibilityProof(branch.pat),
+                        try self.anyStmtSpanImpossibilityProof(self.stmtSpan(branch.bindings)),
                         if (branch.guard) |guard| self.exprImpossibilityProof(guard) else null,
                         self.exprImpossibilityProof(branch.body),
                     }));
@@ -14524,6 +14580,9 @@ const BodyContext = struct {
                     defer added.deinit(self.allocator);
                     try self.bindPatLocals(branch.pat, bound, &added);
                     defer removeBoundLocals(bound, added.items);
+                    for (self.stmtSpan(branch.bindings)) |stmt| {
+                        if (try self.stmtDependsOnFreeLocal(stmt, target, bound, &added)) return true;
+                    }
                     if (branch.guard) |guard| {
                         if (try self.exprDependsOnFreeLocalInner(guard, target, bound)) return true;
                     }
@@ -23896,7 +23955,8 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexIsolated(lookup, 0, encoding_ty);
+        const prepared = self.frozenCustomCodecCall(.parser, shape_ty, lookup);
+        const callable_mono_ty = prepared.callable_ty;
         const parse_fn = self.builder.functionShape(callable_mono_ty, "custom parser target was not a function");
         const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
         if (parse_arg_tys.len != 1) Common.invariant("custom parser target had an unexpected arity");
@@ -23935,7 +23995,7 @@ const BodyContext = struct {
         const parser_expr = try self.addExpr(.{
             .ty = runtime_fn_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -25633,30 +25693,6 @@ const BodyContext = struct {
             try self.graph.importMono(ret_ty),
         );
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
-    }
-
-    fn instantiateTargetCallNodeFromMonoArgAtIndex(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        arg_index: usize,
-        arg_ty: Type.TypeId,
-    ) Allocator.Error!NodeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (arg_index >= function.args.len) {
-            Common.invariant("checked synthetic dispatch target argument index was outside its function type");
-        }
-        const fn_node = try self.instNode(source_fn_ty);
-        const function_nodes = try self.graph.functionNodes(fn_node);
-        const request_args = try self.graph.arena().dupe(NodeId, function_nodes.args);
-        request_args[arg_index] = try checkedMonoRequestNode(
-            self.graph,
-            request_args[arg_index],
-            try self.graph.importMono(arg_ty),
-        );
-        if (try self.graph.containsGeneratedPrivate(request_args[arg_index])) {
-            return try self.graphFunctionNode(request_args, function_nodes.ret);
-        }
-        return fn_node;
     }
 
     /// Return exact producer evidence for a call operand without sealing and
@@ -28622,7 +28658,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
         if (!fn_ctx.frozen_sealed_emission) {
             _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
                 runtime_boundary,
@@ -28631,11 +28667,11 @@ const BodyContext = struct {
                 callable_node,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
         }
         defer {
             fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
         }
         const state_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
         const state_expr = try fn_ctx.localExpr(state_local, runtime_arg_tys[0]);
@@ -28772,7 +28808,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
         if (!fn_ctx.frozen_sealed_emission) {
             _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
                 runtime_boundary,
@@ -28781,11 +28817,11 @@ const BodyContext = struct {
                 callable_node,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
         }
         defer {
             fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
         }
         const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
         const state_expr = try fn_ctx.addExprWithTypeCell(state_cell, .{ .local = state_local });
@@ -28939,7 +28975,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
         if (!fn_ctx.frozen_sealed_emission) {
             _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
                 runtime_boundary,
@@ -28948,11 +28984,11 @@ const BodyContext = struct {
                 callable_node,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
         }
         defer {
             fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
         }
         const value_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
         const value_expr = try fn_ctx.localExpr(value_local, runtime_arg_tys[0]);
@@ -29108,7 +29144,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
         if (!fn_ctx.frozen_sealed_emission) {
             _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
                 runtime_boundary,
@@ -29117,11 +29153,11 @@ const BodyContext = struct {
                 callable_node,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
         }
         defer {
             fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
         }
         const value_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         const value_expr = try fn_ctx.addExprWithTypeCell(value_cell, .{ .local = value_local });
@@ -33177,29 +33213,6 @@ const BodyContext = struct {
         return try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, arg_tys, ret_ty);
     }
 
-    fn methodTargetMonoTypeFromArgAtIndexIsolated(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        arg_index: usize,
-        arg_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const graph = try self.builder.createGraph();
-        defer graph.destroy();
-
-        const owner_template = switch (lookup.target.kind) {
-            .procedure => |procedure| procedure.template,
-            .local_proc => |local| self.localMethodOwnerTemplate(lookup, local),
-            .structural => Common.invariant("structural method registry result has no callable specialization context"),
-        };
-        var body_draft = BodyDraftStore.init(self.allocator);
-        defer body_draft.deinit();
-        var target_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, graph, &body_draft);
-        defer target_ctx.deinit();
-        const fn_node = try target_ctx.instantiateTargetCallNodeFromMonoArgAtIndex(lookup.target.callable_ty, arg_index, arg_ty);
-        try graph.freezeRelations();
-        return try graph.sealNode(fn_node);
-    }
-
     fn methodLookupForTypeName(
         self: *BodyContext,
         owner_ty: Type.TypeId,
@@ -33751,7 +33764,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const prepared_calls = self.frozen_codec_calls orelse return null;
-        for (prepared_calls) |prepared| {
+        for (prepared_calls.calls) |prepared| {
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             const function = self.builder.functionShape(prepared.callable_ty, "prepared codec callable was not a function");
             const prepared_args = self.builder.program.types.span(function.args);
@@ -33779,7 +33792,7 @@ const BodyContext = struct {
         shape_ty: Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const prepared_calls = self.frozen_codec_calls orelse return null;
-        for (prepared_calls) |prepared| {
+        for (prepared_calls.calls) |prepared| {
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             if (try self.builder.program.types.typeEql(
                 &self.builder.program.names,
@@ -33796,7 +33809,7 @@ const BodyContext = struct {
     ) Allocator.Error!?Type.TypeId {
         const prepared_calls = self.frozen_codec_calls orelse return null;
         var found: ?Type.TypeId = null;
-        for (prepared_calls) |prepared| {
+        for (prepared_calls.calls) |prepared| {
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             if (found) |previous| {
                 if (!try self.builder.program.types.typeEql(
@@ -33817,7 +33830,7 @@ const BodyContext = struct {
         callable_ty: Type.TypeId,
     ) Allocator.Error!?DraftFnSlot {
         const prepared_calls = self.frozen_codec_calls orelse return null;
-        for (prepared_calls) |prepared| {
+        for (prepared_calls.calls) |prepared| {
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             if (try self.builder.program.types.typeEql(
                 &self.builder.program.names,
@@ -33826,6 +33839,22 @@ const BodyContext = struct {
             )) return prepared.callee;
         }
         return null;
+    }
+
+    fn frozenCustomCodecCall(
+        self: *BodyContext,
+        kind: CodecKind,
+        shape_ty: Type.TypeId,
+        lookup: MethodLookup,
+    ) FrozenPreparedCodecCall {
+        const prepared_calls = self.frozen_codec_calls orelse
+            Common.invariant("custom codec emission had no prepared call plan");
+        const prepared = prepared_calls.customCall(kind, shape_ty) orelse
+            Common.invariant("custom codec emission reached a shape without a prepared call");
+        if (!self.methodLookupEql(prepared.lookup, lookup)) {
+            Common.invariant("prepared custom codec call resolved to a different method target");
+        }
+        return prepared.*;
     }
 
     fn preparedCodecCalleeAtNode(
@@ -36215,11 +36244,12 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        const prepared = self.frozenCustomCodecCall(.encoder, shape_ty, lookup);
         const runtime_fn_ty = try self.builder.program.types.add(.{ .func = .{
             .args = try self.builder.program.types.addSpan(&.{ shape_ty, state_ty }),
             .ret = ret_ty,
         } });
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{encoding_ty}, runtime_fn_ty);
+        const callable_mono_ty = prepared.callable_ty;
         const encode_fn = self.builder.functionShape(callable_mono_ty, "custom encoder_for target was not a function");
         const encode_arg_tys = self.builder.program.types.span(encode_fn.args);
         if (encode_arg_tys.len != 1) Common.invariant("custom encoder_for target had an unexpected arity");
@@ -36229,7 +36259,7 @@ const BodyContext = struct {
         const encoder_expr = try self.addExpr(.{
             .ty = runtime_fn_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -36973,23 +37003,45 @@ const BodyContext = struct {
         return added_relation;
     }
 
-    fn resolvedPreparedCodecCallsForBoundary(
+    fn sealedPreparedCodecCallsForBoundary(
         self: *BodyContext,
         boundary_expr: DraftExprId,
-    ) Allocator.Error![]FrozenPreparedCodecCall {
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!FrozenPreparedCodecCalls {
         var out = std.ArrayList(FrozenPreparedCodecCall).empty;
         errdefer out.deinit(self.allocator);
         for (self.draft.prepared_codec_calls.items) |prepared| {
             if (prepared.boundary_expr != boundary_expr) continue;
             try out.append(self.allocator, .{
                 .kind = prepared.kind,
+                .purpose = prepared.purpose,
+                .shape_ty = try sealer.sealNode(prepared.shape_node),
+                .lookup = prepared.lookup,
+                .callable_ty = try sealer.sealNode(prepared.callable_node),
+                .callee = prepared.callee,
+            });
+        }
+        return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
+    }
+
+    fn resolvedPreparedCodecCallsForBoundary(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+    ) Allocator.Error!FrozenPreparedCodecCalls {
+        var out = std.ArrayList(FrozenPreparedCodecCall).empty;
+        errdefer out.deinit(self.allocator);
+        for (self.draft.prepared_codec_calls.items) |prepared| {
+            if (prepared.boundary_expr != boundary_expr) continue;
+            try out.append(self.allocator, .{
+                .kind = prepared.kind,
+                .purpose = prepared.purpose,
                 .shape_ty = try self.currentPhaseTypeForNode(prepared.shape_node),
                 .lookup = prepared.lookup,
                 .callable_ty = try self.currentPhaseTypeForNode(prepared.callable_node),
                 .callee = prepared.callee,
             });
         }
-        return try out.toOwnedSlice(self.allocator);
+        return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
     }
 
     fn prepareCustomCodecCall(
@@ -37045,6 +37097,7 @@ const BodyContext = struct {
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
+            .purpose = .custom,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,
@@ -40409,66 +40462,6 @@ const BodyContext = struct {
         }
     }
 
-    fn preRegisterPatternBindersFromCheckedTypes(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-    ) Allocator.Error!void {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .assign => |binder| {
-                if (self.currentOwnerPatternBinderLocal(binder) == null) {
-                    const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), try self.lowerTypeCell(pattern.ty), binder);
-                    try self.bindLocalName(local, binder);
-                    try self.binders.put(binder, local);
-                }
-            },
-            .as => |as| {
-                if (self.currentOwnerPatternBinderLocal(as.binder) == null) {
-                    const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), try self.lowerTypeCell(pattern.ty), as.binder);
-                    try self.bindLocalName(local, as.binder);
-                    try self.binders.put(as.binder, local);
-                }
-                try self.preRegisterPatternBindersFromCheckedTypes(as.pattern);
-            },
-            .applied_tag => |tag| {
-                for (tag.args) |arg| try self.preRegisterPatternBindersFromCheckedTypes(arg);
-            },
-            .nominal => |nominal| try self.preRegisterPatternBindersFromCheckedTypes(nominal.backing_pattern),
-            .record_destructure => |destructs| {
-                for (destructs) |destruct| {
-                    switch (destruct.kind) {
-                        .required, .sub_pattern => |child| try self.preRegisterPatternBindersFromCheckedTypes(child),
-                        .rest => |rest_pattern| {
-                            if (!self.patternIsIgnored(rest_pattern)) {
-                                Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-                            }
-                        },
-                    }
-                }
-            },
-            .list => |list| {
-                for (list.patterns) |child| try self.preRegisterPatternBindersFromCheckedTypes(child);
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.preRegisterPatternBindersFromCheckedTypes(rest_pattern);
-                }
-            },
-            .tuple => |items| {
-                for (items) |item| try self.preRegisterPatternBindersFromCheckedTypes(item);
-            },
-            .str_interpolation => |str| {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| try self.preRegisterPatternBindersFromCheckedTypes(capture);
-                }
-            },
-            .pending,
-            .numeral_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-        }
-    }
-
     fn lowerPatternAtTypeCollectingLists(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
@@ -41302,8 +41295,6 @@ const BodyContext = struct {
                 if (try self.checkedPatternIsProvenUninhabited(pattern.pattern)) continue;
                 var branch_ctx = try self.childContext(self.current_fn_key);
                 errdefer branch_ctx.deinit();
-                try branch_ctx.preRegisterPatternBindersFromCheckedTypes(pattern.pattern);
-                try branch_ctx.applyAlternativeBinderRemaps(pattern.binderRemapsSlice(self.view.bodies));
                 try relateRequestComponent(
                     self.graph,
                     scrutinee_node,
@@ -41319,13 +41310,20 @@ const BodyContext = struct {
             }
         }
 
+        // Every pattern relation must settle before binder cells are projected.
+        // This gives derived binders such as record rest their exact graph node
+        // without allocating a checked-type approximation and rebinding it later.
+        for (pending.items) |*entry| {
+            try entry.ctx.preRegisterPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
+            try entry.ctx.applyAlternativeBinderRemaps(entry.pattern.binderRemapsSlice(self.view.bodies));
+        }
+
         // Select the shared result representation from every inhabited branch
-        // before any branch body is emitted. Match patterns already supplied
-        // their exact binder cells above, so branch-local lookups participate
-        // in this relation-production pass as ordinary producer evidence.
+        // before any branch body is emitted. Match patterns supplied their
+        // exact binder cells above, so branch-local lookups participate in this
+        // relation-production pass as ordinary producer evidence.
         if (value_selection) |selection| {
             for (pending.items) |*entry| {
-                try entry.ctx.rebindPreRegisteredPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
                 try entry.ctx.prepareControlFlowResultSelection(selection, entry.checked_body);
             }
         }
@@ -41337,17 +41335,12 @@ const BodyContext = struct {
                 entry.pattern.pattern,
                 scrutinee_node,
             );
-            try entry.ctx.rebindPreRegisteredPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
             entry.user_guard = if (entry.checked_guard) |guard_expr| try entry.ctx.lowerExpr(guard_expr) else null;
             const branch_output: MatchOutput = if (value_selection) |selection|
                 .{ .value = selection.selected }
             else
                 output;
-            entry.body = try entry.ctx.wrapComptimeBranch(
-                comptime_site,
-                entry.source_index,
-                try entry.ctx.lowerMatchBranchBody(entry.checked_body, branch_output),
-            );
+            entry.body = try entry.ctx.lowerMatchBranchBody(entry.checked_body, branch_output);
             if (value_selection) |selection| {
                 try self.includeControlFlowResult(selection, entry.body);
             }
@@ -41361,13 +41354,27 @@ const BodyContext = struct {
         for (pending.items) |*entry| {
             entry.ctx.reuse_pre_registered_pattern_binders = true;
             entry.ctx.allow_recursive_pattern_lowering_for_match = true;
-            const pat = try entry.ctx.lowerPatternAtNode(entry.pattern.pattern, scrutinee_node);
+            var record_rests = std.ArrayList(PendingMatchRecordRestBinding).empty;
+            defer record_rests.deinit(self.allocator);
+            const pat = try entry.ctx.lowerMatchPatternAtNode(
+                entry.pattern.pattern,
+                scrutinee_node,
+                entry.user_guard,
+                entry.body,
+                &record_rests,
+            );
             if (try entry.ctx.checkedPatternIsProvenUninhabited(entry.pattern.pattern)) continue;
             const guard = try entry.ctx.conjoinPatternLiteralGuards(entry.user_guard);
+            const materialized = try entry.ctx.lowerMatchRecordRestBindings(record_rests.items, entry.body);
             branches[index] = .{
                 .pat = pat,
+                .bindings = materialized.guard_bindings,
                 .guard = guard,
-                .body = entry.body,
+                .body = try entry.ctx.wrapComptimeBranch(
+                    comptime_site,
+                    entry.source_index,
+                    materialized.body,
+                ),
             };
             index += 1;
         }
@@ -41861,11 +41868,21 @@ const BodyContext = struct {
                 expected_node,
                 .expression_lowering,
             ),
-            .field_access,
+            .field_access => try self.lowerExprTypeNode(checked_value),
+            // Lookups are use-sites. Once a generated-private request is
+            // selected, branch emission validates the lookup against that
+            // request; the prepass must not join the raw stored binding cell.
             .lookup_local,
             .lookup_external,
             .lookup_required,
-            => try self.lowerExprTypeNode(checked_value),
+            => if (try self.graph.containsGeneratedPrivate(expected_node))
+                expected_node
+            else
+                try self.lowerExprTypeNode(checked_value),
+            .block => |block| if (block.statements.len == 0)
+                try self.controlFlowResultEvidenceNode(block.final_expr, expected_node)
+            else
+                null,
             else => null,
         };
     }
@@ -44785,14 +44802,6 @@ const BodyContext = struct {
         try self.registerPatternBindersAtNodeInMap(pattern_id, node, &self.binders, false);
     }
 
-    fn rebindPreRegisteredPatternBindersAtNode(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        node: NodeId,
-    ) Allocator.Error!void {
-        try self.registerPatternBindersAtNodeInMap(pattern_id, node, &self.binders, true);
-    }
-
     fn registerPatternBindersAtNodeInMap(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
@@ -45088,6 +45097,31 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
     ) Allocator.Error!DraftPatId {
+        return try self.lowerPatternAtNodeInner(pattern_id, node, null);
+    }
+
+    fn lowerMatchPatternAtNode(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        node: NodeId,
+        guard: ?DraftExprId,
+        body: DraftExprId,
+        record_rests: *std.ArrayList(PendingMatchRecordRestBinding),
+    ) Allocator.Error!DraftPatId {
+        var match_lowering = MatchPatternLowering{
+            .guard = guard,
+            .body = body,
+            .record_rests = record_rests,
+        };
+        return try self.lowerPatternAtNodeInner(pattern_id, node, &match_lowering);
+    }
+
+    fn lowerPatternAtNodeInner(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        node: NodeId,
+        match_lowering: ?*MatchPatternLowering,
+    ) Allocator.Error!DraftPatId {
         if (self.patternNeedsExplicitBinding(pattern_id) and
             !self.allow_recursive_pattern_lowering_for_match)
         {
@@ -45103,7 +45137,7 @@ const BodyContext = struct {
             .as => |as| blk: {
                 const local = try self.materializePatternBinderAtCell(as.binder, cell);
                 break :blk .{ .as = .{
-                    .pattern = try self.lowerPatternAtNode(as.pattern, node),
+                    .pattern = try self.lowerPatternAtNodeInner(as.pattern, node, match_lowering),
                     .local = local,
                 } };
             },
@@ -45111,15 +45145,16 @@ const BodyContext = struct {
                 if (self.graph.content(node) == .named) {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
-                    break :blk .{ .nominal = try self.lowerConstructorPatternAtNode(pattern_id, backing.node) };
+                    break :blk .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) };
                 }
                 const name = try self.builder.tagName(self.view, tag.name);
                 const payloads = try self.allocator.alloc(DraftPatId, tag.args.len);
                 defer self.allocator.free(payloads);
                 for (tag.args, 0..) |arg, payload_index| {
-                    payloads[payload_index] = try self.lowerPatternAtNode(
+                    payloads[payload_index] = try self.lowerPatternAtNodeInner(
                         arg,
                         try self.graph.tagPayloadNode(node, name, payload_index),
+                        match_lowering,
                     );
                 }
                 break :blk .{ .tag = .{
@@ -45130,42 +45165,24 @@ const BodyContext = struct {
             .nominal => |nominal| blk: {
                 const backing = self.graph.namedNodes(node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
-                break :blk .{ .nominal = try self.lowerPatternAtNode(nominal.backing_pattern, backing.node) };
+                break :blk .{ .nominal = try self.lowerPatternAtNodeInner(nominal.backing_pattern, backing.node, match_lowering) };
             },
-            .record_destructure => |destructs| blk: {
-                if (self.graph.content(node) == .named) {
-                    const backing = self.graph.namedNodes(node).backing orelse
-                        Common.invariant("nominal record pattern had no runtime backing");
-                    break :blk .{ .nominal = try self.lowerConstructorPatternAtNode(pattern_id, backing.node) };
-                }
-                var lowered = std.ArrayList(DraftRecordDestruct).empty;
-                defer lowered.deinit(self.allocator);
-                for (destructs) |destruct| {
-                    const child = switch (destruct.kind) {
-                        .required, .sub_pattern => |child| child,
-                        .rest => |rest| {
-                            if (self.patternIsIgnored(rest)) continue;
-                            Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-                        },
-                    };
-                    const name = try self.builder.recordFieldName(self.view, destruct.label);
-                    try lowered.append(self.allocator, .{
-                        .name = name,
-                        .pattern = try self.lowerPatternAtNode(child, try self.graph.recordFieldNode(node, name)),
-                    });
-                }
-                break :blk .{ .record = try self.addRecordDestructSpan(lowered.items) };
-            },
+            .record_destructure => |destructs| return try self.lowerRecordPatternAtNodeInner(
+                pattern_id,
+                node,
+                destructs,
+                match_lowering,
+            ),
             .list => |list| blk: {
                 const elem_node = try self.graph.listElementNode(node);
                 const lowered = try self.allocator.alloc(DraftPatId, list.patterns.len);
                 defer self.allocator.free(lowered);
                 for (list.patterns, 0..) |child, child_index| {
-                    lowered[child_index] = try self.lowerPatternAtNode(child, elem_node);
+                    lowered[child_index] = try self.lowerPatternAtNodeInner(child, elem_node, match_lowering);
                 }
                 const rest: ?DraftListRestPattern = if (list.rest) |rest| .{
                     .index = rest.index,
-                    .pattern = if (rest.pattern) |rest_pattern| try self.lowerPatternAtNode(rest_pattern, node) else null,
+                    .pattern = if (rest.pattern) |rest_pattern| try self.lowerPatternAtNodeInner(rest_pattern, node, match_lowering) else null,
                 } else null;
                 break :blk .{ .list = .{
                     .patterns = try self.addPatSpan(lowered),
@@ -45176,14 +45193,14 @@ const BodyContext = struct {
                 if (self.graph.content(node) == .named) {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
-                    break :blk .{ .nominal = try self.lowerConstructorPatternAtNode(pattern_id, backing.node) };
+                    break :blk .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) };
                 }
                 const item_nodes = try self.graph.tupleItemNodes(node);
                 if (items.len != item_nodes.len) Common.invariant("tuple pattern arity differed from graph tuple arity");
                 const lowered = try self.allocator.alloc(DraftPatId, items.len);
                 defer self.allocator.free(lowered);
                 for (items, item_nodes, 0..) |item, item_node, item_index| {
-                    lowered[item_index] = try self.lowerPatternAtNode(item, item_node);
+                    lowered[item_index] = try self.lowerPatternAtNodeInner(item, item_node, match_lowering);
                 }
                 break :blk .{ .tuple = try self.addPatSpan(lowered) };
             },
@@ -45199,6 +45216,130 @@ const BodyContext = struct {
             .underscore => .wildcard,
         };
         return try self.addPatWithTypeCell(cell, data);
+    }
+
+    fn lowerRecordPatternAtNodeInner(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        node: NodeId,
+        destructs: []const checked.CheckedRecordDestruct,
+        match_lowering: ?*MatchPatternLowering,
+    ) Allocator.Error!DraftPatId {
+        const cell = DraftTypeCell.fromGraphNode(node);
+        if (self.graph.content(node) == .named) {
+            const backing = self.graph.namedNodes(node).backing orelse
+                Common.invariant("nominal record pattern had no runtime backing");
+            if (backing.node == node) Common.invariant("nominal record pattern backing did not advance");
+            return try self.addPatWithTypeCell(cell, .{ .nominal = try self.lowerRecordPatternAtNodeInner(
+                pattern_id,
+                backing.node,
+                destructs,
+                match_lowering,
+            ) });
+        }
+
+        var lowered = std.ArrayList(DraftRecordDestruct).empty;
+        defer lowered.deinit(self.allocator);
+        var source_local: ?DraftLocalId = null;
+        for (destructs) |destruct| {
+            switch (destruct.kind) {
+                .required, .sub_pattern => |child| {
+                    const name = try self.builder.recordFieldName(self.view, destruct.label);
+                    try lowered.append(self.allocator, .{
+                        .name = name,
+                        .pattern = try self.lowerPatternAtNodeInner(
+                            child,
+                            try self.graph.recordFieldNode(node, name),
+                            match_lowering,
+                        ),
+                    });
+                },
+                .rest => |rest| {
+                    if (self.patternIsIgnored(rest)) continue;
+                    const lowering = match_lowering orelse
+                        Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
+                    const rest_binder = switch (self.view.bodies.pattern(rest).data) {
+                        .assign => |binder| binder,
+                        else => Common.invariant("named record rest was not an assignment pattern"),
+                    };
+                    const rest_local = self.currentOwnerPatternBinderLocal(rest_binder) orelse
+                        Common.invariant("record rest binder was not pre-registered at its exact graph node");
+                    const needed_by_guard = if (lowering.guard) |guard|
+                        try self.exprDependsOnFreeLocal(guard, rest_local)
+                    else
+                        false;
+                    const needed_by_body = try self.exprDependsOnFreeLocal(lowering.body, rest_local);
+                    if (!needed_by_guard and !needed_by_body) continue;
+
+                    const captured = source_local orelse blk: {
+                        const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
+                        source_local = local;
+                        break :blk local;
+                    };
+                    const rest_cell = self.localTypeCell(rest_local);
+                    try lowering.record_rests.append(self.allocator, .{
+                        .source_local = captured,
+                        .source_node = node,
+                        .rest_local = rest_local,
+                        .rest_node = try rest_cell.toGraphNode(self.graph),
+                        .rest_cell = rest_cell,
+                        .before_guard = needed_by_guard,
+                    });
+                },
+            }
+        }
+
+        const record_pattern = try self.addPatWithTypeCell(cell, .{
+            .record = try self.addRecordDestructSpan(lowered.items),
+        });
+        const captured = source_local orelse return record_pattern;
+        return try self.addPatWithTypeCell(cell, .{ .as = .{
+            .pattern = record_pattern,
+            .local = captured,
+        } });
+    }
+
+    fn lowerMatchRecordRestBindings(
+        self: *BodyContext,
+        pending: []const PendingMatchRecordRestBinding,
+        original_body: DraftExprId,
+    ) Allocator.Error!LoweredMatchRecordRestBindings {
+        var guard_bindings = std.ArrayList(DraftStmtId).empty;
+        defer guard_bindings.deinit(self.allocator);
+        var body_bindings = std.ArrayList(DraftStmtId).empty;
+        defer body_bindings.deinit(self.allocator);
+
+        for (pending) |binding| {
+            const source_cell = DraftTypeCell.fromGraphNode(binding.source_node);
+            const source = try self.addExprWithTypeCell(source_cell, .{ .local = binding.source_local });
+            const value = try self.lowerRecordRestValueWithTypeCell(
+                source,
+                binding.source_node,
+                binding.rest_cell,
+                binding.rest_node,
+            );
+            const stmt = try self.addStmt(.{ .let_ = .{
+                .pat = try self.addPatWithTypeCell(binding.rest_cell, .{ .bind = binding.rest_local }),
+                .value = value,
+            } });
+            if (binding.before_guard) {
+                try guard_bindings.append(self.allocator, stmt);
+            } else {
+                try body_bindings.append(self.allocator, stmt);
+            }
+        }
+
+        const body = if (body_bindings.items.len == 0)
+            original_body
+        else
+            try self.addExprWithTypeCell(self.exprTypeCell(original_body), .{ .block = .{
+                .statements = try self.addStmtSpan(body_bindings.items),
+                .final_expr = original_body,
+            } });
+        return .{
+            .guard_bindings = try self.addStmtSpan(guard_bindings.items),
+            .body = body,
+        };
     }
 
     fn lowerConstructorPatternAtNode(

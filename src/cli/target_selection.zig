@@ -31,6 +31,7 @@ pub const SelectionResult = union(enum) {
     requires_executable: SelectedTarget,
     invalid_target: []const u8,
     unsupported_target: RocTarget,
+    incompatible_cpu: RocTarget,
     no_default,
     not_runnable_on_host: RocTarget,
 };
@@ -63,6 +64,10 @@ fn isRunnableOnHost(target: RocTarget, host_cpu_level: CpuLevel) bool {
     return target.isExecutableOnHost() and runsOnHostCpu(target, host_cpu_level);
 }
 
+fn hasIncompatibleHostCpu(target: RocTarget, host_cpu_level: CpuLevel) bool {
+    return target.matchesHostOsAndArch() and !runsOnHostCpu(target, host_cpu_level);
+}
+
 fn selectExplicitBuildTarget(config: TargetsConfig, target: RocTarget) SelectionResult {
     if (config.getLinkSpec(target)) |link_spec| {
         return .{ .selected = .{
@@ -77,6 +82,7 @@ fn selectExplicitBuildTarget(config: TargetsConfig, target: RocTarget) Selection
 }
 
 fn selectDefaultBuildTarget(config: TargetsConfig, host_cpu_level: CpuLevel) SelectionResult {
+    var incompatible_cpu: ?RocTarget = null;
     for (config.getSupportedTargets()) |link_spec| {
         if (isBuildDefaultTarget(link_spec.target, host_cpu_level)) {
             return .{ .selected = .{
@@ -86,8 +92,12 @@ fn selectDefaultBuildTarget(config: TargetsConfig, host_cpu_level: CpuLevel) Sel
                 .source = .default,
             } };
         }
+        if (incompatible_cpu == null and hasIncompatibleHostCpu(link_spec.target, host_cpu_level)) {
+            incompatible_cpu = link_spec.target;
+        }
     }
 
+    if (incompatible_cpu) |target| return .{ .incompatible_cpu = target };
     return .no_default;
 }
 
@@ -125,6 +135,9 @@ fn selectRunTargetForParsed(
         } };
     }
 
+    if (hasIncompatibleHostCpu(target, host_cpu_level)) {
+        return .{ .incompatible_cpu = target };
+    }
     if (!isRunnableOnHost(target, host_cpu_level)) {
         return .{ .not_runnable_on_host = target };
     }
@@ -147,6 +160,7 @@ pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8, host_cpu_
     }
 
     var default_non_executable: ?SelectedTarget = null;
+    var incompatible_cpu: ?RocTarget = null;
     for (config.getSupportedTargets()) |link_spec| {
         if (link_spec.output == .exe and isRunnableOnHost(link_spec.target, host_cpu_level)) {
             return .{ .selected = .{
@@ -155,6 +169,12 @@ pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8, host_cpu_
                 .link_spec = link_spec,
                 .source = .default,
             } };
+        }
+        if (incompatible_cpu == null and
+            link_spec.output == .exe and
+            hasIncompatibleHostCpu(link_spec.target, host_cpu_level))
+        {
+            incompatible_cpu = link_spec.target;
         }
         if (default_non_executable == null and link_spec.output != .exe and isBuildDefaultTarget(link_spec.target, host_cpu_level)) {
             default_non_executable = .{
@@ -166,6 +186,7 @@ pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8, host_cpu_
         }
     }
 
+    if (incompatible_cpu) |target| return .{ .incompatible_cpu = target };
     if (default_non_executable) |selected| return .{ .requires_executable = selected };
     return .no_default;
 }
@@ -368,7 +389,7 @@ test "default build target drops to the v1 twin on a host below the default CPU 
     try std.testing.expectEqual(baseline, run_on_baseline_host.target);
 }
 
-test "a platform without a v1 target has no default for a host below the default CPU level" {
+test "a platform without a v1 target reports its incompatible CPU floor" {
     const native = RocTarget.detectNative();
     if (native.baselineCpuTarget() == null) return error.SkipZigTest;
 
@@ -379,8 +400,14 @@ test "a platform without a v1 target has no default for a host below the default
         },
     };
 
-    try std.testing.expectEqual(SelectionResult.no_default, selectBuildTarget(config, null, .v1));
-    try std.testing.expectEqual(SelectionResult.no_default, selectRunTarget(config, null, .v1));
+    try std.testing.expectEqual(
+        SelectionResult{ .incompatible_cpu = native },
+        selectBuildTarget(config, null, .v1),
+    );
+    try std.testing.expectEqual(
+        SelectionResult{ .incompatible_cpu = native },
+        selectRunTarget(config, null, .v1),
+    );
 
     // Naming the target explicitly still builds it — cross-compiling for a
     // newer CPU than this one is as legitimate as compiling for another OS —
@@ -388,7 +415,7 @@ test "a platform without a v1 target has no default for a host below the default
     const explicit = try expectSelected(selectBuildTarget(config, native.toName(), .v1));
     try std.testing.expectEqual(native, explicit.target);
     try std.testing.expectEqual(
-        SelectionResult{ .not_runnable_on_host = native },
+        SelectionResult{ .incompatible_cpu = native },
         selectRunTarget(config, native.toName(), .v1),
     );
 }

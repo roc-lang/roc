@@ -852,6 +852,9 @@ pub const ListRestPattern = struct {
 /// Match branch.
 pub const Branch = struct {
     pat: PatId,
+    /// Irrefutable compiler-generated bindings evaluated after `pat` succeeds
+    /// and before the user guard. Their locals remain in scope for the body.
+    bindings: Span(StmtId) = Span(StmtId).empty(),
     guard: ?ExprId = null,
     body: ExprId,
 };

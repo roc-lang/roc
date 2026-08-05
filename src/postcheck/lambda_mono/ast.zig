@@ -389,6 +389,7 @@ pub const StrPatternStep = struct {
 /// Match branch.
 pub const Branch = struct {
     pat: PatId,
+    bindings: Span(StmtId) = Span(StmtId).empty(),
     guard: ?ExprId = null,
     body: ExprId,
 };
