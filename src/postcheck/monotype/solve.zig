@@ -200,6 +200,9 @@ pub const GraphDiagnostics = struct {
     mono_import_requests: u64 = 0,
     mono_import_hits: u64 = 0,
     mono_import_misses: u64 = 0,
+    produced_type_requests: u64 = 0,
+    produced_type_relation_hits: u64 = 0,
+    produced_type_pairs_visited: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -237,6 +240,13 @@ const RelationStamp = struct {
     left_version: u32,
     right: NodeId,
     right_version: u32,
+};
+
+const ProducedRelationStamp = struct {
+    request: NodeId,
+    request_version: u32,
+    produced: NodeId,
+    produced_version: u32,
 };
 
 const NominalBackingDeclaration = struct {
@@ -322,6 +332,9 @@ pub const InstGraph = struct {
     class_member_head: std.ArrayList(NodeId),
     class_member_tail: std.ArrayList(NodeId),
     processed_relations: std.AutoHashMap(RelationStamp, void),
+    processed_produced_relations: std.AutoHashMap(ProducedRelationStamp, void),
+    produced_type_pending: std.ArrayList(NodePair),
+    applying_produced_type: bool,
     /// Immutable Type-shaped snapshots by permanent node id. Old snapshots
     /// retain their original provenance while `find` resolves that node to its
     /// current class root; unions therefore never move or reindex snapshots.
@@ -395,6 +408,9 @@ pub const InstGraph = struct {
             .class_member_head = .empty,
             .class_member_tail = .empty,
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
+            .processed_produced_relations = std.AutoHashMap(ProducedRelationStamp, void).init(allocator),
+            .produced_type_pending = .empty,
+            .applying_produced_type = false,
             .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .current_snapshots = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .current_snapshots_dirty = false,
@@ -458,6 +474,8 @@ pub const InstGraph = struct {
         self.row_exts.deinit(allocator);
         self.imported_monos.deinit();
         self.linked_type_nodes.deinit();
+        self.produced_type_pending.deinit(allocator);
+        self.processed_produced_relations.deinit();
         self.processed_relations.deinit();
         self.class_member_tail.deinit(allocator);
         self.class_member_head.deinit(allocator);
@@ -1717,13 +1735,18 @@ pub const InstGraph = struct {
     /// never merged into its public nominal.
     pub fn applyProducedTypeToRequest(self: *InstGraph, request_node: NodeId, produced_node: NodeId) Allocator.Error!NodeId {
         self.requireRelationProduction();
-        var pending = std.ArrayList(NodePair).empty;
-        defer pending.deinit(self.allocator);
-        var related = std.AutoHashMap(NodePair, void).init(self.allocator);
-        defer related.deinit();
-        try pending.append(self.allocator, .{ .left = request_node, .right = produced_node });
-        while (pending.pop()) |pair| {
-            try self.applyProducedTypePair(pair.left, pair.right, &pending, &related);
+        self.countDiagnostic("produced_type_requests");
+        if (self.find(request_node) == self.find(produced_node)) return self.find(produced_node);
+        if (self.applying_produced_type) {
+            Common.invariant("produced-type substitution reentered its graph-owned worklist");
+        }
+        self.applying_produced_type = true;
+        defer self.applying_produced_type = false;
+        self.produced_type_pending.clearRetainingCapacity();
+        defer self.produced_type_pending.clearRetainingCapacity();
+        try self.produced_type_pending.append(self.allocator, .{ .left = request_node, .right = produced_node });
+        while (self.produced_type_pending.pop()) |pair| {
+            try self.applyProducedTypePair(pair.left, pair.right, &self.produced_type_pending);
         }
         return self.find(produced_node);
     }
@@ -1733,14 +1756,22 @@ pub const InstGraph = struct {
         raw_public: NodeId,
         raw_private: NodeId,
         pending: *std.ArrayList(NodePair),
-        related: *std.AutoHashMap(NodePair, void),
     ) Allocator.Error!void {
         const public_node = self.find(raw_public);
         const private_node = self.find(raw_private);
         if (public_node == private_node) return;
-        const pair = NodePair{ .left = public_node, .right = private_node };
-        if (related.contains(pair)) return;
-        try related.put(pair, {});
+        const relation = ProducedRelationStamp{
+            .request = public_node,
+            .request_version = self.versions.items[@intFromEnum(public_node)],
+            .produced = private_node,
+            .produced_version = self.versions.items[@intFromEnum(private_node)],
+        };
+        if (self.processed_produced_relations.contains(relation)) {
+            self.countDiagnostic("produced_type_relation_hits");
+            return;
+        }
+        try self.processed_produced_relations.put(relation, {});
+        self.countDiagnostic("produced_type_pairs_visited");
 
         const public_content = self.nodes.items[@intFromEnum(public_node)];
         const private_content = self.nodes.items[@intFromEnum(private_node)];
