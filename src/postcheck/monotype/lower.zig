@@ -3779,6 +3779,16 @@ const Builder = struct {
                     census.bump("recursive_join_shadow_extra");
                 } else {
                     census.bump("recursive_join_shadow_missed");
+                    if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+                        const missed_spec = &source_ctx.draft.template_specs.items[selection.selected().?];
+                        const template_view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+                        std.debug.print("JOIN-MISSED name={s} spec_state={s} walk_fn={d} frames={d}\n", .{
+                            templateExportName(template_view, template_ref),
+                            @tagName(missed_spec.state),
+                            walk_fn_id.?,
+                            rehearsal.frames.items.len,
+                        });
+                    }
                 }
             }
             // Independently instantiated recursive calls do not necessarily share
@@ -10390,6 +10400,15 @@ fn draftOpenCandidateQualifies(
     active_recursive_edge: bool,
     partial_recursive_allowed: bool,
 ) bool {
+    // An exact-interface match on a spec that is still DEFERRED is an
+    // open-request dedup merge: two still-open requests with equal
+    // interfaces join nodes so later relations flow across them. That
+    // merging is the cross-flavor joining the stored-id dedup replaces
+    // (reunify.md 11.5, 13.2e step 3): each request resolves from its own
+    // site's relations, and equal outcomes collapse at the drain's stored
+    // identity. A lowering spec still joins for recursion termination, and
+    // a completed one is an exact reuse.
+    if (state == .deferred) return false;
     return exact_interface or (state == .lowering and active_recursive_edge and partial_recursive_allowed);
 }
 
