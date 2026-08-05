@@ -666,8 +666,8 @@ fn enterEvidenceScope(
     };
 }
 
-fn relateFunctionRequestInterface(graph: *InstGraph, request_fn: NodeId, produced_fn: NodeId) Allocator.Error!void {
-    _ = try graph.applyProducedTypeToRequest(request_fn, produced_fn);
+fn relateFunctionRequestInterface(graph: *InstGraph, checked_fn: NodeId, exact_fn: NodeId) Allocator.Error!void {
+    _ = try graph.applyProducedTypeToRequest(checked_fn, exact_fn);
 }
 
 fn applyProducedTypeToRequest(graph: *InstGraph, request_node: NodeId, produced_node: NodeId) Allocator.Error!void {
@@ -25088,7 +25088,7 @@ const BodyContext = struct {
         }
         const fn_node = try self.instNode(source_fn_ty);
         const plan_node = try plan_ctx.instNode(plan_fn_ty);
-        try relateFunctionRequestInterface(self.graph, fn_node, plan_node);
+        _ = try self.graph.applyCheckedTypeMapping(fn_node, plan_node);
         return fn_node;
     }
 
@@ -28954,7 +28954,7 @@ const BodyContext = struct {
             self,
             checked_ret_ty,
             call.args,
-            if (hosted_try_capability != null) expected_ret_node else null,
+            expected_ret_node,
             hosted_try_capability,
         );
         const fn_nodes = try self.graph.functionNodes(fn_node);
@@ -29160,7 +29160,10 @@ const BodyContext = struct {
             }
             const lowered = switch (operand) {
                 .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(node)),
-                .generated_interpolation_iter,
+                .generated_interpolation_iter => |expr| blk: {
+                    const produced_node = try self.generatedInterpolationIteratorNode(expr, node);
+                    break :blk try self.lowerGeneratedInterpolationIter(expr, try self.activeTypeFromNode(produced_node));
+                },
                 .generated_numeral,
                 .generated_quote,
                 => try self.lowerDispatchOperandAtType(operand, try self.activeTypeFromNode(node)),
@@ -29195,11 +29198,41 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         return switch (operand) {
             .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(node)),
-            .generated_interpolation_iter,
+            .generated_interpolation_iter => |expr| blk: {
+                const produced_node = try self.generatedInterpolationIteratorNode(expr, node);
+                break :blk try self.lowerGeneratedInterpolationIter(expr, try self.activeTypeFromNode(produced_node));
+            },
             .generated_numeral,
             .generated_quote,
             => try self.lowerDispatchOperandAtType(operand, try self.activeTypeFromNode(node)),
         };
+    }
+
+    /// Interpolation syntax directly produces an iterator; there is no source
+    /// `Iter.custom` call whose ordinary producer lowering can mint the exact
+    /// runtime type. Mint that identity at this producer boundary before any
+    /// nested step closure captures the recursive rest value.
+    fn generatedInterpolationIteratorNode(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        request_node: NodeId,
+    ) Allocator.Error!NodeId {
+        if (self.isGeneratedIteratorEvidenceNode(request_node)) return request_node;
+        const named = switch (self.graph.content(request_node)) {
+            .named => |named| named,
+            else => Common.invariant("generated interpolation iterator request was not a named Iter type"),
+        };
+        const backing = named.backing orelse
+            Common.invariant("generated interpolation iterator request had no public backing");
+        const topology = try self.iteratorRepresentationNames();
+        const len_node = try self.graph.recordFieldNode(backing.node, topology.len_field);
+        const step_node = try self.graph.recordFieldNode(backing.node, topology.step_field);
+        return try self.generatedIteratorNode(
+            .custom,
+            request_node,
+            &.{ len_node, step_node },
+            generatedInterpolationStepKey(self.current_fn_key, expr_id, 0),
+        );
     }
 
     fn lowerGeneratedInterpolationIter(
@@ -29479,7 +29512,9 @@ const BodyContext = struct {
         return switch (self.builder.program.types.get(ty)) {
             .named => |named| blk: {
                 const args = self.builder.program.types.span(named.args);
-                if (args.len != 1) Common.invariant("Iter nominal did not have one type argument");
+                // Generated iterator identities retain their producer
+                // components after the public item argument.
+                if (args.len == 0) Common.invariant("Iter nominal did not have an item type argument");
                 break :blk GuardedList.at(args, 0);
             },
             else => Common.invariant("generated interpolation iterator expected named Iter type"),
@@ -29584,22 +29619,10 @@ const BodyContext = struct {
                     .empty_record => break :blk try self.addConstructorExprAtNode(expected_node, .{ .record = .empty() }),
                     .record => |record| break :blk try self.lowerRecordConstructorAtNode(record, expected_node),
                     .call => break :blk try self.lowerCallExprAtNode(checked_expr, expected_node),
-                    .dispatch_call => |plan| {
-                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
-                    },
-                    .interpolation => |interpolation| {
-                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, interpolation.plan, cell);
-                    },
-                    .type_dispatch_call => |plan| {
-                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
-                    },
-                    .method_eq => |plan| {
-                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
-                    },
+                    .dispatch_call => |plan| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell),
+                    .interpolation => |interpolation| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, interpolation.plan, cell),
+                    .type_dispatch_call => |plan| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell),
+                    .method_eq => |plan| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell),
                     .block => |block| break :blk try self.lowerBlockAtTypeCell(block, cell),
                     .match_ => |match| break :blk try self.lowerMatchExprAtTypeCell(checked_expr, match, cell),
                     .if_ => |if_| break :blk try self.lowerIfExprAtTypeCell(checked_expr, if_, cell),
@@ -29652,17 +29675,6 @@ const BodyContext = struct {
                 break :blk lowered;
             },
         };
-    }
-
-    fn selectExprRepresentationAtNode(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        expected_node: NodeId,
-    ) Allocator.Error!void {
-        _ = try self.graph.applyProducedTypeToRequest(
-            expected_node,
-            try self.lowerExprTypeNode(checked_expr),
-        );
     }
 
     fn lowerCallExprAtNode(

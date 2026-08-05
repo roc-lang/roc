@@ -14266,7 +14266,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [17]
         .{ .name = "Monotype import hits", .count = graph.mono_import_hits },
         .{ .name = "Monotype import misses", .count = graph.mono_import_misses },
         .{ .name = "Produced-type requests", .count = graph.produced_type_requests },
-        .{ .name = "Produced-type relation hits", .count = graph.produced_type_relation_hits },
+        .{ .name = "Produced-type cycle/repeat hits", .count = graph.produced_type_cycle_hits },
         .{ .name = "Produced-type pairs visited", .count = graph.produced_type_pairs_visited },
     };
 }

@@ -201,7 +201,7 @@ pub const GraphDiagnostics = struct {
     mono_import_hits: u64 = 0,
     mono_import_misses: u64 = 0,
     produced_type_requests: u64 = 0,
-    produced_type_relation_hits: u64 = 0,
+    produced_type_cycle_hits: u64 = 0,
     produced_type_pairs_visited: u64 = 0,
 };
 
@@ -247,6 +247,11 @@ const ProducedRelationStamp = struct {
     request_version: u32,
     produced: NodeId,
     produced_version: u32,
+};
+
+const TypeApplicationKind = enum {
+    exact_producer,
+    checked_mapping,
 };
 
 const NominalBackingDeclaration = struct {
@@ -1734,6 +1739,23 @@ pub const InstGraph = struct {
     /// is handled only when that exact node is reached, and its produced root is
     /// never merged into its public nominal.
     pub fn applyProducedTypeToRequest(self: *InstGraph, request_node: NodeId, produced_node: NodeId) Allocator.Error!NodeId {
+        return try self.applyTypeToRequest(request_node, produced_node, .exact_producer);
+    }
+
+    /// Apply a checker-authored type scheme or view to one exact Monotype
+    /// instantiation. Unlike an exact producer relation, this may cross from a
+    /// named checked view into the definition-private structural view recorded
+    /// by checking. It still preserves the exact node as the authority.
+    pub fn applyCheckedTypeMapping(self: *InstGraph, checked_node: NodeId, exact_node: NodeId) Allocator.Error!NodeId {
+        return try self.applyTypeToRequest(checked_node, exact_node, .checked_mapping);
+    }
+
+    fn applyTypeToRequest(
+        self: *InstGraph,
+        request_node: NodeId,
+        produced_node: NodeId,
+        kind: TypeApplicationKind,
+    ) Allocator.Error!NodeId {
         self.requireRelationProduction();
         self.countDiagnostic("produced_type_requests");
         if (self.find(request_node) == self.find(produced_node)) return self.find(produced_node);
@@ -1742,11 +1764,17 @@ pub const InstGraph = struct {
         }
         self.applying_produced_type = true;
         defer self.applying_produced_type = false;
+        // A compound relation depends on every descendant pair it visits, not
+        // only on the versions of its two roots. Retain the allocation across
+        // requests, but keep the entries local to one traversal so child
+        // mutations in later requests cannot make a cached parent pair stale.
+        self.processed_produced_relations.clearRetainingCapacity();
+        defer self.processed_produced_relations.clearRetainingCapacity();
         self.produced_type_pending.clearRetainingCapacity();
         defer self.produced_type_pending.clearRetainingCapacity();
         try self.produced_type_pending.append(self.allocator, .{ .left = request_node, .right = produced_node });
         while (self.produced_type_pending.pop()) |pair| {
-            try self.applyProducedTypePair(pair.left, pair.right, &self.produced_type_pending);
+            try self.applyProducedTypePair(pair.left, pair.right, kind, &self.produced_type_pending);
         }
         return self.find(produced_node);
     }
@@ -1755,6 +1783,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         raw_public: NodeId,
         raw_private: NodeId,
+        kind: TypeApplicationKind,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         const public_node = self.find(raw_public);
@@ -1767,7 +1796,7 @@ pub const InstGraph = struct {
             .produced_version = self.versions.items[@intFromEnum(private_node)],
         };
         if (self.processed_produced_relations.contains(relation)) {
-            self.countDiagnostic("produced_type_relation_hits");
+            self.countDiagnostic("produced_type_cycle_hits");
             return;
         }
         try self.processed_produced_relations.put(relation, {});
@@ -1775,6 +1804,30 @@ pub const InstGraph = struct {
 
         const public_content = self.nodes.items[@intFromEnum(public_node)];
         const private_content = self.nodes.items[@intFromEnum(private_node)];
+
+        // Aliases are not runtime representation boundaries. Preserve the
+        // exact produced root while applying the request through either
+        // side's checker-authored transparent backing.
+        if (public_content == .named and public_content.named.kind == .alias) {
+            const backing = public_content.named.backing orelse
+                Common.invariant("produced-type substitution found an alias request without backing");
+            try self.relateOpaqueChild(backing.node, private_node, pending);
+            return;
+        }
+        if (private_content == .named and private_content.named.kind == .alias) {
+            const backing = private_content.named.backing orelse
+                Common.invariant("produced-type substitution found an exact alias without backing");
+            try self.relateOpaqueChild(public_node, backing.node, pending);
+            return;
+        }
+
+        if (kind == .checked_mapping and public_content == .named and private_content != .named) {
+            const backing = public_content.named.backing orelse
+                Common.invariant("checked type mapping found a named view without backing");
+            try self.relateOpaqueChild(backing.node, private_node, pending);
+            return;
+        }
+
         if (isGeneratedPrivateRootContent(public_content) and isGeneratedPrivateRootContent(private_content)) {
             try self.unify(public_node, private_node);
             return;
@@ -1810,18 +1863,14 @@ pub const InstGraph = struct {
             else => {},
         }
 
-        // Aliases are not runtime representation boundaries. Preserve the
-        // exact produced root while applying the request through either
-        // side's checker-authored transparent backing.
-        if (public_content == .named and public_content.named.kind == .alias) {
-            const backing = public_content.named.backing orelse
-                Common.invariant("produced-type substitution found an alias request without backing");
-            try self.relateOpaqueChild(backing.node, private_node, pending);
-            return;
-        }
-        if (private_content == .named and private_content.named.kind == .alias) {
+        // An exact produced nominal is an explicit constructor layer. A
+        // structural request maps to its backing without discarding that
+        // produced root. The reverse is not valid: a structural producer for
+        // a nominal request means the producer failed to construct the named
+        // value, and descending through the request would hide that bug.
+        if (public_content != .named and private_content == .named) {
             const backing = private_content.named.backing orelse
-                Common.invariant("produced-type substitution found an exact alias without backing");
+                Common.invariant("produced-type substitution found an exact nominal without backing");
             try self.relateOpaqueChild(public_node, backing.node, pending);
             return;
         }
@@ -2111,8 +2160,11 @@ pub const InstGraph = struct {
         private_named: InstNamed,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
-        if (public_named.kind != private_named.kind or
-            !std.meta.eql(public_named.def, private_named.def) or
+        // The definition's private view can be nominal where its public view
+        // is opaque. They are two checked views of the same declared type, so
+        // apply the produced backing directionally while retaining the
+        // produced wrapper.
+        if (!std.meta.eql(public_named.def, private_named.def) or
             public_named.args.len != private_named.args.len)
         {
             Common.invariant("opaque interface relation received different named types");

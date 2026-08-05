@@ -2569,6 +2569,16 @@ a generated nominal it consumes the nominal's recorded public source and
 ordered public arguments directly. It never merges the generated nominal with
 the public nominal.
 
+Applying one checker-authored function interface to another exact
+specialization is a distinct checked-mapping operation. Checking can record a
+named public view on one side and the definition-private structural view of the
+same declaration on the other; the checked mapping follows that explicitly
+recorded nominal backing and preserves the exact specialization as authority.
+An exact value producer has no such permission: if a nominal result was
+requested, the producer must return the nominal wrapper. Treating a structural
+produced value as that nominal would hide a lowering bug. Neither operation
+discovers this distinction by scanning for generated types.
+
 No Monotype operation may ask whether a compound type contains a generated
 representation. In particular, there is no generated-private containment
 query, cache, ancestor mark, or preliminary structural probe whose answer
