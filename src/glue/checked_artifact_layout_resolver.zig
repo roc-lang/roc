@@ -5,6 +5,7 @@
 //! through the shared layout graph/store.
 
 const std = @import("std");
+const collections = @import("collections");
 const check = @import("check");
 const layout = @import("layout");
 
@@ -577,7 +578,7 @@ pub const Resolver = struct {
         root: CheckedArtifact.CheckedTypeId,
     ) Error!void {
         var current: ?CheckedArtifact.CheckedTypeId = root;
-        var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         while (current) |current_id| {
@@ -618,7 +619,7 @@ pub const Resolver = struct {
         root: CheckedArtifact.CheckedTypeId,
     ) Error!void {
         var current: ?CheckedArtifact.CheckedTypeId = root;
-        var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         while (current) |current_id| {

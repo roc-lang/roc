@@ -179,13 +179,13 @@ fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
     };
 }
 
-const CaptureTypeId = struct {
+const CaptureTypeKey = struct {
     source: CaptureSpanSource,
     start: u32,
     len: u32,
     solved_fn_ty: SolvedType.TypeVarId,
 
-    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeId {
+    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeKey {
         return .{
             .source = span.source,
             .start = span.start,
@@ -231,10 +231,10 @@ const FnSpecContext = struct {
     }
 };
 
-const CaptureTypeMap = std.HashMap(CaptureTypeId, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
+const CaptureTypeMap = std.HashMap(CaptureTypeKey, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
 
 const CaptureSpanContext = struct {
-    pub fn hash(_: CaptureSpanContext, span: CaptureTypeId) u64 {
+    pub fn hash(_: CaptureSpanContext, span: CaptureTypeKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, span.source);
         std.hash.autoHash(&hasher, span.start);
@@ -243,7 +243,7 @@ const CaptureSpanContext = struct {
         return hasher.final();
     }
 
-    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeId, rhs: CaptureTypeId) bool {
+    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeKey, rhs: CaptureTypeKey) bool {
         return lhs.source == rhs.source and
             lhs.start == rhs.start and
             lhs.len == rhs.len and
@@ -255,7 +255,7 @@ const Lowerer = struct {
     allocator: Allocator,
     solved: Solved.ProgramView,
     program: *Ast.Program,
-    type_map: std.AutoHashMap(SolvedType.TypeVarId, Type.TypeId),
+    type_map: collections.DenseMap(SolvedType.TypeVarId, Type.TypeId),
     local_map: []?Ast.LocalId,
     expr_map: []?Ast.ExprId,
     pat_map: []?Ast.PatId,
@@ -266,7 +266,7 @@ const Lowerer = struct {
     fn_written: std.ArrayList(bool),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
-    captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
+    captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
     own_captures: std.ArrayList(SolvedType.Capture),
     own_capture_spans: []?CaptureSpanId,
     symbols: Common.SymbolGen,
@@ -318,7 +318,7 @@ const Lowerer = struct {
             .allocator = allocator,
             .solved = solved,
             .program = program,
-            .type_map = std.AutoHashMap(SolvedType.TypeVarId, Type.TypeId).init(allocator),
+            .type_map = collections.DenseMap(SolvedType.TypeVarId, Type.TypeId).init(allocator),
             .local_map = local_map,
             .expr_map = expr_map,
             .pat_map = pat_map,
@@ -329,7 +329,7 @@ const Lowerer = struct {
             .fn_written = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
-            .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
+            .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .own_captures = .empty,
             .own_capture_spans = own_capture_spans,
             .symbols = .{ .next = solved.lifted.next_symbol },
@@ -1324,7 +1324,7 @@ const Lowerer = struct {
         captures: CaptureSpanId,
         solved_fn_ty: SolvedType.TypeVarId,
     ) Allocator.Error!Type.TypeId {
-        const id = CaptureTypeId.from(captures, self.solved.types.root(solved_fn_ty));
+        const id = CaptureTypeKey.from(captures, self.solved.types.root(solved_fn_ty));
         if (self.capture_types.get(id)) |existing| return existing;
 
         const capture_items = self.captureSpan(captures);

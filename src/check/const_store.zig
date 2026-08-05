@@ -1,6 +1,7 @@
 //! Checked compile-time constant store.
 
 const std = @import("std");
+const collections = @import("collections");
 
 const checked_ids = @import("checked_ids.zig");
 const names = @import("canonical_names.zig");
@@ -423,7 +424,7 @@ pub const ConstTypeStore = struct {
     }
 
     pub fn cloneTypeFrom(self: *ConstTypeStore, source: *const ConstTypeStore, ty: ConstTypeId) Allocator.Error!ConstTypeId {
-        var map = std.AutoHashMap(ConstTypeId, ConstTypeId).init(self.allocator);
+        var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
         defer map.deinit();
         return try self.cloneTypeFromInner(source, null, ty, &map);
     }
@@ -435,7 +436,7 @@ pub const ConstTypeStore = struct {
         target_names: *names.NameStore,
         ty: ConstTypeId,
     ) Allocator.Error!ConstTypeId {
-        var map = std.AutoHashMap(ConstTypeId, ConstTypeId).init(self.allocator);
+        var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
         defer map.deinit();
         return try self.cloneTypeFromInner(source, .{
             .source = source_names,
@@ -453,7 +454,7 @@ pub const ConstTypeStore = struct {
         source: *const ConstTypeStore,
         name_translation: ?NameTranslation,
         ty: ConstTypeId,
-        map: *std.AutoHashMap(ConstTypeId, ConstTypeId),
+        map: *collections.DenseMap(ConstTypeId, ConstTypeId),
     ) Allocator.Error!ConstTypeId {
         if (map.get(ty)) |existing| return existing;
 

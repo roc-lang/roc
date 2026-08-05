@@ -794,7 +794,7 @@ pub const Store = struct {
 
                 var key = std.ArrayList(u8).empty;
                 defer key.deinit(allocator);
-                var visited = std.AutoHashMap(GraphNodeId, u32).init(allocator);
+                var visited = collections.DenseMap(GraphNodeId, u32).init(allocator);
                 defer visited.deinit();
 
                 try key.append(allocator, 1); // Recursive graph key format version.
@@ -841,7 +841,7 @@ pub const Store = struct {
             graph: *const LayoutGraph,
             allocator: Allocator,
             key: *std.ArrayList(u8),
-            visited: *std.AutoHashMap(GraphNodeId, u32),
+            visited: *collections.DenseMap(GraphNodeId, u32),
             unresolved_ref: GraphRef,
         ) Allocator.Error!void {
             const ref = resolveNominalRef(graph, unresolved_ref);
@@ -870,7 +870,7 @@ pub const Store = struct {
             graph: *const LayoutGraph,
             allocator: Allocator,
             key: *std.ArrayList(u8),
-            visited: *std.AutoHashMap(GraphNodeId, u32),
+            visited: *collections.DenseMap(GraphNodeId, u32),
             node_id: GraphNodeId,
         ) Allocator.Error!void {
             switch (graph.getNode(node_id)) {

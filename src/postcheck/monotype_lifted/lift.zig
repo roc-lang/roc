@@ -368,8 +368,8 @@ const Lifter = struct {
     nested_def_map: NestedDefMap,
     fn_map: FnMap,
     fn_bodies: std.ArrayList(?MonoFnBody),
-    nested_fn_ids: std.AutoHashMap(Ast.FnId, void),
-    initialized_fns: std.AutoHashMap(Ast.FnId, void),
+    nested_fn_ids: collections.DenseMap(Ast.FnId, void),
+    initialized_fns: collections.DenseMap(Ast.FnId, void),
     symbols: Common.SymbolGen,
     /// Solved capture set per lifted function, indexed by `Ast.FnId`. Computed
     /// as a least fixed point over the function-reference graph before any body
@@ -397,8 +397,8 @@ const Lifter = struct {
             .nested_def_map = &.{},
             .fn_map = &.{},
             .fn_bodies = .empty,
-            .nested_fn_ids = std.AutoHashMap(Ast.FnId, void).init(allocator),
-            .initialized_fns = std.AutoHashMap(Ast.FnId, void).init(allocator),
+            .nested_fn_ids = collections.DenseMap(Ast.FnId, void).init(allocator),
+            .initialized_fns = collections.DenseMap(Ast.FnId, void).init(allocator),
             .symbols = .{ .next = source.next_symbol },
             .fn_captures = &.{},
         };
@@ -1124,14 +1124,14 @@ const BoundBinder = struct {
 };
 
 const BoundSet = struct {
-    locals: std.AutoHashMap(Mono.LocalId, void),
-    binder_heads: std.AutoHashMap(checked.PatternBinderId, u32),
+    locals: collections.DenseMap(Mono.LocalId, void),
+    binder_heads: collections.DenseMap(checked.PatternBinderId, u32),
     binder_entries: std.ArrayList(BoundBinder),
 
     fn init(allocator: Allocator) BoundSet {
         return .{
-            .locals = std.AutoHashMap(Mono.LocalId, void).init(allocator),
-            .binder_heads = std.AutoHashMap(checked.PatternBinderId, u32).init(allocator),
+            .locals = collections.DenseMap(Mono.LocalId, void).init(allocator),
+            .binder_heads = collections.DenseMap(checked.PatternBinderId, u32).init(allocator),
             .binder_entries = .empty,
         };
     }
@@ -1209,7 +1209,7 @@ const CaptureSet = struct {
     program: *Ast.Program,
     fn_captures: []std.ArrayList(Ast.TypedLocal),
     items: std.ArrayList(Ast.TypedLocal),
-    seen: std.AutoHashMap(Mono.LocalId, void),
+    seen: collections.DenseMap(Mono.LocalId, void),
     finalize_operands: bool,
 
     fn init(lifter: *Lifter) CaptureSet {
@@ -1219,7 +1219,7 @@ const CaptureSet = struct {
             .program = lifter.output,
             .fn_captures = lifter.fn_captures,
             .items = .empty,
-            .seen = std.AutoHashMap(Mono.LocalId, void).init(lifter.allocator),
+            .seen = collections.DenseMap(Mono.LocalId, void).init(lifter.allocator),
             .finalize_operands = false,
         };
     }
@@ -1235,7 +1235,7 @@ const CaptureSet = struct {
             .program = program,
             .fn_captures = fn_captures,
             .items = .empty,
-            .seen = std.AutoHashMap(Mono.LocalId, void).init(allocator),
+            .seen = collections.DenseMap(Mono.LocalId, void).init(allocator),
             .finalize_operands = false,
         };
     }
@@ -1683,11 +1683,11 @@ const CaptureScopeEntry = struct {
 
 const CaptureFnState = struct {
     captures: std.ArrayList(Ast.TypedLocal) = .empty,
-    by_id: std.AutoHashMap(checked.CaptureId, Ast.TypedLocal),
+    by_id: collections.DenseMap(checked.CaptureId, Ast.TypedLocal),
     reverse_edges: std.ArrayList(CaptureEdgeId) = .empty,
 
     fn init(allocator: Allocator) CaptureFnState {
-        return .{ .by_id = std.AutoHashMap(checked.CaptureId, Ast.TypedLocal).init(allocator) };
+        return .{ .by_id = collections.DenseMap(checked.CaptureId, Ast.TypedLocal).init(allocator) };
     }
 };
 

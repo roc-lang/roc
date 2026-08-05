@@ -462,7 +462,7 @@ pub const ModuleType = enum {
             .echo_platform => &.{ .builtins, .roc_args },
             .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
             .bump => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
-            .glue => &.{ .base, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
+            .glue => &.{ .base, .collections, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
             .host_alloc => &.{ .builtins, .build_options },
         };
     }

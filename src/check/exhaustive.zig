@@ -26,6 +26,7 @@
 //! - Original Rust implementation in `crates/compiler/exhaustive/`
 
 const std = @import("std");
+const collections = @import("collections");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
@@ -2914,7 +2915,7 @@ fn collectCtorsSketched(
 
     if (found_ctor) {
         // Collect all unique tag IDs
-        var tag_set = std.AutoHashMap(TagId, void).init(allocator);
+        var tag_set = collections.DenseMap(TagId, void).init(allocator);
         for (first_col) |pat| {
             switch (pat) {
                 .ctor => |c| {

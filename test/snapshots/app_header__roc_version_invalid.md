@@ -23,7 +23,7 @@ INVALID ROC VERSION - app_header__roc_version_invalid.md:1:43:1:67
     for. It must be a string holding either a nightly tag or a release version.
 
     For example:
-        roc: "nightly-2026-July-31-123c5d7"
+        roc: "nightly-2026-08-05-24f0b47"
 
 # TOKENS
 ~~~zig

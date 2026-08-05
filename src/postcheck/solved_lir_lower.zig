@@ -207,13 +207,13 @@ fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
     };
 }
 
-const CaptureTypeId = struct {
+const CaptureTypeKey = struct {
     source: CaptureSpanSource,
     start: u32,
     len: u32,
     solved_fn_ty: SolvedType.TypeVarId,
 
-    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeId {
+    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeKey {
         return .{
             .source = span.source,
             .start = span.start,
@@ -319,10 +319,10 @@ const FnSpecContext = struct {
     }
 };
 
-const CaptureTypeMap = std.HashMap(CaptureTypeId, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
+const CaptureTypeMap = std.HashMap(CaptureTypeKey, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
 
 const CaptureSpanContext = struct {
-    pub fn hash(_: CaptureSpanContext, span: CaptureTypeId) u64 {
+    pub fn hash(_: CaptureSpanContext, span: CaptureTypeKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, span.source);
         std.hash.autoHash(&hasher, span.start);
@@ -331,7 +331,7 @@ const CaptureSpanContext = struct {
         return hasher.final();
     }
 
-    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeId, rhs: CaptureTypeId) bool {
+    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeKey, rhs: CaptureTypeKey) bool {
         return lhs.source == rhs.source and
             lhs.start == rhs.start and
             lhs.len == rhs.len and
@@ -402,7 +402,7 @@ const Lowerer = struct {
     types: Type.Store,
     result: LirProgram.Result,
     runtime_schemas: RuntimeSchemaStore,
-    type_map: std.AutoHashMap(SolvedType.TypeVarId, Type.TypeId),
+    type_map: collections.DenseMap(SolvedType.TypeVarId, Type.TypeId),
     fn_specs: std.ArrayList(FnSpec),
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
@@ -420,28 +420,28 @@ const Lowerer = struct {
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
-    captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
-    recursive_value_locals: std.AutoHashMap(Lifted.LocalId, void),
-    recursive_value_capture_ids: std.AutoHashMap(check.CheckedModule.CaptureId, void),
-    recursive_slot_types: std.AutoHashMap(Type.TypeId, Type.TypeId),
+    captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
+    recursive_value_locals: collections.DenseMap(Lifted.LocalId, void),
+    recursive_value_capture_ids: collections.DenseMap(check.CheckedModule.CaptureId, void),
+    recursive_slot_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     own_captures: std.ArrayList(SolvedType.Capture),
     own_capture_spans: []?CaptureSpanId,
     roots: std.ArrayList(RootEntry),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
-    type_layouts: std.AutoHashMap(Type.TypeId, layout.Idx),
-    layout_owner_types: std.AutoHashMap(Type.TypeId, Type.TypeId),
-    const_plan_map: std.AutoHashMap(Type.TypeId, LirProgram.ConstPlanId),
-    const_type_map: std.AutoHashMap(Type.TypeId, const_store.ConstTypeId),
-    mono_const_type_map: std.AutoHashMap(MonoType.TypeId, const_store.ConstTypeId),
-    callable_source_fn_map: std.AutoHashMap(Type.TypeId, SolvedType.TypeVarId),
+    type_layouts: collections.DenseMap(Type.TypeId, layout.Idx),
+    layout_owner_types: collections.DenseMap(Type.TypeId, Type.TypeId),
+    const_plan_map: collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId),
+    const_type_map: collections.DenseMap(Type.TypeId, const_store.ConstTypeId),
+    mono_const_type_map: collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId),
+    callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
     local_map: []?LIR.LocalId,
     typed_local_map: std.AutoHashMap(TypedLiftedLocal, LIR.LocalId),
-    local_types: std.AutoHashMap(LIR.LocalId, Type.TypeId),
+    local_types: collections.DenseMap(LIR.LocalId, Type.TypeId),
     comptime_site_map: []?LIR.ComptimeSiteId,
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
@@ -455,7 +455,7 @@ const Lowerer = struct {
     /// Locals proven during backwards lowering to feed the procedure's one
     /// selected erased-callable result slot. A later lexical producer uses
     /// this explicit provenance to inherit the return destination.
-    return_forwarding_locals: std.AutoHashMap(LIR.LocalId, void),
+    return_forwarding_locals: collections.DenseMap(LIR.LocalId, void),
     /// Multiple distinct eager producers can feed one later runtime choice,
     /// but the hidden reuse owner is affine and cannot be offered to all of
     /// them. Keep that candidate group disqualified until every producer has
@@ -506,9 +506,9 @@ const Lowerer = struct {
         errdefer allocator.free(own_capture_spans);
         @memset(own_capture_spans, null);
 
-        var recursive_value_locals = std.AutoHashMap(Lifted.LocalId, void).init(allocator);
+        var recursive_value_locals = collections.DenseMap(Lifted.LocalId, void).init(allocator);
         errdefer recursive_value_locals.deinit();
-        var recursive_value_capture_ids = std.AutoHashMap(check.CheckedModule.CaptureId, void).init(allocator);
+        var recursive_value_capture_ids = collections.DenseMap(check.CheckedModule.CaptureId, void).init(allocator);
         errdefer recursive_value_capture_ids.deinit();
         try Lowerer.collectRecursiveValueLocals(&solved.lifted, &recursive_value_locals, &recursive_value_capture_ids);
 
@@ -519,7 +519,7 @@ const Lowerer = struct {
             .types = Type.Store.init(allocator),
             .result = try LirProgram.Result.init(allocator, target_usize),
             .runtime_schemas = RuntimeSchemaStore.init(allocator),
-            .type_map = std.AutoHashMap(SolvedType.TypeVarId, Type.TypeId).init(allocator),
+            .type_map = collections.DenseMap(SolvedType.TypeVarId, Type.TypeId).init(allocator),
             .fn_specs = .empty,
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
@@ -537,31 +537,31 @@ const Lowerer = struct {
             .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
-            .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
+            .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .recursive_value_locals = recursive_value_locals,
             .recursive_value_capture_ids = recursive_value_capture_ids,
-            .recursive_slot_types = std.AutoHashMap(Type.TypeId, Type.TypeId).init(allocator),
+            .recursive_slot_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .own_captures = .empty,
             .own_capture_spans = own_capture_spans,
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
-            .type_layouts = std.AutoHashMap(Type.TypeId, layout.Idx).init(allocator),
-            .layout_owner_types = std.AutoHashMap(Type.TypeId, Type.TypeId).init(allocator),
-            .const_plan_map = std.AutoHashMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
-            .const_type_map = std.AutoHashMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
-            .mono_const_type_map = std.AutoHashMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
-            .callable_source_fn_map = std.AutoHashMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
+            .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
+            .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
+            .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
+            .const_type_map = collections.DenseMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
+            .mono_const_type_map = collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
+            .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
             .static_initializer_queue = .empty,
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = local_map,
             .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
-            .local_types = std.AutoHashMap(LIR.LocalId, Type.TypeId).init(allocator),
+            .local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(allocator),
             .comptime_site_map = comptime_site_map,
             .loop_stack = .empty,
             .join_stack = .empty,
-            .return_forwarding_locals = std.AutoHashMap(LIR.LocalId, void).init(allocator),
+            .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
             .erased_owner_states = .empty,
             .erased_call_owner_uses = .empty,
         };
@@ -656,17 +656,17 @@ const Lowerer = struct {
         self.local_map = &.{};
         self.own_capture_spans = &.{};
         self.own_captures = .empty;
-        self.recursive_slot_types = std.AutoHashMap(Type.TypeId, Type.TypeId).init(self.allocator);
-        self.recursive_value_capture_ids = std.AutoHashMap(check.CheckedModule.CaptureId, void).init(self.allocator);
-        self.recursive_value_locals = std.AutoHashMap(Lifted.LocalId, void).init(self.allocator);
+        self.recursive_slot_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(self.allocator);
+        self.recursive_value_capture_ids = collections.DenseMap(check.CheckedModule.CaptureId, void).init(self.allocator);
+        self.recursive_value_locals = collections.DenseMap(Lifted.LocalId, void).init(self.allocator);
         self.typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(self.allocator);
-        self.local_types = std.AutoHashMap(LIR.LocalId, Type.TypeId).init(self.allocator);
+        self.local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(self.allocator);
         self.static_initializer_queue = .empty;
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
-        self.return_forwarding_locals = std.AutoHashMap(LIR.LocalId, void).init(self.allocator);
+        self.return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(self.allocator);
         self.return_forwarding_ambiguous = false;
         self.return_forwarding_repeatable_depth = 0;
         self.erased_owner_states = .empty;
@@ -741,8 +741,8 @@ const Lowerer = struct {
 
     fn collectRecursiveValueLocals(
         lifted: *const Lifted.Program,
-        locals: *std.AutoHashMap(Lifted.LocalId, void),
-        capture_ids: *std.AutoHashMap(check.CheckedModule.CaptureId, void),
+        locals: *collections.DenseMap(Lifted.LocalId, void),
+        capture_ids: *collections.DenseMap(check.CheckedModule.CaptureId, void),
     ) std.mem.Allocator.Error!void {
         for (lifted.stmtsView()) |stmt| {
             if (stmt == .let_ and stmt.let_.recursive) {
@@ -754,8 +754,8 @@ const Lowerer = struct {
     fn collectRecursiveValueLocal(
         lifted: *const Lifted.Program,
         pat_id: Lifted.PatId,
-        locals: *std.AutoHashMap(Lifted.LocalId, void),
-        capture_ids: *std.AutoHashMap(check.CheckedModule.CaptureId, void),
+        locals: *collections.DenseMap(Lifted.LocalId, void),
+        capture_ids: *collections.DenseMap(check.CheckedModule.CaptureId, void),
     ) std.mem.Allocator.Error!void {
         const recursive_pat = lifted.getPat(pat_id);
         if (recursive_pat.data != .bind) Common.invariant("recursive Monotype let statement must bind one local directly");
@@ -1439,7 +1439,7 @@ const Lowerer = struct {
         captures: CaptureSpanId,
         solved_fn_ty: SolvedType.TypeVarId,
     ) Common.LowerError!Type.TypeId {
-        const id = CaptureTypeId.from(captures, self.solved.types.root(solved_fn_ty));
+        const id = CaptureTypeKey.from(captures, self.solved.types.root(solved_fn_ty));
         if (self.capture_types.get(id)) |existing| return existing;
 
         const capture_items = self.captureSpan(captures);
@@ -8306,7 +8306,7 @@ const Lowerer = struct {
     }
 
     fn solvedTypeAlreadyHasRecursiveSlotStorage(self: *Lowerer, ty: SolvedType.TypeVarId) Common.LowerError!bool {
-        var visited = std.AutoHashMap(SolvedType.TypeVarId, void).init(self.allocator);
+        var visited = collections.DenseMap(SolvedType.TypeVarId, void).init(self.allocator);
         defer visited.deinit();
         return try self.solvedTypeAlreadyHasRecursiveSlotStorageInner(ty, &visited);
     }
@@ -8314,7 +8314,7 @@ const Lowerer = struct {
     fn solvedTypeAlreadyHasRecursiveSlotStorageInner(
         self: *Lowerer,
         ty: SolvedType.TypeVarId,
-        visited: *std.AutoHashMap(SolvedType.TypeVarId, void),
+        visited: *collections.DenseMap(SolvedType.TypeVarId, void),
     ) Common.LowerError!bool {
         const root = self.solved.types.root(ty);
         if (visited.contains(root)) return false;
@@ -8338,7 +8338,7 @@ const Lowerer = struct {
     }
 
     fn typeAlreadyHasRecursiveSlotStorage(self: *Lowerer, ty: Type.TypeId) Common.LowerError!bool {
-        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer visited.deinit();
         return try self.typeAlreadyHasRecursiveSlotStorageInner(ty, &visited);
     }
@@ -8346,7 +8346,7 @@ const Lowerer = struct {
     fn typeAlreadyHasRecursiveSlotStorageInner(
         self: *Lowerer,
         ty: Type.TypeId,
-        visited: *std.AutoHashMap(Type.TypeId, void),
+        visited: *collections.DenseMap(Type.TypeId, void),
     ) Common.LowerError!bool {
         if (visited.contains(ty)) return false;
         try visited.put(ty, {});
@@ -8613,13 +8613,13 @@ const Lowerer = struct {
     }
 
     fn typeContainsCallable(self: *Lowerer, ty: Type.TypeId) Common.LowerError!bool {
-        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer visited.deinit();
         return try self.typeContainsCallableInner(ty, &visited);
     }
 
     fn solvedTypeContainsCallable(self: *Lowerer, ty: SolvedType.TypeVarId) Common.LowerError!bool {
-        var visited = std.AutoHashMap(SolvedType.TypeVarId, void).init(self.allocator);
+        var visited = collections.DenseMap(SolvedType.TypeVarId, void).init(self.allocator);
         defer visited.deinit();
         return try self.solvedTypeContainsCallableInner(ty, &visited);
     }
@@ -8627,7 +8627,7 @@ const Lowerer = struct {
     fn solvedTypeContainsCallableInner(
         self: *Lowerer,
         ty: SolvedType.TypeVarId,
-        visited: *std.AutoHashMap(SolvedType.TypeVarId, void),
+        visited: *collections.DenseMap(SolvedType.TypeVarId, void),
     ) Common.LowerError!bool {
         const root = self.solved.types.root(ty);
         if (visited.contains(root)) return false;
@@ -8667,7 +8667,7 @@ const Lowerer = struct {
     fn solvedTypeSpanContainsCallable(
         self: *Lowerer,
         span: SolvedType.Span,
-        visited: *std.AutoHashMap(SolvedType.TypeVarId, void),
+        visited: *collections.DenseMap(SolvedType.TypeVarId, void),
     ) Common.LowerError!bool {
         const values = self.solved_types.span(span);
         for (0..values.len) |index| {
@@ -8680,7 +8680,7 @@ const Lowerer = struct {
     fn typeContainsCallableInner(
         self: *Lowerer,
         ty: Type.TypeId,
-        visited: *std.AutoHashMap(Type.TypeId, void),
+        visited: *collections.DenseMap(Type.TypeId, void),
     ) Common.LowerError!bool {
         if (visited.contains(ty)) return false;
         try visited.put(ty, {});
@@ -8725,7 +8725,7 @@ const Lowerer = struct {
     fn typeSpanContainsCallable(
         self: *Lowerer,
         span: Type.Span,
-        visited: *std.AutoHashMap(Type.TypeId, void),
+        visited: *collections.DenseMap(Type.TypeId, void),
     ) Common.LowerError!bool {
         const values = self.types.span(span);
         for (0..values.len) |index| {
@@ -9256,14 +9256,14 @@ const TypeEquivalence = struct {
     allocator: std.mem.Allocator,
     lowerer: *Lowerer,
     materialized: *const Type.Store,
-    map: std.AutoHashMap(Type.TypeId, Type.TypeId),
+    map: collections.DenseMap(Type.TypeId, Type.TypeId),
 
     fn init(allocator: std.mem.Allocator, lowerer: *Lowerer, materialized: *const Type.Store) TypeEquivalence {
         return .{
             .allocator = allocator,
             .lowerer = lowerer,
             .materialized = materialized,
-            .map = std.AutoHashMap(Type.TypeId, Type.TypeId).init(allocator),
+            .map = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
         };
     }
 
@@ -9571,9 +9571,7 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
         .types = @TypeOf(source.types).fromArrayList(try cloneSlice(MonoType.Content, allocator, view.types)),
         .type_digests = @TypeOf(source.type_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, view.type_digests)),
         .specialization_digests = @TypeOf(source.specialization_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.specializationDigestsView())),
-        .type_digest_generations = @TypeOf(source.type_digest_generations).fromArrayList(try cloneSlice(u64, allocator, source.type_digest_generations.unsafeRawItemsForView())),
-        .specialization_digest_generations = @TypeOf(source.specialization_digest_generations).fromArrayList(try cloneSlice(u64, allocator, source.specialization_digest_generations.unsafeRawItemsForView())),
-        .digest_cache_generation = source.digest_cache_generation,
+        .constructing = @TypeOf(source.constructing).fromArrayList(try cloneSlice(bool, allocator, source.constructing.unsafeRawItemsForView())),
         .spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans)),
         .fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields)),
         .tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags)),

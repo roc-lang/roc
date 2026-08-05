@@ -23,6 +23,7 @@
 //! `out` with an explicit destination store instead of building a temporary.
 
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -71,7 +72,7 @@ const ReturnSlotPass = struct {
 
         var work = std.ArrayList(CFStmtId).empty;
         defer work.deinit(self.store.allocator);
-        var visited = std.AutoHashMap(CFStmtId, void).init(self.store.allocator);
+        var visited = collections.DenseMap(CFStmtId, void).init(self.store.allocator);
         defer visited.deinit();
 
         try work.append(self.store.allocator, body);

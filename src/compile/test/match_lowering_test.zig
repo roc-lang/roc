@@ -8,6 +8,7 @@
 //!   harness runs the certifier).
 
 const std = @import("std");
+const collections = @import("collections");
 const layout = @import("layout");
 const lir = @import("lir");
 
@@ -63,7 +64,7 @@ fn checkRankProcShape(store: *const lir.LirStore, _: *const layout.Store) harnes
         const body = proc.body orelse continue;
         var work = std.ArrayList(lir.LIR.CFStmtId).empty;
         defer work.deinit(store.allocator);
-        var visited = std.AutoHashMap(lir.LIR.CFStmtId, void).init(store.allocator);
+        var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(store.allocator);
         defer visited.deinit();
         try work.append(store.allocator, body);
 

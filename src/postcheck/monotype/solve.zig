@@ -201,6 +201,7 @@ pub const GraphDiagnostics = struct {
     mono_import_hits: u64 = 0,
     mono_import_misses: u64 = 0,
     generated_private_scans: u64 = 0,
+    generated_private_cache_hits: u64 = 0,
     generated_private_nodes_visited: u64 = 0,
     finished_mono_scans: u64 = 0,
     finished_mono_nodes_visited: u64 = 0,
@@ -265,6 +266,18 @@ const NominalBackingInstance = struct {
     node: NodeId,
 };
 
+const GeneratedPrivateDependency = struct {
+    node: NodeId,
+    root: NodeId,
+    version: u32,
+};
+
+const GeneratedPrivateCacheEntry = struct {
+    valid: bool = false,
+    result: bool = false,
+    dependencies: std.ArrayList(GeneratedPrivateDependency) = .empty,
+};
+
 const RelationState = enum {
     producing,
     frozen,
@@ -313,25 +326,29 @@ pub const InstGraph = struct {
     /// Immutable Type-shaped snapshots by permanent node id. Old snapshots
     /// retain their original provenance while `find` resolves that node to its
     /// current class root; unions therefore never move or reindex snapshots.
-    node_snapshots: std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)),
+    node_snapshots: collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)),
     /// Latest immutable snapshot for a root. Any relation mutation clears this
     /// cache; a subsequent inspection materializes a fresh snapshot.
-    current_snapshots: std.AutoHashMap(NodeId, Type.TypeId),
+    current_snapshots: collections.DenseMap(NodeId, Type.TypeId),
+    /// Relation mutations only mark the snapshot cache stale. The next read
+    /// performs one exact global invalidation, coalescing mutation bursts that
+    /// do not inspect an intermediate graph state.
+    current_snapshots_dirty: bool,
     /// Reverse active-snapshot links, also the import memo: a Monotype already
     /// connected to this graph reuses its node instead of being copied.
-    linked_type_nodes: std.AutoHashMap(Type.TypeId, NodeId),
+    linked_type_nodes: collections.DenseMap(Type.TypeId, NodeId),
     /// Exact immutable Monotype snapshot imported at each permanent node.
     /// Unlike `node_snapshots`, these are producer-owned representation
     /// witnesses. Keeping the direct node association lets consumers of an
     /// imported request use the exact finished TypeId rather than reconstructing
     /// an equivalent public shape.
-    imported_monos: std.AutoHashMap(NodeId, Type.TypeId),
+    imported_monos: collections.DenseMap(NodeId, Type.TypeId),
     /// Current extension root for each row root. This is the authority for
     /// maintaining `row_parents`; stale extension edges are removed when row
     /// content changes.
-    row_exts: std.AutoHashMap(NodeId, NodeId),
+    row_exts: std.ArrayList(?NodeId),
     /// Row nodes by the extension node they currently chain through.
-    row_parents: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    row_parents: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
     /// Declaration-backed nominal backings already instantiated in this graph,
     /// bucketed by source declaration. Entries compare argument union-find
     /// classes, so a backing instance keeps one identity after evidence merges
@@ -341,7 +358,7 @@ pub const InstGraph = struct {
     /// function was constructed. A generic source interface may itself carry
     /// upstream generated-private arguments; retaining that producer node is
     /// what lets the callee instantiate those relations without reconstruction.
-    request_source_interfaces: std.AutoHashMap(NodeId, NodeId),
+    request_source_interfaces: std.ArrayList(?NodeId),
     /// Minted iterator roots whose relation graph proved that retaining the
     /// minted tier would create a recursive component identity. The raw node
     /// remains valid across later unions; finalization resolves it to the live
@@ -353,6 +370,18 @@ pub const InstGraph = struct {
     /// slots proves that recursion grows the representation rather than merely
     /// recurring over a fixed iterator.
     recursive_argument_slots: std.ArrayList(NodeId),
+    /// Allocation-free scratch for exact generated-private containment walks.
+    /// Node ids are dense, so an epoch array replaces a fresh hash set on every
+    /// query while preserving cycle detection exactly.
+    generated_private_pending: std.ArrayList(NodeId),
+    generated_private_visit_epochs: std.ArrayList(u32),
+    generated_private_visit_epoch: u32,
+    /// Exact generated-private containment answers by current union-class
+    /// root. Each entry records the permanent nodes, resolved roots, and
+    /// content versions read by its walk. Mutations outside that dependency
+    /// set leave the answer reusable; a relevant redirect or content change
+    /// invalidates it at the next query.
+    generated_private_cache: collections.DenseMap(NodeId, GeneratedPrivateCacheEntry),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -372,16 +401,21 @@ pub const InstGraph = struct {
             .class_member_head = .empty,
             .class_member_tail = .empty,
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
-            .node_snapshots = std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
-            .current_snapshots = std.AutoHashMap(NodeId, Type.TypeId).init(allocator),
-            .linked_type_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
-            .imported_monos = std.AutoHashMap(NodeId, Type.TypeId).init(allocator),
-            .row_exts = std.AutoHashMap(NodeId, NodeId).init(allocator),
-            .row_parents = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
+            .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
+            .current_snapshots = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
+            .current_snapshots_dirty = false,
+            .linked_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
+            .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
+            .row_exts = .empty,
+            .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
-            .request_source_interfaces = std.AutoHashMap(NodeId, NodeId).init(allocator),
+            .request_source_interfaces = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
+            .generated_private_pending = .empty,
+            .generated_private_visit_epochs = .empty,
+            .generated_private_visit_epoch = 0,
+            .generated_private_cache = collections.DenseMap(NodeId, GeneratedPrivateCacheEntry).init(allocator),
         };
         return graph;
     }
@@ -419,11 +453,18 @@ pub const InstGraph = struct {
             bucket.deinit(allocator);
         }
         self.nominal_backings.deinit();
-        self.request_source_interfaces.deinit();
+        self.request_source_interfaces.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
+        self.generated_private_pending.deinit(allocator);
+        self.generated_private_visit_epochs.deinit(allocator);
+        var generated_private_entries = self.generated_private_cache.valueIterator();
+        while (generated_private_entries.next()) |entry| {
+            entry.dependencies.deinit(allocator);
+        }
+        self.generated_private_cache.deinit();
         self.row_parents.deinit();
-        self.row_exts.deinit();
+        self.row_exts.deinit(allocator);
         self.imported_monos.deinit();
         self.linked_type_nodes.deinit();
         self.processed_relations.deinit();
@@ -449,18 +490,18 @@ pub const InstGraph = struct {
         if (!try self.containsGeneratedPrivate(request_fn)) {
             Common.invariant("registered private request interface contained no generated-private evidence");
         }
-        const entry = try self.request_source_interfaces.getOrPut(request_fn);
-        if (entry.found_existing) {
-            if (self.find(entry.value_ptr.*) != self.find(source_fn)) {
+        const entry = &self.request_source_interfaces.items[@intFromEnum(request_fn)];
+        if (entry.*) |existing| {
+            if (self.find(existing) != self.find(source_fn)) {
                 Common.invariant("generated-private request was registered with two source interfaces");
             }
         } else {
-            entry.value_ptr.* = source_fn;
+            entry.* = source_fn;
         }
     }
 
     pub fn requestSourceInterface(self: *InstGraph, request_fn: NodeId) ?NodeId {
-        const source_fn = self.request_source_interfaces.get(request_fn) orelse return null;
+        const source_fn = self.request_source_interfaces.items[@intFromEnum(request_fn)] orelse return null;
         return self.find(source_fn);
     }
 
@@ -606,11 +647,11 @@ pub const InstGraph = struct {
         };
         var pending = std.ArrayList(Pending).empty;
         defer pending.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
-        var depths = std.AutoHashMap(NodeId, u8).init(self.allocator);
+        var depths = collections.DenseMap(NodeId, u8).init(self.allocator);
         defer depths.deinit();
-        var active = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var active = collections.DenseMap(NodeId, void).init(self.allocator);
         defer active.deinit();
 
         for (self.nodes.items, 0..) |_, raw_index| {
@@ -814,8 +855,8 @@ pub const InstGraph = struct {
     fn generatedIteratorDepth(
         self: *InstGraph,
         raw_node: NodeId,
-        depths: *std.AutoHashMap(NodeId, u8),
-        active: *std.AutoHashMap(NodeId, void),
+        depths: *collections.DenseMap(NodeId, u8),
+        active: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!u8 {
         const root = self.find(raw_node);
         if (depths.get(root)) |depth| return depth;
@@ -871,8 +912,8 @@ pub const InstGraph = struct {
     fn pushGeneratedIteratorDepthFrame(
         self: *InstGraph,
         node: NodeId,
-        depths: *std.AutoHashMap(NodeId, u8),
-        active: *std.AutoHashMap(NodeId, void),
+        depths: *collections.DenseMap(NodeId, u8),
+        active: *collections.DenseMap(NodeId, void),
         stack: *std.ArrayList(GeneratedIteratorDepthFrame),
     ) Allocator.Error!void {
         switch (self.generatedIteratorDepthRule(node)) {
@@ -999,7 +1040,7 @@ pub const InstGraph = struct {
         const Pending = struct { node: NodeId, digest: names.TypeDigest };
         var pending = std.ArrayList(Pending).empty;
         defer pending.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
 
         for (self.nodes.items, 0..) |_, raw_index| {
@@ -1091,7 +1132,7 @@ pub const InstGraph = struct {
     /// named type whose backing has not been recorded) answers `true`
     /// conservatively.
     pub fn mayFinalizeAsUninhabited(self: *InstGraph, raw_node: NodeId) Allocator.Error!bool {
-        var visiting = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var visiting = collections.DenseMap(NodeId, void).init(self.allocator);
         defer visiting.deinit();
         return try self.mayFinalizeAsUninhabitedInner(self.find(raw_node), &visiting);
     }
@@ -1099,7 +1140,7 @@ pub const InstGraph = struct {
     fn mayFinalizeAsUninhabitedInner(
         self: *InstGraph,
         raw_node: NodeId,
-        visiting: *std.AutoHashMap(NodeId, void),
+        visiting: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const node = self.find(raw_node);
         const entry = try visiting.getOrPut(node);
@@ -1157,7 +1198,7 @@ pub const InstGraph = struct {
     /// while lowering a branch; it never manufactures a durable type view.
     pub fn finalizesAsUninhabited(self: *InstGraph, raw_node: NodeId) Allocator.Error!bool {
         self.requireFrozenRelations();
-        var visiting = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var visiting = collections.DenseMap(NodeId, void).init(self.allocator);
         defer visiting.deinit();
         return try self.finalizesAsUninhabitedInner(self.find(raw_node), &visiting);
     }
@@ -1165,7 +1206,7 @@ pub const InstGraph = struct {
     fn finalizesAsUninhabitedInner(
         self: *InstGraph,
         raw_node: NodeId,
-        visiting: *std.AutoHashMap(NodeId, void),
+        visiting: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const node = self.find(raw_node);
         const entry = try visiting.getOrPut(node);
@@ -1236,6 +1277,9 @@ pub const InstGraph = struct {
         try self.class_member_next.append(self.allocator, null);
         try self.class_member_head.append(self.allocator, id);
         try self.class_member_tail.append(self.allocator, id);
+        try self.generated_private_visit_epochs.append(self.allocator, 0);
+        try self.row_exts.append(self.allocator, null);
+        try self.request_source_interfaces.append(self.allocator, null);
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
@@ -1308,21 +1352,24 @@ pub const InstGraph = struct {
             return;
         };
 
-        if (self.row_exts.get(row_root)) |old_ext| {
+        const row_ext = &self.row_exts.items[@intFromEnum(row_root)];
+        if (row_ext.*) |old_ext| {
             if (old_ext == ext) {
                 try self.addRowParent(ext, row_root);
                 return;
             }
             self.removeRowParent(old_ext, row_root);
         }
-        try self.row_exts.put(row_root, ext);
+        row_ext.* = ext;
         try self.addRowParent(ext, row_root);
     }
 
     fn unregisterRowParent(self: *InstGraph, row: NodeId) Allocator.Error!void {
         const row_root = self.find(row);
-        if (self.row_exts.fetchRemove(row_root)) |old| {
-            self.removeRowParent(old.value, row_root);
+        const row_ext = &self.row_exts.items[@intFromEnum(row_root)];
+        if (row_ext.*) |old| {
+            row_ext.* = null;
+            self.removeRowParent(old, row_root);
         }
     }
 
@@ -1457,7 +1504,7 @@ pub const InstGraph = struct {
     pub fn typeIsResolved(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         try pending.append(self.allocator, root);
         while (pending.pop()) |raw_node| {
@@ -1527,7 +1574,7 @@ pub const InstGraph = struct {
     pub fn typeCanSealFromExplicitEvidence(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         try pending.append(self.allocator, root);
         while (pending.pop()) |raw_node| {
@@ -1572,7 +1619,7 @@ pub const InstGraph = struct {
     }
 
     fn rowExtensionChainResolved(self: *InstGraph, raw_root: NodeId, kind: RowKind) Allocator.Error!bool {
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         var current = self.find(raw_root);
         while (true) {
@@ -1608,46 +1655,83 @@ pub const InstGraph = struct {
     /// opaque evidence at any structural depth.
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         self.countDiagnostic("generated_private_scans");
-        var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |raw_node| {
+        const query_root = self.find(root);
+        const cache = try self.generated_private_cache.getOrPut(query_root);
+        if (!cache.found_existing) cache.value_ptr.* = .{};
+        if (cache.value_ptr.valid) {
+            var dependencies_match = true;
+            for (cache.value_ptr.dependencies.items) |dependency| {
+                if (self.find(dependency.node) != dependency.root or
+                    self.versions.items[@intFromEnum(dependency.root)] != dependency.version)
+                {
+                    dependencies_match = false;
+                    break;
+                }
+            }
+            if (dependencies_match) {
+                self.countDiagnostic("generated_private_cache_hits");
+                return cache.value_ptr.result;
+            }
+        }
+        cache.value_ptr.valid = false;
+        cache.value_ptr.dependencies.clearRetainingCapacity();
+        self.generated_private_pending.clearRetainingCapacity();
+        defer self.generated_private_pending.clearRetainingCapacity();
+        if (self.generated_private_visit_epoch == std.math.maxInt(u32)) {
+            @memset(self.generated_private_visit_epochs.items, 0);
+            self.generated_private_visit_epoch = 1;
+        } else {
+            self.generated_private_visit_epoch += 1;
+        }
+        const visit_epoch = self.generated_private_visit_epoch;
+        try self.generated_private_pending.append(self.allocator, root);
+        while (self.generated_private_pending.pop()) |raw_node| {
             const node = self.find(raw_node);
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
+            const node_index = @intFromEnum(node);
+            if (self.generated_private_visit_epochs.items[node_index] == visit_epoch) continue;
+            self.generated_private_visit_epochs.items[node_index] = visit_epoch;
+            try cache.value_ptr.dependencies.append(self.allocator, .{
+                .node = raw_node,
+                .root = node,
+                .version = self.versions.items[node_index],
+            });
             self.countDiagnostic("generated_private_nodes_visited");
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .list, .box => |child| try self.generated_private_pending.append(self.allocator, child),
+                .tuple => |items| try self.generated_private_pending.appendSlice(self.allocator, items),
                 .func => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
+                    try self.generated_private_pending.appendSlice(self.allocator, function.args);
+                    try self.generated_private_pending.append(self.allocator, function.ret);
                 },
                 .tag_union => |row| {
-                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
-                    try pending.append(self.allocator, row.ext);
+                    for (row.tags) |tag| try self.generated_private_pending.appendSlice(self.allocator, tag.payloads);
+                    try self.generated_private_pending.append(self.allocator, row.ext);
                 },
                 .record => |row| {
-                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
-                    try pending.append(self.allocator, row.ext);
+                    for (row.fields) |field| try self.generated_private_pending.append(self.allocator, field.ty);
+                    try self.generated_private_pending.append(self.allocator, row.ext);
                 },
                 .named => |named| {
                     if (named.backing) |backing| {
-                        if (backing.authority == .generated_private) return true;
-                        try pending.append(self.allocator, backing.node);
+                        if (backing.authority == .generated_private) {
+                            cache.value_ptr.result = true;
+                            cache.value_ptr.valid = true;
+                            return true;
+                        }
+                        try self.generated_private_pending.append(self.allocator, backing.node);
                     }
-                    try pending.appendSlice(self.allocator, named.args);
+                    try self.generated_private_pending.appendSlice(self.allocator, named.args);
                     for (named.declared_order) |declared| switch (declared) {
                         .named => {},
-                        .padding => |padding| try pending.append(self.allocator, padding),
+                        .padding => |padding| try self.generated_private_pending.append(self.allocator, padding),
                     };
                 },
             }
         }
+        cache.value_ptr.result = false;
+        cache.value_ptr.valid = true;
         return false;
     }
 
@@ -1659,7 +1743,7 @@ pub const InstGraph = struct {
         self.countDiagnostic("finished_mono_scans");
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         try pending.append(self.allocator, root);
         while (pending.pop()) |raw_node| {
@@ -2223,7 +2307,7 @@ pub const InstGraph = struct {
         comptime noun: []const u8,
         access: BackingAccess,
     ) Allocator.Error!NodeId {
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
 
         var node = self.find(raw_node);
@@ -2460,12 +2544,21 @@ pub const InstGraph = struct {
 
     /// A relation mutation invalidates every cached Type-shaped snapshot.
     /// Snapshots may contain the changed node at any structural depth, so
-    /// global invalidation is the exact dependency rule. Observed snapshots
-    /// remain immutable; the next inspection materializes new ids.
+    /// global invalidation is the exact dependency rule. Mutation bursts are
+    /// coalesced: the next inspection clears the cache once before reading it.
+    /// Observed snapshots remain immutable and valid as historical values.
     fn invalidateActiveSnapshots(self: *InstGraph, _: NodeId) void {
         self.countDiagnostic("active_snapshot_invalidations");
-        self.countDiagnosticBy("active_snapshot_entries_invalidated", self.current_snapshots.count());
+        if (!self.current_snapshots_dirty) {
+            self.countDiagnosticBy("active_snapshot_entries_invalidated", self.current_snapshots.count());
+            self.current_snapshots_dirty = true;
+        }
+    }
+
+    fn refreshActiveSnapshots(self: *InstGraph) void {
+        if (!self.current_snapshots_dirty) return;
         self.current_snapshots.clearRetainingCapacity();
+        self.current_snapshots_dirty = false;
     }
 
     /// Redirect `loser` into `winner`, moving row back references and
@@ -2486,7 +2579,7 @@ pub const InstGraph = struct {
             var moved_list = moved.value;
             for (moved_list.items) |parent| {
                 const parent_root = self.find(parent);
-                try self.row_exts.put(parent_root, winner);
+                self.row_exts.items[@intFromEnum(parent_root)] = winner;
                 try self.addRowParent(winner, parent_root);
             }
             moved_list.deinit(self.allocator);
@@ -3229,7 +3322,7 @@ pub const InstGraph = struct {
         defer tags.deinit(self.allocator);
         try tags.appendSlice(self.allocator, row.tags);
 
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         try seen.put(root, {});
 
@@ -3288,7 +3381,7 @@ pub const InstGraph = struct {
         defer fields.deinit(self.allocator);
         try fields.appendSlice(self.allocator, row.fields);
 
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         try seen.put(root, {});
 
@@ -3712,6 +3805,7 @@ pub const InstGraph = struct {
         if (!try self.typeIsResolved(root)) {
             Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
         }
+        self.refreshActiveSnapshots();
         if (self.current_snapshots.get(root)) |current| {
             self.countDiagnostic("active_snapshot_cache_hits");
             return current;
@@ -3759,7 +3853,7 @@ pub const InstGraph = struct {
     }
 
     pub fn typeHasActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!bool {
-        var seen = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer seen.deinit();
         return try self.typeContainsActiveSnapshot(ty, &seen);
     }
@@ -3767,7 +3861,7 @@ pub const InstGraph = struct {
     fn typeContainsActiveSnapshot(
         self: *InstGraph,
         ty: Type.TypeId,
-        seen: *std.AutoHashMap(Type.TypeId, void),
+        seen: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!bool {
         if (self.isActiveSnapshotType(ty)) return true;
         const seen_entry = try seen.getOrPut(ty);
@@ -3818,7 +3912,7 @@ pub const InstGraph = struct {
     fn typeSpanContainsActiveSnapshot(
         self: *InstGraph,
         span: Type.Span,
-        seen: *std.AutoHashMap(Type.TypeId, void),
+        seen: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!bool {
         const children = self.types.span(span);
         for (0..children.len) |index| {
@@ -3861,8 +3955,8 @@ pub const InstGraph = struct {
 /// Monotype type ids.
 pub const GraphTypeFinals = struct {
     graph: *InstGraph,
-    sealed: std.AutoHashMap(NodeId, Type.TypeId),
-    sealed_types: std.AutoHashMap(Type.TypeId, Type.TypeId),
+    sealed: collections.DenseMap(NodeId, Type.TypeId),
+    sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();
@@ -3877,8 +3971,8 @@ pub const GraphTypeFinals = struct {
     fn initUnchecked(graph: *InstGraph) GraphTypeFinals {
         return .{
             .graph = graph,
-            .sealed = std.AutoHashMap(NodeId, Type.TypeId).init(graph.allocator),
-            .sealed_types = std.AutoHashMap(Type.TypeId, Type.TypeId).init(graph.allocator),
+            .sealed = collections.DenseMap(NodeId, Type.TypeId).init(graph.allocator),
+            .sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(graph.allocator),
         };
     }
 
@@ -3953,7 +4047,7 @@ pub const GraphTypeFinals = struct {
     }
 
     fn typeHasActiveSnapshots(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!bool {
-        var seen = std.AutoHashMap(Type.TypeId, void).init(self.graph.allocator);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.graph.allocator);
         defer seen.deinit();
         return try self.graph.typeContainsActiveSnapshot(ty, &seen);
     }
@@ -4121,7 +4215,7 @@ fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool
 const OpenFunctionInterfaceShapeWriter = struct {
     graph: *InstGraph,
     hasher: std.crypto.hash.sha2.Sha256,
-    unresolved_ids: std.AutoHashMap(NodeId, u32),
+    unresolved_ids: collections.DenseMap(NodeId, u32),
     visiting: std.ArrayList(NodeId),
     next_unresolved: u32 = 0,
     output: ?[]u8 = null,
@@ -4131,7 +4225,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
         return .{
             .graph = graph,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
-            .unresolved_ids = std.AutoHashMap(NodeId, u32).init(graph.allocator),
+            .unresolved_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
             .visiting = .empty,
         };
     }
@@ -5403,18 +5497,64 @@ test "relation mutation invalidates active snapshots before freezing" {
     defer graph.destroy();
 
     const resolved = try graph.newNode(.{ .primitive = .u64 });
-    _ = try graph.activeTypeViewForNode(resolved);
+    const before_mutation = try graph.activeTypeViewForNode(resolved);
     try std.testing.expect(graph.current_snapshots.count() != 0);
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     try graph.unify(resolved, unresolved);
 
     try std.testing.expect(graph.acceptsRelationMutation());
-    try std.testing.expectEqual(@as(usize, 0), graph.current_snapshots.count());
+    try std.testing.expect(graph.current_snapshots_dirty);
+
+    const after_mutation = try graph.activeTypeViewForNode(resolved);
+    try std.testing.expect(!graph.current_snapshots_dirty);
+    try std.testing.expect(graph.current_snapshots.count() != 0);
+    try std.testing.expect(before_mutation != after_mutation);
 
     try graph.freezeRelations();
 
     try std.testing.expectEqual(RelationState.frozen, graph.relation_state);
     try std.testing.expect(!graph.acceptsRelationMutation());
+}
+
+test "generated-private traversal scratch handles cycles and epoch rollover" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+
+    const Context = struct {
+        fn fill(_: @This(), reserved: NodeId) Allocator.Error!InstNode {
+            return .{ .box = reserved };
+        }
+    };
+    const recursive = try graph.addRecursiveNode(Context{}, Context.fill);
+    graph.generated_private_visit_epoch = std.math.maxInt(u32);
+    @memset(graph.generated_private_visit_epochs.items, std.math.maxInt(u32));
+
+    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
+    try std.testing.expectEqual(@as(u32, 1), graph.generated_private_visit_epoch);
+
+    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_cache_hits);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
+
+    const unrelated = try graph.newNode(.{ .primitive = .u64 });
+    try graph.setContent(unrelated, .{ .primitive = .str });
+    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_cache_hits);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
+
+    try graph.setContent(recursive, .zst);
+    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_cache_hits);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_nodes_visited);
 }
 
 test "final type sealing remains allowed after instantiation relations freeze" {

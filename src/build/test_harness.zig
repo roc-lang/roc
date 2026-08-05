@@ -1609,6 +1609,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             while (off < out.len) {
                 const n = file.readStreaming(io, &.{out[off..]}) catch |err| switch (err) {
                     error.EndOfStream => return error.UnexpectedEof,
+                    else => return err,
                 };
                 if (n == 0) return error.UnexpectedEof;
                 off += n;

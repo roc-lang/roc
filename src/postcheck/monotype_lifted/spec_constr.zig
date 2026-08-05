@@ -787,7 +787,7 @@ const Pass = struct {
     /// Reverse index from each rewritten callable body to its source function.
     /// This keeps later materialization rooted at the source instead of cloning
     /// an already-rewritten worker.
-    callable_sources: std.AutoHashMap(Ast.FnId, Ast.FnId),
+    callable_sources: collections.DenseMap(Ast.FnId, Ast.FnId),
     next_join_point: u32,
 
     const AnalysisMark = struct {
@@ -827,7 +827,7 @@ const Pass = struct {
             .symbols = .{ .next = program.next_symbol },
             .whole_body_cloned = whole_body_cloned,
             .callable_workers = std.AutoHashMap(CallableWorkerIdentity, Ast.FnId).init(allocator),
-            .callable_sources = std.AutoHashMap(Ast.FnId, Ast.FnId).init(allocator),
+            .callable_sources = collections.DenseMap(Ast.FnId, Ast.FnId).init(allocator),
             .next_join_point = 0,
         };
     }
@@ -1237,8 +1237,8 @@ const Pass = struct {
                 .program = self.program,
                 .allocator = self.allocator,
                 .fn_index = index,
-                .bound = std.AutoHashMap(Ast.LocalId, u32).init(self.allocator),
-                .joins = std.AutoHashMap(Ast.JoinPointId, u32).init(self.allocator),
+                .bound = collections.DenseMap(Ast.LocalId, u32).init(self.allocator),
+                .joins = collections.DenseMap(Ast.JoinPointId, u32).init(self.allocator),
             };
             defer validator.bound.deinit();
             defer validator.joins.deinit();
@@ -2944,7 +2944,7 @@ const Pass = struct {
             if (source_pat.data != .tag) return null;
             const source_tag = source_pat.data.tag;
 
-            var renames = std.AutoHashMap(Ast.LocalId, Ast.LocalId).init(self.allocator);
+            var renames = collections.DenseMap(Ast.LocalId, Ast.LocalId).init(self.allocator);
             defer renames.deinit();
             try renames.put(GuardedList.at(source_params, 0).local, base_param);
 
@@ -3014,7 +3014,7 @@ const Pass = struct {
         step_ty: Type.TypeId,
         iterator_ty: Type.TypeId,
         topology: Type.IteratorTopology,
-        renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId),
+        renames: *collections.DenseMap(Ast.LocalId, Ast.LocalId),
     ) Common.LowerError!?Ast.PatId {
         const source_pat = self.program.getPat(source_pat_id);
         if (source_pat.data != .tag) return null;
@@ -3182,7 +3182,7 @@ const Pass = struct {
         item_expr: Ast.ExprId,
         loop_parts: IteratorLoopParts,
     ) Common.LowerError!?Ast.ExprId {
-        var renames = std.AutoHashMap(Ast.LocalId, Ast.LocalId).init(self.allocator);
+        var renames = collections.DenseMap(Ast.LocalId, Ast.LocalId).init(self.allocator);
         defer renames.deinit();
 
         // Guard against the accumulator flowing through the dropped iterator
@@ -3221,7 +3221,7 @@ const Pass = struct {
     fn cloneNewCarry(
         self: *Pass,
         expr_id: Ast.ExprId,
-        renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId),
+        renames: *collections.DenseMap(Ast.LocalId, Ast.LocalId),
         loop_parts: IteratorLoopParts,
     ) Common.LowerError!?Ast.ExprId {
         const expr = self.program.getExpr(expr_id);
@@ -3331,7 +3331,7 @@ const Pass = struct {
         }
     }
 
-    fn cloneStmtFresh(self: *Pass, stmt_id: Ast.StmtId, renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.StmtId {
+    fn cloneStmtFresh(self: *Pass, stmt_id: Ast.StmtId, renames: *collections.DenseMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.StmtId {
         switch (self.program.getStmt(stmt_id)) {
             .let_ => |let_| {
                 const value = (try self.cloneExprFresh(let_.value, renames)) orelse return null;
@@ -3354,7 +3354,7 @@ const Pass = struct {
     /// Deep-clone a pure-computation expression, applying local renames and
     /// allocating fresh locals at binding sites. Returns null for constructs
     /// outside the foldable set.
-    fn cloneExprFresh(self: *Pass, expr_id: Ast.ExprId, renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.ExprId {
+    fn cloneExprFresh(self: *Pass, expr_id: Ast.ExprId, renames: *collections.DenseMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.ExprId {
         const expr = self.program.getExpr(expr_id);
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| .{ .local = renames.get(local) orelse local },
@@ -3516,7 +3516,7 @@ const Pass = struct {
         return try self.program.addExpr(.{ .ty = ty, .data = data });
     }
 
-    fn cloneExprSpanFresh(self: *Pass, span: Ast.Span(Ast.ExprId), renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.Span(Ast.ExprId) {
+    fn cloneExprSpanFresh(self: *Pass, span: Ast.Span(Ast.ExprId), renames: *collections.DenseMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.Span(Ast.ExprId) {
         const source = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(span));
         defer self.allocator.free(source);
         var out = try self.allocator.alloc(Ast.ExprId, source.len);
@@ -3527,7 +3527,7 @@ const Pass = struct {
         return try self.program.addExprSpan(out);
     }
 
-    fn cloneCaptureOperandSpanFresh(self: *Pass, span: Ast.Span(Ast.CaptureOperand), renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.Span(Ast.CaptureOperand) {
+    fn cloneCaptureOperandSpanFresh(self: *Pass, span: Ast.Span(Ast.CaptureOperand), renames: *collections.DenseMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.Span(Ast.CaptureOperand) {
         const source = try GuardedList.dupe(self.allocator, Ast.CaptureOperand, self.program.captureOperandSpan(span));
         defer self.allocator.free(source);
         var out = try self.allocator.alloc(Ast.CaptureOperand, source.len);
@@ -3541,7 +3541,7 @@ const Pass = struct {
         return try self.program.addCaptureOperandSpan(out);
     }
 
-    fn cloneFieldSpanFresh(self: *Pass, span: Ast.Span(Ast.FieldExpr), renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.Span(Ast.FieldExpr) {
+    fn cloneFieldSpanFresh(self: *Pass, span: Ast.Span(Ast.FieldExpr), renames: *collections.DenseMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.Span(Ast.FieldExpr) {
         const source = try GuardedList.dupe(self.allocator, Ast.FieldExpr, self.program.fieldExprSpan(span));
         defer self.allocator.free(source);
         var out = try self.allocator.alloc(Ast.FieldExpr, source.len);
@@ -3558,7 +3558,7 @@ const Pass = struct {
     /// Clone a pattern, allocating a fresh local for every binding site and
     /// recording the rename. Returns null for list/string patterns, which the
     /// fold does not replay.
-    fn clonePatFresh(self: *Pass, pat_id: Ast.PatId, renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.PatId {
+    fn clonePatFresh(self: *Pass, pat_id: Ast.PatId, renames: *collections.DenseMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.PatId {
         const pat = self.program.getPat(pat_id);
         const data: Ast.PatData = switch (pat.data) {
             .bind => |local| blk: {
@@ -3605,7 +3605,7 @@ const Pass = struct {
         return try self.program.addPat(.{ .ty = pat.ty, .data = data });
     }
 
-    fn clonePatSpanFresh(self: *Pass, span: Ast.Span(Ast.PatId), renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.Span(Ast.PatId) {
+    fn clonePatSpanFresh(self: *Pass, span: Ast.Span(Ast.PatId), renames: *collections.DenseMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.Span(Ast.PatId) {
         const source = try GuardedList.dupe(self.allocator, Ast.PatId, self.program.patSpan(span));
         defer self.allocator.free(source);
         var out = try self.allocator.alloc(Ast.PatId, source.len);
@@ -4242,7 +4242,7 @@ const Pass = struct {
 /// separate makes lexical identity independent of value shape without turning
 /// an opaque binding into constructor evidence.
 const Subst = struct {
-    exact: std.AutoHashMap(Ast.LocalId, Value),
+    exact: collections.DenseMap(Ast.LocalId, Value),
     binder_subst: std.AutoHashMap(BinderIdentity, Value),
     binder_aliases: std.AutoHashMap(BinderIdentity, Value),
     /// Binder identities carried by an enclosing loop being cloned, with a
@@ -4259,7 +4259,7 @@ const Subst = struct {
 
     fn init(allocator: Allocator) Subst {
         return .{
-            .exact = std.AutoHashMap(Ast.LocalId, Value).init(allocator),
+            .exact = collections.DenseMap(Ast.LocalId, Value).init(allocator),
             .binder_subst = std.AutoHashMap(BinderIdentity, Value).init(allocator),
             .binder_aliases = std.AutoHashMap(BinderIdentity, Value).init(allocator),
             .loop_carried_binders = std.AutoHashMap(BinderIdentity, u32).init(allocator),
@@ -4520,7 +4520,7 @@ const Cloner = struct {
     /// result. Normalization can re-clone output nodes while the owning loop
     /// selection remains active; propagating this stamp makes that clone
     /// idempotent without inferring provenance from expression shape.
-    selected_loop_exit_tys: std.AutoHashMap(Ast.ExprId, Type.TypeId),
+    selected_loop_exit_tys: collections.DenseMap(Ast.ExprId, Type.TypeId),
     join_stack: std.ArrayList(ActiveJoinClone),
     /// Remaining arms the shape-preserving let-of-case rewrite may still
     /// process. That rewrite re-clones each arm's body against the small
@@ -4539,9 +4539,9 @@ const Cloner = struct {
     /// currently cloning. A callable worker created while filling such a value
     /// must capture the recursive slot itself, not a field projected from it,
     /// so construction does not read the still-zeroed recursive payload.
-    active_recursive_value_locals: std.AutoHashMap(Ast.LocalId, void),
+    active_recursive_value_locals: collections.DenseMap(Ast.LocalId, void),
     rebased_inline_scopes: std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId),
-    inline_scope_origins: std.AutoHashMap(Ast.InlineScopeId, Ast.InlineScopeId),
+    inline_scope_origins: collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId),
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `nominal.backing`/`static_data_candidate.runtime` pointer edge
@@ -4591,13 +4591,13 @@ const Cloner = struct {
             .inline_stack = .empty,
             .loop_stack = .empty,
             .loop_exit_stack = .empty,
-            .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
+            .selected_loop_exit_tys = collections.DenseMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
-            .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
+            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
             .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
-            .inline_scope_origins = std.AutoHashMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
+            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -4623,13 +4623,13 @@ const Cloner = struct {
             .inline_stack = .empty,
             .loop_stack = .empty,
             .loop_exit_stack = .empty,
-            .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
+            .selected_loop_exit_tys = collections.DenseMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
-            .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
+            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
             .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
-            .inline_scope_origins = std.AutoHashMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
+            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -10080,8 +10080,8 @@ const BodyLocalScope = struct {
     program: *const Ast.Program,
     allocator: Allocator,
     fn_index: usize,
-    bound: std.AutoHashMap(Ast.LocalId, u32),
-    joins: std.AutoHashMap(Ast.JoinPointId, u32),
+    bound: collections.DenseMap(Ast.LocalId, u32),
+    joins: collections.DenseMap(Ast.JoinPointId, u32),
 
     fn checkUse(self: *BodyLocalScope, local: Ast.LocalId) void {
         if (self.bound.contains(local)) return;

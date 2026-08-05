@@ -5594,7 +5594,7 @@ const ArcTest = struct {
     /// be asserted separately.
     fn uniqueArgsInProc(self: *const ArcTest, proc_id: LIR.LirProcSpecId, target: LIR.LocalId) Allocator.Error!u64 {
         var mask: u64 = 0;
-        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.allocator);
+        var visited = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
