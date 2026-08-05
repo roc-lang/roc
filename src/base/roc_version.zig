@@ -13,8 +13,9 @@
 //!
 //! Two forms are recognized:
 //!
-//!   - nightly tags, e.g. `nightly-2026-July-31-123c5d7`, as produced by the
-//!     nightly release workflow and passed to `-Dcompiler-version`
+//!   - nightly tags, e.g. `nightly-2026-08-05-24f0b47`, as produced by the
+//!     nightly release workflow and passed to `-Dcompiler-version`. The month
+//!     may also be spelled by name, as in `nightly-2026-July-31-123c5d7`.
 //!   - releases, e.g. `0.1.0` or `1.0.0-rc1`
 //!
 //! Local development builds report `<build mode>-<git short sha>` (e.g.
@@ -29,7 +30,8 @@ const std = @import("std");
 /// Prefix every nightly release tag starts with.
 pub const nightly_prefix = "nightly-";
 
-/// Calendar month of a nightly release, spelled the way release tags spell it.
+/// Calendar month of a nightly release. Release tags spell it as a number
+/// (`08`), and older ones spell it by name (`August`); see `parseMonth`.
 pub const Month = enum(u8) {
     January = 1,
     February,
@@ -45,7 +47,7 @@ pub const Month = enum(u8) {
     December,
 };
 
-/// A nightly release tag, e.g. `nightly-2026-July-31-123c5d7`.
+/// A nightly release tag, e.g. `nightly-2026-08-05-24f0b47`.
 pub const Nightly = struct {
     year: u16,
     month: Month,
@@ -141,7 +143,7 @@ fn parseNightly(body: []const u8) ?Nightly {
     var parts = std.mem.splitScalar(u8, body, '-');
 
     const year = parseDigits(u16, parts.next() orelse return null, 4, 4) orelse return null;
-    const month = std.meta.stringToEnum(Month, parts.next() orelse return null) orelse return null;
+    const month = parseMonth(parts.next() orelse return null) orelse return null;
     const day = parseDigits(u8, parts.next() orelse return null, 1, 2) orelse return null;
     if (day < 1 or day > 31) return null;
 
@@ -155,6 +157,20 @@ fn parseNightly(body: []const u8) ?Nightly {
     }
 
     return .{ .year = year, .month = month, .day = day, .commit = commit };
+}
+
+/// Parse the month field of a nightly tag, written either as a number (`08`)
+/// or as the month's English name (`August`).
+///
+/// Both spellings are accepted because the release workflow has produced both:
+/// tags name the month by number, and headers pinned by an earlier compiler
+/// that spelled it out should keep working rather than become unreadable.
+fn parseMonth(text: []const u8) ?Month {
+    if (std.meta.stringToEnum(Month, text)) |named| return named;
+
+    const number = parseDigits(u8, text, 1, 2) orelse return null;
+    if (number < 1 or number > 12) return null;
+    return @enumFromInt(number);
 }
 
 /// Parse `MAJOR.MINOR.PATCH` with an optional `-PRERELEASE` suffix.
@@ -187,11 +203,25 @@ fn parseDigits(comptime T: type, text: []const u8, min_len: usize, max_len: usiz
 }
 
 test "parse nightly tag" {
+    const version = parse("nightly-2026-08-05-24f0b47") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u16, 2026), version.nightly.year);
+    try std.testing.expectEqual(Month.August, version.nightly.month);
+    try std.testing.expectEqual(@as(u8, 5), version.nightly.day);
+    try std.testing.expectEqualStrings("24f0b47", version.nightly.commit);
+}
+
+test "parse nightly tag with a named month" {
     const version = parse("nightly-2026-July-31-123c5d7") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u16, 2026), version.nightly.year);
     try std.testing.expectEqual(Month.July, version.nightly.month);
     try std.testing.expectEqual(@as(u8, 31), version.nightly.day);
     try std.testing.expectEqualStrings("123c5d7", version.nightly.commit);
+}
+
+test "parse nightly tag with an unpadded numeric month" {
+    const version = parse("nightly-2026-8-5-24f0b47") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(Month.August, version.nightly.month);
+    try std.testing.expectEqual(@as(u8, 5), version.nightly.day);
 }
 
 test "parse nightly tag with a single-digit day" {
@@ -203,6 +233,9 @@ test "parse nightly tag with a single-digit day" {
 test "reject malformed nightly tags" {
     try std.testing.expectEqual(@as(?Version, null), parse("nightly-2026-Jul-31-123c5d7"));
     try std.testing.expectEqual(@as(?Version, null), parse("nightly-2026-july-31-123c5d7"));
+    try std.testing.expectEqual(@as(?Version, null), parse("nightly-2026-00-05-24f0b47"));
+    try std.testing.expectEqual(@as(?Version, null), parse("nightly-2026-13-05-24f0b47"));
+    try std.testing.expectEqual(@as(?Version, null), parse("nightly-2026-008-05-24f0b47"));
     try std.testing.expectEqual(@as(?Version, null), parse("nightly-26-July-31-123c5d7"));
     try std.testing.expectEqual(@as(?Version, null), parse("nightly-2026-July-32-123c5d7"));
     try std.testing.expectEqual(@as(?Version, null), parse("nightly-2026-July-31"));
@@ -262,6 +295,9 @@ test "stay quiet when there is nothing to report about a pin" {
 
 test "upgrade a pin to a newer nightly" {
     try std.testing.expect(shouldUpgrade("nightly-2026-July-30-aaaaaaa", "nightly-2026-July-31-bbbbbbb"));
+    // A pin written when months were spelled out is still comparable, and
+    // formatting rewrites it in the spelling the running compiler reports.
+    try std.testing.expect(shouldUpgrade("nightly-2026-July-30-aaaaaaa", "nightly-2026-08-05-24f0b47"));
     // Same day, different commit: the running compiler wins.
     try std.testing.expect(shouldUpgrade("nightly-2026-July-31-aaaaaaa", "nightly-2026-July-31-bbbbbbb"));
 }
