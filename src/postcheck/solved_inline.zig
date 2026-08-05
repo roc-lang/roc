@@ -183,15 +183,15 @@ const WrapperAnalyzer = struct {
 
     fn solvedCapturesForFn(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
         const fn_symbol = self.solved.lifted.getFn(fn_id).symbol;
-        const func = switch (self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)])) {
-            .func => |func| func,
-            else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
-        };
-        const callable = switch (self.solved.types.rootContent(func.callable)) {
-            .lambda_set => |members| members,
-            .erased => |erased| erased.members,
-            else => Common.invariant("callable value did not have a resolved callable slot"),
-        };
+        const fn_content = self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)]);
+        if (fn_content != .func) Common.invariant("direct Lambda Mono function table contains a non-function type");
+        const callable_content = self.solved.types.rootContent(fn_content.func.callable);
+        const callable = if (callable_content == .lambda_set)
+            callable_content.lambda_set
+        else if (callable_content == .erased)
+            callable_content.erased.members
+        else
+            Common.invariant("callable value did not have a resolved callable slot");
         for (self.solved_types.memberSpan(callable)) |member| {
             if (member.lambda == fn_symbol) return member.captures;
         }
@@ -306,12 +306,10 @@ const WrapperAnalyzer = struct {
 
     fn isInlineableWrapperBody(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId) bool {
         const expr = self.solved.lifted.getExpr(expr_id);
-        return switch (expr.data) {
-            .call_proc, .low_level => true,
-            .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and
-                self.isInlineableWrapperBody(block.final_expr),
-            else => false,
-        };
+        if (expr.data == .call_proc or expr.data == .low_level) return true;
+        if (expr.data != .block) return false;
+        return self.solved.lifted.stmtSpan(expr.data.block.statements).len == 0 and
+            self.isInlineableWrapperBody(expr.data.block.final_expr);
     }
 
     /// Visit every proc called within a wrapper body so inline cycles are

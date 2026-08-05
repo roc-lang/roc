@@ -35,6 +35,92 @@ const MethodOwnerLookup = struct {
     builtin_origin: bool,
 };
 
+fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
+    return switch (pattern) {
+        .assign => |p| p.ident,
+        .as => |p| p.ident,
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => null,
+    };
+}
+
+fn statementPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
+    return switch (statement) {
+        .s_decl => |decl| decl.pattern,
+        .s_var => |var_stmt| var_stmt.pattern_idx,
+        .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
+fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
+    return switch (statement) {
+        .s_alias_decl => |alias| alias.header,
+        .s_nominal_decl => |nominal| nominal.header,
+        .s_where_alias_decl => |where_alias| where_alias.header,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
+fn completionKindForExpr(expr: CIR.Expr) u32 {
+    const tag = std.meta.activeTag(expr);
+    return if (tag == .e_closure or tag == .e_lambda or tag == .e_hosted_lambda)
+        @intFromEnum(CompletionItemKind.function)
+    else
+        @intFromEnum(CompletionItemKind.variable);
+}
+
 /// Builder for constructing completion item lists.
 /// Handles deduplication and provides methods for adding different types of completions.
 pub const CompletionBuilder = struct {
@@ -421,35 +507,25 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
-            switch (stmt) {
-                .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
-                    const header_idx = switch (stmt) {
-                        .s_alias_decl => |a| a.header,
-                        .s_nominal_decl => |n| n.header,
-                        .s_where_alias_decl => |w| w.header,
-                        else => unreachable,
-                    };
-                    const header = module_env.store.getTypeHeader(header_idx);
-                    const name = module_env.getIdentText(header.name);
-                    if (name.len == 0) continue;
+            const header_idx = statementTypeHeader(stmt) orelse continue;
+            const header = module_env.store.getTypeHeader(header_idx);
+            const name = module_env.getIdentText(header.name);
+            if (name.len == 0) continue;
 
-                    const documentation = try doc_comments.extractDocForStatement(
-                        self.allocator,
-                        module_env.common.source,
-                        &module_env.store,
-                        stmt,
-                        stmt_idx,
-                    );
+            const documentation = try doc_comments.extractDocForStatement(
+                self.allocator,
+                module_env.common.source,
+                &module_env.store,
+                stmt,
+                stmt_idx,
+            );
 
-                    _ = try self.addItem(.{
-                        .label = name,
-                        .kind = @intFromEnum(CompletionItemKind.class),
-                        .detail = null,
-                        .documentation = documentation,
-                    });
-                },
-                else => {},
-            }
+            _ = try self.addItem(.{
+                .label = name,
+                .kind = @intFromEnum(CompletionItemKind.class),
+                .detail = null,
+                .documentation = documentation,
+            });
         }
     }
 
@@ -512,11 +588,7 @@ pub const CompletionBuilder = struct {
             const def = module_env.store.getDef(def_idx);
             const pattern = module_env.store.getPattern(def.pattern);
 
-            const ident_idx = switch (pattern) {
-                .assign => |p| p.ident,
-                .as => |p| p.ident,
-                else => continue,
-            };
+            const ident_idx = patternIdent(pattern) orelse continue;
 
             const name = module_env.getIdentText(ident_idx);
             if (name.len == 0) continue;
@@ -524,10 +596,7 @@ pub const CompletionBuilder = struct {
 
             // Determine completion kind based on the expression type
             const expr = module_env.store.getExpr(def.expr);
-            const kind: u32 = switch (expr) {
-                .e_closure, .e_lambda, .e_hosted_lambda => @intFromEnum(CompletionItemKind.function),
-                else => @intFromEnum(CompletionItemKind.variable),
-            };
+            const kind = completionKindForExpr(expr);
 
             // Get type information for the definition
             var detail: ?[]const u8 = null;
@@ -569,11 +638,7 @@ pub const CompletionBuilder = struct {
             if (stmt_parts.pattern) |pattern_idx| {
                 const pattern = module_env.store.getPattern(pattern_idx);
 
-                const ident_idx = switch (pattern) {
-                    .assign => |p| p.ident,
-                    .as => |p| p.ident,
-                    else => continue,
-                };
+                const ident_idx = patternIdent(pattern) orelse continue;
 
                 const name = module_env.getIdentText(ident_idx);
                 if (name.len == 0) continue;
@@ -583,10 +648,7 @@ pub const CompletionBuilder = struct {
                 var kind: u32 = @intFromEnum(CompletionItemKind.variable);
                 if (stmt_parts.expr) |expr_idx| {
                     const expr = module_env.store.getExpr(expr_idx);
-                    kind = switch (expr) {
-                        .e_closure, .e_lambda, .e_hosted_lambda => @intFromEnum(CompletionItemKind.function),
-                        else => @intFromEnum(CompletionItemKind.variable),
-                    };
+                    kind = completionKindForExpr(expr);
                 }
 
                 // Get type information
@@ -647,11 +709,7 @@ pub const CompletionBuilder = struct {
             const def = module_env.store.getDef(def_idx);
             const pattern = module_env.store.getPattern(def.pattern);
 
-            const ident_idx = switch (pattern) {
-                .assign => |p| p.ident,
-                .as => |p| p.ident,
-                else => continue,
-            };
+            const ident_idx = patternIdent(pattern) orelse continue;
 
             const name = module_env.getIdentText(ident_idx);
             self.logDebug("addRecordFieldCompletions: def '{s}' pattern={} has_annotation={}", .{ name, def.pattern, def.annotation != null });
@@ -671,19 +729,10 @@ pub const CompletionBuilder = struct {
         self.logDebug("addRecordFieldCompletions: checking {d} statements", .{statements_slice.len});
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
-            const pattern_idx = switch (stmt) {
-                .s_decl => |decl| decl.pattern,
-                .s_var => |var_stmt| var_stmt.pattern_idx,
-                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
-                else => continue,
-            };
+            const pattern_idx = statementPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getPattern(pattern_idx);
-            const ident_idx = switch (pattern) {
-                .assign => |p| p.ident,
-                .as => |p| p.ident,
-                else => continue,
-            };
+            const ident_idx = patternIdent(pattern) orelse continue;
 
             const name = module_env.getIdentText(ident_idx);
             self.logDebug("addRecordFieldCompletions: stmt '{s}'", .{name});
@@ -716,31 +765,22 @@ pub const CompletionBuilder = struct {
                 return;
             }
 
-            switch (content) {
-                .alias => |alias| {
-                    const backing_var = type_store.getAliasBackingVar(alias);
-                    resolved = type_store.resolveVar(backing_var);
-                    content = resolved.desc.content;
-                    continue;
-                },
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .nominal_type => |nominal| {
-                            // Row/tuple structure is declaration data: unwrap
-                            // through the declaration's backing template
-                            // (formals appear as rigid vars).
-                            const decl_idx = type_store.lookupNominalDecl(nominal) orelse break;
-                            const decl = type_store.getNominalDecl(decl_idx);
-                            if (!decl.isValid()) break;
-                            resolved = type_store.resolveVar(decl.backing);
-                            content = resolved.desc.content;
-                            continue;
-                        },
-                        else => break,
-                    }
-                },
-                else => break,
+            if (std.meta.activeTag(content) == .alias) {
+                const backing_var = type_store.getAliasBackingVar(content.alias);
+                resolved = type_store.resolveVar(backing_var);
+                content = resolved.desc.content;
+                continue;
             }
+            if (std.meta.activeTag(content) != .structure or std.meta.activeTag(content.structure) != .nominal_type) break;
+
+            // Row/tuple structure is declaration data: unwrap through the
+            // declaration's backing template (formals appear as rigid vars).
+            const decl_idx = type_store.lookupNominalDecl(content.structure.nominal_type) orelse break;
+            const decl = type_store.getNominalDecl(decl_idx);
+            if (!decl.isValid()) break;
+            resolved = type_store.resolveVar(decl.backing);
+            content = resolved.desc.content;
+            continue;
         }
 
         // Try to get record fields, handling aliases that wrap records
@@ -759,64 +799,63 @@ pub const CompletionBuilder = struct {
         while (true) : (steps += 1) {
             if (steps > 8) break;
 
-            switch (content) {
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .tuple => |tuple| {
-                            const elem_vars = type_store.sliceVars(tuple.elems);
+            if (std.meta.activeTag(content) == .structure) {
+                const flat_type = content.structure;
+                if (std.meta.activeTag(flat_type) == .tuple) {
+                    const tuple = flat_type.tuple;
+                    const elem_vars = type_store.sliceVars(tuple.elems);
 
-                            var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
-                            defer if (type_writer) |*tw| tw.deinit();
+                    var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
+                    defer if (type_writer) |*tw| tw.deinit();
 
-                            for (elem_vars, 0..) |elem_var, i| {
-                                var detail: ?[]const u8 = null;
-                                if (type_writer) |*tw| {
-                                    // Type formatting is best-effort; missing type info is acceptable
-                                    tw.write(elem_var, .one_line) catch |err| switch (err) {
-                                        error.OutOfMemory => return error.OutOfMemory,
-                                        error.WriteFailed => {},
-                                    };
-                                    const type_str = tw.get();
-                                    if (type_str.len > 0) {
-                                        detail = try self.allocator.dupe(u8, type_str);
-                                    }
-                                    tw.reset();
-                                }
-
-                                // Use a stack buffer; addItem duplicates accepted labels.
-                                var label_buf: [32]u8 = undefined;
-                                const label = std.fmt.bufPrint(&label_buf, "{d}", .{i}) catch continue;
-                                const added = try self.addItem(.{
-                                    .label = label,
-                                    .kind = @intFromEnum(CompletionItemKind.field),
-                                    .detail = detail,
-                                });
-                                if (added) {} else {}
+                    for (elem_vars, 0..) |elem_var, i| {
+                        var detail: ?[]const u8 = null;
+                        if (type_writer) |*tw| {
+                            // Type formatting is best-effort; missing type info is acceptable
+                            tw.write(elem_var, .one_line) catch |err| switch (err) {
+                                error.OutOfMemory => return error.OutOfMemory,
+                                error.WriteFailed => {},
+                            };
+                            const type_str = tw.get();
+                            if (type_str.len > 0) {
+                                detail = try self.allocator.dupe(u8, type_str);
                             }
-                            return;
-                        },
-                        .nominal_type => |nominal| {
-                            // Row/tuple structure is declaration data: unwrap
-                            // through the declaration's backing template
-                            // (formals appear as rigid vars).
-                            const decl_idx = type_store.lookupNominalDecl(nominal) orelse break;
-                            const decl = type_store.getNominalDecl(decl_idx);
-                            if (!decl.isValid()) break;
-                            resolved = type_store.resolveVar(decl.backing);
-                            content = resolved.desc.content;
-                            continue;
-                        },
-                        else => break,
+                            tw.reset();
+                        }
+
+                        // Use a stack buffer; addItem duplicates accepted labels.
+                        var label_buf: [32]u8 = undefined;
+                        const label = std.fmt.bufPrint(&label_buf, "{d}", .{i}) catch continue;
+                        const added = try self.addItem(.{
+                            .label = label,
+                            .kind = @intFromEnum(CompletionItemKind.field),
+                            .detail = detail,
+                        });
+                        if (added) {} else {}
                     }
-                },
-                .alias => |alias| {
-                    const backing_var = type_store.getAliasBackingVar(alias);
-                    resolved = type_store.resolveVar(backing_var);
+                    return;
+                }
+                if (std.meta.activeTag(flat_type) == .nominal_type) {
+                    const nominal = flat_type.nominal_type;
+                    // Row/tuple structure is declaration data: unwrap
+                    // through the declaration's backing template
+                    // (formals appear as rigid vars).
+                    const decl_idx = type_store.lookupNominalDecl(nominal) orelse break;
+                    const decl = type_store.getNominalDecl(decl_idx);
+                    if (!decl.isValid()) break;
+                    resolved = type_store.resolveVar(decl.backing);
                     content = resolved.desc.content;
                     continue;
-                },
-                else => break,
+                }
+                break;
             }
+            if (std.meta.activeTag(content) == .alias) {
+                const backing_var = type_store.getAliasBackingVar(content.alias);
+                resolved = type_store.resolveVar(backing_var);
+                content = resolved.desc.content;
+                continue;
+            }
+            break;
         }
     }
 
@@ -856,31 +895,22 @@ pub const CompletionBuilder = struct {
                 return findFieldVarInRecord(module_env, record, field_name);
             }
 
-            switch (content) {
-                .alias => |alias| {
-                    const backing_var = type_store.getAliasBackingVar(alias);
-                    resolved = type_store.resolveVar(backing_var);
-                    content = resolved.desc.content;
-                    continue;
-                },
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .nominal_type => |nominal| {
-                            // Row/tuple structure is declaration data: unwrap
-                            // through the declaration's backing template
-                            // (formals appear as rigid vars).
-                            const decl_idx = type_store.lookupNominalDecl(nominal) orelse break;
-                            const decl = type_store.getNominalDecl(decl_idx);
-                            if (!decl.isValid()) break;
-                            resolved = type_store.resolveVar(decl.backing);
-                            content = resolved.desc.content;
-                            continue;
-                        },
-                        else => break,
-                    }
-                },
-                else => break,
+            if (std.meta.activeTag(content) == .alias) {
+                const backing_var = type_store.getAliasBackingVar(content.alias);
+                resolved = type_store.resolveVar(backing_var);
+                content = resolved.desc.content;
+                continue;
             }
+            if (std.meta.activeTag(content) != .structure or std.meta.activeTag(content.structure) != .nominal_type) break;
+
+            // Row/tuple structure is declaration data: unwrap through the
+            // declaration's backing template (formals appear as rigid vars).
+            const decl_idx = type_store.lookupNominalDecl(content.structure.nominal_type) orelse break;
+            const decl = type_store.getNominalDecl(decl_idx);
+            if (!decl.isValid()) break;
+            resolved = type_store.resolveVar(decl.backing);
+            content = resolved.desc.content;
+            continue;
         }
 
         return null;
@@ -918,7 +948,7 @@ pub const CompletionBuilder = struct {
             .structure => |flat_type| {
                 self.logDebug("addFieldsFromContent: structure, flat_type tag={s}", .{@tagName(flat_type)});
             },
-            else => {
+            .flex, .rigid, .err => {
                 self.logDebug("addFieldsFromContent: not a record or alias, tag={s}", .{@tagName(content)});
             },
         }
@@ -1021,11 +1051,7 @@ pub const CompletionBuilder = struct {
                 const def = module_env.store.getDef(def_idx);
                 const pattern = module_env.store.getPattern(def.pattern);
 
-                const ident_idx = switch (pattern) {
-                    .assign => |p| p.ident,
-                    .as => |p| p.ident,
-                    else => continue,
-                };
+                const ident_idx = patternIdent(pattern) orelse continue;
 
                 const name = module_env.getIdentText(ident_idx);
                 if (std.mem.eql(u8, name, variable_name)) {
@@ -1044,19 +1070,10 @@ pub const CompletionBuilder = struct {
             self.logDebug("addMethodCompletions: checking {d} statements", .{statements_slice.len});
             for (statements_slice) |stmt_idx| {
                 const stmt = module_env.store.getStatement(stmt_idx);
-                const pattern_idx = switch (stmt) {
-                    .s_decl => |decl| decl.pattern,
-                    .s_var => |var_stmt| var_stmt.pattern_idx,
-                    .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
-                    else => continue,
-                };
+                const pattern_idx = statementPattern(stmt) orelse continue;
 
                 const pattern = module_env.store.getPattern(pattern_idx);
-                const ident_idx = switch (pattern) {
-                    .assign => |p| p.ident,
-                    .as => |p| p.ident,
-                    else => continue,
-                };
+                const ident_idx = patternIdent(pattern) orelse continue;
 
                 const name = module_env.getIdentText(ident_idx);
                 if (std.mem.eql(u8, name, variable_name)) {
@@ -1096,22 +1113,20 @@ pub const CompletionBuilder = struct {
                 break;
             }
 
-            const method_owner_opt: ?MethodOwnerLookup = switch (content) {
-                .alias => |alias| if (alias.source_decl.toOptional()) |source_decl| .{
+            const method_owner_opt: ?MethodOwnerLookup = if (std.meta.activeTag(content) == .alias)
+                if (content.alias.source_decl.toOptional()) |source_decl| .{
                     .owner = @enumFromInt(source_decl),
-                    .type_name = module_env.getIdentText(alias.ident.ident_idx),
-                    .builtin_origin = alias.source_decl.originIsBuiltin(),
-                } else null,
-                .structure => |flat_type| switch (flat_type) {
-                    .nominal_type => |nominal| if (nominal.sourceDeclOptional()) |source_decl| .{
-                        .owner = @enumFromInt(source_decl),
-                        .type_name = module_env.getIdentText(nominal.ident.ident_idx),
-                        .builtin_origin = nominal.originIsBuiltin(),
-                    } else null,
-                    else => null,
-                },
-                else => null,
-            };
+                    .type_name = module_env.getIdentText(content.alias.ident.ident_idx),
+                    .builtin_origin = content.alias.source_decl.originIsBuiltin(),
+                } else null
+            else if (std.meta.activeTag(content) == .structure and std.meta.activeTag(content.structure) == .nominal_type)
+                if (content.structure.nominal_type.sourceDeclOptional()) |source_decl| .{
+                    .owner = @enumFromInt(source_decl),
+                    .type_name = module_env.getIdentText(content.structure.nominal_type.ident.ident_idx),
+                    .builtin_origin = content.structure.nominal_type.originIsBuiltin(),
+                } else null
+            else
+                null;
 
             if (method_owner_opt) |method_owner| {
                 self.logDebug("addMethodsFromTypeVar: owner={} name={s}", .{ method_owner.owner, method_owner.type_name });
@@ -1149,7 +1164,7 @@ pub const CompletionBuilder = struct {
                     content = resolved.desc.content;
                     continue;
                 },
-                else => break,
+                .structure, .err => break,
             }
         }
     }
@@ -1298,11 +1313,7 @@ pub const CompletionBuilder = struct {
             const def = module_env.store.getDef(def_idx);
             const pattern = module_env.store.getPattern(def.pattern);
 
-            const ident_idx = switch (pattern) {
-                .assign => |p| p.ident,
-                .as => |p| p.ident,
-                else => continue,
-            };
+            const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
                 return try doc_comments.extractDocForDef(
@@ -1318,19 +1329,10 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
-            const pattern_idx = switch (stmt) {
-                .s_decl => |decl| decl.pattern,
-                .s_var => |var_stmt| var_stmt.pattern_idx,
-                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
-                else => continue,
-            };
+            const pattern_idx = statementPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getPattern(pattern_idx);
-            const ident_idx = switch (pattern) {
-                .assign => |p| p.ident,
-                .as => |p| p.ident,
-                else => continue,
-            };
+            const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
                 return try doc_comments.extractDocForStatement(
@@ -1354,11 +1356,7 @@ pub const CompletionBuilder = struct {
             const def = module_env.store.getDef(def_idx);
             const pattern = module_env.store.getPattern(def.pattern);
 
-            const ident_idx = switch (pattern) {
-                .assign => |p| p.ident,
-                .as => |p| p.ident,
-                else => continue,
-            };
+            const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
                 return ModuleEnv.varFrom(def.pattern);
@@ -1369,19 +1367,10 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
-            const pattern_idx = switch (stmt) {
-                .s_decl => |decl| decl.pattern,
-                .s_var => |var_stmt| var_stmt.pattern_idx,
-                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
-                else => continue,
-            };
+            const pattern_idx = statementPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getPattern(pattern_idx);
-            const ident_idx = switch (pattern) {
-                .assign => |p| p.ident,
-                .as => |p| p.ident,
-                else => continue,
-            };
+            const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
                 return ModuleEnv.varFrom(pattern_idx);
@@ -1407,26 +1396,23 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
-            switch (stmt) {
-                .s_nominal_decl => |nom_decl| {
-                    const header = module_env.store.getTypeHeader(nom_decl.header);
-                    const rel_name = module_env.getIdentText(header.relative_name);
+            if (std.meta.activeTag(stmt) != .s_nominal_decl) continue;
+            const nom_decl = stmt.s_nominal_decl;
+            const header = module_env.store.getTypeHeader(nom_decl.header);
+            const rel_name = module_env.getIdentText(header.relative_name);
 
-                    if (!std.mem.eql(u8, rel_name, type_name)) continue;
+            if (!std.mem.eql(u8, rel_name, type_name)) continue;
 
-                    // Opaque check: if is_opaque and from another module, skip
-                    if (nom_decl.is_opaque and requesting_module_name != null) {
-                        if (!std.mem.eql(u8, requesting_module_name.?, module_env.module_name)) {
-                            return false;
-                        }
-                    }
-
-                    // Get the backing type annotation
-                    const anno = module_env.store.getTypeAnno(nom_decl.anno);
-                    return try self.addTagsFromTypeAnno(module_env, anno);
-                },
-                else => {},
+            // Opaque check: if is_opaque and from another module, skip
+            if (nom_decl.is_opaque and requesting_module_name != null) {
+                if (!std.mem.eql(u8, requesting_module_name.?, module_env.module_name)) {
+                    return false;
+                }
             }
+
+            // Get the backing type annotation
+            const anno = module_env.store.getTypeAnno(nom_decl.anno);
+            return try self.addTagsFromTypeAnno(module_env, anno);
         }
         return false;
     }
@@ -1437,33 +1423,25 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
         anno: CIR.TypeAnno,
     ) Allocator.Error!bool {
-        switch (anno) {
-            .tag_union => |tu| {
-                const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
-                for (tags_slice) |tag_anno_idx| {
-                    const tag_anno = module_env.store.getTypeAnno(tag_anno_idx);
-                    switch (tag_anno) {
-                        .tag => |t| {
-                            const tag_name = module_env.getIdentText(t.name);
-                            if (tag_name.len == 0) continue;
+        if (std.meta.activeTag(anno) != .tag_union) return false;
+        const tags_slice = module_env.store.sliceTypeAnnos(anno.tag_union.tags);
+        for (tags_slice) |tag_anno_idx| {
+            const tag_anno = module_env.store.getTypeAnno(tag_anno_idx);
+            if (std.meta.activeTag(tag_anno) != .tag) continue;
+            const tag = tag_anno.tag;
+            const tag_name = module_env.getIdentText(tag.name);
+            if (tag_name.len == 0) continue;
 
-                            // Show the tag signature (e.g. "SubVal(Str)") as detail
-                            const detail = try self.formatTagSignature(module_env, tag_name, t.args);
+            // Show the tag signature (e.g. "SubVal(Str)") as detail
+            const detail = try self.formatTagSignature(module_env, tag_name, tag.args);
 
-                            const added = try self.addItem(.{
-                                .label = tag_name,
-                                .kind = @intFromEnum(CompletionItemKind.enum_member),
-                                .detail = detail,
-                            });
-                            if (added) {} else {}
-                        },
-                        else => {},
-                    }
-                }
-                return true;
-            },
-            else => return false,
+            _ = try self.addItem(.{
+                .label = tag_name,
+                .kind = @intFromEnum(CompletionItemKind.enum_member),
+                .detail = detail,
+            });
         }
+        return true;
     }
 
     /// Format a tag signature like "SubVal(Str)" or "Cons(a, List(a))".

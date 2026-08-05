@@ -530,7 +530,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             try self.normalize(child, sub.ty, sub.pat, &cols, &binds);
                         }
                     },
-                    else => unreachable,
+                    .int_switch, .eq_chain, .str_set, .list_len => unreachable,
                 }
 
                 for (row.cols) |c| {
@@ -839,7 +839,7 @@ pub fn Compiler(comptime Ctx: type) type {
                                 return inner;
                             }
                         },
-                        else => {},
+                        .leaf, .guard, .exit_join, .exit_, .fail => {},
                     }
                 }
                 return try self.mk(.{ .exit_join = .{ .id = exit_id, .cont = state.cont, .inner = inner } });
@@ -1120,7 +1120,14 @@ pub fn Compiler(comptime Ctx: type) type {
                 // Back-relative and rest reads need the parent list's length.
                 switch (entry.step) {
                     .list_elem_back, .list_rest => try self.markUse(entry.parent, .len),
-                    else => {},
+                    .root,
+                    .field,
+                    .tag_payload,
+                    .callable_payload,
+                    .list_elem_front,
+                    .nominal_backing,
+                    .str_capture,
+                    => {},
                 }
             }
 
@@ -1633,7 +1640,7 @@ const MockCtx = struct {
             .str_lit => |s| s,
             .str_pattern => |s| s.shape,
             .list => |l| l.elems.len,
-            else => unreachable,
+            .bind, .wildcard, .as_pattern, .record, .tuple, .nominal => unreachable,
         };
     }
 
@@ -1648,10 +1655,9 @@ const MockCtx = struct {
     }
 
     pub fn strCaptureCount(self: MockCtx, pat: u32) u16 {
-        return switch (self.get(pat)) {
-            .str_pattern => |s| @intCast(s.captures.len),
-            else => 0,
-        };
+        const pattern = self.get(pat);
+        if (std.meta.activeTag(pattern) != .str_pattern) return 0;
+        return @intCast(pattern.str_pattern.captures.len);
     }
 
     pub fn strCapturePat(self: MockCtx, pat: u32, i: u16) ?u32 {

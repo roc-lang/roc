@@ -1311,14 +1311,7 @@ pub fn replaceExprWithRuntimeError(self: *Self, expr_idx: CIR.Expr.Idx, reason: 
 
 /// Extract the region from any diagnostic variant
 fn getDiagnosticRegion(diagnostic: CIR.Diagnostic) Region {
-    return switch (diagnostic) {
-        .type_redeclared => |data| data.redeclared_region,
-        .type_alias_redeclared => |data| data.redeclared_region,
-        .nominal_type_redeclared => |data| data.redeclared_region,
-        .duplicate_record_field => |data| data.duplicate_region,
-        .duplicate_tag => |data| data.duplicate_region,
-        inline else => |data| data.region,
-    };
+    return diagnostic.toRegion();
 }
 
 /// Import helper functions from CIR
@@ -3441,7 +3434,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
         },
-        else => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
+        .invalid_string_interpolation,
+        .can_lambda_not_implemented,
+        .unused_type_var_name,
+        .type_var_marked_unused,
+        .type_var_starting_with_dollar,
+        => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }
 
@@ -4484,10 +4482,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
             // Only process assign patterns - skip destructuring patterns
             const pattern = self.store.getPattern(def.pattern);
-            switch (pattern) {
-                .assign => {},
-                else => continue, // Skip non-assign patterns (like destructuring)
-            }
+            if (std.meta.activeTag(pattern) != .assign) continue; // Skip non-assign patterns (like destructuring)
 
             // Use def_idx for type lookup, not def.pattern. During type checking,
             // def_var and pattern_var are unified, but the type store may not have
@@ -4518,13 +4513,10 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         const all_stmts = self.store.sliceStatements(self.all_statements);
         var has_type_decl = false;
         for (all_stmts) |stmt_idx| {
-            const stmt = self.store.getStatement(stmt_idx);
-            switch (stmt) {
-                .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
-                    has_type_decl = true;
-                    break;
-                },
-                else => continue,
+            const tag = std.meta.activeTag(self.store.getStatement(stmt_idx));
+            if (tag == .s_alias_decl or tag == .s_nominal_decl or tag == .s_where_alias_decl) {
+                has_type_decl = true;
+                break;
             }
         }
 
@@ -4602,7 +4594,25 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
-                    else => continue,
+                    .s_decl,
+                    .s_var,
+                    .s_var_uninitialized,
+                    .s_reassign,
+                    .s_crash,
+                    .s_dbg,
+                    .s_expr,
+                    .s_expect,
+                    .s_for,
+                    .s_while,
+                    .s_infinite_loop,
+                    .s_breakable_loop,
+                    .s_break,
+                    .s_return,
+                    .s_import,
+                    .s_type_anno,
+                    .s_type_var_alias,
+                    .s_runtime_error,
+                    => continue,
                 }
             }
 

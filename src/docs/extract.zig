@@ -261,7 +261,7 @@ pub fn extractModuleDocs(
             else
                 module_env.store.sliceDefs(module_env.all_defs);
         },
-        else => module_env.store.sliceDefs(module_env.all_defs),
+        .type_module, .default_app, .app, .package, .module, .malformed => module_env.store.sliceDefs(module_env.all_defs),
     };
 
     for (defs_slice) |def_idx| {
@@ -402,7 +402,25 @@ pub fn extractModuleDocs(
                     .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                 });
             },
-            else => {},
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
         }
     }
 
@@ -812,10 +830,46 @@ fn extractDefEntry(
                         .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                     };
                 },
-                else => return null,
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_alias_decl,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => return null,
             }
         },
-        else => return null,
+        .as,
+        .applied_tag,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => return null,
     }
 }
 
@@ -846,17 +900,11 @@ fn extractNominalChildren(
     def: CIR.Def,
 ) Allocator.Error![]DocModel.DocEntry {
     const expr = module_env.store.getExpr(def.expr);
-    switch (expr) {
-        .e_nominal => |nom| {
-            const backing = module_env.store.getExpr(nom.backing_expr);
-            switch (backing) {
-                .e_record => |rec| {
-                    return try extractRecordChildren(gpa, module_env, rec.fields);
-                },
-                else => {},
-            }
-        },
-        else => {},
+    if (std.meta.activeTag(expr) == .e_nominal) {
+        const backing = module_env.store.getExpr(expr.e_nominal.backing_expr);
+        if (std.meta.activeTag(backing) == .e_record) {
+            return try extractRecordChildren(gpa, module_env, backing.e_record.fields);
+        }
     }
     return try gpa.alloc(DocModel.DocEntry, 0);
 }
@@ -1075,7 +1123,17 @@ fn extractWhereTypeVarName(
         switch (module_env.store.getTypeAnno(current)) {
             .rigid_var => |rv| return try gpa.dupe(u8, module_env.getIdentText(rv.name)),
             .rigid_var_lookup => |rv_lookup| current = rv_lookup.ref,
-            else => return try gpa.dupe(u8, "?"),
+            .apply,
+            .underscore,
+            .lookup,
+            .tag_union,
+            .tag,
+            .@"fn",
+            .tuple,
+            .record,
+            .parens,
+            .malformed,
+            => return try gpa.dupe(u8, "?"),
         }
     }
 }
@@ -1358,7 +1416,18 @@ fn extractTypeAnnoAsDocType(
                                     } });
                                     try Builder.pushVisitsReversed(&frames, gpa, tag_args_slice);
                                 },
-                                else => {
+                                .apply,
+                                .rigid_var,
+                                .rigid_var_lookup,
+                                .underscore,
+                                .lookup,
+                                .tag_union,
+                                .@"fn",
+                                .tuple,
+                                .record,
+                                .parens,
+                                .malformed,
+                                => {
                                     try frames.append(gpa, .malformed_tag);
                                 },
                             }
@@ -1550,7 +1619,16 @@ fn extractTypeAnnoAsDocType(
                             tags_len += 1;
                             gpa.free(tu.tags);
                         },
-                        else => unreachable,
+                        .type_ref,
+                        .type_var,
+                        .function,
+                        .record,
+                        .tuple,
+                        .apply,
+                        .where_clause,
+                        .wildcard,
+                        .@"error",
+                        => unreachable,
                     }
                     gpa.destroy(single_tag);
                 }
@@ -2201,10 +2279,17 @@ fn extractRecord(
                         break;
                     },
                     .empty_record => break,
-                    else => break,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => break,
                 }
             },
-            else => break,
+            .err => break,
         }
     }
 
@@ -2368,7 +2453,16 @@ fn extractTagUnion(
         },
         .structure => |ft| switch (ft) {
             .empty_tag_union => {}, // closed union
-            else => {
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            => {
                 is_open = true;
                 ext_type = try extractDocTypeInner(ctx, tag_union.ext);
             },
@@ -2452,7 +2546,7 @@ fn convertModuleKind(kind: ModuleEnv.ModuleKind) DocModel.ModuleKind {
         .package => .package,
         .platform => .platform,
         .type_module => .type_module,
-        else => .app, // hosted and malformed modules are not documented as package modules
+        .hosted, .malformed => .app, // hosted and malformed modules are not documented as package modules
     };
 }
 

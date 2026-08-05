@@ -6,18 +6,13 @@ const std = @import("std");
 pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
     return struct {
         const Self = @This();
-        const ReaderError = if (@hasDecl(ReaderType, "Error"))
-            ReaderType.Error
-        else
-            @compileError("LSP transport ReaderType must expose an Error error set");
-
         allocator: std.mem.Allocator,
         std_io: std.Io,
         reader: ReaderType,
         writer: WriterType,
         log_file: ?std.Io.File = null,
 
-        pub const ReadMessageError = ReaderError || std.mem.Allocator.Error || error{
+        pub const ReadMessageError = std.mem.Allocator.Error || error{
             EndOfStream,
             MissingContentLength,
             InvalidHeader,

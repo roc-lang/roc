@@ -171,7 +171,7 @@ pub fn extractImportsFromDeclIndex(
                 try appendModuleName(gpa, &result, parse_ast.env.getIdent(module_ident), .importer, 0, false);
             }
         },
-        else => {},
+        .app, .module, .package, .hosted, .type_module, .default_app, .malformed => {},
     }
 
     return result.toOwnedSlice(gpa);
@@ -321,10 +321,8 @@ test "package public modules map explicit aliases to internal logical paths" {
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
     const header = ast.store.getHeader(ast.store.getFile().header);
-    const exposes = switch (header) {
-        .package => |package_header| package_header.exposes,
-        else => unreachable,
-    };
+    try std.testing.expect(header == .package);
+    const exposes = header.package.exposes;
     const modules = try extractPublicModules(ast, exposes, gpa);
     defer freePublicModules(gpa, modules);
 
@@ -351,10 +349,8 @@ test "package public module aliases cannot traverse above package root" {
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
     const header = ast.store.getHeader(ast.store.getFile().header);
-    const exposes = switch (header) {
-        .package => |package_header| package_header.exposes,
-        else => unreachable,
-    };
+    try std.testing.expect(header == .package);
+    const exposes = header.package.exposes;
     try std.testing.expectError(error.ImportEscapesPackageRoot, extractPublicModules(ast, exposes, gpa));
 }
 

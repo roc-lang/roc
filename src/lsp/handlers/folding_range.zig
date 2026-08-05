@@ -18,37 +18,31 @@ pub fn handler(comptime ServerType: type) type {
                 return;
             };
 
-            const obj = switch (params) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "foldingRange params must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(params) != .object) {
+                try self.sendError(id, .invalid_params, "foldingRange params must be an object");
+                return;
+            }
+            const obj = params.object;
 
             // Extract textDocument.uri
             const text_doc_value = obj.get("textDocument") orelse {
                 try self.sendError(id, .invalid_params, "missing textDocument");
                 return;
             };
-            const text_doc = switch (text_doc_value) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "textDocument must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(text_doc_value) != .object) {
+                try self.sendError(id, .invalid_params, "textDocument must be an object");
+                return;
+            }
+            const text_doc = text_doc_value.object;
             const uri_value = text_doc.get("uri") orelse {
                 try self.sendError(id, .invalid_params, "missing uri");
                 return;
             };
-            const uri = switch (uri_value) {
-                .string => |s| s,
-                else => {
-                    try self.sendError(id, .invalid_params, "uri must be a string");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(uri_value) != .string) {
+                try self.sendError(id, .invalid_params, "uri must be a string");
+                return;
+            }
+            const uri = uri_value.string;
 
             // Get the document text from the store
             const doc = self.doc_store.get(uri);
@@ -99,49 +93,26 @@ fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Alloca
         const offset = region.start.offset;
         const line = offsetToLine(offset, &line_offsets);
 
-        switch (tag) {
-            // Opening brackets
-            .OpenCurly, .OpenSquare, .OpenRound => {
-                try bracket_stack.append(allocator, .{
-                    .line = line,
-                    .tag = tag,
-                });
-            },
+        // Opening brackets
+        if (tag == .OpenCurly or tag == .OpenSquare or tag == .OpenRound) {
+            try bracket_stack.append(allocator, .{ .line = line, .tag = tag });
+        } else {
             // Closing brackets
-            .CloseCurly => {
-                if (popMatchingBracket(&bracket_stack, .OpenCurly)) |open_info| {
+            const expected_open: ?Token.Tag = if (tag == .CloseCurly)
+                .OpenCurly
+            else if (tag == .CloseSquare)
+                .OpenSquare
+            else if (tag == .CloseRound)
+                .OpenRound
+            else
+                null;
+            if (expected_open) |expected| {
+                if (popMatchingBracket(&bracket_stack, expected)) |open_info| {
                     if (line > open_info.line) {
-                        try ranges.append(allocator, .{
-                            .startLine = open_info.line,
-                            .endLine = line,
-                            .kind = null,
-                        });
+                        try ranges.append(allocator, .{ .startLine = open_info.line, .endLine = line, .kind = null });
                     }
                 }
-            },
-            .CloseSquare => {
-                if (popMatchingBracket(&bracket_stack, .OpenSquare)) |open_info| {
-                    if (line > open_info.line) {
-                        try ranges.append(allocator, .{
-                            .startLine = open_info.line,
-                            .endLine = line,
-                            .kind = null,
-                        });
-                    }
-                }
-            },
-            .CloseRound => {
-                if (popMatchingBracket(&bracket_stack, .OpenRound)) |open_info| {
-                    if (line > open_info.line) {
-                        try ranges.append(allocator, .{
-                            .startLine = open_info.line,
-                            .endLine = line,
-                            .kind = null,
-                        });
-                    }
-                }
-            },
-            else => {},
+            }
         }
     }
 

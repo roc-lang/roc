@@ -53,10 +53,7 @@ pub const IntrinsicId = enum(u8) {
 
     /// Explicit request-topology contract for compiler-owned intrinsic calls.
     pub fn requestResultSource(self: IntrinsicId) RequestResultSource {
-        return switch (self) {
-            .field_names_rename_fields => .{ .argument = 0 },
-            else => .declared_return,
-        };
+        return if (self == .field_names_rename_fields) .{ .argument = 0 } else .declared_return;
     }
 };
 
@@ -1569,10 +1566,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
                 // The annotation must be a function type for low-level operations
                 const annotation = env.store.getAnnotation(def.annotation.?);
                 const type_anno = env.store.getTypeAnno(annotation.anno);
-                const num_params: u32 = switch (type_anno) {
-                    .@"fn" => |func| func.args.span.len,
-                    else => return error.BuiltinLowLevelAnnotationMustBeFunction,
-                };
+                if (type_anno != .@"fn") return error.BuiltinLowLevelAnnotationMustBeFunction;
+                const num_params: u32 = type_anno.@"fn".args.span.len;
 
                 // Create parameter patterns for the lambda
                 const patterns_start = env.store.scratchTop("patterns");

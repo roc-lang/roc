@@ -197,7 +197,10 @@ fn runInterpreter(allocator: Allocator, program: Program) InterpreterError!Resul
         error.Crash => return crashResult(allocator, &runtime_env, interp.getCrashMessage()),
         error.RuntimeError => return crashResult(allocator, &runtime_env, interp.getRuntimeErrorMessage()),
         error.DivisionByZero => return crashResult(allocator, &runtime_env, "Division by zero"),
-        else => return err,
+        error.ComptimeExhaustiveness,
+        error.ExpectErr,
+        error.OutOfMemory,
+        => return err,
     };
     const ret_layout = program.store.getProcSpec(program.main_proc).ret_layout;
     return .{

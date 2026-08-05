@@ -41,10 +41,9 @@ const Call = extern struct {
     res_sse: *[max_result_sse]u128,
 };
 
-const supported = switch (builtin.cpu.arch) {
-    .aarch64, .aarch64_be, .x86_64 => true,
-    else => false,
-};
+const supported = builtin.cpu.arch == .aarch64 or
+    builtin.cpu.arch == .aarch64_be or
+    builtin.cpu.arch == .x86_64;
 
 /// Whether the host trampoline supports the architecture this compiler is running on.
 pub const available = supported;
@@ -75,11 +74,12 @@ pub fn call(
 ) Error!void {
     if (!supported) return Error.UnsupportedArch;
 
-    const target_abi: layout.abi.Target = switch (builtin.cpu.arch) {
-        .aarch64, .aarch64_be => layout.abi.aarch64Target(builtin.os.tag),
-        .x86_64 => if (builtin.os.tag == .windows) .x86_64_windows else .x86_64_sysv,
-        else => return Error.UnsupportedArch,
-    };
+    const target_abi: layout.abi.Target = if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be)
+        layout.abi.aarch64Target(builtin.os.tag)
+    else if (builtin.cpu.arch == .x86_64)
+        if (builtin.os.tag == .windows) .x86_64_windows else .x86_64_sysv
+    else
+        return Error.UnsupportedArch;
 
     // Hosted functions take their natural C ABI under the symbol ABI: the host
     // reaches its own runtime operations directly, so no leading *RocOps.
@@ -181,10 +181,9 @@ fn writeUnaligned(dst: [*]u8, bytes: []const u8) void {
 }
 
 fn invoke(ctl: *const Call) void {
-    switch (builtin.cpu.arch) {
-        .aarch64, .aarch64_be, .x86_64 => rocCallTrampoline(ctl),
-        else => unreachable,
-    }
+    if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be or builtin.cpu.arch == .x86_64) {
+        rocCallTrampoline(ctl);
+    } else unreachable;
 }
 
 // The fixed trampoline, defined in `host_trampoline.S`. It saves the control pointer in a

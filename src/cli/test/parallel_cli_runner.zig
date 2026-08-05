@@ -1763,8 +1763,22 @@ fn buildCaseEnv(io: std.Io, allocator: Allocator) CliRunnerError!CaseEnv {
 
 fn deleteIfExists(io: std.Io, path: []const u8) CliRunnerError!void {
     std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.AccessDenied,
+        error.BadPathName,
+        error.Canceled,
+        error.FileBusy,
+        error.FileSystem,
+        error.IsDir,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemResources,
+        error.Unexpected,
+        => return err,
         error.FileNotFound => {},
-        else => return err,
     };
 }
 
@@ -2154,7 +2168,7 @@ fn resultFromProcess(
                 .message = fail_msg,
             };
         },
-        else => {
+        .stopped, .unknown => {
             return .{
                 .status = .crash,
                 .phase = phase,
@@ -2173,7 +2187,7 @@ fn resultFromProcess(
 fn processSucceeded(term: std.process.Child.Term) bool {
     return switch (term) {
         .exited => |code| code == 0,
-        else => false,
+        .signal, .stopped, .unknown => false,
     };
 }
 
@@ -2190,7 +2204,7 @@ fn buildSucceededOrExpectedDiagnostics(result: std.process.RunResult, expected_s
 
     return switch (result.term) {
         .exited => |code| code == 2,
-        else => false,
+        .signal, .stopped, .unknown => false,
     };
 }
 
@@ -2239,7 +2253,7 @@ fn exitCode(term: std.process.Child.Term) u32 {
     return switch (term) {
         .exited => |code| @intCast(code),
         .signal => |sig| @as(u32, @intFromEnum(sig)) | 0x80000000,
-        else => 0xFFFFFFFF,
+        .stopped, .unknown => 0xFFFFFFFF,
     };
 }
 
@@ -2445,17 +2459,17 @@ fn checkExitExpectation(
         .success => switch (result.term) {
             .exited => |code| if (code == 0) null else std.fmt.allocPrint(allocator, "expected exit code 0, got {d}", .{code}) catch "unexpected exit code",
             .signal => "process terminated by signal",
-            else => "process terminated abnormally",
+            .stopped, .unknown => "process terminated abnormally",
         },
         .failure => switch (result.term) {
             .exited => |code| if (code != 0) null else "expected non-zero exit code, got 0",
             .signal => "process terminated by signal",
-            else => "process terminated abnormally",
+            .stopped, .unknown => "process terminated abnormally",
         },
         .code => |expected_code| switch (result.term) {
             .exited => |code| if (code == expected_code) null else std.fmt.allocPrint(allocator, "expected exit code {d}, got {d}", .{ expected_code, code }) catch "unexpected exit code",
             .signal => "process terminated by signal",
-            else => "process terminated abnormally",
+            .stopped, .unknown => "process terminated abnormally",
         },
         .not_panic => {
             const did_panic = result.term == .signal or
@@ -2931,11 +2945,9 @@ const GlueNativeTarget = struct {
 
 fn nativeMuslTarget() ?NativeMuslTarget {
     if (builtin.os.tag != .linux) return null;
-    return switch (builtin.cpu.arch) {
-        .x86_64 => .{ .roc_target = "x64musl", .zig_target = "x86_64-linux-musl", .rust_target = "x86_64-unknown-linux-musl", .c_host_needs_compiler_rt = false },
-        .aarch64 => .{ .roc_target = "arm64musl", .zig_target = "aarch64-linux-musl", .rust_target = "aarch64-unknown-linux-musl", .c_host_needs_compiler_rt = true },
-        else => null,
-    };
+    if (builtin.cpu.arch == .x86_64) return .{ .roc_target = "x64musl", .zig_target = "x86_64-linux-musl", .rust_target = "x86_64-unknown-linux-musl", .c_host_needs_compiler_rt = false };
+    if (builtin.cpu.arch == .aarch64) return .{ .roc_target = "arm64musl", .zig_target = "aarch64-linux-musl", .rust_target = "aarch64-unknown-linux-musl", .c_host_needs_compiler_rt = true };
+    return null;
 }
 
 fn nativeGlueTarget() ?GlueNativeTarget {
@@ -2952,17 +2964,59 @@ fn nativeGlueTarget() ?GlueNativeTarget {
     }
 
     return switch (builtin.os.tag) {
-        .macos => switch (builtin.cpu.arch) {
-            .x86_64 => .{ .roc_target = "x64mac", .zig_target = "x86_64-macos", .rust_target = "x86_64-apple-darwin", .host_library = "libhost.a", .output_name = "glue-runtime-app", .kind = .macos, .c_host_needs_compiler_rt = false },
-            .aarch64 => .{ .roc_target = "arm64mac", .zig_target = "aarch64-macos", .rust_target = "aarch64-apple-darwin", .host_library = "libhost.a", .output_name = "glue-runtime-app", .kind = .macos, .c_host_needs_compiler_rt = false },
-            else => null,
-        },
-        .windows => switch (builtin.cpu.arch) {
-            .x86_64 => .{ .roc_target = "x64win", .zig_target = "x86_64-windows-msvc", .rust_target = "x86_64-pc-windows-msvc", .host_library = "host.lib", .output_name = "glue-runtime-app.exe", .kind = .windows, .c_host_needs_compiler_rt = false },
-            .aarch64 => .{ .roc_target = "arm64win", .zig_target = "aarch64-windows-msvc", .rust_target = "aarch64-pc-windows-msvc", .host_library = "host.lib", .output_name = "glue-runtime-app.exe", .kind = .windows, .c_host_needs_compiler_rt = false },
-            else => null,
-        },
-        else => null,
+        .macos => if (builtin.cpu.arch == .x86_64)
+            .{ .roc_target = "x64mac", .zig_target = "x86_64-macos", .rust_target = "x86_64-apple-darwin", .host_library = "libhost.a", .output_name = "glue-runtime-app", .kind = .macos, .c_host_needs_compiler_rt = false }
+        else if (builtin.cpu.arch == .aarch64)
+            .{ .roc_target = "arm64mac", .zig_target = "aarch64-macos", .rust_target = "aarch64-apple-darwin", .host_library = "libhost.a", .output_name = "glue-runtime-app", .kind = .macos, .c_host_needs_compiler_rt = false }
+        else
+            null,
+        .windows => if (builtin.cpu.arch == .x86_64)
+            .{ .roc_target = "x64win", .zig_target = "x86_64-windows-msvc", .rust_target = "x86_64-pc-windows-msvc", .host_library = "host.lib", .output_name = "glue-runtime-app.exe", .kind = .windows, .c_host_needs_compiler_rt = false }
+        else if (builtin.cpu.arch == .aarch64)
+            .{ .roc_target = "arm64win", .zig_target = "aarch64-windows-msvc", .rust_target = "aarch64-pc-windows-msvc", .host_library = "host.lib", .output_name = "glue-runtime-app.exe", .kind = .windows, .c_host_needs_compiler_rt = false }
+        else
+            null,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .linux,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .freebsd,
+        .netbsd,
+        .openbsd,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => null,
     };
 }
 
@@ -4511,8 +4565,72 @@ fn runLlvmObjdump(
 
     for (candidates) |argv| {
         return runRawInEnv(io, allocator, env, argv, project_root_path, null, timeout_ms) catch |err| switch (err) {
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.AssignProcessToJobObjectFailed,
+            error.BadPathName,
+            error.BrokenPipe,
+            error.Canceled,
+            error.ConcurrencyUnavailable,
+            error.ConfigureJobObjectFailed,
+            error.ConnectionResetByPeer,
+            error.CreateJobObjectFailed,
+            error.CrossDevice,
+            error.DeviceBusy,
+            error.DirNotEmpty,
+            error.DiskQuota,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileSystem,
+            error.FileTooBig,
+            error.HardwareFailure,
+            error.InputOutput,
+            error.InvalidArgs,
+            error.InvalidBatchScriptArg,
+            error.InvalidExe,
+            error.InvalidFileName,
+            error.InvalidGeneratedGraphConfig,
+            error.InvalidName,
+            error.InvalidProcessGroupId,
+            error.InvalidUserId,
+            error.InvalidWtf8,
+            error.IsDir,
+            error.LinkQuotaExceeded,
+            error.LockViolation,
+            error.LockedMemoryLimitExceeded,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.NotLink,
+            error.NotOpenForReading,
+            error.NotOpenForWriting,
+            error.OperationUnsupported,
+            error.OutOfMemory,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessAlreadyExec,
+            error.ProcessFdQuotaExceeded,
+            error.ProcessNotFound,
+            error.ReadOnlyFileSystem,
+            error.ResourceLimitReached,
+            error.ResumeProcessFailed,
+            error.SocketUnconnected,
+            error.StreamTooLong,
+            error.Streaming,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Timeout,
+            error.Unexpected,
+            error.UnrecognizedVolume,
+            error.WouldBlock,
+            error.WriteFailed,
+            => |other| return other,
             error.FileNotFound => continue,
-            else => |other| return other,
         };
     }
     return null;
@@ -4586,31 +4704,69 @@ const DefaultPlatformTarget = enum {
     }
 
     fn canBuildOnHost(self: DefaultPlatformTarget) bool {
-        return switch (self) {
-            .x64glibc, .arm64glibc => builtin.os.tag == .linux,
-            else => true,
-        };
+        return (self != .x64glibc and self != .arm64glibc) or builtin.os.tag == .linux;
     }
 
     fn canRunOnHost(self: DefaultPlatformTarget) bool {
         return switch (builtin.os.tag) {
-            .linux => switch (builtin.cpu.arch) {
-                .x86_64 => self == .x64musl or self == .x64glibc,
-                .aarch64 => self == .arm64musl or self == .arm64glibc,
-                else => false,
-            },
-            .macos => switch (builtin.cpu.arch) {
-                .x86_64 => self == .x64mac,
-                .aarch64 => self == .arm64mac,
-                else => false,
-            },
-            .windows => switch (builtin.cpu.arch) {
-                .x86_64 => self == .x64win,
-                .aarch64 => self == .arm64win,
-                else => false,
-            },
+            .linux => if (builtin.cpu.arch == .x86_64)
+                self == .x64musl or self == .x64glibc
+            else if (builtin.cpu.arch == .aarch64)
+                self == .arm64musl or self == .arm64glibc
+            else
+                false,
+            .macos => if (builtin.cpu.arch == .x86_64)
+                self == .x64mac
+            else if (builtin.cpu.arch == .aarch64)
+                self == .arm64mac
+            else
+                false,
+            .windows => if (builtin.cpu.arch == .x86_64)
+                self == .x64win
+            else if (builtin.cpu.arch == .aarch64)
+                self == .arm64win
+            else
+                false,
             .freestanding => false,
-            else => false,
+            .other,
+            .contiki,
+            .fuchsia,
+            .hermit,
+            .managarm,
+            .haiku,
+            .hurd,
+            .illumos,
+            .plan9,
+            .rtems,
+            .serenity,
+            .dragonfly,
+            .freebsd,
+            .netbsd,
+            .openbsd,
+            .driverkit,
+            .ios,
+            .maccatalyst,
+            .tvos,
+            .visionos,
+            .watchos,
+            .uefi,
+            .@"3ds",
+            .ps3,
+            .ps4,
+            .ps5,
+            .psp,
+            .vita,
+            .emscripten,
+            .wasi,
+            .amdhsa,
+            .amdpal,
+            .cuda,
+            .mesa3d,
+            .nvcl,
+            .opencl,
+            .opengl,
+            .vulkan,
+            => false,
         };
     }
 };
@@ -5212,8 +5368,21 @@ fn writeGeneratedTypeModule(
 
 fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8) CliRunnerError!usize {
     var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.AccessDenied,
+        error.BadPathName,
+        error.Canceled,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ProcessFdQuotaExceeded,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        => return err,
         error.FileNotFound => return 0,
-        else => return err,
     };
     defer cache_dir.close(io);
 
@@ -5565,8 +5734,21 @@ fn customPipelineParityDiagnostics(io: std.Io, allocator: Allocator, env: *const
 /// and linked-executable caches that the run verb also writes under the root.
 fn countCheckedModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8) CliRunnerError!usize {
     var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.AccessDenied,
+        error.BadPathName,
+        error.Canceled,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ProcessFdQuotaExceeded,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        => return err,
         error.FileNotFound => return 0,
-        else => return err,
     };
     defer cache_dir.close(io);
 
@@ -6364,13 +6546,13 @@ fn customIssue10015UrlRandomTestSize(
 
     const platform_hash = "8GdFEvQYS3TeAZxKvTzCLVdQiomweGtXcdZkXNDEeABq";
     const random_hash = "4mHqd7aiQ1hYkoso9C8JRfnx3GuwcwoDqv8EdqAsLbfN";
-    const target_dir_name = switch (builtin.cpu.arch) {
-        .aarch64 => "arm64mac",
-        .x86_64 => "x64mac",
-        else => return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "issue 10015 test only supports macOS ARM64 and x86_64" },
-    };
-    const platform_main_source = switch (builtin.cpu.arch) {
-        .aarch64 =>
+    const target_dir_name = if (builtin.cpu.arch == .aarch64)
+        "arm64mac"
+    else if (builtin.cpu.arch == .x86_64)
+        "x64mac"
+    else
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "issue 10015 test only supports macOS ARM64 and x86_64" };
+    const platform_main_source = if (builtin.cpu.arch == .aarch64)
         \\platform ""
         \\    requires {} { main! : List(Str) => Try({}, [Exit(I32)]) }
         \\    exposes [Stdout, Stderr, Stdin]
@@ -6399,8 +6581,7 @@ fn customIssue10015UrlRandomTestSize(
         \\    }
         \\}
         \\
-        ,
-        .x86_64 =>
+    else if (builtin.cpu.arch == .x86_64)
         \\platform ""
         \\    requires {} { main! : List(Str) => Try({}, [Exit(I32)]) }
         \\    exposes [Stdout, Stderr, Stdin]
@@ -6429,9 +6610,8 @@ fn customIssue10015UrlRandomTestSize(
         \\    }
         \\}
         \\
-        ,
-        else => unreachable,
-    };
+    else
+        unreachable;
 
     const cache_platform_dir = std.fs.path.join(allocator, &.{ env.dirs.roc_cache_dir, "roc", "packages", platform_hash }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate cached platform path: {}", .{err});
@@ -7974,14 +8154,67 @@ fn hostSharedLibraryExtension() []const u8 {
     return switch (builtin.os.tag) {
         .windows => ".dll",
         .macos => ".dylib",
-        else => ".so",
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .linux,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .freebsd,
+        .netbsd,
+        .openbsd,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => ".so",
     };
 }
 
 fn countGlueDylibCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8, opt_name: []const u8) CliRunnerError!GlueDylibCacheFileCounts {
     var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.AccessDenied,
+        error.BadPathName,
+        error.Canceled,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ProcessFdQuotaExceeded,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        => return err,
         error.FileNotFound => return .{},
-        else => return err,
     };
     defer cache_dir.close(io);
 
@@ -9427,18 +9660,14 @@ test "cross target builds one build-only case per matching platform spec" {
     );
 
     const fx = platform_config.findPlatform("fx").?;
-    const expected_count = switch (fx.test_apps) {
-        .spec_list => |specs| specs.len,
-        else => unreachable,
-    };
+    if (std.meta.activeTag(fx.test_apps) != .spec_list) return error.TestUnexpectedResult;
+    const expected_count = fx.test_apps.spec_list.len;
     try std.testing.expectEqual(expected_count, cases.len);
     for (cases) |case| {
         try std.testing.expectEqual(@as(?OptMode, null), case.backend);
         try std.testing.expect(std.mem.startsWith(u8, case.body.platform.roc_file, "test/fx/"));
-        switch (case.body.platform.test_kind) {
-            .cross_compile => |target| try std.testing.expectEqualStrings("x64musl", target),
-            else => return error.TestUnexpectedResult,
-        }
+        if (std.meta.activeTag(case.body.platform.test_kind) != .cross_compile) return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("x64musl", case.body.platform.test_kind.cross_compile);
     }
 }
 
@@ -9542,9 +9771,10 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     }
 
     for (results) |r| {
-        switch (r.status) {
-            .build_failed, .run_failed, .crash, .timeout, .infra_error => std.process.exit(1),
-            else => {},
-        }
+        if (r.status == .build_failed or
+            r.status == .run_failed or
+            r.status == .crash or
+            r.status == .timeout or
+            r.status == .infra_error) std.process.exit(1);
     }
 }

@@ -343,18 +343,18 @@ const DemandAnalyzer = struct {
         // longer than the number of defs is a cycle.
         var hops_remaining: usize = self.summary_defs.len + 1;
         while (hops_remaining > 0) : (hops_remaining -= 1) {
-            switch (self.cir.store.getExpr(current)) {
-                .e_lambda => return current,
-                .e_closure => |closure| return closure.lambda_idx,
-                .e_lookup_local => |lookup| {
-                    if (local_callables) |locals| {
-                        if (locals.get(lookup.pattern_idx)) |lambda_idx| return lambda_idx;
-                    }
-                    const def_idx = self.pattern_to_def.get(lookup.pattern_idx) orelse return null;
-                    current = self.cir.store.getDef(def_idx).expr;
-                },
-                else => return null,
+            const expr = self.cir.store.getExpr(current);
+            const tag = std.meta.activeTag(expr);
+            if (tag == .e_lambda) return current;
+            if (tag == .e_closure) return expr.e_closure.lambda_idx;
+            if (tag != .e_lookup_local) return null;
+
+            const lookup = expr.e_lookup_local;
+            if (local_callables) |locals| {
+                if (locals.get(lookup.pattern_idx)) |lambda_idx| return lambda_idx;
             }
+            const def_idx = self.pattern_to_def.get(lookup.pattern_idx) orelse return null;
+            current = self.cir.store.getDef(def_idx).expr;
         }
         return null;
     }
@@ -511,23 +511,25 @@ const DemandAnalyzer = struct {
         call_args: CIR.Expr.Span,
         local_callables: *LocalCallables,
     ) std.mem.Allocator.Error!void {
-        switch (self.cir.store.getExpr(call_func)) {
-            .e_lookup_local => |lookup| {
-                if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
+        const expr = self.cir.store.getExpr(call_func);
+        const tag = std.meta.activeTag(expr);
+        if (tag == .e_lambda) {
+            try self.beginApplyLambdaSummary(walk, current, call_func, call_args);
+        } else if (tag == .e_closure) {
+            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, call_args);
+        } else if (tag == .e_lookup_local) {
+            const lookup = expr.e_lookup_local;
+            if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
+                try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args);
+                return;
+            }
+            if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
+                if (self.lambdaFromDef(def_idx)) |lambda_idx| {
                     try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args);
-                    return;
                 }
-                if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
-                    if (self.lambdaFromDef(def_idx)) |lambda_idx| {
-                        try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args);
-                    }
-                    return;
-                }
-                _ = try current.addCalledPattern(self.allocator, lookup.pattern_idx);
-            },
-            .e_lambda => try self.beginApplyLambdaSummary(walk, current, call_func, call_args),
-            .e_closure => |closure| try self.beginApplyLambdaSummary(walk, current, closure.lambda_idx, call_args),
-            else => {},
+                return;
+            }
+            _ = try current.addCalledPattern(self.allocator, lookup.pattern_idx);
         }
     }
 
@@ -539,23 +541,25 @@ const DemandAnalyzer = struct {
         local_callables: *LocalCallables,
     ) std.mem.Allocator.Error!void {
         const empty_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
-        switch (self.cir.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| {
-                if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
+        const expr = self.cir.store.getExpr(expr_idx);
+        const tag = std.meta.activeTag(expr);
+        if (tag == .e_lambda) {
+            try self.beginApplyLambdaSummary(walk, current, expr_idx, empty_args);
+        } else if (tag == .e_closure) {
+            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, empty_args);
+        } else if (tag == .e_lookup_local) {
+            const lookup = expr.e_lookup_local;
+            if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
+                try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args);
+                return;
+            }
+            if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
+                if (self.lambdaFromDef(def_idx)) |lambda_idx| {
                     try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args);
-                    return;
                 }
-                if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
-                    if (self.lambdaFromDef(def_idx)) |lambda_idx| {
-                        try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args);
-                    }
-                    return;
-                }
-                _ = try current.addCalledPattern(self.allocator, lookup.pattern_idx);
-            },
-            .e_lambda => try self.beginApplyLambdaSummary(walk, current, expr_idx, empty_args),
-            .e_closure => |closure| try self.beginApplyLambdaSummary(walk, current, closure.lambda_idx, empty_args),
-            else => {},
+                return;
+            }
+            _ = try current.addCalledPattern(self.allocator, lookup.pattern_idx);
         }
     }
 
@@ -921,10 +925,12 @@ pub fn getTopLevelConstants(
         const def = cir.store.getDef(def_idx);
         const expr = cir.store.getExpr(def.expr);
 
-        const is_constant = switch (expr) {
-            .e_lambda, .e_closure, .e_anno_only, .e_derived_method, .e_hosted_lambda => false,
-            else => true,
-        };
+        const tag = std.meta.activeTag(expr);
+        const is_constant = tag != .e_lambda and
+            tag != .e_closure and
+            tag != .e_anno_only and
+            tag != .e_derived_method and
+            tag != .e_hosted_lambda;
 
         if (is_constant) {
             try constants.append(allocator, def_idx);

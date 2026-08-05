@@ -514,13 +514,13 @@ pub const InstGraph = struct {
     ) ?NodeId {
         const public_named = switch (self.content(public_node)) {
             .named => |named| named,
-            else => return null,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
         };
         if (public_named.args.len == 0) return null;
         for (self.nodes.items, 0..) |node_content, raw_index| {
             const candidate = switch (node_content) {
                 .named => |named| named,
-                else => continue,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
             };
             const provenance = candidate.generated_iterator orelse continue;
             if (candidate.def.iterator_kind != kind or
@@ -660,7 +660,7 @@ pub const InstGraph = struct {
             if (entry.found_existing) continue;
             const named = switch (self.content(node)) {
                 .named => |named| named,
-                else => continue,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
             };
             if (named.generated_iterator == null) continue;
 
@@ -676,7 +676,7 @@ pub const InstGraph = struct {
             const node = self.find(item.node);
             var named = switch (self.content(node)) {
                 .named => |named| named,
-                else => Common.invariant("generated iterator representation target stopped being named"),
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator representation target stopped being named"),
             };
             named.def.generated = null;
             if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
@@ -1025,7 +1025,7 @@ pub const InstGraph = struct {
                 named.args[child_index + 1]
             else
                 named.args[child_index],
-            else => Common.invariant("generated iterator depth frame had no structural child"),
+            .redirect, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator depth frame had no structural child"),
         };
     }
 
@@ -1049,7 +1049,7 @@ pub const InstGraph = struct {
             if (entry.found_existing) continue;
             const named = switch (self.content(node)) {
                 .named => |named| named,
-                else => continue,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
             };
             const provenance = named.generated_iterator orelse continue;
             var hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -1079,7 +1079,7 @@ pub const InstGraph = struct {
         for (pending.items) |item| {
             var named = switch (self.content(item.node)) {
                 .named => |named| named,
-                else => Common.invariant("generated iterator identity target stopped being named"),
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator identity target stopped being named"),
             };
             named.def.generated = item.digest;
             try self.setContent(item.node, .{ .named = named });
@@ -1107,7 +1107,17 @@ pub const InstGraph = struct {
                     if (backing.use != .inspectable) return false;
                     node = self.find(backing.node);
                 },
-                else => return false,
+                .primitive,
+                .list,
+                .box,
+                .tuple,
+                .func,
+                .tag_union,
+                .record,
+                .empty_record,
+                .erased,
+                .zst,
+                => return false,
             }
         }
         Common.invariant("named Monotype backing cycle reached final demand validation");
@@ -1331,11 +1341,12 @@ pub const InstGraph = struct {
 
     fn registerRowParent(self: *InstGraph, row: NodeId, node_content: InstNode) Allocator.Error!void {
         const row_root = self.find(row);
-        const maybe_ext = switch (node_content) {
-            .tag_union => |tag_union| tag_union.ext,
-            .record => |record| record.ext,
-            else => null,
-        };
+        const maybe_ext = if (node_content == .tag_union)
+            node_content.tag_union.ext
+        else if (node_content == .record)
+            node_content.record.ext
+        else
+            null;
         const ext = if (maybe_ext) |raw_ext| self.find(raw_ext) else {
             try self.unregisterRowParent(row_root);
             return;
@@ -1393,18 +1404,15 @@ pub const InstGraph = struct {
     fn find(self: *InstGraph, id: NodeId) NodeId {
         var current = id;
         while (true) {
-            switch (self.nodes.items[@intFromEnum(current)]) {
-                .redirect => |next| current = next,
-                else => break,
-            }
+            const node = self.nodes.items[@intFromEnum(current)];
+            if (node == .redirect) current = node.redirect else break;
         }
         // Path compression: repoint every redirect on the chain at the root.
         var walk = id;
         while (walk != current) {
-            const next = switch (self.nodes.items[@intFromEnum(walk)]) {
-                .redirect => |next| next,
-                else => unreachable,
-            };
+            const redirect = self.nodes.items[@intFromEnum(walk)];
+            if (redirect != .redirect) unreachable;
+            const next = redirect.redirect;
             self.nodes.items[@intFromEnum(walk)] = .{ .redirect = current };
             walk = next;
         }
@@ -1445,14 +1453,12 @@ pub const InstGraph = struct {
 
     /// Collision authority for open function-interface lookup buckets.
     pub fn sameFunctionInterface(self: *InstGraph, left: NodeId, right: NodeId) bool {
-        const left_fn = switch (self.content(left)) {
-            .func => |function| function,
-            else => Common.invariant("draft function interface comparison received a non-function left request"),
-        };
-        const right_fn = switch (self.content(right)) {
-            .func => |function| function,
-            else => Common.invariant("draft function interface comparison received a non-function right request"),
-        };
+        const left_content = self.content(left);
+        if (left_content != .func) Common.invariant("draft function interface comparison received a non-function left request");
+        const left_fn = left_content.func;
+        const right_content = self.content(right);
+        if (right_content != .func) Common.invariant("draft function interface comparison received a non-function right request");
+        const right_fn = right_content.func;
         if (left_fn.args.len != right_fn.args.len) return false;
         for (left_fn.args, right_fn.args) |left_arg, right_arg| {
             if (!self.sameClass(left_arg, right_arg)) return false;
@@ -1545,10 +1551,9 @@ pub const InstGraph = struct {
     pub fn materializeLiteralDefault(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
         self.requireRelationProduction();
         const node = self.find(raw_node);
-        const variable = switch (self.nodes.items[@intFromEnum(node)]) {
-            .unresolved => |unresolved| unresolved,
-            else => Common.invariant("literal default materialization received a non-variable node"),
-        };
+        const node_content = self.nodes.items[@intFromEnum(node)];
+        if (node_content != .unresolved) Common.invariant("literal default materialization received a non-variable node");
+        const variable = node_content.unresolved;
         const phase = variable.numeric_default_phase orelse
             Common.invariant("unresolved literal leaf had no checked default phase");
         const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
@@ -1632,7 +1637,16 @@ pub const InstGraph = struct {
                 .empty_tag_union => return kind == .tag_union,
                 .empty_record => return kind == .record,
                 .unresolved => return false,
-                else => return false,
+                .redirect,
+                .primitive,
+                .list,
+                .box,
+                .tuple,
+                .func,
+                .named,
+                .erased,
+                .zst,
+                => return false,
             }
         }
     }
@@ -1832,118 +1846,109 @@ pub const InstGraph = struct {
             return;
         }
         const private_contains_generated = try self.containsGeneratedPrivate(private_node);
-        switch (private_content) {
-            .named => |private_named| if (private_named.backing) |backing| {
+        if (private_content == .named) {
+            const private_named = private_content.named;
+            if (private_named.backing) |backing| {
                 if (backing.authority == .generated_private) {
-                    switch (public_content) {
-                        .unresolved => |public_var| {
-                            if (private_named.generated_iterator != null) {
-                                try self.materializeGeneratedIteratorPublicInterface(public_node, public_var, private_named);
-                                try self.relateGeneratedOpaquePair(
-                                    self.nodes.items[@intFromEnum(self.find(public_node))],
-                                    private_named,
-                                    pending,
-                                );
-                                return;
-                            }
-                            if (try self.resolvePublicVariableToImportedGeneratedIterator(public_node, public_var, private_node, private_named)) {
-                                return;
-                            }
-                        },
-                        else => {},
+                    if (public_content == .unresolved) {
+                        const public_var = public_content.unresolved;
+                        if (private_named.generated_iterator != null) {
+                            try self.materializeGeneratedIteratorPublicInterface(public_node, public_var, private_named);
+                            try self.relateGeneratedOpaquePair(
+                                self.nodes.items[@intFromEnum(self.find(public_node))],
+                                private_named,
+                                pending,
+                            );
+                            return;
+                        }
+                        if (try self.resolvePublicVariableToImportedGeneratedIterator(public_node, public_var, private_node, private_named)) {
+                            return;
+                        }
                     }
                     try self.relateGeneratedOpaquePair(public_content, private_named, pending);
                     return;
                 }
-            },
-            .unresolved => {
-                try self.unify(public_node, private_node);
-                return;
-            },
-            else => {},
+            }
+        } else if (private_content == .unresolved) {
+            try self.unify(public_node, private_node);
+            return;
         }
 
         switch (public_content) {
             .redirect => unreachable,
             .unresolved => |public_var| {
                 if (private_contains_generated) {
-                    switch (private_content) {
-                        .named => |private_named| {
-                            const public_named = try self.materializeNamedRequestPublicInterface(
-                                public_node,
-                                public_var,
-                                private_named,
-                            );
-                            try self.relatePublicNamedOpaquePair(public_named, private_named, pending);
-                            try self.union_(private_node, public_node);
-                            return;
-                        },
-                        else => {},
+                    if (private_content == .named) {
+                        const private_named = private_content.named;
+                        const public_named = try self.materializeNamedRequestPublicInterface(
+                            public_node,
+                            public_var,
+                            private_named,
+                        );
+                        try self.relatePublicNamedOpaquePair(public_named, private_named, pending);
+                        try self.union_(private_node, public_node);
+                        return;
                     }
                     Common.invariant("opaque interface relation received unresolved checked structure for generated evidence");
                 }
                 try self.unify(public_node, private_node);
             },
-            .primitive => |public_primitive| switch (private_content) {
-                .primitive => |private_primitive| {
-                    if (public_primitive != private_primitive) {
-                        Common.invariant("opaque interface relation received different primitive types");
-                    }
-                },
-                else => Common.invariant("opaque interface relation received different type structure"),
+            .primitive => |public_primitive| {
+                if (private_content != .primitive) Common.invariant("opaque interface relation received different type structure");
+                if (public_primitive != private_content.primitive) {
+                    Common.invariant("opaque interface relation received different primitive types");
+                }
             },
-            .list => |public_elem| switch (private_content) {
-                .list => |private_elem| try self.relateOpaqueChild(public_elem, private_elem, pending),
-                else => Common.invariant("opaque interface relation received different type structure"),
+            .list => |public_elem| {
+                if (private_content != .list) Common.invariant("opaque interface relation received different type structure");
+                try self.relateOpaqueChild(public_elem, private_content.list, pending);
             },
-            .box => |public_elem| switch (private_content) {
-                .box => |private_elem| try self.relateOpaqueChild(public_elem, private_elem, pending),
-                else => Common.invariant("opaque interface relation received different type structure"),
+            .box => |public_elem| {
+                if (private_content != .box) Common.invariant("opaque interface relation received different type structure");
+                try self.relateOpaqueChild(public_elem, private_content.box, pending);
             },
-            .tuple => |public_items| switch (private_content) {
-                .tuple => |private_items| {
-                    if (public_items.len != private_items.len) {
-                        Common.invariant("opaque interface relation received tuples of different arity");
-                    }
-                    for (public_items, private_items) |public_item, private_item| {
-                        try self.relateOpaqueChild(public_item, private_item, pending);
-                    }
-                },
-                else => Common.invariant("opaque interface relation received different type structure"),
+            .tuple => |public_items| {
+                if (private_content != .tuple) Common.invariant("opaque interface relation received different type structure");
+                const private_items = private_content.tuple;
+                if (public_items.len != private_items.len) {
+                    Common.invariant("opaque interface relation received tuples of different arity");
+                }
+                for (public_items, private_items) |public_item, private_item| {
+                    try self.relateOpaqueChild(public_item, private_item, pending);
+                }
             },
-            .func => |public_fn| switch (private_content) {
-                .func => |private_fn| {
-                    if (public_fn.args.len != private_fn.args.len) {
-                        Common.invariant("opaque interface relation received functions of different arity");
-                    }
-                    for (public_fn.args, private_fn.args) |public_arg, private_arg| {
-                        try self.relateOpaqueChild(public_arg, private_arg, pending);
-                    }
-                    try self.relateOpaqueChild(public_fn.ret, private_fn.ret, pending);
-                },
-                else => Common.invariant("opaque interface relation received different type structure"),
+            .func => |public_fn| {
+                if (private_content != .func) Common.invariant("opaque interface relation received different type structure");
+                const private_fn = private_content.func;
+                if (public_fn.args.len != private_fn.args.len) {
+                    Common.invariant("opaque interface relation received functions of different arity");
+                }
+                for (public_fn.args, private_fn.args) |public_arg, private_arg| {
+                    try self.relateOpaqueChild(public_arg, private_arg, pending);
+                }
+                try self.relateOpaqueChild(public_fn.ret, private_fn.ret, pending);
             },
-            .tag_union => switch (private_content) {
-                .tag_union => try self.relateOpaqueTagRows(public_node, private_node, pending),
-                else => Common.invariant("opaque interface relation received different type structure"),
+            .tag_union => {
+                if (private_content != .tag_union) Common.invariant("opaque interface relation received different type structure");
+                try self.relateOpaqueTagRows(public_node, private_node, pending);
             },
-            .record => switch (private_content) {
-                .record => try self.relateOpaqueRecordRows(public_node, private_node, pending),
-                else => Common.invariant("opaque interface relation received different type structure"),
+            .record => {
+                if (private_content != .record) Common.invariant("opaque interface relation received different type structure");
+                try self.relateOpaqueRecordRows(public_node, private_node, pending);
             },
             .empty_tag_union => if (private_content != .empty_tag_union)
                 Common.invariant("opaque interface relation received different type structure"),
             .empty_record => if (private_content != .empty_record)
                 Common.invariant("opaque interface relation received different type structure"),
-            .named => |public_named| switch (private_content) {
-                .named => |private_named| try self.relatePublicNamedOpaquePair(public_named, private_named, pending),
-                else => Common.invariant("opaque interface relation received different type structure"),
+            .named => |public_named| {
+                if (private_content != .named) Common.invariant("opaque interface relation received different type structure");
+                try self.relatePublicNamedOpaquePair(public_named, private_content.named, pending);
             },
-            .erased => |public_digest| switch (private_content) {
-                .erased => |private_digest| if (!std.mem.eql(u8, public_digest.bytes[0..], private_digest.bytes[0..])) {
+            .erased => |public_digest| {
+                if (private_content != .erased) Common.invariant("opaque interface relation received different type structure");
+                if (!std.mem.eql(u8, public_digest.bytes[0..], private_content.erased.bytes[0..])) {
                     Common.invariant("opaque interface relation received different erased types");
-                },
-                else => Common.invariant("opaque interface relation received different type structure"),
+                }
             },
             .zst => if (private_content != .zst)
                 Common.invariant("opaque interface relation received different type structure"),
@@ -2124,10 +2129,8 @@ pub const InstGraph = struct {
         private_named: InstNamed,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
-        const public_named = switch (public_content) {
-            .named => |named| named,
-            else => Common.invariant("opaque public interface relation received a non-named public node"),
-        };
+        if (public_content != .named) Common.invariant("opaque public interface relation received a non-named public node");
+        const public_named = public_content.named;
         const iterator_relation = Type.iteratorRelation(public_named, private_named);
         if (iterator_relation == .public_minted or iterator_relation == .forced_dynamic) {
             if (public_named.def.iterator_representation != .none or
@@ -2313,16 +2316,17 @@ pub const InstGraph = struct {
             if (entry.found_existing) {
                 Common.invariant("instantiation " ++ noun ++ " read encountered a recursive named backing");
             }
-            switch (self.nodes.items[@intFromEnum(node)]) {
-                .named => |named| {
-                    const backing = named.backing orelse
-                        Common.invariant("instantiation " ++ noun ++ " read reached a named type without backing");
-                    if (!backingAllowsAccess(backing.use, access)) {
-                        Common.invariant("instantiation " ++ noun ++ " read inspected a runtime-layout-only backing");
-                    }
-                    node = self.find((try self.structuralBackingNode(backing.node, named)).node);
-                },
-                else => return node,
+            const node_content = self.nodes.items[@intFromEnum(node)];
+            if (node_content == .named) {
+                const named = node_content.named;
+                const backing = named.backing orelse
+                    Common.invariant("instantiation " ++ noun ++ " read reached a named type without backing");
+                if (!backingAllowsAccess(backing.use, access)) {
+                    Common.invariant("instantiation " ++ noun ++ " read inspected a runtime-layout-only backing");
+                }
+                node = self.find((try self.structuralBackingNode(backing.node, named)).node);
+            } else {
+                return node;
             }
         }
     }
@@ -2337,10 +2341,9 @@ pub const InstGraph = struct {
 
     /// Project a function-shaped live node without materializing a Monotype.
     pub fn functionNodes(self: *InstGraph, node: NodeId) Allocator.Error!FunctionNodes {
-        return switch (self.content(try self.shapeRoot(node, "function", .inspectable))) {
-            .func => |function| .{ .args = function.args, .ret = self.find(function.ret) },
-            else => Common.invariant("instantiation function read had a non-function node"),
-        };
+        const node_content = self.content(try self.shapeRoot(node, "function", .inspectable));
+        if (node_content != .func) Common.invariant("instantiation function read had a non-function node");
+        return .{ .args = node_content.func.args, .ret = self.find(node_content.func.ret) };
     }
 
     pub const FunctionInterfaceIterator = struct {
@@ -2369,26 +2372,23 @@ pub const InstGraph = struct {
 
     /// Project tuple item cells without materializing a Monotype.
     pub fn tupleItemNodes(self: *InstGraph, node: NodeId) Allocator.Error![]const NodeId {
-        return switch (self.content(try self.shapeRoot(node, "tuple", .inspectable))) {
-            .tuple => |items| items,
-            else => Common.invariant("instantiation tuple read had a non-tuple node"),
-        };
+        const node_content = self.content(try self.shapeRoot(node, "tuple", .inspectable));
+        if (node_content != .tuple) Common.invariant("instantiation tuple read had a non-tuple node");
+        return node_content.tuple;
     }
 
     /// Project a list element cell without materializing a Monotype.
     pub fn listElementNode(self: *InstGraph, node: NodeId) Allocator.Error!NodeId {
-        return switch (self.content(try self.shapeRoot(node, "list", .inspectable))) {
-            .list => |element| self.find(element),
-            else => Common.invariant("instantiation list read had a non-list node"),
-        };
+        const node_content = self.content(try self.shapeRoot(node, "list", .inspectable));
+        if (node_content != .list) Common.invariant("instantiation list read had a non-list node");
+        return self.find(node_content.list);
     }
 
     /// Project a box element cell without materializing a Monotype.
     pub fn boxElementNode(self: *InstGraph, node: NodeId) Allocator.Error!NodeId {
-        return switch (self.content(try self.shapeRoot(node, "box", .inspectable))) {
-            .box => |element| self.find(element),
-            else => Common.invariant("instantiation box read had a non-box node"),
-        };
+        const node_content = self.content(try self.shapeRoot(node, "box", .inspectable));
+        if (node_content != .box) Common.invariant("instantiation box read had a non-box node");
+        return self.find(node_content.box);
     }
 
     /// Project one exact tag payload cell from a live tag-union row.
@@ -2415,11 +2415,10 @@ pub const InstGraph = struct {
     /// shaped, without materializing a Monotype or exposing its row extension.
     pub fn tagRowNodesOrNull(self: *InstGraph, raw_row: NodeId) Allocator.Error!?TagRowNodes {
         const structural = try self.shapeRoot(raw_row, "tag row", .inspectable);
-        return switch (self.content(structural)) {
-            .tag_union => .{ .tags = (try self.flattenTagRow(structural)).tags },
-            .empty_tag_union => .{ .tags = &.{} },
-            else => null,
-        };
+        const structural_content = self.content(structural);
+        if (structural_content == .tag_union) return .{ .tags = (try self.flattenTagRow(structural)).tags };
+        if (structural_content == .empty_tag_union) return .{ .tags = &.{} };
+        return null;
     }
 
     /// Read every explicit tag and payload cell from a tag-union-shaped node
@@ -2435,15 +2434,13 @@ pub const InstGraph = struct {
     /// currently known tags.
     pub fn tagRowIsClosed(self: *InstGraph, raw_row: NodeId) Allocator.Error!bool {
         const structural = try self.shapeRoot(raw_row, "tag row closure", .inspectable);
-        return switch (self.content(structural)) {
-            .empty_tag_union => true,
-            .tag_union => switch (self.content((try self.flattenTagRow(structural)).ext)) {
-                .empty_tag_union => true,
-                .unresolved => false,
-                else => Common.invariant("flattened tag row had an invalid extension"),
-            },
-            else => Common.invariant("instantiation tag-row closure read had a non-tag-union node"),
-        };
+        const structural_content = self.content(structural);
+        if (structural_content == .empty_tag_union) return true;
+        if (structural_content != .tag_union) Common.invariant("instantiation tag-row closure read had a non-tag-union node");
+        const ext = self.content((try self.flattenTagRow(structural)).ext);
+        if (ext == .empty_tag_union) return true;
+        if (ext == .unresolved) return false;
+        Common.invariant("flattened tag row had an invalid extension");
     }
 
     fn tagPayloadNodeWithAccess(
@@ -2454,10 +2451,8 @@ pub const InstGraph = struct {
         access: BackingAccess,
     ) Allocator.Error!NodeId {
         const structural = try self.shapeRoot(node, "tag payload", access);
-        const row = switch (self.content(structural)) {
-            .tag_union => try self.flattenTagRow(structural),
-            else => Common.invariant("instantiation tag payload read had a non-tag-union node"),
-        };
+        if (self.content(structural) != .tag_union) Common.invariant("instantiation tag payload read had a non-tag-union node");
+        const row = try self.flattenTagRow(structural);
         const wanted = self.tagLabelText(name);
         for (row.tags) |tag| {
             if (!Ident.textEql(wanted, self.tagLabelText(tag.name))) continue;
@@ -2471,17 +2466,17 @@ pub const InstGraph = struct {
 
     /// Project the explicit arguments and backing of a named live node.
     pub fn namedNodes(self: *InstGraph, node: NodeId) NamedNodes {
-        return switch (self.content(node)) {
-            .named => |named| .{
-                .kind = named.kind,
-                .args = named.args,
-                .backing = if (named.backing) |backing| .{
-                    .node = self.find(backing.node),
-                    .use = backing.use,
-                    .authority = backing.authority,
-                } else null,
-            },
-            else => Common.invariant("instantiation named read had a non-named node"),
+        const node_content = self.content(node);
+        if (node_content != .named) Common.invariant("instantiation named read had a non-named node");
+        const named = node_content.named;
+        return .{
+            .kind = named.kind,
+            .args = named.args,
+            .backing = if (named.backing) |backing| .{
+                .node = self.find(backing.node),
+                .use = backing.use,
+                .authority = backing.authority,
+            } else null,
         };
     }
 
@@ -2515,10 +2510,8 @@ pub const InstGraph = struct {
         comptime noun: []const u8,
     ) Allocator.Error!NodeId {
         const structural = try self.shapeRoot(raw_record, noun, access);
-        const row = switch (self.content(structural)) {
-            .record => try self.flattenRecordRow(structural),
-            else => Common.invariant("instantiation " ++ noun ++ " had a non-record receiver type"),
-        };
+        if (self.content(structural) != .record) Common.invariant("instantiation " ++ noun ++ " had a non-record receiver type");
+        const row = try self.flattenRecordRow(structural);
         const wanted = self.fieldLabelText(name);
         for (row.fields) |field| {
             if (Ident.textEql(wanted, self.fieldLabelText(field.name))) {
@@ -2532,11 +2525,10 @@ pub const InstGraph = struct {
     /// a temporary Monotype view.
     pub fn recordNodes(self: *InstGraph, raw_record: NodeId) Allocator.Error!RecordNodes {
         const structural = try self.shapeRoot(raw_record, "record", .inspectable);
-        return switch (self.content(structural)) {
-            .record => .{ .fields = (try self.flattenRecordRow(structural)).fields },
-            .empty_record => .{ .fields = &.{} },
-            else => Common.invariant("instantiation record read had a non-record node"),
-        };
+        const structural_content = self.content(structural);
+        if (structural_content == .record) return .{ .fields = (try self.flattenRecordRow(structural)).fields };
+        if (structural_content == .empty_record) return .{ .fields = &.{} };
+        Common.invariant("instantiation record read had a non-record node");
     }
 
     /// Project the explicit runtime backing fields needed to emit a checked
@@ -2544,11 +2536,10 @@ pub const InstGraph = struct {
     /// type inspection.
     pub fn recordConstructionNodes(self: *InstGraph, raw_record: NodeId) Allocator.Error!RecordNodes {
         const structural = try self.shapeRoot(raw_record, "record constructor", .runtime_layout);
-        return switch (self.content(structural)) {
-            .record => |record| .{ .fields = record.fields },
-            .empty_record => .{ .fields = &.{} },
-            else => Common.invariant("instantiation record constructor had a non-record runtime backing"),
-        };
+        const structural_content = self.content(structural);
+        if (structural_content == .record) return .{ .fields = structural_content.record.fields };
+        if (structural_content == .empty_record) return .{ .fields = &.{} };
+        Common.invariant("instantiation record constructor had a non-record runtime backing");
     }
 
     /// A relation mutation invalidates every cached Type-shaped snapshot.
@@ -2635,75 +2626,77 @@ pub const InstGraph = struct {
         const public_content = self.nodes.items[@intFromEnum(public_root)];
         const request_content = self.nodes.items[@intFromEnum(request_root)];
         switch (public_content) {
-            .list => switch (request_content) {
-                .list => {},
-                else => Common.invariant("request container join received different type structure"),
+            .list => {
+                if (request_content != .list) Common.invariant("request container join received different type structure");
             },
-            .box => switch (request_content) {
-                .box => {},
-                else => Common.invariant("request container join received different type structure"),
+            .box => {
+                if (request_content != .box) Common.invariant("request container join received different type structure");
             },
-            .tuple => |public_items| switch (request_content) {
-                .tuple => |request_items| if (public_items.len != request_items.len) {
+            .tuple => |public_items| {
+                if (request_content != .tuple) Common.invariant("request container join received different type structure");
+                if (public_items.len != request_content.tuple.len) {
                     Common.invariant("request container join received tuples of different arity");
-                },
-                else => Common.invariant("request container join received different type structure"),
+                }
             },
-            .func => |public_fn| switch (request_content) {
-                .func => |request_fn| if (public_fn.args.len != request_fn.args.len) {
+            .func => |public_fn| {
+                if (request_content != .func) Common.invariant("request container join received different type structure");
+                if (public_fn.args.len != request_content.func.args.len) {
                     Common.invariant("request container join received functions of different arity");
-                },
-                else => Common.invariant("request container join received different type structure"),
+                }
             },
-            .record => switch (request_content) {
-                .record => {
-                    const public_row = try self.flattenRecordRow(public_root);
-                    const request_row = try self.flattenRecordRow(request_root);
-                    if (public_row.fields.len != request_row.fields.len) {
-                        Common.invariant("request container join received records with different field counts");
-                    }
-                    for (public_row.fields) |public_field| {
-                        const wanted = self.fieldLabelText(public_field.name);
-                        var found = false;
-                        for (request_row.fields) |request_field| {
-                            if (Ident.textEql(wanted, self.fieldLabelText(request_field.name))) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            Common.invariant("request container join received records with different fields");
+            .record => {
+                if (request_content != .record) Common.invariant("request container join received different type structure");
+                const public_row = try self.flattenRecordRow(public_root);
+                const request_row = try self.flattenRecordRow(request_root);
+                if (public_row.fields.len != request_row.fields.len) {
+                    Common.invariant("request container join received records with different field counts");
+                }
+                for (public_row.fields) |public_field| {
+                    const wanted = self.fieldLabelText(public_field.name);
+                    var found = false;
+                    for (request_row.fields) |request_field| {
+                        if (Ident.textEql(wanted, self.fieldLabelText(request_field.name))) {
+                            found = true;
+                            break;
                         }
                     }
-                },
-                else => Common.invariant("request container join received different type structure"),
+                    if (!found) {
+                        Common.invariant("request container join received records with different fields");
+                    }
+                }
             },
-            .tag_union => switch (request_content) {
-                .tag_union => {
-                    const public_row = try self.flattenTagRow(public_root);
-                    const request_row = try self.flattenTagRow(request_root);
-                    if (public_row.tags.len != request_row.tags.len) {
-                        Common.invariant("request container join received tag unions with different tag counts");
-                    }
-                    for (public_row.tags) |public_tag| {
-                        const wanted = self.tagLabelText(public_tag.name);
-                        var found = false;
-                        for (request_row.tags) |request_tag| {
-                            if (Ident.textEql(wanted, self.tagLabelText(request_tag.name)) and
-                                public_tag.payloads.len == request_tag.payloads.len)
-                            {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            Common.invariant("request container join received tag unions with different tags");
+            .tag_union => {
+                if (request_content != .tag_union) Common.invariant("request container join received different type structure");
+                const public_row = try self.flattenTagRow(public_root);
+                const request_row = try self.flattenTagRow(request_root);
+                if (public_row.tags.len != request_row.tags.len) {
+                    Common.invariant("request container join received tag unions with different tag counts");
+                }
+                for (public_row.tags) |public_tag| {
+                    const wanted = self.tagLabelText(public_tag.name);
+                    var found = false;
+                    for (request_row.tags) |request_tag| {
+                        if (Ident.textEql(wanted, self.tagLabelText(request_tag.name)) and
+                            public_tag.payloads.len == request_tag.payloads.len)
+                        {
+                            found = true;
+                            break;
                         }
                     }
-                },
-                else => Common.invariant("request container join received different type structure"),
+                    if (!found) {
+                        Common.invariant("request container join received tag unions with different tags");
+                    }
+                }
             },
-            else => Common.invariant("request container join received a non-container public type"),
+            .redirect,
+            .unresolved,
+            .primitive,
+            .empty_tag_union,
+            .empty_record,
+            .named,
+            .erased,
+            .zst,
+            => Common.invariant("request container join received a non-container public type"),
         }
         try self.union_(request_root, public_root);
     }
@@ -2746,14 +2739,10 @@ pub const InstGraph = struct {
 
         const left_content = self.nodes.items[@intFromEnum(left)];
         const right_content = self.nodes.items[@intFromEnum(right)];
-        const left_generated_private = switch (left_content) {
-            .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
-            else => false,
-        };
-        const right_generated_private = switch (right_content) {
-            .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
-            else => false,
-        };
+        const left_generated_private = left_content == .named and
+            (if (left_content.named.backing) |backing| backing.authority == .generated_private else false);
+        const right_generated_private = right_content == .named and
+            (if (right_content.named.backing) |backing| backing.authority == .generated_private else false);
         if (left_generated_private != right_generated_private and
             !allow_private_selection and
             !self.isIteratorRepresentationTierRelation(left_content, right_content))
@@ -2761,29 +2750,24 @@ pub const InstGraph = struct {
             Common.invariant("generated-private representation reached ordinary public/private graph unification");
         }
 
-        switch (left_content) {
-            .redirect => unreachable,
-            .unresolved => |left_var| switch (right_content) {
-                .unresolved => |right_var| {
-                    try self.setContent(right, .{ .unresolved = mergeVariables(left_var, right_var) });
-                    try self.union_(right, left);
-                },
-                .named => |right_named| if (right_named.kind == .alias)
-                    try self.unifyThroughBacking(right, right_content, left, pending)
-                else
-                    try self.union_(right, left),
-                else => try self.union_(right, left),
-            },
-            else => switch (right_content) {
-                .unresolved => switch (left_content) {
-                    .named => |left_named| if (left_named.kind == .alias)
-                        try self.unifyThroughBacking(left, left_content, right, pending)
-                    else
-                        try self.union_(left, right),
-                    else => try self.union_(left, right),
-                },
-                else => try self.unifyConcrete(left, left_content, right, right_content, pending),
-            },
+        if (left_content == .redirect) unreachable;
+        if (left_content == .unresolved) {
+            if (right_content == .unresolved) {
+                try self.setContent(right, .{ .unresolved = mergeVariables(left_content.unresolved, right_content.unresolved) });
+                try self.union_(right, left);
+            } else if (right_content == .named and right_content.named.kind == .alias) {
+                try self.unifyThroughBacking(right, right_content, left, pending);
+            } else {
+                try self.union_(right, left);
+            }
+        } else if (right_content == .unresolved) {
+            if (left_content == .named and left_content.named.kind == .alias) {
+                try self.unifyThroughBacking(left, left_content, right, pending);
+            } else {
+                try self.union_(left, right);
+            }
+        } else {
+            try self.unifyConcrete(left, left_content, right, right_content, pending);
         }
     }
 
@@ -2830,81 +2814,112 @@ pub const InstGraph = struct {
     ) Allocator.Error!void {
         switch (left_content) {
             .redirect, .unresolved => unreachable,
-            .primitive => |left_prim| switch (right_content) {
-                .primitive => |right_prim| {
-                    if (left_prim != right_prim) {
-                        Common.invariant("instantiation unified two different primitive types");
-                    }
+            .primitive => |left_prim| {
+                if (right_content == .primitive) {
+                    if (left_prim != right_content.primitive) Common.invariant("instantiation unified two different primitive types");
                     try self.union_(left, right);
-                },
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified a primitive type with a non-primitive type"),
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified a primitive type with a non-primitive type");
+                }
             },
-            .list => |left_elem| switch (right_content) {
-                .list => |right_elem| {
-                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_elem });
+            .list => |left_elem| {
+                if (right_content == .list) {
+                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_content.list });
                     try self.union_(left, right);
-                },
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified a List with a non-List type"),
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified a List with a non-List type");
+                }
             },
-            .box => |left_elem| switch (right_content) {
-                .box => |right_elem| {
-                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_elem });
+            .box => |left_elem| {
+                if (right_content == .box) {
+                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_content.box });
                     try self.union_(left, right);
-                },
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified a Box with a non-Box type"),
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified a Box with a non-Box type");
+                }
             },
-            .tuple => |left_items| switch (right_content) {
-                .tuple => |right_items| {
+            .tuple => |left_items| {
+                if (right_content == .tuple) {
+                    const right_items = right_content.tuple;
                     if (left_items.len != right_items.len) Common.invariant("instantiation unified tuples of different arity");
                     for (left_items, right_items) |left_item, right_item| {
                         try pending.append(self.allocator, .{ .left = left_item, .right = right_item });
                     }
                     try self.union_(left, right);
-                },
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified a tuple with a non-tuple type"),
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified a tuple with a non-tuple type");
+                }
             },
-            .func => |left_fn| switch (right_content) {
-                .func => |right_fn| {
+            .func => |left_fn| {
+                if (right_content == .func) {
+                    const right_fn = right_content.func;
                     if (left_fn.args.len != right_fn.args.len) Common.invariant("instantiation unified functions of different arity");
                     for (left_fn.args, right_fn.args) |left_arg, right_arg| {
                         try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });
                     }
                     try pending.append(self.allocator, .{ .left = left_fn.ret, .right = right_fn.ret });
                     try self.union_(left, right);
-                },
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified a function with a non-function type"),
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified a function with a non-function type");
+                }
             },
-            .tag_union => switch (right_content) {
-                .tag_union => try self.unifyTagRows(left, right, pending),
-                .empty_tag_union => try self.unifyRowWithEmpty(left, right, .tag_union),
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified a tag union with a non-tag-union type"),
+            .tag_union => {
+                if (right_content == .tag_union) {
+                    try self.unifyTagRows(left, right, pending);
+                } else if (right_content == .empty_tag_union) {
+                    try self.unifyRowWithEmpty(left, right, .tag_union);
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified a tag union with a non-tag-union type");
+                }
             },
-            .empty_tag_union => switch (right_content) {
-                .empty_tag_union => try self.union_(left, right),
-                .tag_union => try self.unifyRowWithEmpty(right, left, .tag_union),
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified an empty tag union with an incompatible type"),
+            .empty_tag_union => {
+                if (right_content == .empty_tag_union) {
+                    try self.union_(left, right);
+                } else if (right_content == .tag_union) {
+                    try self.unifyRowWithEmpty(right, left, .tag_union);
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified an empty tag union with an incompatible type");
+                }
             },
-            .record => switch (right_content) {
-                .record => try self.unifyRecordRows(left, right, pending),
-                .empty_record => try self.unifyRowWithEmpty(left, right, .record),
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified a record with a non-record type"),
+            .record => {
+                if (right_content == .record) {
+                    try self.unifyRecordRows(left, right, pending);
+                } else if (right_content == .empty_record) {
+                    try self.unifyRowWithEmpty(left, right, .record);
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified a record with a non-record type");
+                }
             },
-            .empty_record => switch (right_content) {
-                .empty_record => try self.union_(left, right),
-                .record => try self.unifyRowWithEmpty(right, left, .record),
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified an empty record with an incompatible type"),
+            .empty_record => {
+                if (right_content == .empty_record) {
+                    try self.union_(left, right);
+                } else if (right_content == .record) {
+                    try self.unifyRowWithEmpty(right, left, .record);
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified an empty record with an incompatible type");
+                }
             },
-            .named => |left_named| switch (right_content) {
-                .named => |right_named| {
+            .named => |left_named| {
+                if (right_content == .named) {
+                    const right_named = right_content.named;
                     if (left_named.kind == .alias) {
                         try self.unifyThroughBacking(left, left_content, right, pending);
                         return;
@@ -3037,36 +3052,38 @@ pub const InstGraph = struct {
                         return;
                     }
                     try self.unifyThroughBacking(left, left_content, right, pending);
-                },
-                else => try self.unifyThroughBacking(left, left_content, right, pending),
+                } else {
+                    try self.unifyThroughBacking(left, left_content, right, pending);
+                }
             },
-            .erased => |left_digest| switch (right_content) {
-                .erased => |right_digest| {
-                    if (!std.mem.eql(u8, left_digest.bytes[0..], right_digest.bytes[0..])) {
+            .erased => |left_digest| {
+                if (right_content == .erased) {
+                    if (!std.mem.eql(u8, left_digest.bytes[0..], right_content.erased.bytes[0..])) {
                         Common.invariant("instantiation unified two different erased types");
                     }
                     try self.union_(left, right);
-                },
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified an erased type with an incompatible type"),
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified an erased type with an incompatible type");
+                }
             },
-            .zst => switch (right_content) {
-                .zst => try self.union_(left, right),
-                .named => try self.unifyThroughBacking(right, right_content, left, pending),
-                else => Common.invariant("instantiation unified a zero-sized type with an incompatible type"),
+            .zst => {
+                if (right_content == .zst) {
+                    try self.union_(left, right);
+                } else if (right_content == .named) {
+                    try self.unifyThroughBacking(right, right_content, left, pending);
+                } else {
+                    Common.invariant("instantiation unified a zero-sized type with an incompatible type");
+                }
             },
         }
     }
 
     fn isIteratorRepresentationTierRelation(self: *InstGraph, left: InstNode, right: InstNode) bool {
-        const left_named = switch (left) {
-            .named => |named| named,
-            else => return false,
-        };
-        const right_named = switch (right) {
-            .named => |named| named,
-            else => return false,
-        };
+        if (left != .named or right != .named) return false;
+        const left_named = left.named;
+        const right_named = right.named;
         return switch (self.iteratorRelation(left_named, right_named)) {
             .public_minted, .forced_dynamic => true,
             .ordinary, .minted_join => false,
@@ -3113,10 +3130,8 @@ pub const InstGraph = struct {
         other: NodeId,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
-        const named = switch (named_content) {
-            .named => |named| named,
-            else => unreachable,
-        };
+        if (named_content != .named) unreachable;
+        const named = named_content.named;
         const declared_backing = named.backing orelse
             Common.invariant("instantiation unified an opaque type without backing against a structural type");
         const backing = try self.structuralBackingNode(declared_backing.node, named);
@@ -3125,13 +3140,11 @@ pub const InstGraph = struct {
             if (named.kind == .alias) {
                 Common.invariant("alias backing cycle reached Monotype instantiation");
             }
-            switch (self.nodes.items[@intFromEnum(other)]) {
-                .named => Common.invariant("recursive nominal backing met a different named type"),
-                else => {
-                    try self.union_(named_node, other);
-                    return;
-                },
+            if (self.nodes.items[@intFromEnum(other)] == .named) {
+                Common.invariant("recursive nominal backing met a different named type");
             }
+            try self.union_(named_node, other);
+            return;
         }
         if (declared_backing.node != backing_node) {
             var compressed = named;
@@ -3142,12 +3155,9 @@ pub const InstGraph = struct {
             try pending.append(self.allocator, .{ .left = backing_node, .right = other });
             return;
         }
-        switch (self.nodes.items[@intFromEnum(other)]) {
-            .named => {
-                try pending.append(self.allocator, .{ .left = backing_node, .right = other });
-                return;
-            },
-            else => {},
+        if (self.nodes.items[@intFromEnum(other)] == .named) {
+            try pending.append(self.allocator, .{ .left = backing_node, .right = other });
+            return;
         }
         const moved = try self.newNode(self.nodes.items[@intFromEnum(other)]);
         try self.union_(named_node, other);
@@ -3183,10 +3193,9 @@ pub const InstGraph = struct {
     fn compressStructuralBacking(self: *InstGraph, raw: NodeId, owner: InstNamed, result: NodeId) Allocator.Error!void {
         var current = self.find(raw);
         while (current != result) {
-            const named = switch (self.nodes.items[@intFromEnum(current)]) {
-                .named => |named| named,
-                else => Common.invariant("named backing compression reached a structural node before its result"),
-            };
+            const node_content = self.nodes.items[@intFromEnum(current)];
+            if (node_content != .named) Common.invariant("named backing compression reached a structural node before its result");
+            const named = node_content.named;
             if (named.kind != .alias and !self.sameNamedInstance(named, owner)) {
                 Common.invariant("named backing compression reached a non-transparent named type");
             }
@@ -3204,15 +3213,13 @@ pub const InstGraph = struct {
 
     fn structuralBackingNext(self: *InstGraph, raw: NodeId, owner: InstNamed) ?NodeId {
         const current = self.find(raw);
-        switch (self.nodes.items[@intFromEnum(current)]) {
-            .named => |named| {
-                if (named.kind != .alias and !self.sameNamedInstance(named, owner)) return null;
-                const backing = named.backing orelse
-                    Common.invariant("named backing chain reached a named type without backing");
-                return self.find(backing.node);
-            },
-            else => return null,
-        }
+        const node_content = self.nodes.items[@intFromEnum(current)];
+        if (node_content != .named) return null;
+        const named = node_content.named;
+        if (named.kind != .alias and !self.sameNamedInstance(named, owner)) return null;
+        const backing = named.backing orelse
+            Common.invariant("named backing chain reached a named type without backing");
+        return self.find(backing.node);
     }
 
     fn sameNamedInstance(self: *InstGraph, left: InstNamed, right: InstNamed) bool {
@@ -3257,7 +3264,18 @@ pub const InstGraph = struct {
                 .record => true,
                 .tag_union => Common.invariant("tag row terminated in an empty record extension"),
             },
-            else => Common.invariant("flattened row did not terminate in an unresolved or empty extension"),
+            .redirect,
+            .primitive,
+            .list,
+            .box,
+            .tuple,
+            .func,
+            .tag_union,
+            .record,
+            .named,
+            .erased,
+            .zst,
+            => Common.invariant("flattened row did not terminate in an unresolved or empty extension"),
         };
     }
 
@@ -3297,10 +3315,9 @@ pub const InstGraph = struct {
     /// union (closed), or compressed out.
     fn flattenTagRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatTagRow {
         const root = self.find(raw_root);
-        const row = switch (self.nodes.items[@intFromEnum(root)]) {
-            .tag_union => |row| row,
-            else => Common.invariant("instantiation flattened a non-tag-union row"),
-        };
+        const root_content = self.nodes.items[@intFromEnum(root)];
+        if (root_content != .tag_union) Common.invariant("instantiation flattened a non-tag-union row");
+        const row = root_content.tag_union;
         var tags = std.ArrayList(InstTag).empty;
         defer tags.deinit(self.allocator);
         try tags.appendSlice(self.allocator, row.tags);
@@ -3310,15 +3327,13 @@ pub const InstGraph = struct {
         try seen.put(root, {});
 
         var ext = self.find(row.ext);
-        switch (self.nodes.items[@intFromEnum(ext)]) {
-            .unresolved, .empty_tag_union => {
-                if (row.ext != ext) {
-                    const flattened: InstNode = .{ .tag_union = .{ .tags = row.tags, .ext = ext } };
-                    _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
-                }
-                return .{ .tags = row.tags, .ext = ext };
-            },
-            else => {},
+        const ext_content = self.nodes.items[@intFromEnum(ext)];
+        if (ext_content == .unresolved or ext_content == .empty_tag_union) {
+            if (row.ext != ext) {
+                const flattened: InstNode = .{ .tag_union = .{ .tags = row.tags, .ext = ext } };
+                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
+            }
+            return .{ .tags = row.tags, .ext = ext };
         }
 
         while (true) {
@@ -3336,7 +3351,18 @@ pub const InstGraph = struct {
                     ext = self.find(tail.ext);
                 },
                 .unresolved, .empty_tag_union => break,
-                else => Common.invariant("instantiation tag row extended into a non-tag-union type"),
+                .redirect,
+                .primitive,
+                .list,
+                .box,
+                .tuple,
+                .func,
+                .record,
+                .empty_record,
+                .named,
+                .erased,
+                .zst,
+                => Common.invariant("instantiation tag row extended into a non-tag-union type"),
             }
         }
 
@@ -3348,10 +3374,9 @@ pub const InstGraph = struct {
 
     fn flattenRecordRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatRecordRow {
         const root = self.find(raw_root);
-        const row = switch (self.nodes.items[@intFromEnum(root)]) {
-            .record => |row| row,
-            else => Common.invariant("instantiation flattened a non-record row"),
-        };
+        const root_content = self.nodes.items[@intFromEnum(root)];
+        if (root_content != .record) Common.invariant("instantiation flattened a non-record row");
+        const row = root_content.record;
         var fields = std.ArrayList(InstField).empty;
         defer fields.deinit(self.allocator);
         try fields.appendSlice(self.allocator, row.fields);
@@ -3361,15 +3386,13 @@ pub const InstGraph = struct {
         try seen.put(root, {});
 
         var ext = self.find(row.ext);
-        switch (self.nodes.items[@intFromEnum(ext)]) {
-            .unresolved, .empty_record => {
-                if (row.ext != ext) {
-                    const flattened: InstNode = .{ .record = .{ .fields = row.fields, .ext = ext } };
-                    _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
-                }
-                return .{ .fields = row.fields, .ext = ext };
-            },
-            else => {},
+        const ext_content = self.nodes.items[@intFromEnum(ext)];
+        if (ext_content == .unresolved or ext_content == .empty_record) {
+            if (row.ext != ext) {
+                const flattened: InstNode = .{ .record = .{ .fields = row.fields, .ext = ext } };
+                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
+            }
+            return .{ .fields = row.fields, .ext = ext };
         }
 
         while (true) {
@@ -3387,7 +3410,18 @@ pub const InstGraph = struct {
                     ext = self.find(tail.ext);
                 },
                 .unresolved, .empty_record => break,
-                else => Common.invariant("instantiation record row extended into a non-record type"),
+                .redirect,
+                .primitive,
+                .list,
+                .box,
+                .tuple,
+                .func,
+                .tag_union,
+                .empty_tag_union,
+                .named,
+                .erased,
+                .zst,
+                => Common.invariant("instantiation record row extended into a non-record type"),
             }
         }
 
@@ -3494,28 +3528,27 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         const ext_root = self.find(ext);
-        switch (self.nodes.items[@intFromEnum(ext_root)]) {
-            .unresolved => |variable| {
-                if (variable.numeric_default_phase != null) {
-                    Common.invariant("instantiation tried to write a tag row into a numeric variable");
+        const ext_content = self.nodes.items[@intFromEnum(ext_root)];
+        if (ext_content == .unresolved) {
+            const variable = ext_content.unresolved;
+            if (variable.numeric_default_phase != null) {
+                Common.invariant("instantiation tried to write a tag row into a numeric variable");
+            }
+            if (variable.row_default) |default| {
+                if (default != .empty_tag_union) {
+                    Common.invariant("instantiation tried to write a tag row into a record row variable");
                 }
-                if (variable.row_default) |default| {
-                    if (default != .empty_tag_union) {
-                        Common.invariant("instantiation tried to write a tag row into a record row variable");
-                    }
-                }
-                try self.setContent(ext_root, .{ .tag_union = .{
-                    .tags = try self.arena().dupe(InstTag, tags),
-                    .ext = tail_ext,
-                } });
-            },
-            else => {
-                const rest = try self.newNode(.{ .tag_union = .{
-                    .tags = try self.arena().dupe(InstTag, tags),
-                    .ext = tail_ext,
-                } });
-                try pending.append(self.allocator, .{ .left = ext_root, .right = rest });
-            },
+            }
+            try self.setContent(ext_root, .{ .tag_union = .{
+                .tags = try self.arena().dupe(InstTag, tags),
+                .ext = tail_ext,
+            } });
+        } else {
+            const rest = try self.newNode(.{ .tag_union = .{
+                .tags = try self.arena().dupe(InstTag, tags),
+                .ext = tail_ext,
+            } });
+            try pending.append(self.allocator, .{ .left = ext_root, .right = rest });
         }
     }
 
@@ -3602,28 +3635,27 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         const ext_root = self.find(ext);
-        switch (self.nodes.items[@intFromEnum(ext_root)]) {
-            .unresolved => |variable| {
-                if (variable.numeric_default_phase != null) {
-                    Common.invariant("instantiation tried to write a record row into a numeric variable");
+        const ext_content = self.nodes.items[@intFromEnum(ext_root)];
+        if (ext_content == .unresolved) {
+            const variable = ext_content.unresolved;
+            if (variable.numeric_default_phase != null) {
+                Common.invariant("instantiation tried to write a record row into a numeric variable");
+            }
+            if (variable.row_default) |default| {
+                if (default != .empty_record) {
+                    Common.invariant("instantiation tried to write a record row into a tag row variable");
                 }
-                if (variable.row_default) |default| {
-                    if (default != .empty_record) {
-                        Common.invariant("instantiation tried to write a record row into a tag row variable");
-                    }
-                }
-                try self.setContent(ext_root, .{ .record = .{
-                    .fields = try self.arena().dupe(InstField, fields),
-                    .ext = tail_ext,
-                } });
-            },
-            else => {
-                const rest = try self.newNode(.{ .record = .{
-                    .fields = try self.arena().dupe(InstField, fields),
-                    .ext = tail_ext,
-                } });
-                try pending.append(self.allocator, .{ .left = ext_root, .right = rest });
-            },
+            }
+            try self.setContent(ext_root, .{ .record = .{
+                .fields = try self.arena().dupe(InstField, fields),
+                .ext = tail_ext,
+            } });
+        } else {
+            const rest = try self.newNode(.{ .record = .{
+                .fields = try self.arena().dupe(InstField, fields),
+                .ext = tail_ext,
+            } });
+            try pending.append(self.allocator, .{ .left = ext_root, .right = rest });
         }
     }
 
@@ -3891,13 +3923,11 @@ pub const InstGraph = struct {
     }
 
     fn isGeneratedPrivateRootContent(node_content: InstNode) bool {
-        return switch (node_content) {
-            .named => |named| if (named.backing) |backing|
-                backing.authority == .generated_private
-            else
-                false,
-            else => false,
-        };
+        if (node_content != .named) return false;
+        return if (node_content.named.backing) |backing|
+            backing.authority == .generated_private
+        else
+            false;
     }
 
     fn isActiveSnapshotType(self: *InstGraph, ty: Type.TypeId) bool {
@@ -4233,23 +4263,20 @@ const OpenFunctionInterfaceShapeWriter = struct {
         const content = self.graph.nodes.items[@intFromEnum(node)];
         self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
         self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
-        switch (content) {
-            .redirect => unreachable,
-            .unresolved => |variable| {
-                const entry = try self.unresolved_ids.getOrPut(node);
-                if (!entry.found_existing) {
-                    entry.value_ptr.* = self.next_unresolved;
-                    self.next_unresolved += 1;
-                    self.writeBytes("unresolved-new");
-                    self.writeU32(entry.value_ptr.*);
-                    self.writeVariable(variable);
-                } else {
-                    self.writeBytes("unresolved-ref");
-                    self.writeU32(entry.value_ptr.*);
-                }
-                return;
-            },
-            else => {},
+        if (content == .redirect) unreachable;
+        if (content == .unresolved) {
+            const entry = try self.unresolved_ids.getOrPut(node);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = self.next_unresolved;
+                self.next_unresolved += 1;
+                self.writeBytes("unresolved-new");
+                self.writeU32(entry.value_ptr.*);
+                self.writeVariable(content.unresolved);
+            } else {
+                self.writeBytes("unresolved-ref");
+                self.writeU32(entry.value_ptr.*);
+            }
+            return;
         }
 
         for (self.visiting.items, 0..) |open_node, position| {
@@ -4591,62 +4618,20 @@ pub fn assertNoDuplicateTags(name_store: *const names.NameStore, tags: []const T
 
 fn instNodeEql(left: InstNode, right: InstNode) bool {
     return switch (left) {
-        .redirect => |left_next| switch (right) {
-            .redirect => |right_next| left_next == right_next,
-            else => false,
-        },
-        .unresolved => |left_var| switch (right) {
-            .unresolved => |right_var| std.meta.eql(left_var, right_var),
-            else => false,
-        },
-        .primitive => |left_primitive| switch (right) {
-            .primitive => |right_primitive| left_primitive == right_primitive,
-            else => false,
-        },
-        .list => |left_elem| switch (right) {
-            .list => |right_elem| left_elem == right_elem,
-            else => false,
-        },
-        .box => |left_elem| switch (right) {
-            .box => |right_elem| left_elem == right_elem,
-            else => false,
-        },
-        .tuple => |left_items| switch (right) {
-            .tuple => |right_items| nodeSliceEql(left_items, right_items),
-            else => false,
-        },
-        .func => |left_fn| switch (right) {
-            .func => |right_fn| nodeSliceEql(left_fn.args, right_fn.args) and left_fn.ret == right_fn.ret,
-            else => false,
-        },
-        .tag_union => |left_row| switch (right) {
-            .tag_union => |right_row| left_row.ext == right_row.ext and instTagSliceEql(left_row.tags, right_row.tags),
-            else => false,
-        },
-        .record => |left_row| switch (right) {
-            .record => |right_row| left_row.ext == right_row.ext and instFieldSliceEql(left_row.fields, right_row.fields),
-            else => false,
-        },
-        .empty_tag_union => switch (right) {
-            .empty_tag_union => true,
-            else => false,
-        },
-        .empty_record => switch (right) {
-            .empty_record => true,
-            else => false,
-        },
-        .named => |left_named| switch (right) {
-            .named => |right_named| instNamedEql(left_named, right_named),
-            else => false,
-        },
-        .erased => |left_digest| switch (right) {
-            .erased => |right_digest| std.mem.eql(u8, left_digest.bytes[0..], right_digest.bytes[0..]),
-            else => false,
-        },
-        .zst => switch (right) {
-            .zst => true,
-            else => false,
-        },
+        .redirect => |left_next| right == .redirect and left_next == right.redirect,
+        .unresolved => |left_var| right == .unresolved and std.meta.eql(left_var, right.unresolved),
+        .primitive => |left_primitive| right == .primitive and left_primitive == right.primitive,
+        .list => |left_elem| right == .list and left_elem == right.list,
+        .box => |left_elem| right == .box and left_elem == right.box,
+        .tuple => |left_items| right == .tuple and nodeSliceEql(left_items, right.tuple),
+        .func => |left_fn| right == .func and nodeSliceEql(left_fn.args, right.func.args) and left_fn.ret == right.func.ret,
+        .tag_union => |left_row| right == .tag_union and left_row.ext == right.tag_union.ext and instTagSliceEql(left_row.tags, right.tag_union.tags),
+        .record => |left_row| right == .record and left_row.ext == right.record.ext and instFieldSliceEql(left_row.fields, right.record.fields),
+        .empty_tag_union => right == .empty_tag_union,
+        .empty_record => right == .empty_record,
+        .named => |left_named| right == .named and instNamedEql(left_named, right.named),
+        .erased => |left_digest| right == .erased and std.mem.eql(u8, left_digest.bytes[0..], right.erased.bytes[0..]),
+        .zst => right == .zst,
     };
 }
 
@@ -5022,24 +5007,24 @@ test "cyclic row extension is not a resolved graph type" {
 fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {
     if (T == NodeId) @compileError(path ++ " exposes instantiation graph NodeId");
 
-    switch (@typeInfo(T)) {
-        .array => |array| assertNoNodeId(array.child, path ++ "[]"),
-        .optional => |optional| assertNoNodeId(optional.child, path ++ "?"),
-        .pointer => |pointer| switch (pointer.size) {
-            .slice => assertNoNodeId(pointer.child, path ++ "[]"),
+    const info = @typeInfo(T);
+    if (info == .array) {
+        assertNoNodeId(info.array.child, path ++ "[]");
+    } else if (info == .optional) {
+        assertNoNodeId(info.optional.child, path ++ "?");
+    } else if (info == .pointer) {
+        switch (info.pointer.size) {
+            .slice => assertNoNodeId(info.pointer.child, path ++ "[]"),
             .one, .many, .c => {},
-        },
-        .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                assertNoNodeId(field.type, path ++ "." ++ field.name);
-            }
-        },
-        .@"union" => |info| {
-            inline for (info.fields) |field| {
-                assertNoNodeId(field.type, path ++ "." ++ field.name);
-            }
-        },
-        else => {},
+        }
+    } else if (info == .@"struct") {
+        inline for (info.@"struct".fields) |field| {
+            assertNoNodeId(field.type, path ++ "." ++ field.name);
+        }
+    } else if (info == .@"union") {
+        inline for (info.@"union".fields) |field| {
+            assertNoNodeId(field.type, path ++ "." ++ field.name);
+        }
     }
 }
 
@@ -5320,10 +5305,9 @@ test "alias unification does not make the alias its own backing" {
     try std.testing.expect(graph.find(alias) != graph.find(backing));
 
     const alias_ty = try graph.activeTypeViewForNode(alias);
-    const named = switch (type_store.get(alias_ty)) {
-        .named => |named| named,
-        else => return error.TestExpectedEqual,
-    };
+    const alias_content = type_store.get(alias_ty);
+    if (alias_content != .named) return error.TestExpectedEqual;
+    const named = alias_content.named;
     const named_backing = named.backing orelse return error.TestExpectedEqual;
     try std.testing.expect(named_backing.ty != alias_ty);
 }
@@ -5760,14 +5744,12 @@ test "opaque interface relation preserves distinct public and generated-private 
 
     try graph.relateOpaqueInterface(public, private);
 
-    const retained_public = switch (graph.content(public)) {
-        .named => |named| named,
-        else => return error.TestUnexpectedResult,
-    };
-    const retained_private = switch (graph.content(private)) {
-        .named => |named| named,
-        else => return error.TestUnexpectedResult,
-    };
+    const public_content = graph.content(public);
+    if (public_content != .named) return error.TestUnexpectedResult;
+    const retained_public = public_content.named;
+    const private_content = graph.content(private);
+    if (private_content != .named) return error.TestUnexpectedResult;
+    const retained_private = private_content.named;
     try std.testing.expect(!graph.sameClass(public, private));
     try std.testing.expectEqual(Type.BackingAuthority.checked_public, retained_public.backing.?.authority);
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, retained_private.backing.?.authority);
@@ -6396,10 +6378,8 @@ test "issue 9647: unresolved tag row extension absorbs rest without allocating a
 
     try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
     const left_ext_content = graph.content(left_ext);
-    const rest = switch (left_ext_content) {
-        .tag_union => |row| row,
-        else => return error.TestUnexpectedResult,
-    };
+    if (left_ext_content != .tag_union) return error.TestUnexpectedResult;
+    const rest = left_ext_content.tag_union;
     try std.testing.expectEqual(@as(usize, 1), rest.tags.len);
     try std.testing.expectEqual(extra_name, rest.tags[0].name);
     try std.testing.expectEqual(graph.find(right_ext), graph.find(rest.ext));
@@ -6454,10 +6434,9 @@ test "issue 9647: same nominal backing wrapper resolves to structural backing on
     try graph.unify(outer_named, other);
 
     try std.testing.expectEqual(before_nodes + 1, graph.nodes.items.len);
-    const compressed = switch (graph.content(outer_named)) {
-        .named => |named| named,
-        else => return error.TestUnexpectedResult,
-    };
+    const outer_content = graph.content(outer_named);
+    if (outer_content != .named) return error.TestUnexpectedResult;
+    const compressed = outer_content.named;
     try std.testing.expectEqual(structural_backing, compressed.backing.?.node);
 }
 

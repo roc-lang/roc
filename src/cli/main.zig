@@ -527,8 +527,26 @@ const BuiltinsObjects = struct {
             .x64freebsd => x64freebsd,
             .x64openbsd => x64openbsd,
             .x64netbsd => x64netbsd,
-            // Fallback for other targets (will use native, may not work for cross-compilation)
-            else => native,
+            .x64linux,
+            .x64elf,
+            .x64v1mac,
+            .x64v1win,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            .x64v1musl,
+            .x64v1glibc,
+            .x64v1linux,
+            .x64v1elf,
+            .arm64linux,
+            .arm64v1win,
+            .arm64v1linux,
+            .arm64v1musl,
+            .arm64v1glibc,
+            .arm32linux,
+            .arm32musl,
+            .wasm32v1,
+            => native,
         };
     }
 
@@ -549,8 +567,26 @@ const BuiltinsObjects = struct {
             .x64freebsd => x64freebsd_extern,
             .x64openbsd => x64openbsd_extern,
             .x64netbsd => x64netbsd_extern,
-            // Fallback for other targets (will use native, may not work for cross-compilation)
-            else => native_extern,
+            .x64linux,
+            .x64elf,
+            .x64v1mac,
+            .x64v1win,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            .x64v1musl,
+            .x64v1glibc,
+            .x64v1linux,
+            .x64v1elf,
+            .arm64linux,
+            .arm64v1win,
+            .arm64v1linux,
+            .arm64v1musl,
+            .arm64v1glibc,
+            .arm32linux,
+            .arm32musl,
+            .wasm32v1,
+            => native_extern,
         };
     }
 
@@ -558,7 +594,7 @@ const BuiltinsObjects = struct {
     pub fn filename(target: RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins.obj",
-            else => "roc_builtins.o",
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "roc_builtins.o",
         };
     }
 
@@ -566,7 +602,7 @@ const BuiltinsObjects = struct {
     pub fn filenameExtern(target: RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins_extern.obj",
-            else => "roc_builtins_extern.o",
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "roc_builtins_extern.o",
         };
     }
 };
@@ -599,7 +635,25 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
                 .x64freebsd => x64freebsd,
                 .x64openbsd => x64openbsd,
                 .x64netbsd => x64netbsd,
-                else => null,
+                .x64elf,
+                .x64v1mac,
+                .x64v1win,
+                .x64v1freebsd,
+                .x64v1openbsd,
+                .x64v1netbsd,
+                .x64v1musl,
+                .x64v1glibc,
+                .x64v1linux,
+                .x64v1elf,
+                .arm64v1win,
+                .arm64v1linux,
+                .arm64v1musl,
+                .arm64v1glibc,
+                .arm32linux,
+                .arm32musl,
+                .wasm32,
+                .wasm32v1,
+                => null,
             };
         }
 
@@ -848,10 +902,8 @@ fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator
 
         if (kernel32.CreateHardLinkW(dest_w, source_w, null) == .FALSE) {
             const err = std.os.windows.GetLastError();
-            switch (err) {
-                .ALREADY_EXISTS => return error.PathAlreadyExists,
-                else => return error.Unexpected,
-            }
+            if (err == .ALREADY_EXISTS) return error.PathAlreadyExists;
+            return error.Unexpected;
         }
     } else {
         // On POSIX systems, use the link system call
@@ -911,9 +963,23 @@ pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDi
                 // Directory already exists, try again with a new random suffix
                 continue;
             },
-            else => {
-                return err;
-            },
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.DiskQuota,
+            error.FileNotFound,
+            error.LinkQuotaExceeded,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => return err,
         };
 
         return dir_path;
@@ -987,9 +1053,23 @@ pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_na
                 // Directory already exists, try again with a new random suffix
                 continue;
             },
-            else => {
-                return err;
-            },
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.DiskQuota,
+            error.FileNotFound,
+            error.LinkQuotaExceeded,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => return err,
         };
 
         // Try to create the fd file
@@ -999,7 +1079,31 @@ pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_na
                 std.Io.Dir.cwd().deleteDir(ctx.io.std_io, temp_dir_path) catch {};
                 continue;
             },
-            else => {
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileNotFound,
+            error.FileTooBig,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => {
                 // Clean up directory on other errors
                 std.Io.Dir.cwd().deleteDir(ctx.io.std_io, temp_dir_path) catch {};
                 return err;
@@ -1218,7 +1322,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .unbundle => .unbundle,
         .bump => .bump,
         .install => .install,
-        else => .unknown,
+        .docs, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
@@ -1249,7 +1353,18 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
                         ) catch {};
                         return error.FileNotFound;
                     },
-                    else => {
+                    error.AccessDenied,
+                    error.BadPathName,
+                    error.Canceled,
+                    error.FileBusy,
+                    error.InputOutput,
+                    error.NameTooLong,
+                    error.PermissionDenied,
+                    error.ReadOnlyFileSystem,
+                    error.SymLinkLoop,
+                    error.SystemResources,
+                    error.Unexpected,
+                    => {
                         ctx.io.stderr().print(
                             "Error: Unable to access default 'main.roc': {}\n",
                             .{err},
@@ -1549,7 +1664,34 @@ fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.Cre
     // User-facing output paths should still fail normally if the parent directory is missing.
     std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
     };
 }
 
@@ -1590,7 +1732,18 @@ fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
     while (true) {
         const bytes_read = file.readStreaming(ctx.io.std_io, &.{&read_buf}) catch |err| switch (err) {
             error.EndOfStream => break,
-            else => {
+            error.AccessDenied,
+            error.Canceled,
+            error.ConnectionResetByPeer,
+            error.InputOutput,
+            error.IsDir,
+            error.LockViolation,
+            error.NotOpenForReading,
+            error.SocketUnconnected,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => {
                 return ctx.fail(.{ .file_read_failed = .{
                     .path = path,
                     .err = err,
@@ -2028,12 +2181,15 @@ fn entrypointAbiDigestFromLirData(
     platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
     target: RocTarget,
 ) (Allocator.Error || CliError)![32]u8 {
-    const abi_target: layout.abi.Target = switch (target.toCpuArch()) {
-        .aarch64 => layout.abi.aarch64Target(target.toOsTag()),
-        .x86_64 => if (target.toOsTag() == .windows) .x86_64_windows else .x86_64_sysv,
-        .wasm32 => .wasm32,
-        else => return ctx.fail(.{ .shim_generation_failed = .{ .err = error.UnsupportedTarget } }),
-    };
+    const cpu_arch = target.toCpuArch();
+    const abi_target: layout.abi.Target = if (cpu_arch == .aarch64)
+        layout.abi.aarch64Target(target.toOsTag())
+    else if (cpu_arch == .x86_64)
+        if (target.toOsTag() == .windows) .x86_64_windows else .x86_64_sysv
+    else if (cpu_arch == .wasm32)
+        .wasm32
+    else
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.UnsupportedTarget } });
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-entrypoint-abi-v1");
@@ -2470,7 +2626,38 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
                 .reason = "its install.json manifest is missing",
             } });
         },
-        else => return ctx.fail(.{ .install_entry_corrupt = .{
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.OutOfMemory,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
             .reason = "its install.json manifest could not be read",
@@ -2546,7 +2733,34 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => {
             return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
         },
     };
@@ -2600,7 +2814,13 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     ctx.io.stderr().print("that specifies which targets are supported and what files to link.\n", .{}) catch {};
                     return error.PlatformNotSupported;
                 },
-                else => {
+                error.FileReadError,
+                error.MissingFilesDirectory,
+                error.MissingTargetFile,
+                error.OutOfMemory,
+                error.ParseError,
+                error.UnsupportedTarget,
+                => {
                     std.log.debug("Could not validate platform header: {}", .{err});
                 },
             }
@@ -2943,7 +3163,21 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         std.log.debug("Caching executable to: {s}", .{exe_cache_path});
         std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
             error.FileNotFound => {}, // OK, doesn't exist
-            else => std.log.debug("Could not delete existing cache file: {}", .{err}),
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.FileBusy,
+            error.FileSystem,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NotDir,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => std.log.debug("Could not delete existing cache file: {}", .{err}),
         };
         createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
             // If hardlinking fails, fall back to copying
@@ -3254,7 +3488,38 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.E
         error.OutOfMemory => return error.OutOfMemory,
         // Any other read failure (e.g. file not found) means this isn't a
         // default app to handle here; fall through to the normal path.
-        else => return null,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return null,
     };
 
     const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch |err| switch (err) {
@@ -3437,7 +3702,34 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     };
     ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } }),
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } }),
     };
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
@@ -3578,7 +3870,21 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
 
         std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
             error.FileNotFound => {},
-            else => std.log.debug("Could not delete existing cache file: {}", .{err}),
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.FileBusy,
+            error.FileSystem,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NotDir,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => std.log.debug("Could not delete existing cache file: {}", .{err}),
         };
         createHardlink(ctx, exe_path, exe_cache_path) catch {
             std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
@@ -3980,7 +4286,7 @@ fn terminateHotShimChild(child: *HotShimChild) void {
                 _ = std.os.windows.ntdll.NtTerminateProcess(pid, @enumFromInt(1));
             },
             .wasi => {},
-            else => std.posix.kill(pid, .KILL) catch {},
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => std.posix.kill(pid, .KILL) catch {},
         }
     }
 }
@@ -4176,7 +4482,12 @@ fn finishHotReloadRebuild(
             error.WatchInputsReadFailed,
             error.WatchInputsMalformed,
             => return false,
-            else => |e| return e,
+            error.Canceled,
+            error.CurrentDirUnlinked,
+            error.NameTooLong,
+            error.OutOfMemory,
+            error.Unexpected,
+            => |e| return e,
         };
     const changed_during_refresh = try refreshWatchState(ctx, state, signal, new_inputs);
 
@@ -5334,7 +5645,26 @@ fn defaultRunShimTarget(native: RocTarget) RocTarget {
         .arm64musl, .arm64glibc, .arm64linux => .arm64musl,
         .x64v1musl, .x64v1glibc, .x64v1linux => .x64v1musl,
         .arm64v1musl, .arm64v1glibc, .arm64v1linux => .arm64v1musl,
-        else => native,
+        .x64mac,
+        .x64win,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1elf,
+        .arm64mac,
+        .arm64win,
+        .arm64v1win,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => native,
     };
 }
 
@@ -5903,8 +6233,8 @@ fn evaluateLirImageEntrypoint(
             }
             unreachable;
         },
-        else => |e| {
-            reportCliInterpreterError(ops, &interpreter, e);
+        error.OutOfMemory, error.RuntimeError, error.ComptimeExhaustiveness, error.DivisionByZero, error.Crash, error.ExpectErr => {
+            reportCliInterpreterError(ops, &interpreter, @errorCast(err));
             return;
         },
     };
@@ -5970,7 +6300,31 @@ fn lowerLirWithBuildEnv(
                 .path = roc_file_path,
                 .context = .source_file,
             } }),
-            else => |e| e,
+            error.AccessDenied,
+            error.BuiltinLowLevelAnnotationMustBeFunction,
+            error.DownloadFailed,
+            error.ExpectedPlatformString,
+            error.ExpectedString,
+            error.FileError,
+            error.Internal,
+            error.InvalidDependency,
+            error.InvalidNullByteInPath,
+            error.InvalidUrl,
+            error.IoError,
+            error.LockedMemoryLimitExceeded,
+            error.LowLevelOperationsNotFound,
+            error.MissingFilesDirectory,
+            error.MissingTargetFile,
+            error.NoCacheDir,
+            error.NoPackageSource,
+            error.PathOutsideWorkspace,
+            error.StreamTooLong,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.UnsupportedBuiltinAnnotationOnly,
+            error.UnsupportedHeader,
+            => |e| e,
         };
     };
 
@@ -5993,10 +6347,7 @@ fn lowerLirWithBuildEnv(
     build_env.compileDiscovered() catch |err| {
         if (reporter) |r| r.fail();
         _ = try renderDrainedBuildEnvReports(ctx, &build_env, display_path);
-        return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => |e| e,
-        };
+        return err;
     };
 
     const counts = try renderDrainedBuildEnvReports(ctx, &build_env, display_path);
@@ -6340,7 +6691,35 @@ fn validateBundleUrl(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemo
             .url = url,
             .reason = "This URL contains more than one version number. A package URL must contain exactly one MAJOR.MINOR.PATCH version before its hash.",
         } }),
-        else => ctx.fail(.{ .invalid_url = .{
+        error.ChecksumFailure,
+        error.DecompressionFailed,
+        error.DictionaryIdFlagUnsupported,
+        error.DirectoryCreateFailed,
+        error.EndOfStream,
+        error.ExpandedSizeLimitExceeded,
+        error.FileCreateFailed,
+        error.FileError,
+        error.FileTooLarge,
+        error.FileWriteFailed,
+        error.HashMismatch,
+        error.HttpError,
+        error.InvalidFilename,
+        error.InvalidHash,
+        error.InvalidPath,
+        error.InvalidProxyUrl,
+        error.InvalidTarHeader,
+        error.InvalidUrl,
+        error.LocalhostWasNotLoopback,
+        error.MalformedBlock,
+        error.MalformedFrame,
+        error.NetworkError,
+        error.NoDataExtracted,
+        error.NoHashInUrl,
+        error.OutOfMemory,
+        error.ReadFailed,
+        error.UnexpectedEndOfStream,
+        error.WriteFailed,
+        => ctx.fail(.{ .invalid_url = .{
             .url = url,
             .reason = "Invalid URL format or missing hash. URLs must end with a base58-encoded BLAKE3 hash filename (e.g., '<hash>.tar.zst').",
         } }),
@@ -6596,7 +6975,38 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
                 .reason = "its install.json manifest is missing",
             } });
         },
-        else => return ctx.fail(.{ .install_entry_corrupt = .{
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.OutOfMemory,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = args.shorthand,
             .path = entry.entry_dir,
             .reason = "its install.json manifest could not be read",
@@ -6700,7 +7110,7 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
             .compiler_owned => |plugin_platform| switch (plugin_platform) {
                 .glue => .glue,
             },
-            else => .executable,
+            .none, .path_or_url => .executable,
         };
     };
 
@@ -6971,7 +7381,20 @@ fn discoverAndAddBundleModules(
                 return switch (result) {
                     .missing_target_file => error.MissingTargetFile,
                     .missing_files_directory => error.MissingFilesDirectory,
-                    else => error.MissingTargetFile,
+                    .valid,
+                    .missing_targets_section,
+                    .extra_file,
+                    .empty_targets,
+                    .unsupported_target,
+                    .missing_cross_compile_host,
+                    .unsupported_glibc_cross,
+                    .no_platform_found,
+                    .invalid_target,
+                    .linker_failed,
+                    .linker_not_available,
+                    .process_crashed,
+                    .process_signaled,
+                    => error.MissingTargetFile,
                 };
             }
         }
@@ -7246,7 +7669,21 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
                 try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
                 try stderr.print("Path: {s}\n", .{error_ctx.path});
             },
-            else => {},
+            error.AccessDenied,
+            error.CompressionFailed,
+            error.FileNotFound,
+            error.FileOpenFailed,
+            error.FilePathTooLong,
+            error.FileReadFailed,
+            error.FileStatFailed,
+            error.FileTooLarge,
+            error.FlushFailed,
+            error.IsDir,
+            error.OutOfMemory,
+            error.SystemResources,
+            error.TarWriteFailed,
+            error.WriteFailed,
+            => {},
         }
         return err;
     };
@@ -7306,7 +7743,18 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
             error.FileNotFound => {
                 // Good, directory doesn't exist
             },
-            else => return err,
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.FileBusy,
+            error.InputOutput,
+            error.NameTooLong,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => return err,
         };
 
         if (cwd.openDir(ctx.io.std_io, dir_name, .{})) |_| {
@@ -7356,7 +7804,24 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
                     try stderr.print("Archive: {s}\n", .{archive_path});
                     had_errors = true;
                 },
-                else => {
+                error.ChecksumFailure,
+                error.DecompressionFailed,
+                error.DictionaryIdFlagUnsupported,
+                error.DirectoryCreateFailed,
+                error.EndOfStream,
+                error.ExpandedSizeLimitExceeded,
+                error.FileCreateFailed,
+                error.FileTooLarge,
+                error.FileWriteFailed,
+                error.InvalidTarHeader,
+                error.MalformedBlock,
+                error.MalformedFrame,
+                error.NoDataExtracted,
+                error.OutOfMemory,
+                error.ReadFailed,
+                error.UnexpectedEndOfStream,
+                error.WriteFailed,
+                => {
                     try stderr.print("Error unbundling {s}: {s}\n", .{ archive_path, @errorName(err) });
                     had_errors = true;
                 },
@@ -7492,7 +7957,32 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
                 .x64openbsd,
                 => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
-                else => echo_platform.build_platform_main_source,
+                .x64musl,
+                .x64glibc,
+                .x64linux,
+                .x64elf,
+                .x64freebsd,
+                .x64netbsd,
+                .x64v1mac,
+                .x64v1win,
+                .x64v1freebsd,
+                .x64v1openbsd,
+                .x64v1netbsd,
+                .x64v1musl,
+                .x64v1glibc,
+                .x64v1linux,
+                .x64v1elf,
+                .arm64linux,
+                .arm64musl,
+                .arm64glibc,
+                .arm64v1win,
+                .arm64v1linux,
+                .arm64v1musl,
+                .arm64v1glibc,
+                .arm32linux,
+                .arm32musl,
+                .wasm32v1,
+                => echo_platform.build_platform_main_source,
             };
         }
 
@@ -7501,7 +7991,7 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
 
     return switch (RocTarget.detectNative().toOsTag()) {
         .macos, .windows, .openbsd => echo_platform.build_c_platform_main_source,
-        else => echo_platform.build_platform_main_source,
+        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => echo_platform.build_platform_main_source,
     };
 }
 
@@ -7799,11 +8289,9 @@ fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
 
 fn llvmBuildLinkAbi(target: RocTarget, synthetic_default_platform: bool) linker.TargetAbi {
     if (synthetic_default_platform) {
-        return switch (target.toOsTag()) {
-            .linux => .musl,
-            .freebsd, .netbsd => .freestanding,
-            else => linker.TargetAbi.fromRocTarget(target),
-        };
+        const os = target.toOsTag();
+        if (os == .linux) return .musl;
+        if (os == .freebsd or os == .netbsd) return .freestanding;
     }
     return linker.TargetAbi.fromRocTarget(target);
 }
@@ -8525,29 +9013,23 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
 }
 
 fn devBackendPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    return switch (target_arch) {
-        .x86_64 => "x64 Backend",
-        .aarch64 => "arm64 Backend",
-        .wasm32 => "wasm32 Bytecode Generation",
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "dev code-generation timing requested for unsupported architecture {s}",
-                    .{@tagName(target_arch)},
-                );
-            }
-            unreachable;
-        },
-    };
+    if (target_arch == .x86_64) return "x64 Backend";
+    if (target_arch == .aarch64) return "arm64 Backend";
+    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "dev code-generation timing requested for unsupported architecture {s}",
+            .{@tagName(target_arch)},
+        );
+    }
+    unreachable;
 }
 
 fn devInstructionGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    return switch (target_arch) {
-        .x86_64 => "x64 Instruction Generation",
-        .aarch64 => "arm64 Instruction Generation",
-        .wasm32 => "wasm32 Bytecode Generation",
-        else => devBackendPhaseName(target_arch),
-    };
+    if (target_arch == .x86_64) return "x64 Instruction Generation";
+    if (target_arch == .aarch64) return "arm64 Instruction Generation";
+    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
+    return devBackendPhaseName(target_arch);
 }
 
 fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]progress.SubTiming {
@@ -8574,7 +9056,7 @@ test "dev backend timing labels name the backend and emitted instruction format"
 fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
     return switch (target.toOsTag()) {
         .macos, .windows => false,
-        else => true,
+        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => true,
     };
 }
 
@@ -9000,15 +9482,12 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
-    switch (target_arch) {
-        .x86_64, .aarch64, .wasm32 => {},
-        else => {
-            try ctx.io.stderr().print(
-                "Error: roc build --opt={s} does not support the '{s}' architecture.\n",
-                .{ @tagName(args.opt), @tagName(target_arch) },
-            );
-            return error.UnsupportedTarget;
-        },
+    if (target_arch != .x86_64 and target_arch != .aarch64 and target_arch != .wasm32) {
+        try ctx.io.stderr().print(
+            "Error: roc build --opt={s} does not support the '{s}' architecture.\n",
+            .{ @tagName(args.opt), @tagName(target_arch) },
+        );
+        return error.UnsupportedTarget;
     }
 
     if (args.require_executable_output and link_type != .exe) {
@@ -9265,7 +9744,34 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
     };
 
     var build_env = try initCliBuildEnv(ctx, .{
@@ -9328,15 +9834,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.UnsupportedCrossCompilation;
     }
 
-    switch (target_arch) {
-        .x86_64, .aarch64, .wasm32 => {},
-        else => {
-            try ctx.io.stderr().print(
-                "Error: The native object backend does not support the '{s}' architecture.\n",
-                .{@tagName(target_arch)},
-            );
-            return error.UnsupportedTarget;
-        },
+    if (target_arch != .x86_64 and target_arch != .aarch64 and target_arch != .wasm32) {
+        try ctx.io.stderr().print(
+            "Error: The native object backend does not support the '{s}' architecture.\n",
+            .{@tagName(target_arch)},
+        );
+        return error.UnsupportedTarget;
     }
     const code_generation_phase_name = devBackendPhaseName(target_arch);
 
@@ -9599,7 +10102,34 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
     };
 
     var build_env = try initCliBuildEnv(ctx, .{
@@ -10304,7 +10834,7 @@ fn testRootRegion(
 ) base.Region {
     return switch (root.source) {
         .statement => |statement| env.store.getStatementRegion(statement),
-        else => {
+        .def, .expr, .required_binding, .hoisted => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("CLI test invariant violated: test root was not published from an expect statement", .{});
             }
@@ -10336,7 +10866,7 @@ fn collectExpectBindingPatterns(
 ) Allocator.Error![]CIR.Pattern.Idx {
     const statement_idx = switch (root.source) {
         .statement => |statement| statement,
-        else => return allocator.alloc(CIR.Pattern.Idx, 0),
+        .def, .expr, .required_binding, .hoisted => return allocator.alloc(CIR.Pattern.Idx, 0),
     };
     const statement = env.store.getStatement(statement_idx);
     if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);
@@ -10504,13 +11034,8 @@ fn sourceBindingForPattern(env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) 
         const def = env.store.getDef(def_idx);
         if (def.pattern != pattern_idx) continue;
 
-        switch (env.store.getExpr(def.expr)) {
-            .e_lambda,
-            .e_closure,
-            .e_hosted_lambda,
-            => return null,
-            else => {},
-        }
+        const expr_tag = std.meta.activeTag(env.store.getExpr(def.expr));
+        if (expr_tag == .e_lambda or expr_tag == .e_closure or expr_tag == .e_hosted_lambda) return null;
 
         const pattern_region = env.store.getPatternRegion(def.pattern);
         const expr_region = env.store.getExprRegion(def.expr);
@@ -10680,7 +11205,7 @@ fn lowerCheckedSourceToLir(
             // Host-visible data exports exist only in linked outputs.
             .include_provided_data_exports = switch (roots) {
                 .linked_output => true,
-                else => false,
+                .platform_entrypoints, .test_plan => false,
             },
             // Internal readonly values are embedded by linked outputs and dev
             // RunImages. LirImage deliberately remains pointer-width independent.
@@ -10694,11 +11219,11 @@ fn lowerCheckedSourceToLir(
             },
             .test_plan_metadata = switch (roots) {
                 .test_plan => |plan| plan.metadata,
-                else => &.{},
+                .platform_entrypoints, .linked_output => &.{},
             },
             .procedure_template_root_grouping = switch (roots) {
                 .test_plan => .shared_adjacent,
-                else => .isolated,
+                .platform_entrypoints, .linked_output => .isolated,
             },
         },
         .{
@@ -10708,7 +11233,7 @@ fn lowerCheckedSourceToLir(
             // backends omit them from optimized output.
             .inline_expects = switch (roots) {
                 .test_plan => .run,
-                else => inlineExpectModeForOpt(opt),
+                .platform_entrypoints, .linked_output => inlineExpectModeForOpt(opt),
             },
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
@@ -11092,7 +11617,12 @@ fn runInterpreterTestRoots(
             // source snippet at the `?` itself.
             const failure_region = switch (err) {
                 error.ExpectErr => interpreter.getExpectErrRegion() orelse run.region,
-                else => run.region,
+                error.ComptimeExhaustiveness,
+                error.Crash,
+                error.DivisionByZero,
+                error.OutOfMemory,
+                error.RuntimeError,
+                => run.region,
             };
             const message = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err);
             var message_owned = true;
@@ -11104,7 +11634,12 @@ fn runInterpreterTestRoots(
                     message_owned = false;
                     break :blk null;
                 },
-                else => blk: {
+                error.ComptimeExhaustiveness,
+                error.DivisionByZero,
+                error.ExpectErr,
+                error.OutOfMemory,
+                error.RuntimeError,
+                => blk: {
                     message_owned = false;
                     break :blk message;
                 },
@@ -11291,7 +11826,103 @@ fn runCompiledTestRoots(
         .interpreter => unreachable,
     } catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingDynamicLinkingInformation,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.PageSizeQueryFailed,
+        error.ParseError,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.TypeCheckError,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => {
             try appendCompilerErrorsForRuns(ctx, mode, err, root_runs, results, summary);
             return;
         },
@@ -11488,7 +12119,103 @@ fn runLlvmLoweredTestModulesOnce(
         event_callback,
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingDynamicLinkingInformation,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.PageSizeQueryFailed,
+        error.ParseError,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.TypeCheckError,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => {
             for (lowered_modules) |*lowered_module| {
                 var results = std.ArrayList(CliTestResultItem).empty;
                 errdefer {
@@ -11694,7 +12421,7 @@ const WatchFileState = union(enum) {
         return switch (a) {
             .hash => |a_hash| switch (b) {
                 .hash => |b_hash| std.mem.eql(u8, &a_hash, &b_hash),
-                else => false,
+                .missing, .unreadable => false,
             },
             .missing => b == .missing,
             .unreadable => b == .unreadable,
@@ -11769,7 +12496,7 @@ const WatchChild = struct {
 
         while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
             error.EndOfStream => {},
-            else => |e| return e,
+            error.Canceled, error.ConcurrencyUnavailable, error.Timeout => return @errorCast(err),
         }
         try multi_reader.checkAnyError();
 
@@ -12220,7 +12947,37 @@ fn readWatchInputsFile(ctx: *CliCtx, file_path: []const u8, extra_paths: []const
     const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(watch_inputs_file_limit)) catch |err| switch (err) {
         error.FileNotFound => return error.WatchInputsMissing,
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.WatchInputsReadFailed,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return error.WatchInputsReadFailed,
     };
     defer ctx.gpa.free(bytes);
 
@@ -12295,7 +13052,37 @@ fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFi
     const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .limited(watch_file_hash_limit)) catch |err| switch (err) {
         error.FileNotFound => return .missing,
         error.OutOfMemory => return error.OutOfMemory,
-        else => return .unreadable,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return .unreadable,
     };
     defer ctx.gpa.free(bytes);
 
@@ -12393,7 +13180,13 @@ fn refreshWatchState(
                 ctx.io.flush();
                 return err;
             },
-            else => return err,
+            error.AlreadyStarted,
+            error.LockedMemoryLimitExceeded,
+            error.OutOfMemory,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            => return err,
         };
     }
 
@@ -12602,7 +13395,7 @@ fn terminateWatchChild(child: *WatchChild) void {
             _ = std.os.windows.ntdll.NtTerminateProcess(child.id, @enumFromInt(1));
         },
         .wasi => {},
-        else => {
+        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => {
             std.posix.kill(child.id, .KILL) catch {};
         },
     }
@@ -12825,7 +13618,36 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     if (use_live_optimized_output) {
         const spill_temp_dir = createUniqueTempDir(ctx) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.WriteFailed,
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.DiskQuota,
+            error.FailedToCreateUniqueTempDir,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileNotFound,
+            error.FileTooBig,
+            error.IsDir,
+            error.LinkQuotaExceeded,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.Streaming,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => return error.WriteFailed,
         };
         live_coordinator = try CliTestTranscriptCoordinator.init(
             ctx.gpa,
@@ -13789,10 +14611,7 @@ fn printTestProblem(
     };
     if (should_print_detail) {
         if (failure_detail) |msg| {
-            switch (severity) {
-                .warning => try report.addWarningMessage(msg),
-                else => try report.addErrorMessage(msg),
-            }
+            if (severity == .warning) try report.addWarningMessage(msg) else try report.addErrorMessage(msg);
         }
     }
 
@@ -14010,7 +14829,19 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
                     .{ args.glue_spec, args.glue_spec },
                 );
             },
-            else => {},
+            error.BuildEnvInit,
+            error.CompilationFailed,
+            error.DevBackendUnavailable,
+            error.FileNotFound,
+            error.GlueSpecNotFound,
+            error.ModuleRetrieval,
+            error.NotPlatformFile,
+            error.OutOfMemory,
+            error.ParseFailed,
+            error.PlatformPathResolution,
+            error.TempDirCreation,
+            error.WriteFailed,
+            => {},
         }
         return err;
     };
@@ -14470,7 +15301,17 @@ fn nsToMs(ns: u64) u32 {
     return @intCast((ns + 500_000) / 1_000_000);
 }
 
-fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) @TypeOf(err)!void {
+fn ReturnErrorSet(comptime Fn: type) type {
+    const return_type = @typeInfo(Fn).@"fn".return_type.?;
+    return @typeInfo(return_type).error_union.error_set;
+}
+
+const ProcessFileError = ReturnErrorSet(@TypeOf(rocCheckDefaultAppPreserved)) ||
+    ReturnErrorSet(@TypeOf(checkFileWithBuildEnvPreserved)) ||
+    ReturnErrorSet(@TypeOf(rocCheckDefaultApp)) ||
+    ReturnErrorSet(@TypeOf(checkFileWithBuildEnv));
+
+fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const u8) ProcessFileError!void {
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
@@ -14484,7 +15325,93 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) @Type
         error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
 
         // Catch-all for any other errors
-        else => stderr.print("{s}\n", .{@errorName(err)}) catch {},
+        error.AccessDenied,
+        error.AlreadyStarted,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BrokenPipe,
+        error.BuiltinArtifactVersionMismatch,
+        error.BuiltinLowLevelAnnotationMustBeFunction,
+        error.Canceled,
+        error.CheckFailed,
+        error.CliError,
+        error.ConcurrencyUnavailable,
+        error.ConnectionResetByPeer,
+        error.CorruptArtifact,
+        error.CorruptBuiltinArtifact,
+        error.CorruptEmbeddedBuiltins,
+        error.CurrentDirUnlinked,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DownloadFailed,
+        error.EmptyCode,
+        error.FileBusy,
+        error.FileError,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileSystem,
+        error.FileTooBig,
+        error.InputOutput,
+        error.InvalidBatchScriptArg,
+        error.InvalidExe,
+        error.InvalidName,
+        error.InvalidNullByteInPath,
+        error.InvalidProcessGroupId,
+        error.InvalidUrl,
+        error.InvalidUserId,
+        error.InvalidWtf8,
+        error.IoError,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.LowLevelOperationsNotFound,
+        error.MissingFilesDirectory,
+        error.MissingTargetFile,
+        error.MmapFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoCacheDir,
+        error.NoDevice,
+        error.NoPackageSource,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OperationUnsupported,
+        error.OutOfMemory,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessAlreadyExec,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.ResourceLimitReached,
+        error.SocketUnconnected,
+        error.StaleEmbeddedBuiltins,
+        error.StreamTooLong,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.ThreadQuotaExceeded,
+        error.Timeout,
+        error.Unexpected,
+        error.UnrecognizedVolume,
+        error.UnsupportedBuiltinAnnotationOnly,
+        error.UnsupportedPlatform,
+        error.UnsupportedWatchMode,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WatchBackendFailed,
+        error.WatchInputsMalformed,
+        error.WatchInputsMissing,
+        error.WatchInputsReadFailed,
+        error.WouldBlock,
+        error.WriteFailed,
+        => stderr.print("{s}\n", .{@errorName(err)}) catch {},
     }
 
     return err;
@@ -14585,36 +15512,35 @@ fn remapDefaultAppDocumentElement(
     original_line_starts: []const u32,
     synthetic_header_lines: u32,
 ) Allocator.Error!void {
-    switch (element.*) {
-        .source_code_region => |*region| try remapDefaultAppSourceRegion(
+    if (element.* == .source_code_region) {
+        try remapDefaultAppSourceRegion(
             allocator,
-            region,
+            &element.source_code_region,
             original_path,
             original_source,
             original_line_starts,
             synthetic_header_lines,
-        ),
-        .source_code_with_underlines => |*underlines| {
-            const old_start_line = underlines.display_region.start_line;
-            try remapDefaultAppSourceRegion(
-                allocator,
-                &underlines.display_region,
-                original_path,
-                original_source,
-                original_line_starts,
-                synthetic_header_lines,
-            );
-            if (old_start_line <= synthetic_header_lines) return;
-            for (underlines.underline_regions) |*underline| {
-                if (underline.start_line > synthetic_header_lines) {
-                    underline.start_line -= synthetic_header_lines;
-                }
-                if (underline.end_line > synthetic_header_lines) {
-                    underline.end_line -= synthetic_header_lines;
-                }
+        );
+    } else if (element.* == .source_code_with_underlines) {
+        const underlines = &element.source_code_with_underlines;
+        const old_start_line = underlines.display_region.start_line;
+        try remapDefaultAppSourceRegion(
+            allocator,
+            &underlines.display_region,
+            original_path,
+            original_source,
+            original_line_starts,
+            synthetic_header_lines,
+        );
+        if (old_start_line <= synthetic_header_lines) return;
+        for (underlines.underline_regions) |*underline| {
+            if (underline.start_line > synthetic_header_lines) {
+                underline.start_line -= synthetic_header_lines;
             }
-        },
-        else => {},
+            if (underline.end_line > synthetic_header_lines) {
+                underline.end_line -= synthetic_header_lines;
+            }
+        }
     }
 }
 
@@ -14727,7 +15653,68 @@ fn checkFileWithBuildEnvPreserved(
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => {},
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.BuiltinArtifactVersionMismatch,
+            error.BuiltinLowLevelAnnotationMustBeFunction,
+            error.Canceled,
+            error.CorruptArtifact,
+            error.CorruptBuiltinArtifact,
+            error.CorruptEmbeddedBuiltins,
+            error.DeviceBusy,
+            error.DownloadFailed,
+            error.EmptyCode,
+            error.ExpectedAppHeader,
+            error.ExpectedPlatformString,
+            error.ExpectedString,
+            error.FileBusy,
+            error.FileError,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.InputOutput,
+            error.Internal,
+            error.InvalidDependency,
+            error.InvalidNullByteInPath,
+            error.InvalidPackageName,
+            error.InvalidUrl,
+            error.IoError,
+            error.IsDir,
+            error.LockedMemoryLimitExceeded,
+            error.LowLevelOperationsNotFound,
+            error.MissingFilesDirectory,
+            error.MissingTargetFile,
+            error.MmapFailed,
+            error.MprotectFailed,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoCacheDir,
+            error.NoDevice,
+            error.NoPackageSource,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.OperationUnsupported,
+            error.PathAlreadyExists,
+            error.PathOutsideWorkspace,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.StaleEmbeddedBuiltins,
+            error.StreamTooLong,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.UnrecognizedVolume,
+            error.UnsupportedBuiltinAnnotationOnly,
+            error.UnsupportedHeader,
+            error.UnsupportedPlatform,
+            error.UnwindRegistrationFailed,
+            error.VirtualAllocFailed,
+            error.VirtualProtectFailed,
+            => {},
         }
 
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
@@ -14872,7 +15859,68 @@ fn checkFileWithBuildEnv(
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => {},
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.BuiltinArtifactVersionMismatch,
+            error.BuiltinLowLevelAnnotationMustBeFunction,
+            error.Canceled,
+            error.CorruptArtifact,
+            error.CorruptBuiltinArtifact,
+            error.CorruptEmbeddedBuiltins,
+            error.DeviceBusy,
+            error.DownloadFailed,
+            error.EmptyCode,
+            error.ExpectedAppHeader,
+            error.ExpectedPlatformString,
+            error.ExpectedString,
+            error.FileBusy,
+            error.FileError,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.InputOutput,
+            error.Internal,
+            error.InvalidDependency,
+            error.InvalidNullByteInPath,
+            error.InvalidPackageName,
+            error.InvalidUrl,
+            error.IoError,
+            error.IsDir,
+            error.LockedMemoryLimitExceeded,
+            error.LowLevelOperationsNotFound,
+            error.MissingFilesDirectory,
+            error.MissingTargetFile,
+            error.MmapFailed,
+            error.MprotectFailed,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoCacheDir,
+            error.NoDevice,
+            error.NoPackageSource,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.OperationUnsupported,
+            error.PathAlreadyExists,
+            error.PathOutsideWorkspace,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.StaleEmbeddedBuiltins,
+            error.StreamTooLong,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.UnrecognizedVolume,
+            error.UnsupportedBuiltinAnnotationOnly,
+            error.UnsupportedHeader,
+            error.UnsupportedPlatform,
+            error.UnwindRegistrationFailed,
+            error.VirtualAllocFailed,
+            error.VirtualProtectFailed,
+            => {},
         }
 
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
@@ -15412,7 +16460,38 @@ fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u
     const file_content = std.Io.Dir.cwd().readFileAlloc(io, file_path, ctx.gpa, .limited(10 * 1024 * 1024)) catch |err| {
         switch (err) {
             error.FileNotFound => try sendResponse(io, stream, "404 Not Found", "text/plain", "File Not Found"),
-            else => try sendResponse(io, stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.ConnectionResetByPeer,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileTooBig,
+            error.InputOutput,
+            error.IsDir,
+            error.LockViolation,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.NotOpenForReading,
+            error.OutOfMemory,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.SocketUnconnected,
+            error.StreamTooLong,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => try sendResponse(io, stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
         }
         return;
     };
@@ -15744,16 +16823,15 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
     const root_name = build_env.discovered_pkg_name orelse return error.Internal;
     const root_pkg = build_env.packages.getPtr(root_name) orelse return error.Internal;
 
-    switch (root_pkg.kind) {
-        .package, .platform => {},
-        else => return ctx.fail(.{ .bump_failed = .{
+    if (root_pkg.kind != .package and root_pkg.kind != .platform) {
+        return ctx.fail(.{ .bump_failed = .{
             .title = "Not A Package",
             .message = try std.fmt.allocPrint(
                 ctx.arena,
                 "roc bump compares package APIs, but the {s} module ({s}) has neither a package nor a platform header.",
                 .{ side, root_pkg.root_file },
             ),
-        } }),
+        } });
     }
 
     // Map every compiled module's identity to the package that owns it, so type
@@ -16086,7 +17164,34 @@ fn generateDocs(
     // Create output directory
     std.Io.Dir.cwd().createDirPath(ctx.io.std_io, base_output_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
     };
 
     // Load the language reference articles when requested. They are read from

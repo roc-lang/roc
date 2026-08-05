@@ -17,12 +17,8 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) error{NotAnInteger}!i128 {
     const expr = module_env.store.getExpr(expr_idx);
-    switch (expr) {
-        .e_num => |int_expr| {
-            return @bitCast(int_expr.value.bytes);
-        },
-        else => return error.NotAnInteger,
-    }
+    if (std.meta.activeTag(expr) != .e_num) return error.NotAnInteger;
+    return @bitCast(expr.e_num.value.bytes);
 }
 
 test "canonicalize simple positive integer" {
@@ -72,13 +68,9 @@ test "canonicalize builtin typed integer suffix without caller setup" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_typed_int => |typed| {
-            try testing.expectEqual(@as(i128, 0), typed.value.toI128());
-            try testing.expectEqualStrings("I64", test_env.getIdent(typed.type_name));
-        },
-        else => return error.NotATypedInteger,
-    }
+    if (std.meta.activeTag(expr) != .e_typed_int) return error.NotATypedInteger;
+    try testing.expectEqual(@as(i128, 0), expr.e_typed_int.value.toI128());
+    try testing.expectEqualStrings("I64", test_env.getIdent(expr.e_typed_int.type_name));
 }
 
 test "canonicalize builtin typed fractional suffix without caller setup" {
@@ -88,13 +80,9 @@ test "canonicalize builtin typed fractional suffix without caller setup" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_typed_frac => |typed| {
-            try testing.expectEqual(@as(i128, 3_140_000_000_000_000_000), typed.value.toI128());
-            try testing.expectEqualStrings("Dec", test_env.getIdent(typed.type_name));
-        },
-        else => return error.NotATypedFraction,
-    }
+    if (std.meta.activeTag(expr) != .e_typed_frac) return error.NotATypedFraction;
+    try testing.expectEqual(@as(i128, 3_140_000_000_000_000_000), expr.e_typed_frac.value.toI128());
+    try testing.expectEqualStrings("Dec", test_env.getIdent(expr.e_typed_frac.type_name));
 }
 
 test "typed numeric suffix still uses ordinary scope lookup" {
@@ -108,13 +96,10 @@ test "typed numeric suffix still uses ordinary scope lookup" {
 
     var found_undeclared_type = false;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .undeclared_type => |data| {
-                if (std.mem.eql(u8, test_env.getIdent(data.name), "UnknownType")) {
-                    found_undeclared_type = true;
-                }
-            },
-            else => {},
+        if (std.meta.activeTag(diagnostic) == .undeclared_type and
+            std.mem.eql(u8, test_env.getIdent(diagnostic.undeclared_type.name), "UnknownType"))
+        {
+            found_undeclared_type = true;
         }
     }
 
@@ -138,20 +123,14 @@ test "typed numeric suffix uses local shadow of builtin numeric type" {
     const final_expr_idx = expr.e_block.final_expr;
     const suffix_target = test_env.module_env.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(final_expr_idx)) orelse return error.MissingSuffixTarget;
 
-    switch (suffix_target.target()) {
-        .local => {},
-        else => return error.NotLocalSuffixTarget,
-    }
+    if (suffix_target.target() != .local) return error.NotLocalSuffixTarget;
 
     const diagnostics = try test_env.getDiagnostics();
     defer testing.allocator.free(diagnostics);
 
     var found_shadowing_warning = false;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .builtin_type_shadowed_warning => found_shadowing_warning = true,
-            else => {},
-        }
+        if (std.meta.activeTag(diagnostic) == .builtin_type_shadowed_warning) found_shadowing_warning = true;
     }
 
     try testing.expect(found_shadowing_warning);

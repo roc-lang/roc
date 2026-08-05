@@ -27,12 +27,9 @@ fn expectNoZeroTargetExternalLookup(env: *const ModuleEnv) error{TestUnexpectedR
         if (env.store.nodes.get(node_idx).tag != .expr_external_lookup) continue;
 
         const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
-        switch (env.store.getExpr(expr_idx)) {
-            .e_lookup_external => |external| {
-                try testing.expect(external.target_node_idx != 0);
-            },
-            else => unreachable,
-        }
+        const expr = env.store.getExpr(expr_idx);
+        if (expr != .e_lookup_external) unreachable;
+        try testing.expect(expr.e_lookup_external.target_node_idx != 0);
     }
 }
 
@@ -107,13 +104,11 @@ test "file imports reject absolute paths before recording dependencies" {
 
     var found_absolute_path = false;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .file_import_absolute_path => |data| {
-                found_absolute_path = true;
-                try testing.expectEqualStrings("/tmp/data.txt", result.parse_env.getString(data.path));
-            },
-            .file_import_not_found, .file_import_io_error => return error.UnexpectedFileImportReadDiagnostic,
-            else => {},
+        if (diagnostic == .file_import_absolute_path) {
+            found_absolute_path = true;
+            try testing.expectEqualStrings("/tmp/data.txt", result.parse_env.getString(diagnostic.file_import_absolute_path.path));
+        } else if (diagnostic == .file_import_not_found or diagnostic == .file_import_io_error) {
+            return error.UnexpectedFileImportReadDiagnostic;
         }
     }
 
@@ -222,29 +217,27 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .module_not_found => |d| {
-                module_not_found_count += 1;
-                const module_name = parse_env.getIdent(d.module_name);
-                if (std.mem.eql(u8, module_name, "NonExistent")) {
-                    found_non_existent = true;
-                }
-            },
-            .value_not_exposed => |d| {
-                value_not_exposed_count += 1;
-                const value_name = parse_env.getIdent(d.value_name);
-                if (std.mem.eql(u8, value_name, "doesNotExist")) {
-                    found_does_not_exist = true;
-                }
-            },
-            .type_not_exposed => |d| {
-                type_not_exposed_count += 1;
-                const type_name = parse_env.getIdent(d.type_name);
-                if (std.mem.eql(u8, type_name, "InvalidType")) {
-                    found_invalid_type = true;
-                }
-            },
-            else => {},
+        if (diagnostic == .module_not_found) {
+            const d = diagnostic.module_not_found;
+            module_not_found_count += 1;
+            const module_name = parse_env.getIdent(d.module_name);
+            if (std.mem.eql(u8, module_name, "NonExistent")) {
+                found_non_existent = true;
+            }
+        } else if (diagnostic == .value_not_exposed) {
+            const d = diagnostic.value_not_exposed;
+            value_not_exposed_count += 1;
+            const value_name = parse_env.getIdent(d.value_name);
+            if (std.mem.eql(u8, value_name, "doesNotExist")) {
+                found_does_not_exist = true;
+            }
+        } else if (diagnostic == .type_not_exposed) {
+            const d = diagnostic.type_not_exposed;
+            type_not_exposed_count += 1;
+            const type_name = parse_env.getIdent(d.type_name);
+            if (std.mem.eql(u8, type_name, "InvalidType")) {
+                found_invalid_type = true;
+            }
         }
     }
     // Verify we got the expected errors
@@ -336,20 +329,18 @@ test "import validation - type module associated values are importable via expos
     const diagnostics = try importer_env.getDiagnostics();
     defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .value_not_exposed => |d| {
-                std.debug.print("unexpected VALUE NOT EXPOSED for {s}\n", .{importer_env.getIdent(d.value_name)});
-                return error.UnexpectedValueNotExposed;
-            },
-            .qualified_ident_does_not_exist => |d| {
-                std.debug.print("unexpected unresolved ident {s}\n", .{importer_env.getIdent(d.ident)});
-                return error.UnexpectedUnresolvedIdent;
-            },
-            .ident_not_in_scope => |d| {
-                std.debug.print("unexpected ident not in scope {s}\n", .{importer_env.getIdent(d.ident)});
-                return error.UnexpectedIdentNotInScope;
-            },
-            else => {},
+        if (diagnostic == .value_not_exposed) {
+            const d = diagnostic.value_not_exposed;
+            std.debug.print("unexpected VALUE NOT EXPOSED for {s}\n", .{importer_env.getIdent(d.value_name)});
+            return error.UnexpectedValueNotExposed;
+        } else if (diagnostic == .qualified_ident_does_not_exist) {
+            const d = diagnostic.qualified_ident_does_not_exist;
+            std.debug.print("unexpected unresolved ident {s}\n", .{importer_env.getIdent(d.ident)});
+            return error.UnexpectedUnresolvedIdent;
+        } else if (diagnostic == .ident_not_in_scope) {
+            const d = diagnostic.ident_not_in_scope;
+            std.debug.print("unexpected ident not in scope {s}\n", .{importer_env.getIdent(d.ident)});
+            return error.UnexpectedIdentNotInScope;
         }
     }
 }
@@ -436,32 +427,30 @@ test "import validation - exposed nested type associated function resolves via s
     const diagnostics = try importer_env.getDiagnostics();
     defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .qualified_ident_does_not_exist => |d| {
-                std.debug.print("unexpected unresolved qualified ident: {s}\n", .{importer_env.getIdent(d.ident)});
-                return error.UnexpectedUnresolvedIdent;
-            },
-            .nested_value_not_found => |d| {
-                std.debug.print("unexpected nested value not found: {s}.{s}\n", .{ importer_env.getIdent(d.parent_name), importer_env.getIdent(d.nested_name) });
-                return error.UnexpectedNestedValueNotFound;
-            },
-            .nested_type_not_found => |d| {
-                std.debug.print("unexpected nested type not found: {s}.{s}\n", .{ importer_env.getIdent(d.parent_name), importer_env.getIdent(d.nested_name) });
-                return error.UnexpectedNestedTypeNotFound;
-            },
-            .value_not_exposed => |d| {
-                std.debug.print("unexpected value not exposed: {s}\n", .{importer_env.getIdent(d.value_name)});
-                return error.UnexpectedValueNotExposed;
-            },
-            .type_not_exposed => |d| {
-                std.debug.print("unexpected type not exposed: {s}\n", .{importer_env.getIdent(d.type_name)});
-                return error.UnexpectedTypeNotExposed;
-            },
-            .ident_not_in_scope => |d| {
-                std.debug.print("unexpected ident not in scope: {s}\n", .{importer_env.getIdent(d.ident)});
-                return error.UnexpectedIdentNotInScope;
-            },
-            else => {},
+        if (diagnostic == .qualified_ident_does_not_exist) {
+            const d = diagnostic.qualified_ident_does_not_exist;
+            std.debug.print("unexpected unresolved qualified ident: {s}\n", .{importer_env.getIdent(d.ident)});
+            return error.UnexpectedUnresolvedIdent;
+        } else if (diagnostic == .nested_value_not_found) {
+            const d = diagnostic.nested_value_not_found;
+            std.debug.print("unexpected nested value not found: {s}.{s}\n", .{ importer_env.getIdent(d.parent_name), importer_env.getIdent(d.nested_name) });
+            return error.UnexpectedNestedValueNotFound;
+        } else if (diagnostic == .nested_type_not_found) {
+            const d = diagnostic.nested_type_not_found;
+            std.debug.print("unexpected nested type not found: {s}.{s}\n", .{ importer_env.getIdent(d.parent_name), importer_env.getIdent(d.nested_name) });
+            return error.UnexpectedNestedTypeNotFound;
+        } else if (diagnostic == .value_not_exposed) {
+            const d = diagnostic.value_not_exposed;
+            std.debug.print("unexpected value not exposed: {s}\n", .{importer_env.getIdent(d.value_name)});
+            return error.UnexpectedValueNotExposed;
+        } else if (diagnostic == .type_not_exposed) {
+            const d = diagnostic.type_not_exposed;
+            std.debug.print("unexpected type not exposed: {s}\n", .{importer_env.getIdent(d.type_name)});
+            return error.UnexpectedTypeNotExposed;
+        } else if (diagnostic == .ident_not_in_scope) {
+            const d = diagnostic.ident_not_in_scope;
+            std.debug.print("unexpected ident not in scope: {s}\n", .{importer_env.getIdent(d.ident)});
+            return error.UnexpectedIdentNotInScope;
         }
     }
 }
@@ -538,16 +527,14 @@ test "import validation - exposing a type module's main type by name is not a re
     const diagnostics = try importer_env.getDiagnostics();
     defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .shadowing_warning => |d| {
-                std.debug.print("unexpected redeclaration of {s}\n", .{importer_env.getIdent(d.ident)});
-                return error.UnexpectedRedeclaration;
-            },
-            .qualified_ident_does_not_exist => |d| {
-                std.debug.print("unexpected unresolved qualified ident: {s}\n", .{importer_env.getIdent(d.ident)});
-                return error.UnexpectedUnresolvedIdent;
-            },
-            else => {},
+        if (diagnostic == .shadowing_warning) {
+            const d = diagnostic.shadowing_warning;
+            std.debug.print("unexpected redeclaration of {s}\n", .{importer_env.getIdent(d.ident)});
+            return error.UnexpectedRedeclaration;
+        } else if (diagnostic == .qualified_ident_does_not_exist) {
+            const d = diagnostic.qualified_ident_does_not_exist;
+            std.debug.print("unexpected unresolved qualified ident: {s}\n", .{importer_env.getIdent(d.ident)});
+            return error.UnexpectedUnresolvedIdent;
         }
     }
 }
@@ -666,11 +653,7 @@ test "unresolved exposed value is not imported as external lookup target zero" {
 
     const a_diagnostics = try a_env.getDiagnostics();
     defer allocator.free(a_diagnostics);
-    for (a_diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            else => return error.UnexpectedImportDiagnostic,
-        }
-    }
+    if (a_diagnostics.len != 0) return error.UnexpectedImportDiagnostic;
 
     const importer_source =
         \\import A
@@ -710,15 +693,13 @@ test "unresolved exposed value is not imported as external lookup target zero" {
     const importer_diagnostics = try importer_env.getDiagnostics();
     defer allocator.free(importer_diagnostics);
     for (importer_diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .nested_value_not_found => |d| {
-                if (std.mem.eql(u8, importer_env.getIdent(d.parent_name), "A") and
-                    std.mem.eql(u8, importer_env.getIdent(d.nested_name), "f"))
-                {
-                    found_missing_f = true;
-                }
-            },
-            else => {},
+        if (diagnostic == .nested_value_not_found) {
+            const d = diagnostic.nested_value_not_found;
+            if (std.mem.eql(u8, importer_env.getIdent(d.parent_name), "A") and
+                std.mem.eql(u8, importer_env.getIdent(d.nested_name), "f"))
+            {
+                found_missing_f = true;
+            }
         }
     }
     try testing.expect(found_missing_f);
@@ -759,15 +740,7 @@ test "import validation - no module_envs provided" {
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .module_not_found => {
-                // expected this error message, ignore
-            },
-            else => {
-                // these errors are not expected
-                try testing.expect(false);
-            },
-        }
+        try testing.expect(diagnostic == .module_not_found);
     }
 }
 
@@ -932,14 +905,12 @@ test "imported type-module tag rejects alias target" {
 
     var found_alias_error = false;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .type_alias_but_needed_nominal => |d| {
-                const name = env.getIdent(d.name);
-                if (std.mem.eql(u8, name, "Other")) {
-                    found_alias_error = true;
-                }
-            },
-            else => {},
+        if (diagnostic == .type_alias_but_needed_nominal) {
+            const d = diagnostic.type_alias_but_needed_nominal;
+            const name = env.getIdent(d.name);
+            if (std.mem.eql(u8, name, "Other")) {
+                found_alias_error = true;
+            }
         }
     }
 
@@ -1018,16 +989,12 @@ test "imported nested associated types resolve by qualified export key" {
     defer allocator.free(diagnostics);
 
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .type_not_exposed,
-            .type_from_missing_module,
-            .module_not_imported,
-            .undeclared_type,
-            .type_alias_but_needed_nominal,
-            .qualified_ident_does_not_exist,
-            => return error.UnexpectedDiagnostic,
-            else => {},
-        }
+        if (diagnostic == .type_not_exposed or
+            diagnostic == .type_from_missing_module or
+            diagnostic == .module_not_imported or
+            diagnostic == .undeclared_type or
+            diagnostic == .type_alias_but_needed_nominal or
+            diagnostic == .qualified_ident_does_not_exist) return error.UnexpectedDiagnostic;
     }
 }
 
@@ -1053,12 +1020,8 @@ test "export count safety - ensures safe u16 casting" {
     };
     const diag_idx1 = try env1.store.addDiagnostic(diag_at_limit);
     const retrieved1 = env1.store.getDiagnostic(diag_idx1);
-    switch (retrieved1) {
-        .too_many_exports => |d| {
-            try expectEqual(@as(u32, 65535), d.count);
-        },
-        else => return error.UnexpectedDiagnostic,
-    }
+    if (retrieved1 != .too_many_exports) return error.UnexpectedDiagnostic;
+    try expectEqual(@as(u32, 65535), retrieved1.too_many_exports.count);
     // Test the diagnostic for exceeding the limit
     var env2 = try ModuleEnv.init(allocator, "");
     defer env2.deinit();
@@ -1071,12 +1034,8 @@ test "export count safety - ensures safe u16 casting" {
     };
     const diag_idx2 = try env2.store.addDiagnostic(diag_over_limit);
     const retrieved2 = env2.store.getDiagnostic(diag_idx2);
-    switch (retrieved2) {
-        .too_many_exports => |d| {
-            try expectEqual(@as(u32, 70000), d.count);
-        },
-        else => return error.UnexpectedDiagnostic,
-    }
+    if (retrieved2 != .too_many_exports) return error.UnexpectedDiagnostic;
+    try expectEqual(@as(u32, 70000), retrieved2.too_many_exports.count);
     // Demonstrate that values under the limit can be safely cast to u16
     const safe_count: u32 = 65534; // Just under the limit
     const casted: u16 = @intCast(safe_count); // This is safe

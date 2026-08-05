@@ -133,10 +133,8 @@ pub fn validatePlatformHasTargets(
     const header = store.getHeader(file.header);
 
     // Only platform headers should have targets
-    const platform = switch (header) {
-        .platform => |p| p,
-        else => return .{ .valid = {} }, // Non-platform headers don't need targets
-    };
+    if (header != .platform) return .{ .valid = {} }; // Non-platform headers don't need targets
+    const platform = header.platform;
 
     // Check if targets section exists
     if (platform.targets == null) {
@@ -702,15 +700,11 @@ test "validatePlatformHasTargets detects missing targets section" {
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
-    switch (result) {
-        .missing_targets_section => |info| {
-            try std.testing.expectEqualStrings("test/platform/main.roc", info.platform_path);
-        },
-        else => {
-            std.debug.print("Expected missing_targets_section but got {}\n", .{result});
-            return error.UnexpectedResult;
-        },
+    if (result != .missing_targets_section) {
+        std.debug.print("Expected missing_targets_section but got {}\n", .{result});
+        return error.UnexpectedResult;
     }
+    try std.testing.expectEqualStrings("test/platform/main.roc", result.missing_targets_section.platform_path);
 }
 
 test "validatePlatformHasTargets accepts platform with targets section" {
@@ -929,19 +923,16 @@ test "validateTargetFilesExist reports missing target file with valid path" {
     // This should return a missing_target_file result with a valid expected_full_path
     const result = try validateTargetFilesExist(allocator, std.testing.io, config, tmp_dir.dir);
 
-    switch (result) {
-        .missing_target_file => |info| {
-            // The expected_full_path should be a valid string, not garbage
-            // If it's garbage due to use-after-free, this will likely fail or crash
-            try std.testing.expectEqualStrings("targets/x64mac", info.expected_full_path);
-            // Also check that it's still accessible after the function returns
-            try std.testing.expect(info.expected_full_path.len > 0);
-            // Clean up the allocated path
-            allocator.free(info.expected_full_path);
-        },
-        else => {
-            std.debug.print("Expected missing_target_file but got {}\n", .{result});
-            return error.UnexpectedResult;
-        },
+    if (result != .missing_target_file) {
+        std.debug.print("Expected missing_target_file but got {}\n", .{result});
+        return error.UnexpectedResult;
     }
+    const info = result.missing_target_file;
+    // The expected_full_path should be a valid string, not garbage
+    // If it's garbage due to use-after-free, this will likely fail or crash
+    try std.testing.expectEqualStrings("targets/x64mac", info.expected_full_path);
+    // Also check that it's still accessible after the function returns
+    try std.testing.expect(info.expected_full_path.len > 0);
+    // Clean up the allocated path
+    allocator.free(info.expected_full_path);
 }

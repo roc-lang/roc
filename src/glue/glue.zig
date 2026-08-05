@@ -135,7 +135,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             error.NotPlatformFile => error.NotPlatformFile,
             error.FileNotFound => error.FileNotFound,
             error.ParseFailed => error.ParseFailed,
-            else => error.ParseFailed,
+            error.OutOfMemory,
+            => error.ParseFailed,
         };
     };
     defer platform_info.deinit(gpa);
@@ -519,7 +520,16 @@ pub fn buildGlueSpecDylibFile(
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
             error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
-            else => stderr.print("Error: {s}\n", .{@errorName(err)}),
+            error.DevBackendUnavailable,
+            error.FileNotFound,
+            error.GlueDylibStampMismatch,
+            error.GlueDylibUnavailable,
+            error.ModuleRetrieval,
+            error.NotPlatformFile,
+            error.ParseFailed,
+            error.PlatformPathResolution,
+            error.TempDirCreation,
+            => stderr.print("Error: {s}\n", .{@errorName(err)}),
         }) catch {};
         return err;
     };
@@ -612,7 +622,19 @@ fn runGlueSpecDylib(
         break :blk openVerifiedGlueDylib(gpa, stderr, first, &stamp, args.no_cache) catch |err| {
             switch (err) {
                 error.GlueDylibUnavailable, error.GlueDylibStampMismatch => {},
-                else => return err,
+                error.BuildEnvInit,
+                error.CompilationFailed,
+                error.DevBackendUnavailable,
+                error.FileNotFound,
+                error.GlueSpecNotFound,
+                error.ModuleRetrieval,
+                error.NotPlatformFile,
+                error.OutOfMemory,
+                error.ParseFailed,
+                error.PlatformPathResolution,
+                error.TempDirCreation,
+                error.WriteFailed,
+                => return err,
             }
             // An installed dylib is a managed artifact: never rebuild past a
             // failure to load it — the remedy is reinstalling the shorthand.
@@ -679,7 +701,8 @@ fn getOrBuildGlueDylib(
 
     const cache_path = glueDylibCachePath(gpa, root_artifact_key, stamp, args.opt, roc_ctx) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.BuildEnvInit,
+        error.NoHomeDirectory,
+        => return error.BuildEnvInit,
     };
     errdefer gpa.free(cache_path);
 
@@ -753,13 +776,25 @@ fn buildGlueDylib(
     }};
     var bitcode = codegen.generateEntrypointModule("roc_glue_plugin", entrypoints[0..]) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.CompilationFailed,
+        error.CompilationFailed,
+        error.UnsupportedLowLevel,
+        => return error.CompilationFailed,
     };
     defer bitcode.deinit();
 
     return llvm_compile.compileToSharedLibrary(gpa, std_io, bitcode.bitcode, glueLlvmCompileOptions(opt)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.CompilationFailed,
+        error.BitcodeParseError,
+        error.LinkFailed,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.MissingBuiltinBitcode,
+        error.ModuleLinkFailed,
+        error.NoBitcodeModules,
+        error.TempFileError,
+        error.UnsupportedLlvmTriple,
+        error.WindowsSDKNotFound,
+        => return error.CompilationFailed,
     };
 }
 
@@ -772,7 +807,44 @@ fn openVerifiedGlueDylib(
 ) GlueError!eval_mod.DynLib {
     var lib = eval_mod.DynLib.open(gpa, dylib.path) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LlvmBackendUnavailable,
+        error.LockedMemoryLimitExceeded,
+        error.MappingAlreadyExists,
+        error.MemoryMappingNotSupported,
+        error.MissingDynamicLinkingInformation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => {
             if (report_errors) {
                 stderr.print("Error loading compiled glue dylib {s}: {s}\n", .{ dylib.path, @errorName(err) }) catch {};
             }
@@ -920,10 +992,10 @@ fn hashTaggedBytes(hasher: *std.crypto.hash.Blake3, tag: []const u8, bytes: []co
 }
 
 fn sharedLibraryExtension() []const u8 {
-    return switch (builtin.os.tag) {
+    return switch (roc_target.classifyOs(builtin.os.tag)) {
         .windows => ".dll",
         .macos => ".dylib",
-        else => ".so",
+        .linux, .freebsd, .openbsd, .netbsd, .other => ".so",
     };
 }
 
@@ -1123,15 +1195,11 @@ fn providedRootFfiSymbol(
     root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
     root: CheckedArtifact.RootRequest,
 ) []const u8 {
-    const def_idx = switch (root.source) {
-        .def => |def| def,
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("glue invariant violated: provided export root is not a definition", .{});
-            }
-            unreachable;
-        },
-    };
+    if (root.source != .def) {
+        if (builtin.mode == .Debug) std.debug.panic("glue invariant violated: provided export root is not a definition", .{});
+        unreachable;
+    }
+    const def_idx = root.source.def;
     const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("glue invariant violated: provided export root has no published top-level value", .{});
@@ -1275,7 +1343,38 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
     // Read source file
     var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
-        else => return error.ParseFailed,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.OutOfMemory,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return error.ParseFailed,
     };
     source = base.source_utils.normalizeLineEndingsRealloc(gpa, source) catch {
         gpa.free(source);
@@ -1303,67 +1402,66 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
     const header = parse_ast.store.getHeader(file_node.header);
 
     // Check if this is a platform file
-    switch (header) {
-        .platform => |platform_header| {
-            // Extract requires entries
-            const requires_entries_ast = parse_ast.store.requiresEntrySlice(platform_header.requires_entries);
-            var requires_entries = std.ArrayList(PlatformHeaderInfo.RequiresEntry).empty;
-            errdefer {
-                for (requires_entries.items) |entry| {
-                    gpa.free(entry.name);
-                }
-                requires_entries.deinit(gpa);
+    if (header != .platform) return error.NotPlatformFile;
+    const platform_header = header.platform;
+    {
+        // Extract requires entries
+        const requires_entries_ast = parse_ast.store.requiresEntrySlice(platform_header.requires_entries);
+        var requires_entries = std.ArrayList(PlatformHeaderInfo.RequiresEntry).empty;
+        errdefer {
+            for (requires_entries.items) |entry| {
+                gpa.free(entry.name);
             }
+            requires_entries.deinit(gpa);
+        }
 
-            var hosted_entries = std.ArrayList(PlatformHeaderInfo.HostedEntry).empty;
-            errdefer {
-                for (hosted_entries.items) |entry| {
-                    gpa.free(entry.key);
-                    gpa.free(entry.ffi_symbol);
-                }
-                hosted_entries.deinit(gpa);
+        var hosted_entries = std.ArrayList(PlatformHeaderInfo.HostedEntry).empty;
+        errdefer {
+            for (hosted_entries.items) |entry| {
+                gpa.free(entry.key);
+                gpa.free(entry.ffi_symbol);
             }
+            hosted_entries.deinit(gpa);
+        }
 
-            const hosted_entries_ast = parse_ast.store.symbolMapEntrySlice(platform_header.hosted);
-            for (hosted_entries_ast) |entry_idx| {
-                const entry = parse_ast.store.getSymbolMapEntry(entry_idx);
-                const hosted_key = (try hostedEntryKeyAllocFromAst(gpa, &env, parse_ast, entry)) orelse continue;
-                const ffi_symbol = gpa.dupe(u8, parse_ast.resolve(entry.symbol)) catch |err| {
-                    gpa.free(hosted_key);
-                    return err;
-                };
-                hosted_entries.append(gpa, .{
-                    .key = hosted_key,
-                    .ffi_symbol = ffi_symbol,
-                }) catch |err| {
-                    gpa.free(hosted_key);
-                    gpa.free(ffi_symbol);
-                    return err;
-                };
-            }
-
-            for (requires_entries_ast) |entry_idx| {
-                const entry = parse_ast.store.getRequiresEntry(entry_idx);
-
-                if (parse_ast.tokens.resolveIdentifier(entry.entrypoint_name)) |ident_idx| {
-                    const name = env.common.getIdent(ident_idx);
-                    try requires_entries.append(gpa, .{
-                        .name = try gpa.dupe(u8, name),
-                    });
-                }
-            }
-
-            const requires_entries_owned = try requires_entries.toOwnedSlice(gpa);
-            errdefer deinitPlatformRequiresEntries(gpa, requires_entries_owned);
-            const hosted_entries_owned = try hosted_entries.toOwnedSlice(gpa);
-            errdefer deinitPlatformHostedEntries(gpa, hosted_entries_owned);
-
-            return PlatformHeaderInfo{
-                .requires_entries = requires_entries_owned,
-                .hosted_entries = hosted_entries_owned,
+        const hosted_entries_ast = parse_ast.store.symbolMapEntrySlice(platform_header.hosted);
+        for (hosted_entries_ast) |entry_idx| {
+            const entry = parse_ast.store.getSymbolMapEntry(entry_idx);
+            const hosted_key = (try hostedEntryKeyAllocFromAst(gpa, &env, parse_ast, entry)) orelse continue;
+            const ffi_symbol = gpa.dupe(u8, parse_ast.resolve(entry.symbol)) catch |err| {
+                gpa.free(hosted_key);
+                return err;
             };
-        },
-        else => return error.NotPlatformFile,
+            hosted_entries.append(gpa, .{
+                .key = hosted_key,
+                .ffi_symbol = ffi_symbol,
+            }) catch |err| {
+                gpa.free(hosted_key);
+                gpa.free(ffi_symbol);
+                return err;
+            };
+        }
+
+        for (requires_entries_ast) |entry_idx| {
+            const entry = parse_ast.store.getRequiresEntry(entry_idx);
+
+            if (parse_ast.tokens.resolveIdentifier(entry.entrypoint_name)) |ident_idx| {
+                const name = env.common.getIdent(ident_idx);
+                try requires_entries.append(gpa, .{
+                    .name = try gpa.dupe(u8, name),
+                });
+            }
+        }
+
+        const requires_entries_owned = try requires_entries.toOwnedSlice(gpa);
+        errdefer deinitPlatformRequiresEntries(gpa, requires_entries_owned);
+        const hosted_entries_owned = try hosted_entries.toOwnedSlice(gpa);
+        errdefer deinitPlatformHostedEntries(gpa, hosted_entries_owned);
+
+        return PlatformHeaderInfo{
+            .requires_entries = requires_entries_owned,
+            .hosted_entries = hosted_entries_owned,
+        };
     }
 }
 
@@ -1789,7 +1887,7 @@ const TypeTable = struct {
                 defer self.restoreNominalFormals(lookup, saved, bound_formals);
                 break :blk try self.collectHostedFunctionMetadata(lookup.artifact, lookup.declaration.backing);
             },
-            else => null,
+            .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .empty_record, .tag_union, .empty_tag_union => null,
         };
     }
 
@@ -1913,7 +2011,7 @@ const TypeTable = struct {
                 return true;
             },
             .empty_record => return true,
-            else => return false,
+            .pending, .err, .flex, .rigid, .tuple, .function, .tag_union, .empty_tag_union => return false,
         }
     }
 
@@ -2097,10 +2195,9 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
     ) Allocator.Error!?struct { decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey, source_statement: u32, arg_keys: []TypeTableKey } {
-        const nominal = switch (checkedTypePayload(artifact, checked_type)) {
-            .nominal => |nominal| nominal,
-            else => return null,
-        };
+        const payload = checkedTypePayload(artifact, checked_type);
+        if (payload != .nominal) return null;
+        const nominal = payload.nominal;
         if (nominal.builtin != null) return null;
         const lookup = self.nominalDeclarationFor(artifact, nominal) orelse return null;
         const arg_keys = try self.gpa.alloc(TypeTableKey, nominal.args.len);
@@ -2358,31 +2455,29 @@ const TypeTable = struct {
 
         self.entries.items[@intCast(idx)].repr = repr;
 
-        switch (repr) {
-            .record => |rec| {
-                if (rec.name.len == 0) {
-                    // Name anonymous structs by a STRUCTURAL content hash (field
-                    // names + each field's structural identity), not the volatile
-                    // type-table index. This keeps host-facing names stable across
-                    // any change that reorders the type table (issue #9983's
-                    // backing opening inserts entries), and deduplicates
-                    // structurally identical anonymous structs.
-                    var hasher = std.hash.Wyhash.init(0);
-                    for (rec.fields) |field| {
-                        hasher.update(field.name);
-                        hasher.update(&[_]u8{0});
-                        self.hashStructuralId(&hasher, field.type_id);
-                        hasher.update(&[_]u8{0});
-                    }
-                    self.entries.items[@intCast(idx)].repr = .{ .record = .{
-                        .name = try std.fmt.allocPrint(self.gpa, "__AnonStruct_{x}", .{hasher.final()}),
-                        .anonymous = true,
-                        .fields = rec.fields,
-                        .layout = rec.layout,
-                    } };
+        if (repr == .record) {
+            const rec = repr.record;
+            if (rec.name.len == 0) {
+                // Name anonymous structs by a STRUCTURAL content hash (field
+                // names + each field's structural identity), not the volatile
+                // type-table index. This keeps host-facing names stable across
+                // any change that reorders the type table (issue #9983's
+                // backing opening inserts entries), and deduplicates
+                // structurally identical anonymous structs.
+                var hasher = std.hash.Wyhash.init(0);
+                for (rec.fields) |field| {
+                    hasher.update(field.name);
+                    hasher.update(&[_]u8{0});
+                    self.hashStructuralId(&hasher, field.type_id);
+                    hasher.update(&[_]u8{0});
                 }
-            },
-            else => {},
+                self.entries.items[@intCast(idx)].repr = .{ .record = .{
+                    .name = try std.fmt.allocPrint(self.gpa, "__AnonStruct_{x}", .{hasher.final()}),
+                    .anonymous = true,
+                    .fields = rec.fields,
+                    .layout = rec.layout,
+                } };
+            }
         }
 
         return idx;
@@ -2399,19 +2494,23 @@ const TypeTable = struct {
             hasher.update("?");
             return;
         }
-        switch (self.entries.items[@intCast(type_id)].repr) {
-            .record => |r| hasher.update(r.name),
-            .tag_union => |t| hasher.update(t.name),
-            .unknown => |u| hasher.update(u.name),
-            .list => |l| {
-                hasher.update("list:");
-                self.hashStructuralId(hasher, l.elem_id);
-            },
-            .box => |b| {
-                hasher.update("box:");
-                self.hashStructuralId(hasher, b.inner_id);
-            },
-            else => |r| hasher.update(@tagName(r)),
+        const repr = self.entries.items[@intCast(type_id)].repr;
+        if (repr == .record) {
+            hasher.update(repr.record.name);
+        } else if (repr == .tag_union) {
+            hasher.update(repr.tag_union.name);
+        } else if (repr == .unknown) {
+            hasher.update(repr.unknown.name);
+        } else if (repr == .list) {
+            const l = repr.list;
+            hasher.update("list:");
+            self.hashStructuralId(hasher, l.elem_id);
+        } else if (repr == .box) {
+            const b = repr.box;
+            hasher.update("box:");
+            self.hashStructuralId(hasher, b.inner_id);
+        } else {
+            hasher.update(@tagName(repr));
         }
     }
 
@@ -2452,10 +2551,11 @@ const TypeTable = struct {
     ) bool {
         var current = checked_type;
         while (true) {
-            switch (checkedTypePayload(artifact, current)) {
-                .alias => |alias| current = alias.backing,
-                .function => return true,
-                else => return false,
+            const payload = checkedTypePayload(artifact, current);
+            if (payload == .alias) {
+                current = payload.alias.backing;
+            } else {
+                return payload == .function;
             }
         }
     }
@@ -2566,11 +2666,12 @@ const TypeTable = struct {
         repr: CollectedTypeRepr,
     ) Allocator.Error!CollectedAbiLayout {
         const layout_val = store.getLayout(layout_idx);
-        const details = switch (repr) {
-            .record => |rec| try self.abiRecordDetails(store, layout_val, rec),
-            .tag_union => |tu| try self.abiTagUnionDetails(store, layout_val, tu),
-            else => CollectedAbiLayoutDetails.builtin,
-        };
+        const details = if (repr == .record)
+            try self.abiRecordDetails(store, layout_val, repr.record)
+        else if (repr == .tag_union)
+            try self.abiTagUnionDetails(store, layout_val, repr.tag_union)
+        else
+            CollectedAbiLayoutDetails.builtin;
         return .{
             .size_align = abiSizeAlign(store, layout_val),
             .contains_refcounted = store.layoutContainsRefcounted(layout_val),
@@ -2974,38 +3075,38 @@ const TypeTable = struct {
             break :open_blk try self.convertCheckedType(lookup.artifact, decl.backing);
         } else glueInvariant("nominal glue conversion could not find declaration backing", .{});
 
-        return switch (backing_repr) {
-            .record => |rec| blk: {
-                // The backing record `rec.fields` is in the structural (sorted)
-                // order. A nominal record keeps DECLARED source order only when
-                // it opts in with an unnamed `_` padding field.
-                const declared_fields = try self.nominalRecordInDeclaredOrder(artifact, nominal, rec, nominal_layout) orelse
-                    break :blk .{ .record = .{
-                        .name = try self.gpa.dupe(u8, display_name),
-                        .anonymous = false,
-                        .fields = rec.fields,
-                        .layout = nominal_layout,
-                    } };
-                // `declared_fields` replaces `rec.fields`, which we now own and free.
-                for (rec.fields) |field| self.freeDuped(field.name);
-                self.gpa.free(rec.fields);
-                break :blk .{ .record = .{
+        if (backing_repr == .record) {
+            const rec = backing_repr.record;
+            // The backing record `rec.fields` is in the structural (sorted)
+            // order. A nominal record keeps DECLARED source order only when
+            // it opts in with an unnamed `_` padding field.
+            const declared_fields = try self.nominalRecordInDeclaredOrder(artifact, nominal, rec, nominal_layout) orelse
+                return .{ .record = .{
                     .name = try self.gpa.dupe(u8, display_name),
                     .anonymous = false,
-                    .fields = declared_fields,
+                    .fields = rec.fields,
                     .layout = nominal_layout,
                 } };
-            },
-            .tag_union => |tu| blk: {
-                self.freeDuped(tu.name);
-                break :blk .{ .tag_union = .{
-                    .name = try self.gpa.dupe(u8, display_name),
-                    .tags = tu.tags,
-                    .layout = nominal_layout,
-                } };
-            },
-            else => backing_repr,
-        };
+            // `declared_fields` replaces `rec.fields`, which we now own and free.
+            for (rec.fields) |field| self.freeDuped(field.name);
+            self.gpa.free(rec.fields);
+            return .{ .record = .{
+                .name = try self.gpa.dupe(u8, display_name),
+                .anonymous = false,
+                .fields = declared_fields,
+                .layout = nominal_layout,
+            } };
+        }
+        if (backing_repr == .tag_union) {
+            const tu = backing_repr.tag_union;
+            self.freeDuped(tu.name);
+            return .{ .tag_union = .{
+                .name = try self.gpa.dupe(u8, display_name),
+                .tags = tu.tags,
+                .layout = nominal_layout,
+            } };
+        }
+        return backing_repr;
     }
 
     const NominalDeclarationLookup = struct {
@@ -3492,7 +3593,7 @@ const GlueRocValueWriter = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            else => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
+            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
         };
     }
 
@@ -4228,7 +4329,7 @@ fn appendRecordRowFields(
                 try fields.appendSlice(gpa, tail_fields);
                 break;
             },
-            else => glueInvariant("non-record checked row reached glue record conversion", .{}),
+            .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => glueInvariant("non-record checked row reached glue record conversion", .{}),
         }
     }
 }
@@ -4276,7 +4377,7 @@ fn appendTagRowTags(
                 try tags.appendSlice(gpa, tag_union.tags);
                 current = tag_union.ext;
             },
-            else => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
+            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
         }
     }
 }

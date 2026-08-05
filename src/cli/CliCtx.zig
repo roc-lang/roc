@@ -495,7 +495,7 @@ test "issue 10465 merged standard streams preserve both buffered outputs" {
     const term = try child.wait(test_io);
     switch (term) {
         .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
-        else => return error.TestUnexpectedResult,
+        .signal, .stopped, .unknown => return error.TestUnexpectedResult,
     }
 
     const combined = try tmp.dir.readFileAlloc(test_io, "combined.log", allocator, .limited(64 * 1024));

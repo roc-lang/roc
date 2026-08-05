@@ -29,11 +29,12 @@ fn blockStatementAt(test_env: *TestEnv, expr_idx: CIR.Expr.Idx, index: usize) Wh
 
 fn firstLambdaBodyStatement(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) WhileLoopTestError!CIR.Statement {
     const expr = test_env.getCanonicalExpr(expr_idx);
-    const lambda_idx = switch (expr) {
-        .e_lambda => expr_idx,
-        .e_closure => |closure| closure.lambda_idx,
-        else => return error.ExpectedLambda,
-    };
+    const lambda_idx = if (expr == .e_lambda)
+        expr_idx
+    else if (expr == .e_closure)
+        expr.e_closure.lambda_idx
+    else
+        return error.ExpectedLambda;
 
     const lambda = test_env.getCanonicalExpr(lambda_idx);
     try testing.expectEqual(.e_lambda, std.meta.activeTag(lambda));

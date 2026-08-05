@@ -175,16 +175,14 @@ fn pushPatternList(
 /// `e_binop`, a checked `e_dispatch_call` desugared from one, or a checked
 /// equality node (printed as `==`/`!=`).
 fn surfaceBinopOp(expr: Expr) ?Expr.Binop.Op {
-    return switch (expr) {
-        .e_binop => |binop| binop.op,
-        .e_dispatch_call => |method_call| switch (method_call.surface_origin) {
-            .binop => |op| op,
-            else => null,
-        },
-        .e_structural_eq => |eq| if (eq.negated) .ne else .eq,
-        .e_method_eq => |eq| if (eq.negated) .ne else .eq,
-        else => null,
-    };
+    const tag = std.meta.activeTag(expr);
+    if (tag == .e_binop) return expr.e_binop.op;
+    if (tag == .e_dispatch_call and expr.e_dispatch_call.surface_origin == .binop) {
+        return expr.e_dispatch_call.surface_origin.binop;
+    }
+    if (tag == .e_structural_eq) return if (expr.e_structural_eq.negated) .ne else .eq;
+    if (tag == .e_method_eq) return if (expr.e_method_eq.negated) .ne else .eq;
+    return null;
 }
 
 /// Which side of a binary operator an operand sits on. The two sides have
@@ -230,27 +228,26 @@ fn emitBinopOperandFrame(
 fn unaryReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
     const receiver = self.module_env.store.getExpr(receiver_idx);
     if (surfaceBinopOp(receiver) != null) return true;
-    return switch (receiver) {
-        .e_unary_minus, .e_unary_not => true,
-        .e_dispatch_call => |method_call| switch (method_call.surface_origin) {
-            .unary_minus, .unary_not => true,
-            else => false,
-        },
-        .e_num => |num| num.value.kind == .i128 and num.value.toI128() < 0,
-        .e_frac_f32 => |frac| std.math.signbit(frac.value),
-        .e_frac_f64 => |frac| std.math.signbit(frac.value),
-        .e_dec => |dec| dec.value.num < 0,
-        .e_dec_small => |small| small.value.numerator < 0,
-        .e_num_from_numeral, .e_typed_num_from_numeral => blk: {
-            const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(receiver_idx)) orelse {
-                std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(receiver_idx)});
-            };
-            break :blk literal.isNegative();
-        },
-        .e_typed_int => |typed| typed.value.kind == .i128 and typed.value.toI128() < 0,
-        .e_typed_frac => |typed| typed.value.toI128() < 0,
-        else => false,
-    };
+    const tag = std.meta.activeTag(receiver);
+    if (tag == .e_unary_minus or tag == .e_unary_not) return true;
+    if (tag == .e_dispatch_call) {
+        const origin = std.meta.activeTag(receiver.e_dispatch_call.surface_origin);
+        return origin == .unary_minus or origin == .unary_not;
+    }
+    if (tag == .e_num) return receiver.e_num.value.kind == .i128 and receiver.e_num.value.toI128() < 0;
+    if (tag == .e_frac_f32) return std.math.signbit(receiver.e_frac_f32.value);
+    if (tag == .e_frac_f64) return std.math.signbit(receiver.e_frac_f64.value);
+    if (tag == .e_dec) return receiver.e_dec.value.num < 0;
+    if (tag == .e_dec_small) return receiver.e_dec_small.value.numerator < 0;
+    if (tag == .e_num_from_numeral or tag == .e_typed_num_from_numeral) {
+        const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(receiver_idx)) orelse {
+            std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(receiver_idx)});
+        };
+        return literal.isNegative();
+    }
+    if (tag == .e_typed_int) return receiver.e_typed_int.value.kind == .i128 and receiver.e_typed_int.value.toI128() < 0;
+    if (tag == .e_typed_frac) return receiver.e_typed_frac.value.toI128() < 0;
+    return false;
 }
 
 /// Push frames emitting a unary operator's receiver, parenthesized when
@@ -629,9 +626,11 @@ fn emitPatternFrame(
                 const step = self.module_env.store.getStrPatternStep(str.steps, step_offset);
                 try self.write("${");
                 if (step.capture) |capture_idx| {
-                    switch (self.module_env.store.getPattern(capture_idx)) {
-                        .assign => |assign| try self.emitIdent(self.module_env.getIdent(assign.ident)),
-                        else => try self.write("<capture>"),
+                    const capture = self.module_env.store.getPattern(capture_idx);
+                    if (std.meta.activeTag(capture) == .assign) {
+                        try self.emitIdent(self.module_env.getIdent(capture.assign.ident));
+                    } else {
+                        try self.write("<capture>");
                     }
                 } else {
                     try self.write("_");
@@ -772,15 +771,12 @@ fn emitStatementFrame(
     allocator: std.mem.Allocator,
 ) EmitError!void {
     const stmt = self.module_env.store.getStatement(stmt_idx);
-    switch (stmt) {
-        .s_decl => |decl| {
-            try self.addPatternToScope(decl.pattern);
-            try frames.append(allocator, .{ .expr = decl.expr });
-            try frames.append(allocator, .{ .write = " = " });
-            try frames.append(allocator, .{ .pattern = decl.pattern });
-        },
-        else => {},
-    }
+    if (std.meta.activeTag(stmt) != .s_decl) return;
+    const decl = stmt.s_decl;
+    try self.addPatternToScope(decl.pattern);
+    try frames.append(allocator, .{ .expr = decl.expr });
+    try frames.append(allocator, .{ .write = " = " });
+    try frames.append(allocator, .{ .pattern = decl.pattern });
 }
 
 fn binopOpToToken(op: Expr.Binop.Op) parse.tokenize.Token.Tag {

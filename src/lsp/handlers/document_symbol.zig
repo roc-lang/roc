@@ -15,37 +15,31 @@ pub fn handler(comptime ServerType: type) type {
                 return;
             };
 
-            const obj = switch (params) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "documentSymbol params must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(params) != .object) {
+                try self.sendError(id, .invalid_params, "documentSymbol params must be an object");
+                return;
+            }
+            const obj = params.object;
 
             // Extract textDocument.uri
             const text_doc_value = obj.get("textDocument") orelse {
                 try self.sendError(id, .invalid_params, "missing textDocument");
                 return;
             };
-            const text_doc = switch (text_doc_value) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "textDocument must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(text_doc_value) != .object) {
+                try self.sendError(id, .invalid_params, "textDocument must be an object");
+                return;
+            }
+            const text_doc = text_doc_value.object;
             const uri_value = text_doc.get("uri") orelse {
                 try self.sendError(id, .invalid_params, "missing uri");
                 return;
             };
-            const uri = switch (uri_value) {
-                .string => |s| s,
-                else => {
-                    try self.sendError(id, .invalid_params, "uri must be a string");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(uri_value) != .string) {
+                try self.sendError(id, .invalid_params, "uri must be a string");
+                return;
+            }
+            const uri = uri_value.string;
 
             // Get the document text from the store (for source extraction)
             const doc = self.doc_store.get(uri);
@@ -57,7 +51,39 @@ pub fn handler(comptime ServerType: type) type {
             // Use the syntax checker to get the canonicalized module
             const symbols = self.syntax_checker.getDocumentSymbols(self.allocator, uri, source) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => {
+                error.AccessDenied,
+                error.AntivirusInterference,
+                error.BadPathName,
+                error.BuiltinArtifactVersionMismatch,
+                error.Canceled,
+                error.CorruptArtifact,
+                error.CorruptBuiltinArtifact,
+                error.CorruptEmbeddedBuiltins,
+                error.DeviceBusy,
+                error.FileBusy,
+                error.FileNotFound,
+                error.FileSystem,
+                error.FileTooBig,
+                error.InputOutput,
+                error.IsDir,
+                error.NameTooLong,
+                error.NetworkNotFound,
+                error.NoDevice,
+                error.NoSpaceLeft,
+                error.NotDir,
+                error.OperationUnsupported,
+                error.PathAlreadyExists,
+                error.PermissionDenied,
+                error.PipeBusy,
+                error.ProcessFdQuotaExceeded,
+                error.StaleEmbeddedBuiltins,
+                error.SymLinkLoop,
+                error.SystemFdQuotaExceeded,
+                error.SystemResources,
+                error.Unexpected,
+                error.UnrecognizedVolume,
+                error.WriteFailed,
+                => {
                     try self.sendResponse(id, &[_]SymbolInformation{});
                     return;
                 },

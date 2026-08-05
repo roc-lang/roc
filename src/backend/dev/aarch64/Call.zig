@@ -94,20 +94,13 @@ pub const PLATFORM_REG: GeneralReg = .PR; // X18
 
 /// Check if a general register is callee-saved
 pub fn isCalleeSaved(reg: GeneralReg) bool {
-    return switch (reg) {
-        .X19, .X20, .X21, .X22, .X23, .X24, .X25, .X26, .X27, .X28 => true,
-        .FP, .LR => true, // Frame pointer and link register are also preserved
-        else => false,
-    };
+    return reg == .X19 or reg == .X20 or reg == .X21 or reg == .X22 or reg == .X23 or reg == .X24 or reg == .X25 or reg == .X26 or reg == .X27 or reg == .X28 or reg == .FP or reg == .LR;
 }
 
 /// Check if a float register is callee-saved
 /// Note: Only the lower 64 bits of V8-V15 are callee-saved
 pub fn isFloatCalleeSaved(reg: FloatReg) bool {
-    return switch (reg) {
-        .V8, .V9, .V10, .V11, .V12, .V13, .V14, .V15 => true,
-        else => false,
-    };
+    return reg == .V8 or reg == .V9 or reg == .V10 or reg == .V11 or reg == .V12 or reg == .V13 or reg == .V14 or reg == .V15;
 }
 
 /// Default free registers for allocation (ordered by preference)

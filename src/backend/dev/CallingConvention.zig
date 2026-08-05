@@ -18,7 +18,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const RocTarget = @import("roc_target").RocTarget;
+const target_mod = @import("roc_target");
+const RocTarget = target_mod.RocTarget;
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
@@ -60,7 +61,7 @@ pub const CallingConvention = struct {
 
     /// Create calling convention for a given target
     pub fn forTarget(target: RocTarget) CallingConvention {
-        return switch (target.toCpuArch()) {
+        return switch (target_mod.classifyCpuArch(target.toCpuArch())) {
             .x86_64 => if (target.isWindows())
                 CallingConvention{
                     .param_regs = .{ .x86_64 = &WIN64_PARAM_REGS },
@@ -87,7 +88,7 @@ pub const CallingConvention = struct {
                 .pass_by_ptr_threshold = std.math.maxInt(usize),
                 .is_windows = false,
             },
-            else => unsupportedArchCallingConvention(target),
+            .arm, .wasm32, .other => unsupportedArchCallingConvention(target),
         };
     }
 
@@ -756,7 +757,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                         }
                         ra.src = .{ .from_mem = .{ .base = CC_EMIT.BASE_PTR, .offset = save_offset } };
                     },
-                    else => {},
+                    .from_reg, .from_imm => {},
                 }
             }
         }
@@ -816,10 +817,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     const j = frame.scan;
                     frame.scan += 1;
                     if (j == frame.i) continue;
-                    const src_reg = switch (sources[j]) {
-                        .from_reg => |reg| reg,
-                        else => continue, // only reg sources can form conflicts
-                    };
+                    if (sources[j] != .from_reg) continue; // only reg sources can form conflicts
+                    const src_reg = sources[j].from_reg;
                     if (src_reg != dst) continue;
 
                     // Arg j reads from dst — we'd clobber it.
