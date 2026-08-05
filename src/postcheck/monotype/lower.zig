@@ -3686,125 +3686,6 @@ const Builder = struct {
                 }
             }
         }
-        // A resolved request keys on its structural digest alone: the graph
-        // walk below exists to find still-open specializations a resolved
-        // request could join, and joining them is the cross-flavor merging
-        // the stored-id dedup replaces (reunify.md 11.5, 13.2e step 3). A
-        // digest miss for a resolved request is a new specialization.
-        if (selection.selected() == null and resolved_request_ty == null) {
-            census.bump("template_dedup_graph_walk");
-            var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
-            defer seen_specs.deinit();
-            var interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
-            while (interface.next()) |interface_node| {
-                var aliases = source_ctx.graph.classMemberIterator(interface_node);
-                while (aliases.next()) |member| {
-                    const lookup_address = DraftTemplateLookupAddress{
-                        .family = family,
-                        .evidence_digest = evidence_digest.bytes,
-                        .request_kind = 1,
-                        .request_fn_key = draftOpenRequestKey(member),
-                    };
-                    if (source_ctx.draft.template_spec_lookup.get(lookup_address)) |candidates| {
-                        for (candidates.items) |raw_spec| {
-                            const seen = try seen_specs.getOrPut(raw_spec);
-                            if (seen.found_existing) continue;
-                            const spec = &source_ctx.draft.template_specs.items[raw_spec];
-                            if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
-                            if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                            const exact_interface = source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node);
-                            const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
-                                source_ctx.draft.current_owner,
-                                spec.fn_id,
-                            );
-                            // Synthesized component calls can share ubiquitous
-                            // result cells such as Bool across unrelated
-                            // component types; require an argument-class
-                            // anchor before treating a partial match as
-                            // recursion.
-                            const partial_recursive_allowed = active_recursive_edge and switch (evidence_mode) {
-                                .resolved => true,
-                                .synthesized => try draftRequestOverlapsInitialArgumentClass(
-                                    source_ctx.graph,
-                                    spec.initial_request_arg_classes,
-                                    request_fn_node,
-                                ),
-                            };
-                            if (!draftOpenCandidateQualifies(
-                                spec.state,
-                                exact_interface,
-                                active_recursive_edge,
-                                partial_recursive_allowed,
-                            )) continue;
-                            if (!selection.add(raw_spec, exact_interface)) {
-                                Common.invariant("draft template request matched more than one partial active recursive specialization");
-                            }
-                        }
-                    }
-                }
-            }
-            // Debug-only: the graph-free recursive join, compared against the
-            // walk's selection (reunify.md 13.2e, E2). An open request's
-            // callable emitted under the live frame names the active
-            // specialization it re-enters; the interface walk is the graph's
-            // way of deciding the same thing, and the comparison certifies the
-            // replacement before the walk goes.
-            if (comptime census.enabled) shadow: {
-                const rehearsal = self.rehearsal orelse break :shadow;
-                // Some requesting paths hand a callable id from the template's
-                // own module; the requesting view cannot state those, and the
-                // shadow measures rather than guesses.
-                if (@intFromEnum(source_fn_ty) >= source_ctx.view.types.payloadCount()) {
-                    census.bump("recursive_join_shadow_unstatable");
-                    break :shadow;
-                }
-                const directed = source_ctx.storedCallableForGeneratedEdge(source_fn_ty) orelse {
-                    census.bump("recursive_join_shadow_unstatable");
-                    break :shadow;
-                };
-                const shadow_fn_id = rehearsal.activeRecursiveJoin(self.specializationTypeDigest(directed));
-                const walk_fn_id: ?u32 = if (selection.selected()) |raw_spec|
-                    @intFromEnum(source_ctx.draft.template_specs.items[raw_spec].fn_id)
-                else
-                    null;
-                if (walk_fn_id == null and shadow_fn_id == null) {
-                    census.bump("recursive_join_shadow_both_none");
-                } else if (walk_fn_id != null and shadow_fn_id != null) {
-                    if (walk_fn_id.? == shadow_fn_id.?) {
-                        census.bump("recursive_join_shadow_agree");
-                    } else {
-                        census.bump("recursive_join_shadow_differs");
-                    }
-                } else if (walk_fn_id == null) {
-                    census.bump("recursive_join_shadow_extra");
-                } else {
-                    census.bump("recursive_join_shadow_missed");
-                }
-            }
-            // Independently instantiated recursive calls do not necessarily share
-            // graph cells with the specialization currently being lowered. Once
-            // both requests are fully resolved, exact structural type equality is
-            // the durable proof that they are the same specialization request.
-            // This scan retains graph-interface identity for active recursive
-            // and partially overlapping requests.
-            if (resolved_request_ty) |request_fn_ty| {
-                for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
-                    const raw_spec: u32 = @intCast(raw_spec_usize);
-                    if (!names.procedureTemplateRefEql(spec.template_ref, template_ref)) continue;
-                    // The checked source root selects the template body, but it is
-                    // not part of a resolved specialization's identity. Recursive
-                    // calls can reach the same template through a different checked
-                    // root; exact interface, evidence, and lexical context prove
-                    // that they refer to the same active specialization.
-                    if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
-                    if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
-                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
-                    if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, request_fn_ty)) continue;
-                    if (!selection.add(raw_spec, true)) unreachable;
-                }
-            }
-        }
         if (selection.selected()) |raw_spec| {
             // A lowering specialization reached through an explicitly shared
             // interface class is a recursive edge. Fresh checked variables in
@@ -6041,51 +5922,6 @@ const Builder = struct {
                         const spec_shape = spec.open_request_shape orelse continue;
                         if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
                         if (!selection.add(raw_spec, true)) unreachable;
-                    }
-                }
-            }
-        }
-        var interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
-        if (selection.selected() == null) {
-            while (interface.next()) |interface_node| {
-                var aliases = source_ctx.graph.classMemberIterator(interface_node);
-                while (aliases.next()) |member| {
-                    const lookup_address = DraftNestedLookupAddress{
-                        .family = family,
-                        .evidence_digest = evidence_digest.bytes,
-                        .request_kind = 1,
-                        .request_fn_key = draftOpenRequestKey(member),
-                    };
-                    if (source_ctx.draft.nested_spec_lookup.get(lookup_address)) |candidates| {
-                        for (candidates.items) |raw_spec| {
-                            const seen = try seen_specs.getOrPut(raw_spec);
-                            if (seen.found_existing) continue;
-                            const spec = &source_ctx.draft.nested_specs.items[raw_spec];
-                            if (spec.request_fn_ty != null) continue;
-                            if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
-                            if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
-                            if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
-                            if (signature_relation == .exact_graph and
-                                source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
-                            {
-                                continue;
-                            }
-                            const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
-                            const exact_interface = source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node);
-                            const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
-                                source_ctx.draft.current_owner,
-                                spec.fn_id,
-                            );
-                            if (!draftOpenCandidateQualifies(
-                                spec.state,
-                                exact_interface,
-                                active_recursive_edge,
-                                true,
-                            )) continue;
-                            if (!selection.add(raw_spec, exact_interface)) {
-                                Common.invariant("draft nested request matched more than one partial active recursive specialization");
-                            }
-                        }
                     }
                 }
             }
@@ -10382,24 +10218,6 @@ fn runtimeDemandGuardFrameSetsEql(
         } else return false;
     }
     return true;
-}
-
-fn draftOpenCandidateQualifies(
-    state: DraftSpecState,
-    exact_interface: bool,
-    active_recursive_edge: bool,
-    partial_recursive_allowed: bool,
-) bool {
-    // An exact-interface match on a spec that is still DEFERRED is an
-    // open-request dedup merge: two still-open requests with equal
-    // interfaces join nodes so later relations flow across them. That
-    // merging is the cross-flavor joining the stored-id dedup replaces
-    // (reunify.md 11.5, 13.2e step 3): each request resolves from its own
-    // site's relations, and equal outcomes collapse at the drain's stored
-    // identity. A lowering spec still joins for recursion termination, and
-    // a completed one is an exact reuse.
-    if (state == .deferred) return false;
-    return exact_interface or (state == .lowering and active_recursive_edge and partial_recursive_allowed);
 }
 
 fn draftRequestOverlapsInitialArgumentClass(
@@ -48312,9 +48130,6 @@ test "open draft recursive provenance joins fresh interface cells only while low
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, recursive_fn));
     const initial_arg_classes = try graph.snapshotFunctionArgumentClasses(active_fn);
     try std.testing.expect(try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, recursive_fn));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false, false));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, true, false));
-    try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true, true));
     try graph.unify(active_fn, recursive_fn);
     try std.testing.expect(graph.sameFunctionInterface(active_fn, recursive_fn));
     try std.testing.expect(graph.sameClass(shared_ret, recursive_ret));
@@ -48326,13 +48141,11 @@ test "open draft recursive provenance joins fresh interface cells only while low
     } });
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, independent_fn));
     try std.testing.expect(!try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, independent_fn));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true, true));
     try std.testing.expect(!graph.sameClass(active_arg, independent_arg));
 
     // An exact request reuses a completed specialization regardless of the
     // requesting guard context; reuses under a different context are recorded
     // and re-verified against the specialization's demands at seal.
-    try std.testing.expect(draftOpenCandidateQualifies(.lowered, true, false, false));
 }
 
 test "open draft selection converges exact interfaces and rejects partial ambiguity" {

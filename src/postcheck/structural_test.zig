@@ -656,7 +656,7 @@ test "Monotype indirect calls retain graph-native function provenance" {
     try std.testing.expect(direct_prepare < direct_specialize);
 }
 
-test "Monotype open specialization lookup covers the complete function interface" {
+test "Monotype open specialization lookup joins only active recursive specializations" {
     const lower_source = @embedFile("monotype/lower.zig");
     const template_source = sourceSliceBetween(
         lower_source,
@@ -668,15 +668,17 @@ test "Monotype open specialization lookup covers the complete function interface
         "fn lowerDraftNestedFromContext(",
         "fn lowerExprAtTypeCell(",
     );
+    // Both open-request interface walks are gone: joining two still-open
+    // requests through shared graph cells is the cross-flavor merging the
+    // stored-id dedup replaces (the template walk selected nothing at all,
+    // and every nested selection was such a merge, never active recursion).
+    // What a request may still join is an ACTIVE recursive specialization,
+    // for termination, which each path scans for directly.
     inline for (.{ template_source, nested_source }) |lookup_source| {
+        try expectNotContains(lookup_source, "classMemberIterator(interface_node)");
+        try expectNotContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
+        try expectNotContains(lookup_source, "draftOpenCandidateQualifies(");
         try expectContains(lookup_source, "functionInterfaceIterator(request_fn_node)");
-        try expectContains(lookup_source, "classMemberIterator(interface_node)");
-        try expectContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
-        try expectContains(lookup_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
-        try expectContains(lookup_source, "draftOpenCandidateQualifies(");
-        try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
-        try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
-        try expectContains(lookup_source, "if (!selection.add(raw_spec, exact_interface))");
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
         try expectContains(lookup_source, "try source_ctx.graph.unifyRecursiveFunctionInterface(");
         try expectContains(lookup_source, "spec.initial_request_arg_classes");
@@ -685,6 +687,7 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
     try expectContains(nested_source, "std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)");
+    try expectContains(nested_source, "draftNestedActiveRecursiveCandidate(");
 }
 
 test "Monotype match lowering relates patterns before specialization and projects graph cells" {
