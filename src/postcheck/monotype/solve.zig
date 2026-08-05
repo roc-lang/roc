@@ -201,6 +201,7 @@ pub const GraphDiagnostics = struct {
     mono_import_hits: u64 = 0,
     mono_import_misses: u64 = 0,
     generated_private_scans: u64 = 0,
+    generated_private_cache_hits: u64 = 0,
     generated_private_nodes_visited: u64 = 0,
     finished_mono_scans: u64 = 0,
     finished_mono_nodes_visited: u64 = 0,
@@ -262,6 +263,18 @@ const NominalBackingCacheContext = struct {
 const NominalBackingInstance = struct {
     args: []NodeId,
     node: NodeId,
+};
+
+const GeneratedPrivateDependency = struct {
+    node: NodeId,
+    root: NodeId,
+    version: u32,
+};
+
+const GeneratedPrivateCacheEntry = struct {
+    valid: bool = false,
+    result: bool = false,
+    dependencies: std.ArrayList(GeneratedPrivateDependency) = .empty,
 };
 
 const RelationState = enum {
@@ -362,6 +375,12 @@ pub const InstGraph = struct {
     generated_private_pending: std.ArrayList(NodeId),
     generated_private_visit_epochs: std.ArrayList(u32),
     generated_private_visit_epoch: u32,
+    /// Exact generated-private containment answers by current union-class
+    /// root. Each entry records the permanent nodes, resolved roots, and
+    /// content versions read by its walk. Mutations outside that dependency
+    /// set leave the answer reusable; a relevant redirect or content change
+    /// invalidates it at the next query.
+    generated_private_cache: std.AutoHashMap(NodeId, GeneratedPrivateCacheEntry),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -395,6 +414,7 @@ pub const InstGraph = struct {
             .generated_private_pending = .empty,
             .generated_private_visit_epochs = .empty,
             .generated_private_visit_epoch = 0,
+            .generated_private_cache = std.AutoHashMap(NodeId, GeneratedPrivateCacheEntry).init(allocator),
         };
         return graph;
     }
@@ -437,6 +457,11 @@ pub const InstGraph = struct {
         self.recursive_argument_slots.deinit(allocator);
         self.generated_private_pending.deinit(allocator);
         self.generated_private_visit_epochs.deinit(allocator);
+        var generated_private_entries = self.generated_private_cache.valueIterator();
+        while (generated_private_entries.next()) |entry| {
+            entry.dependencies.deinit(allocator);
+        }
+        self.generated_private_cache.deinit();
         self.row_parents.deinit();
         self.row_exts.deinit();
         self.imported_monos.deinit();
@@ -1610,6 +1635,26 @@ pub const InstGraph = struct {
     /// opaque evidence at any structural depth.
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         self.countDiagnostic("generated_private_scans");
+        const query_root = self.find(root);
+        const cache = try self.generated_private_cache.getOrPut(query_root);
+        if (!cache.found_existing) cache.value_ptr.* = .{};
+        if (cache.value_ptr.valid) {
+            var dependencies_match = true;
+            for (cache.value_ptr.dependencies.items) |dependency| {
+                if (self.find(dependency.node) != dependency.root or
+                    self.versions.items[@intFromEnum(dependency.root)] != dependency.version)
+                {
+                    dependencies_match = false;
+                    break;
+                }
+            }
+            if (dependencies_match) {
+                self.countDiagnostic("generated_private_cache_hits");
+                return cache.value_ptr.result;
+            }
+        }
+        cache.value_ptr.valid = false;
+        cache.value_ptr.dependencies.clearRetainingCapacity();
         self.generated_private_pending.clearRetainingCapacity();
         defer self.generated_private_pending.clearRetainingCapacity();
         if (self.generated_private_visit_epoch == std.math.maxInt(u32)) {
@@ -1625,6 +1670,11 @@ pub const InstGraph = struct {
             const node_index = @intFromEnum(node);
             if (self.generated_private_visit_epochs.items[node_index] == visit_epoch) continue;
             self.generated_private_visit_epochs.items[node_index] = visit_epoch;
+            try cache.value_ptr.dependencies.append(self.allocator, .{
+                .node = raw_node,
+                .root = node,
+                .version = self.versions.items[node_index],
+            });
             self.countDiagnostic("generated_private_nodes_visited");
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
@@ -1645,7 +1695,11 @@ pub const InstGraph = struct {
                 },
                 .named => |named| {
                     if (named.backing) |backing| {
-                        if (backing.authority == .generated_private) return true;
+                        if (backing.authority == .generated_private) {
+                            cache.value_ptr.result = true;
+                            cache.value_ptr.valid = true;
+                            return true;
+                        }
                         try self.generated_private_pending.append(self.allocator, backing.node);
                     }
                     try self.generated_private_pending.appendSlice(self.allocator, named.args);
@@ -1656,6 +1710,8 @@ pub const InstGraph = struct {
                 },
             }
         }
+        cache.value_ptr.result = false;
+        cache.value_ptr.valid = true;
         return false;
     }
 
@@ -5479,6 +5535,8 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
 
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
 
     const Context = struct {
         fn fill(_: @This(), reserved: NodeId) Allocator.Error!InstNode {
@@ -5491,6 +5549,21 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
 
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
     try std.testing.expectEqual(@as(u32, 1), graph.generated_private_visit_epoch);
+
+    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_cache_hits);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
+
+    const unrelated = try graph.newNode(.{ .primitive = .u64 });
+    try graph.setContent(unrelated, .{ .primitive = .str });
+    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_cache_hits);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
+
+    try graph.setContent(recursive, .zst);
+    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_cache_hits);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_nodes_visited);
 }
 
 test "final type sealing remains allowed after instantiation relations freeze" {
