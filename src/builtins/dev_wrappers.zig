@@ -21,6 +21,13 @@ const float_math_f64 = @import("float_math/f64.zig");
 const numeric_conversions = @import("numeric_conversions.zig");
 const simd = @import("simd.zig");
 
+// The conversion wrappers below hand back a result narrower than the u128 they
+// compute it in, by copying the first val_size bytes of its byte representation.
+// Those are the low-order bytes only on a little-endian target.
+comptime {
+    std.debug.assert(@import("builtin").cpu.arch.endian() == .little);
+}
+
 const RocStr = str.RocStr;
 const RocList = list.RocList;
 const FromUtf8Try = str.FromUtf8Try;
