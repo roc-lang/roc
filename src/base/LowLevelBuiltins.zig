@@ -201,7 +201,8 @@ pub fn strOp(op: LowLevel) BuiltinFn {
 }
 
 /// List ops that lower to a single builtin, for backends that call rather
-/// than inline them. The sublist-shaped ops all share one wrapper.
+/// than inline them. The owned sublist-shaped ops share one wrapper; ARC's
+/// borrowed sublist variant uses its non-consuming wrapper.
 pub fn listOp(op: LowLevel) BuiltinFn {
     return switch (op) {
         .list_with_capacity => .list_with_capacity,
@@ -214,6 +215,7 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .list_take_first,
         .list_take_last,
         => .list_sublist,
+        .list_sublist_borrowed => .list_sublist_borrowed,
         .list_drop_at => .list_drop_at,
         .list_swap => .list_swap,
         .list_set => .list_set,

@@ -642,16 +642,24 @@ fn runGlueSpecDylib(
     defer crash_boundary.deinit();
 
     const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_runtime = try eval_mod.boxy_abi.createRuntimeFromStores(
-        gpa,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        boxy_tables,
-        runtime_env.get_ops(),
-    );
-    defer eval_mod.boxy_abi.deinitRuntime(boxy_runtime);
-    const previous_boxy_runtime = eval_mod.boxy_abi.swapActiveRuntime(boxy_runtime);
-    defer _ = eval_mod.boxy_abi.swapActiveRuntime(previous_boxy_runtime);
+    const boxy_runtime = if (boxy_tables.needsRuntimeForStore(&lowered.lir_result.store))
+        try eval_mod.boxy_abi.createRuntimeFromStores(
+            gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            boxy_tables,
+            runtime_env.get_ops(),
+        )
+    else
+        null;
+    defer if (boxy_runtime) |runtime| eval_mod.boxy_abi.deinitRuntime(runtime);
+    const previous_boxy_runtime = if (boxy_runtime) |runtime|
+        eval_mod.boxy_abi.swapActiveRuntime(runtime)
+    else
+        null;
+    defer if (boxy_runtime != null) {
+        _ = eval_mod.boxy_abi.swapActiveRuntime(previous_boxy_runtime);
+    };
     const boxy_fns = eval_mod.boxy_abi.nativeFnTable();
 
     const sj = crash_boundary.set();

@@ -64,6 +64,7 @@ pub const LowLevel = enum(u16) {
     list_with_capacity,
     list_drop_at,
     list_sublist,
+    list_sublist_borrowed,
     list_set,
     list_replace_unsafe,
     list_swap,
@@ -666,9 +667,9 @@ pub const LowLevel = enum(u16) {
     ///   because it stores a handle to them inside the result. ARC emits no
     ///   retain of its own, so an op that declares this and does not retain
     ///   leaves the stored handle undercounted.
-    /// - `retain_result`: the result is read out of a structure that stays
-    ///   live (an element, a box payload, a capture), so ARC retains it after
-    ///   the op rather than treating it as freshly owned.
+    /// - `retain_result`: the result aliases storage that stays live (an
+    ///   element, box payload, capture, or borrowed view), so ARC retains it
+    ///   after the op rather than treating it as freshly owned.
     /// - `result_borrows_args`: the result points into those arguments'
     ///   payloads without owning them. ARC keeps the lender live across every
     ///   use of the result instead of retaining the result.
@@ -898,6 +899,8 @@ pub const LowLevel = enum(u16) {
             .list_split_first,
             .list_split_last,
             => RcEffect.runtimeUniquenessMaybeSharedResult(argMask(&.{0})),
+
+            .list_sublist_borrowed => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
             .list_reverse,
             .list_reserve,
@@ -1409,6 +1412,24 @@ pub const LowLevel = enum(u16) {
             .crash,
             => RcEffect.none(),
         };
+    }
+
+    /// ARC-only primitive variant whose result may borrow from an argument.
+    /// Neutral LIR keeps the source operation; ARC uses this explicit mapping
+    /// while solving and materializes exactly one of the two operations.
+    pub fn arcBorrowedResultVariant(self: LowLevel) ?LowLevel {
+        return switch (self) {
+            .list_sublist => .list_sublist_borrowed,
+            else => null,
+        };
+    }
+
+    /// Ownership signature ARC solves for this neutral low-level statement.
+    /// Operations without an ARC-only borrowed variant retain their declared
+    /// statement effect, including synthetic effects used by focused tests.
+    pub fn arcInferenceRcEffect(self: LowLevel, declared: RcEffect) RcEffect {
+        const borrowed = self.arcBorrowedResultVariant() orelse return declared;
+        return borrowed.rcEffect();
     }
 
     /// Whether this primitive can consume borrowed string views directly,

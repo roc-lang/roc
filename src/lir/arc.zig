@@ -1018,6 +1018,11 @@ const ReleaseDecision = union(enum) {
 /// One solver-owned linear decision. The small lists retain their capacity
 /// across fixed-point revisits; only the converged contents are consumed by
 /// materialization.
+const LowLevelSelection = struct {
+    op: LIR.LowLevel,
+    rc_effect: LIR.LowLevel.RcEffect,
+};
+
 const ArcPlanStep = struct {
     initialized: bool = false,
     stmt: LIR.CFStmtId = undefined,
@@ -1033,6 +1038,7 @@ const ArcPlanStep = struct {
     reuse_unique: bool = false,
     skip_result_retain: bool = false,
     unique_args: u64 = 0,
+    low_level_selection: ?LowLevelSelection = null,
     retain_call_result: bool = false,
     call_callee: ?LIR.LirProcSpecId = null,
     call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
@@ -1054,6 +1060,7 @@ const ArcPlanStep = struct {
         self.reuse_unique = false;
         self.skip_result_retain = false;
         self.unique_args = 0;
+        self.low_level_selection = null;
         self.retain_call_result = false;
         self.call_callee = null;
         self.call_demanded = arc_sig.RcSig.all_owned;
@@ -1763,14 +1770,16 @@ const Inserter = struct {
                 } });
             },
             .assign_low_level => |assign| blk: {
-                if (assign.rc_effect.retain_args != 0) {
-                    next = try self.retainMaskedArgs(assign.args, assign.rc_effect.retain_args & ~step.transfer_mask, next);
+                const op = if (step.low_level_selection) |selection| selection.op else assign.op;
+                const rc_effect = if (step.low_level_selection) |selection| selection.rc_effect else assign.rc_effect;
+                if (rc_effect.retain_args != 0) {
+                    next = try self.retainMaskedArgs(assign.args, rc_effect.retain_args & ~step.transfer_mask, next);
                 }
-                if (assign.rc_effect.retain_result and !step.skip_result_retain) next = try self.retainLocalIfRc(assign.target, next);
+                if (rc_effect.retain_result and !step.skip_result_retain) next = try self.retainLocalIfRc(assign.target, next);
                 break :blk try self.store.addCFStmt(.{ .assign_low_level = .{
                     .target = assign.target,
-                    .op = assign.op,
-                    .rc_effect = assign.rc_effect,
+                    .op = op,
+                    .rc_effect = rc_effect,
                     .unique_args = step.unique_args,
                     .args = assign.args,
                     .interchangeable = assign.interchangeable,
@@ -2218,12 +2227,28 @@ const Inserter = struct {
                 },
                 .assign_low_level => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForLowLevel(&segment.owned, assign.args, assign.rc_effect, assign.target, assign.next, segment.ctx.loop_keep, true);
+                    const borrowed_variant = assign.op.arcBorrowedResultVariant();
+                    const use_borrowed = borrowed_variant != null and self.isBindingBorrowed(assign.target);
+                    const selected_op = if (use_borrowed) borrowed_variant.? else assign.op;
+                    const selected_effect = if (borrowed_variant != null) selected_op.rcEffect() else assign.rc_effect;
+                    const transfer = try self.transferForLowLevel(
+                        &segment.owned,
+                        assign.args,
+                        selected_effect,
+                        assign.target,
+                        assign.next,
+                        segment.ctx.loop_keep,
+                        true,
+                        borrowed_variant != null and !use_borrowed,
+                    );
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.preserve_consumed_args = transfer.preserve_consumed_args;
                     step.transfer_mask = transfer.transfer_mask;
                     step.skip_result_retain = self.isBindingBorrowed(assign.target);
                     step.unique_args = transfer.unique_args;
+                    if (borrowed_variant != null) {
+                        step.low_level_selection = .{ .op = selected_op, .rc_effect = selected_effect };
+                    }
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
@@ -3567,8 +3592,9 @@ const Inserter = struct {
     }
 
     const LowLevelTransfer = struct {
-        /// Consumed positions whose group survives this statement: they pay
-        /// a retain before the op to preserve the caller's unit.
+        /// Consumed positions that pay a retain before the op, either because
+        /// their group survives or because an owned variant needs a unit from
+        /// an argument whose solved binding is borrowed.
         preserve_consumed_args: u64,
         /// Retained positions whose group dies here: their unit moves into
         /// the result instead of paying the trailing retain.
@@ -3581,8 +3607,10 @@ const Inserter = struct {
 
     /// Low-level ops: `RcEffect` masks say which positions the op consumes
     /// or retains; this decides which of those transfers move existing units
-    /// and which pay retains. `want_unique` gates the uniqueness-claim scan,
-    /// whose result only affects materialized statements.
+    /// and which pay retains. Borrowed-result variants may also retain a
+    /// borrowed input to supply the unit required by the selected owned op.
+    /// `want_unique` gates the uniqueness-claim scan, whose result only affects
+    /// materialized statements.
     fn transferForLowLevel(
         self: *Inserter,
         owned: *OwnedSet,
@@ -3592,11 +3620,24 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
         want_unique: bool,
+        supply_missing_consumed_args: bool,
     ) ResourceError!LowLevelTransfer {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
         }
-        const live_consumed_args = try self.preserveConsumedArgMask(args, rc_effect.consume_args, next, target, loop_keep);
+        var live_consumed_args = try self.preserveConsumedArgMask(args, rc_effect.consume_args, next, target, loop_keep);
+        if (supply_missing_consumed_args) {
+            const locals = self.store.getLocalSpan(args);
+            for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
+                const bit = argMaskBit(position);
+                if ((rc_effect.consume_args & bit) == 0) continue;
+                if (!self.ownsUnit(owned, GuardedList.at(locals, position))) {
+                    // The solved signature borrowed this argument. Retaining it
+                    // here supplies the unit consumed by the owned operation.
+                    live_consumed_args |= bit;
+                }
+            }
+        }
         const unique_args = if (want_unique)
             self.uniqueArgsMask(args, rc_effect, target, live_consumed_args, owned)
         else
@@ -6191,6 +6232,40 @@ const ArcTest = struct {
             }
         }
         return mask;
+    }
+
+    fn reachableLowLevelAssign(self: *const ArcTest, target: LIR.LocalId) @FieldType(LIR.CFStmt, "assign_low_level") {
+        var cursor = self.procBody();
+        var remaining: usize = self.store.cfStmtCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (self.store.getCFStmt(cursor)) {
+                .assign_low_level => |assign| {
+                    if (assign.target == target) return assign;
+                    cursor = assign.next;
+                },
+                .incref => |rc| cursor = rc.next,
+                .decref => |rc| cursor = rc.next,
+                .decref_if_initialized => |rc| cursor = rc.next,
+                .free => |rc| cursor = rc.next,
+                .assign_ref => |assign| cursor = assign.next,
+                .assign_literal => |assign| cursor = assign.next,
+                .init_uninitialized => |uninit| cursor = uninit.next,
+                .assign_call => |assign| cursor = assign.next,
+                .assign_call_erased => |assign| cursor = assign.next,
+                .assign_packed_erased_fn => |assign| cursor = assign.next,
+                .assign_list => |assign| cursor = assign.next,
+                .assign_struct => |assign| cursor = assign.next,
+                .assign_tag => |assign| cursor = assign.next,
+                .store_struct => |assign| cursor = assign.next,
+                .store_tag => |assign| cursor = assign.next,
+                .set_local => |assign| cursor = assign.next,
+                .debug => |debug_stmt| cursor = debug_stmt.next,
+                .expect => |expect_stmt| cursor = expect_stmt.next,
+                .comptime_branch_taken => |marker| cursor = marker.next,
+                else => arcInvariant("ARC test fixture expected a low-level op on a linear path"),
+            }
+        }
+        arcInvariant("ARC test fixture cycled while walking to a low-level op");
     }
 
     /// Like `uniqueArgsFor`, but restricted to statements reachable from one
@@ -9176,6 +9251,97 @@ test "RC borrow: list element read via low-level borrows the list" {
     try f.run();
     try f.expectRc(elem, 0, 0, 0);
     try f.expectRc(list, 0, 1, 0);
+}
+
+test "RC borrow: read-only sublist materializes a borrowed view" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const range = try f.local(.i64);
+    const slice = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_slice = try f.expectStmt(slice, result_assign);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = slice,
+        .op = .list_sublist,
+        .rc_effect = LIR.LowLevel.list_sublist.rcEffect(),
+        .args = try f.span(&.{ list, range }),
+        .next = use_slice,
+    } });
+    const range_assign = try f.assignI64(range, 0, sublist);
+    const body = try f.assignList(list, &.{}, range_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+
+    const emitted = f.reachableLowLevelAssign(slice);
+    try testing.expectEqual(LIR.LowLevel.list_sublist_borrowed, emitted.op);
+    try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
+    try f.expectRc(slice, 0, 0, 0);
+    try f.expectRc(list, 0, 1, 0);
+}
+
+test "RC borrow: owned sublist from borrowed parameter retains one input unit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const range = try f.local(.i64);
+    const slice = try f.local(f.list_i64);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const consume_slice = try f.assignCall(call_result, &.{slice}, result_assign);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = slice,
+        .op = .list_sublist,
+        .rc_effect = LIR.LowLevel.list_sublist.rcEffect(),
+        .args = try f.span(&.{ list, range }),
+        .next = consume_slice,
+    } });
+    const body = try f.assignI64(range, 0, sublist);
+    _ = try f.addProc(&.{list}, body, .i64);
+
+    try f.run();
+
+    const emitted = f.reachableLowLevelAssign(slice);
+    try testing.expectEqual(LIR.LowLevel.list_sublist, emitted.op);
+    try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
+    try f.expectRc(list, 1, 0, 0);
+    try f.expectRc(slice, 0, 0, 0);
+}
+
+test "RC borrow: owned sublist transfers an owned input unit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const range = try f.local(.i64);
+    const slice = try f.local(f.list_i64);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const consume_slice = try f.assignCall(call_result, &.{slice}, result_assign);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = slice,
+        .op = .list_sublist,
+        .rc_effect = LIR.LowLevel.list_sublist.rcEffect(),
+        .args = try f.span(&.{ list, range }),
+        .next = consume_slice,
+    } });
+    const range_assign = try f.assignI64(range, 0, sublist);
+    const body = try f.assignList(list, &.{}, range_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+
+    const emitted = f.reachableLowLevelAssign(slice);
+    try testing.expectEqual(LIR.LowLevel.list_sublist, emitted.op);
+    try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
+    try f.expectRc(list, 0, 0, 0);
+    try f.expectRc(slice, 0, 0, 0);
 }
 
 test "RC borrow: string match view capture used read-only does not retain source" {

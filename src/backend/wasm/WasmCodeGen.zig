@@ -13258,7 +13258,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateLLListSplitLast(args, ll.ret_layout);
         },
         // list_sublist(list, {len: U64, start: U64}) -> list
-        .list_sublist => {
+        .list_sublist, .list_sublist_borrowed => {
             // Shared layout uses canonical alphabetical field indices for records.
             // For { start : U64, len : U64 }, that means index 0 = len and index 1 = start.
             const ls = self.getLayoutStore();

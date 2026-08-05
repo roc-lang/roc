@@ -487,6 +487,28 @@ encountering malformed template data for one is an invariant violation.
 `CheckedTypeStore` construction and public-API dependency collection both omit
 nominal declarations that checking explicitly marked invalid.
 
+### Associated Item Lookup Through Aliases
+
+Canonicalization resolves ordinary nominal associated items whose declaration
+is already known, but it does not interpret an alias annotation to rediscover
+the nominal owner. A lookup through a local or imported alias is explicit CIR
+carrying the alias declaration and requested item. Checking follows the solved
+alias backing to its terminal nominal, resolves that nominal's owner by module
+content identity, and performs the exact owner-and-item method lookup. It then
+replaces the source node with the exact target module identity, type node, and
+definition. Alias traversal has no source-text reconstruction or fixed hop
+limit; invalid and cyclic aliases must already resolve to the checker error
+type.
+
+The checker memoizes this resolution by alias declaration type variable and
+item, while each use still instantiates the selected method scheme separately.
+`CheckedBodyPayloadCopier.copyExprData` treats any unresolved associated lookup
+as an invariant violation. For a resolved target reached through a re-export,
+checked module data stores the exact imported procedure or imported constant
+identity selected by checking. `buildImportedTemplateClosure` and
+`collectPublicApiDependencies` receive defining checked module data explicitly
+when no lexical import exists.
+
 ### Compile-Time Evaluation And Static Storage
 
 Compile-time evaluation must evaluate every checked top-level expression and
@@ -1766,12 +1788,14 @@ declarations also produce source diagnostics.
 A platform requirement's for-clause alias is a binder over an app-supplied
 type: the requirement's `Model` IS the app's `Model` by the for-clause's own
 definition, so identity provenance follows meaning provenance. After the
-requirement surface is checked, copied occurrences of a platform-root-owned
-for-clause alias resolve to the app's own type declaration (the checker
-redirects those solved vars, cited as
-`RedirectRule.for_clause_alias_identity`). Nothing in the app's checked
-output needs the platform root's checked module as a type owner, which is
-what lets an app build's platform root defer its checked-module output.
+requirement surface is checked, the checker supplies each platform alias's
+explicit `(origin module, source declaration)` key and backing identity root as
+source substitutions while copying each requirement into the app store. The
+copier resolves every declaration-owned alias occurrence and every recorded
+identity slot directly to the app's own type declaration; no copied
+platform-owned alias enters the solved app graph. Nothing in the app's checked
+output needs the platform root's checked module as a type owner, which is what
+lets an app build's platform root defer its checked-module output.
 
 The platform root's checked module is output exactly once per build:
 relation-bearing at finalization when an app root is paired (keyed by the
@@ -3752,10 +3776,6 @@ site to any family below must classify it here.
 
 - `widenTryConditionForExpectedReturn` — policy: Hosted Try Question
   Widening (above).
-- `resolveForClauseAliasOccurrences` — policy: for-clause alias identity
-  (see Platform/App Relation): copied occurrences of a platform
-  requirement's for-clause alias resolve to the app's own type declaration,
-  because the alias is a binder over the app-supplied type.
 - `markErroneousBranchWithExpected` — mechanism: diagnostic recovery. The
   expression already has a reported error; its var is redirected to a fresh
   var unified with the expected return so checking can continue past it.
@@ -3845,6 +3865,12 @@ selects the code-generation backend and optimization family. The
 `--specialize` flag selects how checked data becomes LIR before ARC and code
 generation.
 
+Compile-time evaluation is not a runtime lowering-strategy selection. CTFE
+always uses `.lss`, including when the enclosing runtime compilation explicitly
+selects `.boxy`. Runtime strategy flags, cache entries, and host wrappers must
+not route a compile-time root through Boxy or reuse Boxy-lowered LIR as a CTFE
+result.
+
 Compiler progress text follows the selected strategy. `.lss` reports the
 lambda-set-specializing work as `Specializing`. `.boxy` reports the same
 pipeline position as `Lowering`, because it does not specialize lambda sets.
@@ -3932,6 +3958,14 @@ in its owning module with an isolated binder environment; caller-module binder
 ids and lambda arguments are unavailable there. This is explicit checked-stage
 data, not recovery from the lookup, name, or callable shape.
 
+When a pending callable-eval binding is itself selected as a private worker,
+planning follows that same checked producer expression. A producer that is an
+explicit lambda, closure, or resolved procedure lookup supplies the worker
+source directly; a value use whose producer is a general expression remains a
+`RuntimeCallableEvalUsePlan`. Boxy does not request a second compile-time
+evaluation, switch CTFE away from LSS, or treat the callable's checked type as
+evidence for a missing body.
+
 Imported direct calls, pending callable producers, and restored const functions
 therefore keep imported type and expression ids attached to the imported
 CheckedModule that owns them; they are not mapped into root-module ids and they
@@ -4018,6 +4052,15 @@ never required on host-created callable values. A compiler-created callable
 records the exact immutable descriptor of the value its worker returns. The
 runtime registration for that worker records its actual return layout and the
 offset of the private metadata; it does not infer either from the call site.
+
+Each executing dev image selects its own sidecar runtime for the current OS
+thread so retained callables and overlapping hot-reload generations resolve
+descriptor ids against the image that produced them. Libc-linked tools use
+native TLS for that selection. The freestanding Linux machine-code shim has no
+TLS startup runtime, so it keys the same selection explicitly by the kernel
+thread id; it must not emit compiler TLS accesses or collapse concurrent image
+selections into one process-global pointer. Standalone linked programs use the
+separate process-global runtime installed from their embedded sidecar.
 
 Source `Box(a)` does not add a second box merely because `.boxy` already
 represents the internal type variable `a` as a boxed payload pointer. The
@@ -4148,6 +4191,14 @@ Only the wrapper is listed in `root_procs` with the checked root metadata. The
 private worker is an ordinary private LIR proc. Native entrypoint wrappers,
 interpreter shims, glue, static data export, and ABI cache digests therefore see
 the same host layouts under `.lss` and `.boxy`.
+
+A root plan records both the host relation type and the exact checked
+implementation-definition type reached through its procedure source. The host
+relation determines the public ABI and the worker boundary; the implementation
+definition supplies the concrete call substitution used to plan every hidden
+descriptor and dictionary argument. A host wrapper consumes those planned
+static mappings. It must not treat a generalized platform relation as concrete
+or rediscover the implementation type while lowering.
 
 Hosted calls use the same rule in the opposite direction. A checked hosted
 template is resolved through the checked hosted-procedure table and lowers to a
@@ -6059,6 +6110,17 @@ explicit target local before continuing to the next statement. Literal workers
 use the ordinary `assign_literal` statements with layouts selected from the
 boxy layout plan; zst values use ordinary empty-struct assignment.
 
+Direct-call descriptor setup has one explicit execution order: evaluate each
+source operand into its value and descriptor locals, materialize descriptor
+prerequisites selected from those live source values, adapt the arguments to
+the worker representations, materialize hidden descriptor and dictionary
+arguments, then call the worker. A hidden descriptor with a planned source
+argument index consumes that exact value's descriptor. When it names a nested
+representation, lowering follows the planned representation path through that
+value's descriptor before consulting descriptor-environment bindings; an
+environment may contain bindings for other live values with the same generic
+representation and is not evidence that those values are interchangeable.
+
 An applied-tag worker argument pattern is irrefutable only when its planned
 checked representation contains exactly one tag variant with that checked tag
 identity. Lowering validates that data, reserves the payload binders, and uses
@@ -6078,6 +6140,15 @@ segments: the literal bytes are copied into the LIR string store and referenced
 by `assign_literal.str_literal`. The checked type remains `List(U8)` and layout
 selection comes from the checked type's boxy representation; the lowerer does
 not synthesize a list item-by-item from the bytes.
+
+A generalized numeral literal whose checked conversion is a runtime operation
+retains its exact checked numeral in the Boxy plan. If its target is
+descriptor-governed, lowering emits the descriptor-guided dynamic integer or
+fractional literal operation and materializes the exact target descriptor. If
+the target is a dynamic box with a fixed payload layout, lowering first emits
+the exact scalar payload and then boxes it with that descriptor. It must not
+evaluate the conversion with CTFE, choose a machine scalar from the contextual
+layout alone, or reconstruct the numeral from formatted text.
 
 Checked builtin string interpolation that has already been represented as a
 checked `str` segment list lowers by evaluating each segment expression in
@@ -6390,6 +6461,25 @@ worker projects each captured field's descriptor in planned field order before
 binding or using the value. No consumer reconstructs capture descriptors from
 capture bytes, layouts, or the worker's contextual types.
 
+Every callable-value use edge records the exact hidden descriptor arguments for
+that use. Descriptors required only by the callable body are captured from
+those planned use-site arguments; descriptors represented structurally in the
+callable signature remain ordinary callable boundary descriptors. An
+uninstantiated declaration use may share a descriptor source only when the plan
+contains one unambiguous worker/caller source for the same checked producer.
+Lowering must not infer body captures from the declaration's generalized type
+or from another use of the same worker.
+
+Callable adapters collect result descriptor requirements as well as argument
+and capture requirements. Explicitly planned captures retain their descriptor
+identity; result traversal only appends requirement identities that are still
+missing. When one requirement appears in multiple callable positions it names
+one runtime descriptor identity and is not remapped by a later position. Before
+materializing a new capture, the adapter consults the source callable's exact
+local descriptor environment keyed by the requirement and source
+representation. A descriptor bound to a different live value or merely sharing
+the same storage layout is not evidence for that capture.
+
 For every checked call through a function value, the boxy lowerer emits an
 erased-call LIR statement. Its result descriptor operand is the call site's
 expected representation descriptor; a distinct descriptor output local receives
@@ -6452,6 +6542,17 @@ selected by checked dispatch when no dictionary is required.
 The lowerer must not discover method owners by searching registries at LIR
 time. It consumes the checked dispatch plan and checked method registry entries
 that checking already produced.
+
+Synthetic static dictionary method adapters construct one explicit descriptor
+source scope from the method worker's planned sources and the requirement-side
+descriptor mapping. Callable captures in that adapter pass their own
+requirement's mapped source representation into static materialization. If a
+matched source child is itself descriptor-governed, materialization follows its
+explicit descriptor-source chain until it reaches the concrete source; cycles
+and conflicting mappings are invariant failures. Once two tag variants have
+been matched by checked tag identity, their payload descriptors align by the
+checked payload index. The adapter does not search ambient descriptor locals or
+reconstruct a nested source from layout shape.
 
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:
@@ -7203,6 +7304,16 @@ generates constraints per statement:
   borrow arg 0); the result's mode is then solved like a payload read, with
   the lifetime constraint tied to those args. Ops whose results never alias
   a retained arg produce fresh owned results as today.
+  A low-level operation may also declare one explicit ARC-only borrowed-result
+  variant. Neutral LIR retains the ordinary source operation, but constraint
+  generation uses the borrowed variant's `RcEffect`. After modes solve, an
+  actually borrowed result materializes the borrowed operation and its effect;
+  an owned result materializes the ordinary consuming operation and its
+  effect. If the ordinary operation needs to consume an argument whose solved
+  binding is borrowed, ARC emits one retain immediately before the operation
+  to supply that consumed unit. Every post-ARC statement therefore contains
+  the exact concrete operation and effect the backend executes. The variant
+  mapping is static low-level-op data, and only ARC may select from it.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
@@ -7265,8 +7376,10 @@ before solving and never weakened:
 - hosted procs: every refcounted arg owned by the host, result owned. This
   keeps the LirImage And Hosted Functions contract unchanged.
 - erased-callable procs (`ProcAbi.erased_callable`): all-owned, as above.
-- low-level ops: their `RcEffect` is the signature; it is explicit static
-  data on the op, never inferred.
+- low-level ops: each concrete operation's `RcEffect` is its signature; it is
+  explicit static data on the op, never inferred. An ARC-only borrowed-result
+  variant is likewise an explicit operation and signature, selected only by
+  the ARC rule above.
 
 ### Interprocedural Solving
 
@@ -7365,8 +7478,10 @@ plans when keep/common states change. Once the fixed point converges, direct
 call demands are mapped to final variants and every reachable plan is complete.
 
 Each plan records every concrete move/retain/release decision and call-variant
-or uniqueness choice. Materialization receives neither ownership state nor
-liveness and only follows completed plans to rebuild statement chains:
+or uniqueness choice. For a low-level operation with an ARC-only borrowed
+variant, the plan also records the selected concrete operation and `RcEffect`.
+Materialization receives neither ownership state nor liveness and only follows
+completed plans to rebuild statement chains:
 
 - borrowed occurrence: no statements.
 - owned occurrence that is not the final occurrence on its path: `incref`

@@ -9844,6 +9844,7 @@ const CheckedSourceNodes = struct {
             .e_bytes_literal,
             .e_lookup_local,
             .e_lookup_external,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_empty_list,
             .e_empty_record,
@@ -9855,6 +9856,7 @@ const CheckedSourceNodes = struct {
             .e_derived_method,
             .e_break,
             => {},
+            .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached checked source traversal", .{}),
         }
     }
 
@@ -10918,6 +10920,7 @@ pub const CheckedBodyStore = struct {
         local_module: CheckedModuleArtifactKey,
         local_procedure_bindings: *const TopLevelProcedureBindingTable,
         imports: []const PublishImportArtifact,
+        available_modules: []const ImportedModuleView,
         relation_modules: []const ImportedModuleView,
     ) void {
         for (refs.records, 0..) |record, i| {
@@ -10961,6 +10964,7 @@ pub const CheckedBodyStore = struct {
                         local_module,
                         local_procedure_bindings,
                         imports,
+                        available_modules,
                         relation_modules,
                     );
                 },
@@ -11944,6 +11948,7 @@ fn directProcedureTargetForCall(
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
     imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) ?ResolvedValueId {
     const ref_id = refs.lookupIdByCheckedExpr(callee) orelse return null;
@@ -11956,6 +11961,7 @@ fn directProcedureTargetForCall(
         local_module,
         local_procedure_bindings,
         imports,
+        available_modules,
         relation_modules,
     )) ref_id else null;
 }
@@ -11965,6 +11971,7 @@ fn resolvedValueCanBeCalledDirectly(
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
     imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) bool {
     return switch (ref) {
@@ -11974,6 +11981,7 @@ fn resolvedValueCanBeCalledDirectly(
             local_module,
             local_procedure_bindings,
             imports,
+            available_modules,
             relation_modules,
         ),
         .imported_proc => |proc| procedureUseCanBeCalledDirectly(
@@ -11981,6 +11989,7 @@ fn resolvedValueCanBeCalledDirectly(
             local_module,
             local_procedure_bindings,
             imports,
+            available_modules,
             relation_modules,
         ),
         .platform_required_proc => |required| procedureUseCanBeCalledDirectly(
@@ -11988,6 +11997,7 @@ fn resolvedValueCanBeCalledDirectly(
             local_module,
             local_procedure_bindings,
             imports,
+            available_modules,
             relation_modules,
         ),
         .local_param,
@@ -12009,6 +12019,7 @@ fn procedureUseCanBeCalledDirectly(
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
     imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) bool {
     return switch (proc.binding) {
@@ -12017,15 +12028,17 @@ fn procedureUseCanBeCalledDirectly(
             local_module,
             local_procedure_bindings,
             imports,
+            available_modules,
             relation_modules,
         ),
-        .imported => |imported| importedProcedureCanBeCalledDirectly(imported, imports, relation_modules),
+        .imported => |imported| importedProcedureCanBeCalledDirectly(imported, imports, available_modules, relation_modules),
         .hosted => true,
         .platform_required => |required| topLevelProcedureCanBeCalledDirectly(
             .{ .artifact = required.artifact, .binding = required.procedure_binding },
             local_module,
             local_procedure_bindings,
             imports,
+            available_modules,
             relation_modules,
         ),
     };
@@ -12036,12 +12049,13 @@ fn topLevelProcedureCanBeCalledDirectly(
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
     imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) bool {
     const body = if (checkedArtifactKeyEql(top_level.artifact, local_module))
         local_procedure_bindings.get(top_level.binding).body
     else blk: {
-        const view = moduleViewForKey(imports, relation_modules, top_level.artifact) orelse
+        const view = moduleViewForKey(imports, available_modules, relation_modules, top_level.artifact) orelse
             checkedArtifactInvariant("direct-call target referenced an unavailable checked module", .{});
         break :blk view.top_level_procedure_bindings.get(top_level.binding).body;
     };
@@ -12051,9 +12065,10 @@ fn topLevelProcedureCanBeCalledDirectly(
 fn importedProcedureCanBeCalledDirectly(
     imported: ImportedProcedureBindingRef,
     imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) bool {
-    const view = moduleViewForKey(imports, relation_modules, imported.artifact) orelse
+    const view = moduleViewForKey(imports, available_modules, relation_modules, imported.artifact) orelse
         checkedArtifactInvariant("imported direct-call target referenced an unavailable checked module", .{});
     for (view.exported_procedure_bindings.bindings) |binding| {
         if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
@@ -12065,11 +12080,15 @@ fn importedProcedureCanBeCalledDirectly(
 
 fn moduleViewForKey(
     imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
     key: CheckedModuleArtifactKey,
 ) ?ImportedModuleView {
     for (imports) |import| {
         if (checkedArtifactKeyEql(import.key, key)) return import.view;
+    }
+    for (available_modules) |view| {
+        if (checkedArtifactKeyEql(view.key, key)) return view;
     }
     for (relation_modules) |view| {
         if (checkedArtifactKeyEql(view.key, key)) return view;
@@ -12174,7 +12193,8 @@ const CheckedBodyPayloadCopier = struct {
                 .pattern = self.checkedPattern(lookup.pattern_idx),
                 .resolved = null,
             } },
-            .e_lookup_external => .{ .lookup_external = null },
+            .e_lookup_external, .e_lookup_associated_resolved => .{ .lookup_external = null },
+            .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached checked body publication", .{}),
             .e_lookup_required => .{ .lookup_required = null },
             .e_list => |list| .{ .list = try self.copyExprSpan(list.elems) },
             .e_empty_list => .empty_list,
@@ -13718,6 +13738,7 @@ pub const ResolvedValueRefTable = struct {
         module_idx: u32,
         artifact_key: CheckedModuleArtifactKey,
         imports: []const PublishImportArtifact,
+        available_artifacts: []const ImportedModuleView,
         templates: *const CheckedProcedureTemplateTable,
         hosted_procs: *const HostedProcTable,
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
@@ -13745,8 +13766,10 @@ pub const ResolvedValueRefTable = struct {
             switch (tag) {
                 .expr_var,
                 .expr_external_lookup,
+                .expr_associated_lookup_resolved,
                 .expr_required_lookup,
                 => {},
+                .expr_associated_lookup_local, .expr_associated_lookup => checkedArtifactInvariant("unresolved associated lookup reached resolved value publication", .{}),
                 else => continue,
             }
 
@@ -13758,6 +13781,7 @@ pub const ResolvedValueRefTable = struct {
                 artifact_key,
                 expr_idx,
                 imports,
+                available_artifacts,
                 templates,
                 hosted_procs,
                 platform_required_declarations,
@@ -13966,6 +13990,7 @@ fn categorizeValueRef(
     artifact_key: CheckedModuleArtifactKey,
     expr_idx: CIR.Expr.Idx,
     imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
     _: *const CheckedProcedureTemplateTable,
     hosted_procs: *const HostedProcTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
@@ -13993,6 +14018,17 @@ fn categorizeValueRef(
             external.target_node_idx,
             imports,
         ),
+        .e_lookup_associated_resolved => |resolved| categorizeResolvedAssociatedValueRef(
+            module,
+            artifact_key,
+            resolved.module_identity,
+            resolved.target_def_idx,
+            imports,
+            available_artifacts,
+            hosted_procs,
+            top_level_values,
+        ),
+        .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached value-ref categorization", .{}),
         .e_lookup_required => |required| categorizeRequiredValueRef(
             required.requires_idx.toU32(),
             platform_required_declarations,
@@ -14149,38 +14185,7 @@ fn categorizeLocalValueRef(
             unreachable;
         }
 
-        switch (entry.value) {
-            .const_ref => |const_ref| return .{ .top_level_const = .{
-                .const_ref = const_ref,
-                .requested_source_ty_template = .{},
-            } },
-            .procedure_binding => |binding| {
-                if (hostedProcForDef(hosted_procs, entry.def)) |hosted| {
-                    return .{ .hosted_proc = .{
-                        .binding = .{ .hosted = .{
-                            .module_idx = hosted.module_idx,
-                            .def = hosted.def_idx,
-                            .proc = hosted.proc,
-                            .template = hosted.template,
-                        } },
-                        .source_fn_ty_template = .{},
-                        .intrinsic = null,
-                        .iterator_procedure = null,
-                        .runtime_result_provenance = null,
-                    } };
-                }
-                return .{ .top_level_proc = .{
-                    .binding = .{ .top_level = .{
-                        .artifact = artifact_key,
-                        .binding = binding,
-                    } },
-                    .source_fn_ty_template = .{},
-                    .intrinsic = intrinsicForProcedureDef(module, entry.def),
-                    .iterator_procedure = iteratorProcedureForDef(module, entry.def),
-                    .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, entry.def),
-                } };
-            },
-        }
+        return categorizeTopLevelValueRef(module, artifact_key, entry, hosted_procs);
     }
 
     const binder = checked_bodies.patternBinderForSource(pattern) orelse {
@@ -14220,6 +14225,44 @@ fn categorizeLocalValueRef(
         );
     }
     unreachable;
+}
+
+fn categorizeTopLevelValueRef(
+    module: TypedCIR.Module,
+    artifact_key: CheckedModuleArtifactKey,
+    entry: TopLevelValueEntry,
+    hosted_procs: *const HostedProcTable,
+) ResolvedValueRef {
+    return switch (entry.value) {
+        .const_ref => |const_ref| .{ .top_level_const = .{
+            .const_ref = const_ref,
+            .requested_source_ty_template = .{},
+        } },
+        .procedure_binding => |binding| if (hostedProcForDef(hosted_procs, entry.def)) |hosted|
+            .{ .hosted_proc = .{
+                .binding = .{ .hosted = .{
+                    .module_idx = hosted.module_idx,
+                    .def = hosted.def_idx,
+                    .proc = hosted.proc,
+                    .template = hosted.template,
+                } },
+                .source_fn_ty_template = .{},
+                .intrinsic = null,
+                .iterator_procedure = null,
+                .runtime_result_provenance = null,
+            } }
+        else
+            .{ .top_level_proc = .{
+                .binding = .{ .top_level = .{
+                    .artifact = artifact_key,
+                    .binding = binding,
+                } },
+                .source_fn_ty_template = .{},
+                .intrinsic = intrinsicForProcedureDef(module, entry.def),
+                .iterator_procedure = iteratorProcedureForDef(module, entry.def),
+                .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, entry.def),
+            } },
+    };
 }
 
 fn selectedHoistedConstUse(
@@ -14285,6 +14328,73 @@ fn categorizeImportedValueRef(
         );
     }
     unreachable;
+}
+
+fn categorizeResolvedAssociatedValueRef(
+    module: TypedCIR.Module,
+    artifact_key: CheckedModuleArtifactKey,
+    module_identity: base.ModuleIdentity.Idx,
+    target_def: CIR.Def.Idx,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    hosted_procs: *const HostedProcTable,
+    top_level_values: *const TopLevelValueTable,
+) ResolvedValueRef {
+    if (module_identity == module.moduleEnvConst().selfModuleIdentity()) {
+        const entry = top_level_values.lookupByDef(target_def) orelse
+            return checkedArtifactInvariant("resolved local associated lookup target is not a top-level value", .{});
+        return categorizeTopLevelValueRef(module, artifact_key, entry, hosted_procs);
+    }
+
+    const origin_hash = module.moduleEnvConst().moduleIdentityHash(module_identity);
+    const target_view = importedViewForOriginHash(imports, available_artifacts, origin_hash) orelse
+        checkedArtifactInvariant("resolved associated lookup target has no available checked artifact", .{});
+
+    if (importedProcedureBindingForDef(target_view, target_def)) |binding| {
+        return .{ .imported_proc = .{
+            .binding = .{ .imported = binding.binding },
+            .source_fn_ty_template = .{},
+            .intrinsic = binding.intrinsic,
+            .iterator_procedure = binding.iterator_procedure,
+            .runtime_result_provenance = binding.runtime_result_provenance,
+        } };
+    }
+
+    if (importedConstTemplateForDef(target_view, target_def)) |const_template| {
+        return .{ .imported_const = .{
+            .const_ref = const_template.const_ref,
+            .requested_source_ty_template = .{},
+        } };
+    }
+
+    return checkedArtifactInvariant("resolved associated lookup target was not exported by its checked artifact", .{});
+}
+
+fn importedViewForOriginHash(
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    origin_hash: *const base.ModuleIdentity.Hash,
+) ?ImportedModuleView {
+    var found: ?ImportedModuleView = null;
+    for (imports) |import| {
+        if (!importedViewIdentityMatches(import.view, origin_hash)) continue;
+        found = uniqueImportedView(found, import.view);
+    }
+    for (available_artifacts) |view| {
+        if (!importedViewIdentityMatches(view, origin_hash)) continue;
+        found = uniqueImportedView(found, view);
+    }
+    return found;
+}
+
+fn uniqueImportedView(existing: ?ImportedModuleView, next: ImportedModuleView) ImportedModuleView {
+    if (existing) |found| {
+        if (!checkedArtifactKeyEql(found.key, next.key)) {
+            checkedArtifactInvariant("module identity resolved to multiple checked artifacts", .{});
+        }
+        return found;
+    }
+    return next;
 }
 
 fn importedProcedureBindingForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?ImportedProcedureBindingView {
@@ -25201,6 +25311,7 @@ pub const ExportedProcedureTemplateTable = struct {
         top_level_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         imports: []const PublishImportArtifact,
+        available_artifacts: []const ImportedModuleView,
     ) Allocator.Error!ExportedProcedureTemplateTable {
         var templates = std.ArrayList(ExportedProcedureTemplate).empty;
         var closure_pool = ClosurePool.empty;
@@ -25235,6 +25346,7 @@ pub const ExportedProcedureTemplateTable = struct {
                 top_level_bindings,
                 platform_required_bindings,
                 imports,
+                available_artifacts,
                 template,
                 template_data,
             );
@@ -25301,6 +25413,7 @@ fn buildImportedTemplateClosure(
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
     template_ref: canonical.ProcedureTemplateRef,
     template: CheckedProcedureTemplate,
 ) Allocator.Error!ImportedTemplateClosureView {
@@ -25316,6 +25429,7 @@ fn buildImportedTemplateClosure(
         top_level_bindings,
         platform_required_bindings,
         imports,
+        available_artifacts,
     );
     defer builder.deinit();
 
@@ -25382,6 +25496,7 @@ const ImportedTemplateClosureBuilder = struct {
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
     checked_bodies: UniqueList(ArtifactCheckedBodyRef),
     checked_type_roots: UniqueList(ArtifactCheckedTypeRef),
     checked_type_schemes: UniqueList(ArtifactCheckedTypeSchemeRef),
@@ -25408,6 +25523,7 @@ const ImportedTemplateClosureBuilder = struct {
         top_level_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         imports: []const PublishImportArtifact,
+        available_artifacts: []const ImportedModuleView,
     ) ImportedTemplateClosureBuilder {
         return .{
             .allocator = allocator,
@@ -25421,6 +25537,7 @@ const ImportedTemplateClosureBuilder = struct {
             .top_level_bindings = top_level_bindings,
             .platform_required_bindings = platform_required_bindings,
             .imports = imports,
+            .available_artifacts = available_artifacts,
             .checked_bodies = .empty,
             .checked_type_roots = .empty,
             .checked_type_schemes = .empty,
@@ -25644,6 +25761,16 @@ const ImportedTemplateClosureBuilder = struct {
         for (self.imports) |import| {
             if (!std.meta.eql(import.key.bytes, ref.artifact.bytes)) continue;
             for (import.view.exported_procedure_bindings.bindings) |binding| {
+                if (binding.binding.def == ref.def and
+                    binding.binding.pattern == ref.pattern)
+                {
+                    return binding;
+                }
+            }
+        }
+        for (self.available_artifacts) |view| {
+            if (!std.meta.eql(view.key.bytes, ref.artifact.bytes)) continue;
+            for (view.exported_procedure_bindings.bindings) |binding| {
                 if (binding.binding.def == ref.def and
                     binding.binding.pattern == ref.pattern)
                 {
@@ -25888,6 +26015,7 @@ fn buildImportedConstTemplateClosure(
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
     const_ref: ConstRef,
 ) Allocator.Error!ImportedTemplateClosureView {
     var builder = ImportedTemplateClosureBuilder.init(
@@ -25902,6 +26030,7 @@ fn buildImportedConstTemplateClosure(
         top_level_bindings,
         platform_required_bindings,
         imports,
+        available_artifacts,
     );
     defer builder.deinit();
 
@@ -26041,6 +26170,7 @@ pub const ExportedProcedureBindingTable = struct {
         resolved_value_refs: *const ResolvedValueRefTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         imports: []const PublishImportArtifact,
+        available_artifacts: []const ImportedModuleView,
         artifact_key: CheckedModuleArtifactKey,
     ) Allocator.Error!ExportedProcedureBindingTable {
         var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
@@ -26073,6 +26203,7 @@ pub const ExportedProcedureBindingTable = struct {
                 procedure_bindings,
                 platform_required_bindings,
                 imports,
+                available_artifacts,
                 binding.body,
             );
             errdefer deinitImportedTemplateClosure(allocator, &template_closure);
@@ -26143,6 +26274,7 @@ fn buildProcedureBindingClosure(
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
     body: ProcedureBindingBody,
 ) Allocator.Error!ImportedTemplateClosureView {
     return switch (body) {
@@ -26159,6 +26291,7 @@ fn buildProcedureBindingClosure(
                 top_level_bindings,
                 platform_required_bindings,
                 imports,
+                available_artifacts,
                 template_ref,
                 checked_templates.get(template_ref.template),
             ),
@@ -26174,6 +26307,7 @@ fn buildProcedureBindingClosure(
                 top_level_bindings,
                 platform_required_bindings,
                 imports,
+                available_artifacts,
                 synthetic.template,
                 checked_templates.get(synthetic.template.template),
             ),
@@ -26201,6 +26335,7 @@ fn buildProcedureBindingClosure(
                 top_level_bindings,
                 platform_required_bindings,
                 imports,
+                available_artifacts,
             );
             defer builder.deinit();
 
@@ -26449,6 +26584,7 @@ pub const ExportedConstTemplateTable = struct {
         top_level_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         imports: []const PublishImportArtifact,
+        available_artifacts: []const ImportedModuleView,
     ) Allocator.Error!ExportedConstTemplateTable {
         var templates = std.ArrayList(ImportedConstTemplateView).empty;
         var closure_pool = ClosurePool.empty;
@@ -26476,6 +26612,7 @@ pub const ExportedConstTemplateTable = struct {
                 top_level_bindings,
                 platform_required_bindings,
                 imports,
+                available_artifacts,
                 const_ref,
             );
             errdefer deinitImportedTemplateClosure(allocator, &template_closure);
@@ -30167,6 +30304,7 @@ pub fn publishFromTypedModule(
         module_idx,
         artifact_key,
         inputs.imports,
+        inputs.available_artifacts,
         &checked_procedure_templates,
         &hosted_procs,
         &platform_required_declarations,
@@ -30183,6 +30321,7 @@ pub fn publishFromTypedModule(
         artifact_key,
         &top_level_procedure_bindings,
         inputs.imports,
+        inputs.available_artifacts,
         inputs.relation_artifacts,
     );
 
@@ -30340,6 +30479,7 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         &platform_required_bindings,
         inputs.imports,
+        inputs.available_artifacts,
     );
     errdefer exported_procedure_templates.deinit(allocator);
 
@@ -30357,6 +30497,7 @@ pub fn publishFromTypedModule(
         &resolved_value_refs,
         &platform_required_bindings,
         inputs.imports,
+        inputs.available_artifacts,
         artifact_key,
     );
     errdefer exported_procedure_bindings.deinit(allocator);
@@ -30376,6 +30517,7 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         &platform_required_bindings,
         inputs.imports,
+        inputs.available_artifacts,
     );
     errdefer exported_const_templates.deinit(allocator);
 
@@ -30865,6 +31007,7 @@ fn expectProvidedExportKind(
         module.moduleIndex(),
         artifact_key,
         &builtin_imports,
+        &.{},
         &checked_procedure_templates,
         &hosted_procs,
         &platform_required_declarations,
@@ -30881,6 +31024,7 @@ fn expectProvidedExportKind(
         artifact_key,
         &top_level_procedure_bindings,
         &builtin_imports,
+        &.{},
         &.{},
     );
 

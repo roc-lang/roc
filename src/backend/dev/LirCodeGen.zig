@@ -3989,7 +3989,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const record_layout_idx = self.valueLayout(GuardedList.at(args, 1));
                     const list_loc = try self.emitValueLocal(list_local);
                     const record_loc = try self.emitValueLocal(GuardedList.at(args, 1));
-                    return try self.callListSublistFromRecord(ll, list_local, list_loc, record_loc, record_layout_idx);
+                    return try self.callListSublistFromRecord(ll, .list_sublist, list_local, list_loc, record_loc, record_layout_idx);
+                },
+                .list_sublist_borrowed => {
+                    if (args.len != 2) unreachable;
+                    const list_local = GuardedList.at(args, 0);
+                    const record_layout_idx = self.valueLayout(GuardedList.at(args, 1));
+                    const list_loc = try self.emitValueLocal(list_local);
+                    const record_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    return try self.callListSublistFromRecord(ll, .list_sublist_borrowed, list_local, list_loc, record_loc, record_layout_idx);
                 },
                 .list_drop_at => {
                     if (args.len != 2) unreachable;
@@ -7324,7 +7332,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// list_sublist(list, {start, len}) -> List
-        fn callListSublistFromRecord(self: *Self, ll: anytype, list_local: LocalId, list_loc: ValueLocation, record_loc: ValueLocation, record_layout_idx: ?layout.Idx) Allocator.Error!ValueLocation {
+        fn callListSublistFromRecord(self: *Self, ll: anytype, op: lir.LowLevel, list_local: LocalId, list_loc: ValueLocation, record_loc: ValueLocation, record_layout_idx: ?layout.Idx) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const list_abi = builtinInternalListAbi(ls, "dev.callListSublistFromRecord.builtin_list_abi", ll.ret_layout);
@@ -7365,7 +7373,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const record_off = try self.ensureOnStack(record_loc, record_size);
 
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
-            if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
+            if (op == .list_sublist_borrowed) {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(frame_ptr, result_offset);
+                try builder.addMemArg(frame_ptr, list_off);
+                try builder.addMemArg(frame_ptr, list_off + 8);
+                try builder.addMemArg(frame_ptr, list_off + 16);
+                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try builder.addMemArg(frame_ptr, record_off + start_field_off);
+                try builder.addMemArg(frame_ptr, record_off + len_field_off);
+                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_sublist_borrowed));
+            } else if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);

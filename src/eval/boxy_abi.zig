@@ -25,6 +25,7 @@
 //! through `ret_desc`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const layout_mod = @import("layout");
 const lir = @import("lir");
@@ -170,10 +171,87 @@ pub const GlobalBoxyRuntime = struct {
 };
 
 var global: ?*GlobalBoxyRuntime = null;
-threadlocal var active_runtime: ?*GlobalBoxyRuntime = null;
+
+const ActiveRuntimeSelection = if (builtin.os.tag == .linux and !builtin.link_libc) struct {
+    const Entry = struct {
+        tid: std.os.linux.pid_t,
+        runtime: *GlobalBoxyRuntime,
+        allocator: Allocator,
+        next: ?*Entry,
+    };
+
+    var lock: std.atomic.Mutex = .unlocked;
+    var entries: ?*Entry = null;
+
+    fn lockEntries() void {
+        while (!lock.tryLock()) std.atomic.spinLoopHint();
+    }
+
+    fn get() ?*GlobalBoxyRuntime {
+        const tid = std.os.linux.gettid();
+        lockEntries();
+        defer lock.unlock();
+
+        var current = entries;
+        while (current) |entry| : (current = entry.next) {
+            if (entry.tid == tid) return entry.runtime;
+        }
+        return null;
+    }
+
+    fn swap(runtime: ?*GlobalBoxyRuntime) ?*GlobalBoxyRuntime {
+        const tid = std.os.linux.gettid();
+        lockEntries();
+
+        var link = &entries;
+        while (link.*) |entry| : (link = &entry.next) {
+            if (entry.tid != tid) continue;
+            const previous = entry.runtime;
+            if (runtime) |selected| {
+                entry.runtime = selected;
+                lock.unlock();
+            } else {
+                link.* = entry.next;
+                lock.unlock();
+                entry.allocator.destroy(entry);
+            }
+            return previous;
+        }
+
+        const selected = runtime orelse {
+            lock.unlock();
+            return null;
+        };
+        const entry = selected.gpa.create(Entry) catch {
+            lock.unlock();
+            @panic("boxy runtime could not record the active freestanding thread");
+        };
+        entry.* = .{
+            .tid = tid,
+            .runtime = selected,
+            .allocator = selected.gpa,
+            .next = entries,
+        };
+        entries = entry;
+        lock.unlock();
+        return null;
+    }
+} else struct {
+    threadlocal var runtime: ?*GlobalBoxyRuntime = null;
+
+    fn get() ?*GlobalBoxyRuntime {
+        return runtime;
+    }
+
+    fn swap(selected: ?*GlobalBoxyRuntime) ?*GlobalBoxyRuntime {
+        const previous = runtime;
+        runtime = selected;
+        return previous;
+    }
+};
 
 fn currentRuntime() ?*GlobalBoxyRuntime {
-    return active_runtime orelse global;
+    return ActiveRuntimeSelection.get() orelse global;
 }
 
 fn requireGlobal() *GlobalBoxyRuntime {
@@ -184,9 +262,7 @@ fn requireGlobal() *GlobalBoxyRuntime {
 /// previously selected runtime. The machine-code shim uses this to keep each
 /// hot-reload generation paired with its own sidecar tables.
 pub fn swapActiveRuntime(runtime: ?*GlobalBoxyRuntime) ?*GlobalBoxyRuntime {
-    const previous = active_runtime;
-    active_runtime = runtime;
-    return previous;
+    return ActiveRuntimeSelection.swap(runtime);
 }
 
 fn createRuntime(

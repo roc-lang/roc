@@ -1335,11 +1335,12 @@ fn liftProcStmtFacts(
             },
         }),
         .assign_low_level => |assign| {
+            const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
             solver.unique_seed_masks[proc_index] |= lowLevelUniqueSeedMask(
                 solver.store,
                 proc_params,
                 assign.args,
-                assign.rc_effect,
+                rc_effect,
             );
         },
         .ret => |ret_stmt| try solver.proc_returns[proc_index].append(solver.allocator, @intFromEnum(ret_stmt.value)),
@@ -2192,9 +2193,10 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try liftVisibilitySeed(solver, assign.target);
         },
         .assign_low_level => |assign| {
+            const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
             const args = store.getLocalSpan(assign.args);
-            const borrow_source = lowLevelBorrowSource(solver.domain, assign.rc_effect, args);
-            if (assign.rc_effect.retain_result and borrow_source != no_local) {
+            const borrow_source = lowLevelBorrowSource(solver.domain, rc_effect, args);
+            if (rc_effect.retain_result and borrow_source != no_local) {
                 const source: LIR.LocalId = @enumFromInt(solver.domain.localAt(borrow_source));
                 try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = source } });
             } else {
@@ -2207,8 +2209,8 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     continue;
                 }
                 const bit = @as(u64, 1) << @as(u6, @intCast(index));
-                if ((assign.rc_effect.consume_args & bit) != 0 or
-                    (assign.rc_effect.retain_args & bit) != 0)
+                if ((rc_effect.consume_args & bit) != 0 or
+                    (rc_effect.retain_args & bit) != 0)
                 {
                     try solver.binding_facts.append(allocator, .{ .demand = arg });
                 }
@@ -2216,10 +2218,10 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             if (assign.op == .erased_capture_load) {
                 try liftVisibilitySeed(solver, assign.target);
             } else {
-                const share_mask = assign.rc_effect.result_aliases_consumed_args |
-                    assign.rc_effect.result_borrows_args |
-                    assign.rc_effect.retain_args |
-                    assign.rc_effect.result_shares_args;
+                const share_mask = rc_effect.result_aliases_consumed_args |
+                    rc_effect.result_borrows_args |
+                    rc_effect.retain_args |
+                    rc_effect.result_shares_args;
                 if (share_mask != 0) {
                     for (0..GuardedList.borrowLen(args)) |position| {
                         if (position >= 64) break;
@@ -2227,13 +2229,13 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                         if ((share_mask & bit) == 0) continue;
                         try liftVisibilityLink(solver, assign.target, GuardedList.at(args, position));
                     }
-                } else if (assign.rc_effect.consume_args == 0) {
+                } else if (rc_effect.consume_args == 0) {
                     for (0..GuardedList.borrowLen(args)) |arg_index| {
                         try liftVisibilityLink(solver, assign.target, GuardedList.at(args, arg_index));
                     }
                 }
             }
-            try solver.unique_facts.append(allocator, if (assign.rc_effect.result_unique)
+            try solver.unique_facts.append(allocator, if (rc_effect.result_unique)
                 .{ .birth = assign.target }
             else
                 .{ .foreign = assign.target });
@@ -2245,11 +2247,11 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 }
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
                 var read_only = true;
-                if ((assign.rc_effect.consume_args & bit) != 0) {
+                if ((rc_effect.consume_args & bit) != 0) {
                     try solver.unique_facts.append(allocator, .{ .consume = arg });
                     read_only = false;
                 }
-                if ((assign.rc_effect.retain_args & bit) != 0) {
+                if ((rc_effect.retain_args & bit) != 0) {
                     try solver.unique_facts.append(allocator, .{ .destroy = arg });
                     read_only = false;
                 }
@@ -2964,7 +2966,7 @@ fn computeVisibilityFromLift(
                     seedLocal(&visible, rc_local, target);
                     continue;
                 }
-                const effect = assign.rc_effect;
+                const effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
                 const args = store.getLocalSpan(assign.args);
                 const share_mask = effect.result_aliases_consumed_args |
                     effect.result_borrows_args |
@@ -3207,7 +3209,7 @@ fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, st
             if (assign.target_desc) |target_desc| facts.noteForeign(target_desc);
         },
         .assign_call_dict => |assign| facts.noteForeign(assign.target),
-        .assign_low_level => |assign| if (assign.rc_effect.result_unique)
+        .assign_low_level => |assign| if (assign.op.arcInferenceRcEffect(assign.rc_effect).result_unique)
             facts.noteBirth(assign.target)
         else
             facts.noteForeign(assign.target),
@@ -4007,8 +4009,9 @@ fn computeUniquenessDetailed(
                 }
             },
             .assign_low_level => |assign| {
+                const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
                 marks.trackDef(&has_def, &multi_def, assign.target);
-                if (assign.rc_effect.result_unique) {
+                if (rc_effect.result_unique) {
                     marks.noteBirth(&born, assign.target);
                 } else {
                     marks.destroy(&foreign_def, assign.target);
@@ -4022,11 +4025,11 @@ fn computeUniquenessDetailed(
                     }
                     const bit = @as(u64, 1) << @as(u6, @intCast(position));
                     var read_only = true;
-                    if ((assign.rc_effect.consume_args & bit) != 0) {
+                    if ((rc_effect.consume_args & bit) != 0) {
                         marks.consume(&consumed_once, &destroyed, arg);
                         read_only = false;
                     }
-                    if ((assign.rc_effect.retain_args & bit) != 0) {
+                    if ((rc_effect.retain_args & bit) != 0) {
                         marks.destroy(&destroyed, arg);
                         read_only = false;
                     }

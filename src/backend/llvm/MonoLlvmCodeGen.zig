@@ -4124,7 +4124,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_append_unsafe => try self.emitListAppendUnsafe(target, arg_locals),
             .list_concat => try self.emitListConcat(target, arg_locals, unique_args),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
-            .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
+            .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
             .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
@@ -8832,28 +8832,37 @@ pub const MonoLlvmCodeGen = struct {
                 const safe_start = (self.wip orelse return error.CompilationFailed).select(.normal, takes_all, zero, suffix_start, "") catch return error.OutOfMemory;
                 break :blk ListSlice{ .start = safe_start, .len = count };
             },
-            .list_sublist => try self.loadSublistStartLen(GuardedList.at(args, 1)),
+            .list_sublist, .list_sublist_borrowed => try self.loadSublistStartLen(GuardedList.at(args, 1)),
             else => return error.UnsupportedLowLevel,
         };
         var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
+        if (op == .list_sublist_borrowed) {
+            try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
+            try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
+            try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
+            try call_args.append(self.allocator, .i1, builder.intValue(.i1, @intFromBool(abi.contains_refcounted)) catch return error.OutOfMemory);
+            try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(op).symbolName(), call_args.types.items, call_args.values.items);
         } else {
-            try self.appendListElementRcArgs(&call_args, abi, false, true);
-        }
-        try self.appendUpdateModeArg(&call_args, unique_args);
-        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_sublist", call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinVoid("roc_builtins_list_sublist", call_args.types.items, call_args.values.items);
+            try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
+            try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
+            try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
+            try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
+            const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
+            if (boxy_elem) |elem| {
+                try self.appendBoxyListElementDescArgs(&call_args, elem);
+            } else {
+                try self.appendListElementRcArgs(&call_args, abi, false, true);
+            }
+            try self.appendUpdateModeArg(&call_args, unique_args);
+            try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+            if (boxy_elem != null) {
+                try self.callBoxyVoid("roc_boxy_list_sublist", call_args.types.items, call_args.values.items);
+            } else {
+                try self.callBuiltinVoid(LowLevelBuiltins.listOp(op).symbolName(), call_args.types.items, call_args.values.items);
+            }
         }
     }
 

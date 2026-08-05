@@ -192,6 +192,9 @@ import_cache: ImportCache,
 /// speculative probes an exact rollback boundary.
 imported_method_schemes: std.ArrayListUnmanaged(ImportedMethodScheme) = .empty,
 imported_method_scheme_by_source: std.AutoHashMapUnmanaged(ImportedMethodSchemeKey, u32) = .empty,
+/// Exact associated-item targets keyed by the alias declaration type var and
+/// item. Alias traversal and owner-scope lookup happen once per declaration.
+associated_lookup_cache: std.AutoHashMapUnmanaged(AssociatedLookupCacheKey, ?AssociatedLookupResolution) = .empty,
 /// Copied Bool type from Bool module (for use in if conditions, etc.)
 bool_var: Var,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
@@ -1074,6 +1077,9 @@ const HoistSelectionTransaction = struct {
                 _ = try self.stageBindingRoot(lookup.pattern_idx);
             },
             .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_str_segment,
             .e_bytes_literal,
@@ -1558,6 +1564,7 @@ fn initAssumePrepared(
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .import_cache = ImportCache{},
+        .associated_lookup_cache = .empty,
         .bool_var = undefined,
         .str_var = undefined,
         .u64_var = undefined,
@@ -1708,6 +1715,7 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
     self.imported_method_schemes.deinit(self.gpa);
     self.imported_method_scheme_by_source.deinit(self.gpa);
+    self.associated_lookup_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.checked_interpolation_part_constraints.deinit();
     self.int_unbound_vars.deinit();
@@ -2649,6 +2657,9 @@ fn markHoistInvalidatedExprChildren(
         .e_bytes_literal,
         .e_lookup_local,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_lookup_required,
         .e_empty_list,
         .e_empty_record,
@@ -2772,6 +2783,9 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
             => return expr_idx,
             .e_lookup_local,
             .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_str_segment,
             .e_bytes_literal,
@@ -3098,6 +3112,9 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => false,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_lookup_required,
         .e_str_segment,
         .e_bytes_literal,
@@ -3167,6 +3184,9 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_lookup_required,
         .e_str_segment,
         .e_bytes_literal,
@@ -3255,6 +3275,9 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_break,
         => false,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_str_segment,
         .e_bytes_literal,
         .e_frac_f32,
@@ -3963,33 +3986,6 @@ fn instantiateVarWithSubs(
 
         .current_rank = env.rank(),
         .rigid_behavior = .{ .substitute_rigids = subs },
-    };
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
-}
-
-/// Instantiate a variable, substituting rigids in the provided map and
-/// instantiating any other rigids as fresh flex vars. Used for platform
-/// requirement schemes: for-clause rigids take the app's chosen types, and
-/// every other rigid the requires grammar permits (`_`-prefixed vars, open
-/// union `..` extensions) is app-flexible by design — the same semantics
-/// whether or not a for-clause is present.
-fn instantiateVarWithPartialSubs(
-    self: *Self,
-    var_to_instantiate: Var,
-    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
-    env: *Env,
-    region_behavior: InstantiateRegionBehavior,
-) std.mem.Allocator.Error!Var {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    var instantiate_ctx = Instantiator{
-        .store = self.types,
-        .idents = self.cir.getIdentStoreConst(),
-        .var_map = &self.var_map,
-
-        .current_rank = env.rank(),
-        .rigid_behavior = .{ .substitute_rigids_fresh_flex = subs },
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
@@ -5442,6 +5438,7 @@ fn ensureBuiltinNominalDeclEntries(self: *Self) Allocator.Error!void {
     };
 
     self.var_map.clearRetainingCapacity();
+    const first_new_var: usize = @intCast(self.types.len());
 
     inline for (CIR.builtin_type_specs) |spec| {
         try copy_import.ensureNominalDeclForStatement(
@@ -5455,7 +5452,7 @@ fn ensureBuiltinNominalDeclEntries(self: *Self) Allocator.Error!void {
         );
     }
 
-    try self.postProcessCopiedVars(Region.zero());
+    try self.postProcessCopiedVars(first_new_var, Region.zero());
 }
 
 /// Public `checkFile` function.
@@ -6054,6 +6051,9 @@ fn hoistedRootDependenciesAreKeptInternal(
             context.contains(lookup.pattern_idx) or
             (keep_oracle.selectedPatternIsKept(lookup.pattern_idx) orelse false),
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_str_segment,
         .e_bytes_literal,
         .e_num,
@@ -6195,6 +6195,9 @@ fn hoistedExprAllowsStoredConst(
             try self.hoistedExprSpanAllowsStoredConst(module, run.args, context),
         .e_lookup_local,
         .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
         .e_lookup_required,
         .e_str_segment,
         .e_bytes_literal,
@@ -6284,6 +6287,11 @@ fn hoistedCallableDefForExpr(
             const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
             break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
         },
+        .e_lookup_associated_resolved => |resolved| blk: {
+            const target_module = self.moduleEnvForIdentity(resolved.module_identity) orelse break :blk null;
+            break :blk HoistedCallableDef{ .module = target_module.env, .def = resolved.target_def_idx };
+        },
+        .e_lookup_associated_local, .e_lookup_associated => null,
         .e_str,
         .e_str_segment,
         .e_bytes_literal,
@@ -8629,9 +8637,27 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
     defer alias_bindings.deinit(self.gpa);
     try self.collectForClauseAliasBindings(input, env, &alias_bindings);
 
+    var alias_var_substitutions = std.AutoHashMap(Var, Var).init(self.gpa);
+    defer alias_var_substitutions.deinit();
+    var alias_source_substitutions = std.AutoHashMap(copy_import.AliasSource, Var).init(self.gpa);
+    defer alias_source_substitutions.deinit();
+    for (alias_bindings.items) |binding| {
+        const app_type_var = binding.app_type_var orelse continue;
+        try alias_var_substitutions.put(binding.platform_alias_var, app_type_var);
+        try alias_var_substitutions.put(binding.platform_identity_var, app_type_var);
+        try alias_source_substitutions.put(binding.platform_alias_source, app_type_var);
+    }
+
     for (input.env.requires_types.items.items, 0..) |required_type, requires_idx| {
         const required_ident = try self.copyPlatformIdent(input.env, required_type.ident);
-        const instantiated = (try self.instantiatePlatformRequiredType(input, required_type, env, alias_bindings.items)) orelse continue;
+        const instantiated = (try self.instantiatePlatformRequiredType(
+            input,
+            required_type,
+            env,
+            alias_bindings.items,
+            &alias_var_substitutions,
+            &alias_source_substitutions,
+        )) orelse continue;
         var identity_vars_owned = true;
         defer if (identity_vars_owned) self.gpa.free(instantiated.identity_vars);
 
@@ -8712,12 +8738,11 @@ fn instantiatePlatformRequiredType(
     required_type: ModuleEnv.RequiredType,
     env: *Env,
     bindings: []const ForClauseAliasBinding,
+    alias_var_substitutions: *const std.AutoHashMap(Var, Var),
+    alias_source_substitutions: *const std.AutoHashMap(copy_import.AliasSource, Var),
 ) std.mem.Allocator.Error!?InstantiatedRequirement {
-    self.rigid_var_substitutions.clearRetainingCapacity();
-    defer self.rigid_var_substitutions.clearRetainingCapacity();
-
-    const aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
-    for (aliases) |alias| {
+    const declared_aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
+    for (declared_aliases) |alias| {
         const binding = forClauseAliasBinding(bindings, alias.alias_stmt_idx) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("platform requirement for-clause alias was not collected for the requires clause", .{});
@@ -8726,9 +8751,7 @@ fn instantiatePlatformRequiredType(
         };
         // The alias's app declaration was not found; the diagnostic was
         // emitted when the clause's bindings were collected.
-        const app_type_var = binding.app_type_var orelse return null;
-        const rigid_ident = try self.copyPlatformIdent(input.env, alias.rigid_name);
-        try self.rigid_var_substitutions.put(self.gpa, rigid_ident, app_type_var);
+        if (binding.app_type_var == null) return null;
     }
 
     // Enumerate the requirement type's identity variables (flex/rigid) in the
@@ -8742,7 +8765,22 @@ fn instantiatePlatformRequiredType(
     );
     defer self.gpa.free(platform_identity_vars);
 
-    const copied = try self.copyVar(ModuleEnv.varFrom(required_type.type_anno), input.env, required_type.region);
+    // Aliases are module-scoped, so an entry can use an alias declared by an
+    // earlier flat entry even though it is absent from `declared_aliases`.
+    for (platform_identity_vars) |platform_var| {
+        const binding = forClauseAliasBindingForIdentity(bindings, platform_var) orelse continue;
+        // The alias's app declaration was not found; the diagnostic was
+        // emitted when the clause's bindings were collected.
+        if (binding.app_type_var == null) return null;
+    }
+
+    const copied = try self.copyVarWithSourceSubstitutions(
+        ModuleEnv.varFrom(required_type.type_anno),
+        input.env,
+        required_type.region,
+        alias_var_substitutions,
+        alias_source_substitutions,
+    );
 
     // `copyVar` keyed `var_map` by the platform store's resolved vars — the
     // same roots the identity enumeration returned — so each identity slot
@@ -8758,25 +8796,28 @@ fn instantiatePlatformRequiredType(
         };
     }
 
-    try self.resolveForClauseAliasOccurrences(input, bindings);
+    const expected_var = try self.instantiateVar(copied, env, .{ .explicit = required_type.region });
 
-    const expected_var = try self.instantiateVarWithPartialSubs(
-        copied,
-        &self.rigid_var_substitutions,
-        env,
-        .{ .explicit = required_type.region },
-    );
+    // `instantiateVar` keyed `var_map` by the copied store's resolved vars.
+    // Clause-bound identities were replaced during copying and already are
+    // the exact app declaration; every other identity must have been visited
+    // and instantiated with the requirement root.
+    for (platform_identity_vars, identity_vars) |platform_var, *slot_var| {
+        if (alias_var_substitutions.get(platform_var)) |app_type_var| {
+            const resolved_app_type = self.types.resolveVar(app_type_var).var_;
+            if (builtin.mode == .Debug) {
+                std.debug.assert(self.types.resolveVar(slot_var.*).var_ == resolved_app_type);
+            }
+            slot_var.* = resolved_app_type;
+            continue;
+        }
 
-    // `instantiateVarWithPartialSubs` keyed `var_map` by the copied store's
-    // resolved vars; a var it never instantiated resolves to itself — except a
-    // for-clause rigid whose only occurrences sat beneath alias uses that
-    // resolved to the app's declaration above: instantiation never visits it,
-    // and its solution is that same substitution target.
-    for (identity_vars) |*slot_var| {
         const resolved = self.types.resolveVar(slot_var.*);
-        slot_var.* = self.var_map.get(resolved.var_) orelse switch (resolved.desc.content) {
-            .rigid => |rigid| self.rigid_var_substitutions.get(rigid.name) orelse resolved.var_,
-            else => resolved.var_,
+        slot_var.* = self.var_map.get(resolved.var_) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("platform requirement identity var was not instantiated with its requirement root", .{});
+            }
+            unreachable;
         };
     }
 
@@ -8792,12 +8833,24 @@ const ForClauseAliasBinding = struct {
     /// only while resolving the app-side declaration at the language boundary;
     /// copied occurrences match this declaration identity thereafter.
     platform_alias_stmt_idx: CIR.Statement.Idx,
+    /// Resolved platform-store roots replaced during cross-module copying.
+    platform_alias_var: Var,
+    platform_identity_var: Var,
+    /// Declaration identity shared by every application of this alias.
+    platform_alias_source: copy_import.AliasSource,
     app_type_var: ?Var,
 };
 
 fn forClauseAliasBinding(bindings: []const ForClauseAliasBinding, platform_alias_stmt_idx: CIR.Statement.Idx) ?ForClauseAliasBinding {
     for (bindings) |binding| {
         if (binding.platform_alias_stmt_idx == platform_alias_stmt_idx) return binding;
+    }
+    return null;
+}
+
+fn forClauseAliasBindingForIdentity(bindings: []const ForClauseAliasBinding, platform_identity_var: Var) ?ForClauseAliasBinding {
+    for (bindings) |binding| {
+        if (binding.platform_identity_var == platform_identity_var) return binding;
     }
     return null;
 }
@@ -8815,6 +8868,36 @@ fn collectForClauseAliasBindings(
         const aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
         for (aliases) |alias| {
             if (forClauseAliasBinding(bindings.items, alias.alias_stmt_idx) != null) continue;
+            const alias_statement = input.env.store.getStatement(alias.alias_stmt_idx);
+            const alias_anno = switch (alias_statement) {
+                .s_alias_decl => |decl| decl.anno,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("platform requirement for-clause alias referenced a non-alias statement", .{});
+                    }
+                    unreachable;
+                },
+            };
+            const platform_alias_resolved = input.env.types.resolveVar(ModuleEnv.varFrom(alias.alias_stmt_idx));
+            const platform_alias = switch (platform_alias_resolved.desc.content) {
+                .alias => |resolved_alias| resolved_alias,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("platform requirement for-clause alias statement had no alias type", .{});
+                    }
+                    unreachable;
+                },
+            };
+            const platform_alias_source = copy_import.AliasSource{
+                .origin_module = platform_alias.origin_module,
+                .source_decl = platform_alias.source_decl.toOptional() orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("platform requirement for-clause alias had no source declaration", .{});
+                    }
+                    unreachable;
+                },
+            };
+            const platform_identity_var = input.env.types.resolveVar(ModuleEnv.varFrom(alias_anno)).var_;
             const alias_ident = try self.copyPlatformIdent(input.env, alias.alias_name);
 
             const app_type_stmt = self.appTypeDeclByIdent(alias_ident) orelse {
@@ -8828,6 +8911,9 @@ fn collectForClauseAliasBindings(
                 } });
                 try bindings.append(self.gpa, .{
                     .platform_alias_stmt_idx = alias.alias_stmt_idx,
+                    .platform_alias_var = platform_alias_resolved.var_,
+                    .platform_identity_var = platform_identity_var,
+                    .platform_alias_source = platform_alias_source,
                     .app_type_var = null,
                 });
                 continue;
@@ -8837,56 +8923,11 @@ fn collectForClauseAliasBindings(
             const app_type_var = try self.instantiateVar(ModuleEnv.varFrom(app_type_stmt), env, .{ .explicit = app_type_region });
             try bindings.append(self.gpa, .{
                 .platform_alias_stmt_idx = alias.alias_stmt_idx,
+                .platform_alias_var = platform_alias_resolved.var_,
+                .platform_identity_var = platform_identity_var,
+                .platform_alias_source = platform_alias_source,
                 .app_type_var = app_type_var,
             });
-        }
-    }
-}
-
-/// Resolve copied occurrences of a requirement's for-clause aliases to the
-/// app's own type declarations. A for-clause alias is a binder over an
-/// app-supplied type — the requirement's `Model` IS the app's `Model` by the
-/// for-clause's own definition — so identity provenance follows meaning
-/// provenance: the app's checked output references its own declaration, never
-/// a platform-root-owned named type. This is what lets an app build's platform
-/// root defer publication: nothing the app publishes needs the platform root's
-/// checked module as a type owner.
-fn resolveForClauseAliasOccurrences(
-    self: *Self,
-    input: PlatformRequirementInput,
-    bindings: []const ForClauseAliasBinding,
-) std.mem.Allocator.Error!void {
-    var any_bound = false;
-    for (bindings) |binding| {
-        if (binding.app_type_var != null) {
-            any_bound = true;
-            break;
-        }
-    }
-    if (!any_bound) return;
-    // The platform root's env-local identity, rebased into the app's identity
-    // table the same way `copyVar` rebased each copied type's origin. Absent
-    // entries mean no copied type originates in the platform root.
-    if (input.env.self_module_identity.isNone()) return;
-    const platform_identity_hash = input.env.moduleIdentityHash(input.env.self_module_identity);
-    const platform_origin = self.cir.lookupModuleIdentity(platform_identity_hash) orelse return;
-
-    var it = self.var_map.iterator();
-    while (it.next()) |entry| {
-        const resolved = self.types.resolveVar(entry.value_ptr.*);
-        const alias = switch (resolved.desc.content) {
-            .alias => |alias| alias,
-            else => continue,
-        };
-        if (alias.origin_module != platform_origin) continue;
-        const source_decl = alias.source_decl.toOptional() orelse continue;
-        for (bindings) |binding| {
-            if (source_decl == @intFromEnum(binding.platform_alias_stmt_idx)) {
-                if (binding.app_type_var) |app_type_var| {
-                    try self.types.dangerousSetVarRedirect(.for_clause_alias_identity, resolved.var_, app_type_var);
-                }
-                break;
-            }
         }
     }
 }
@@ -13316,6 +13357,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, .err, env);
             }
         },
+        .e_lookup_associated_local => |lookup| {
+            try self.checkLocalAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
+        },
+        .e_lookup_associated => |lookup| {
+            try self.checkAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
+        },
+        .e_lookup_associated_resolved => |lookup| {
+            try self.checkResolvedAssociatedLookup(expr_var, lookup, expr_region, env);
+        },
         .e_lookup_required => |req| {
             self.markCurrentHoistRuntimeDependency();
             // Look up the type from the platform's requires clause
@@ -14595,6 +14645,16 @@ const StaticDispatchMethodBinding = struct {
     binding: ModuleEnv.MethodBinding,
 };
 
+const AssociatedLookupCacheKey = struct {
+    owner_var: Var,
+    item_ident: Ident.Idx,
+};
+
+const AssociatedLookupResolution = struct {
+    target: StaticDispatchMethodBinding,
+    module_identity: base.ModuleIdentity.Idx,
+};
+
 fn staticDispatchBindingIsDerivedMarker(lookup: StaticDispatchMethodBinding) bool {
     return generatedDerivedMethodDef(lookup.env, lookup.binding.def_idx);
 }
@@ -14790,8 +14850,22 @@ fn methodVarFromOriginalEnv(
     env: *Env,
     region: Region,
 ) Allocator.Error!ToInspectMethodVar {
+    return .{
+        .var_ = try self.methodTypeVarFromOriginalEnv(original_env, is_this_module, type_node_idx, env, region),
+        .dispatcher_name = dispatcher_name,
+    };
+}
+
+fn methodTypeVarFromOriginalEnv(
+    self: *Self,
+    original_env: *const ModuleEnv,
+    is_this_module: bool,
+    type_node_idx: CIR.Node.Idx,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
     const def_var: Var = ModuleEnv.varFrom(type_node_idx);
-    const method_var = if (is_this_module) blk: {
+    return if (is_this_module) blk: {
         if (self.types.resolveVar(def_var).desc.rank == .generalized) {
             break :blk try self.instantiateVar(def_var, env, .use_last_var);
         }
@@ -14800,7 +14874,6 @@ fn methodVarFromOriginalEnv(
         const imported_scheme = try self.importedMethodSchemeFromSource(original_env, type_node_idx);
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
     };
-    return .{ .var_ = method_var, .dispatcher_name = dispatcher_name };
 }
 
 fn derivedMethodValidationVar(
@@ -17634,21 +17707,269 @@ fn resolveVarFromExternal(
     }
 }
 
+fn checkAssociatedLookup(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    lookup: @FieldType(CIR.Expr, "e_lookup_associated"),
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    const external_type = (try self.resolveVarFromExternal(lookup.module_idx, lookup.type_node_idx)) orelse {
+        try self.unifyWith(expr_var, .err, env);
+        return;
+    };
+
+    try self.checkAssociatedLookupFromOwnerVar(
+        expr_idx,
+        expr_var,
+        external_type.local_var,
+        lookup.type_ident,
+        lookup.item_ident,
+        region,
+        env,
+    );
+}
+
+fn checkLocalAssociatedLookup(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    lookup: @FieldType(CIR.Expr, "e_lookup_associated_local"),
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    try self.checkAssociatedLookupFromOwnerVar(
+        expr_idx,
+        expr_var,
+        @enumFromInt(lookup.type_node_idx),
+        lookup.type_ident,
+        lookup.item_ident,
+        region,
+        env,
+    );
+}
+
+fn checkAssociatedLookupFromOwnerVar(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    initial_owner_var: Var,
+    type_ident: Ident.Idx,
+    item_ident: Ident.Idx,
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    const resolution = (try self.resolveAssociatedLookup(initial_owner_var, item_ident)) orelse {
+        try self.failAssociatedLookup(expr_idx, expr_var, type_ident, item_ident, region, env);
+        return;
+    };
+    const source_ident = try self.cir.insertQualifiedIdent(
+        self.cir.getIdent(type_ident),
+        self.cir.getIdent(item_ident),
+    );
+
+    self.cir.store.replaceExprWithResolvedAssociatedLookup(
+        expr_idx,
+        resolution.module_identity,
+        resolution.target.binding.type_node_idx,
+        resolution.target.binding.def_idx,
+        source_ident,
+    );
+
+    try self.checkResolvedAssociatedTarget(
+        expr_var,
+        resolution.target.env,
+        resolution.target.is_this_module,
+        resolution.target.binding.type_node_idx,
+        resolution.target.binding.def_idx,
+        region,
+        env,
+    );
+}
+
+fn resolveAssociatedLookup(
+    self: *Self,
+    initial_owner_var: Var,
+    item_ident: Ident.Idx,
+) Allocator.Error!?AssociatedLookupResolution {
+    const cache_key = AssociatedLookupCacheKey{ .owner_var = initial_owner_var, .item_ident = item_ident };
+    if (self.associated_lookup_cache.get(cache_key)) |cached| return cached;
+
+    var owner_var = initial_owner_var;
+    const nominal = while (true) {
+        const owner = self.types.resolveVar(owner_var);
+        switch (owner.desc.content) {
+            .alias => |alias| owner_var = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| break nominal,
+                else => {
+                    try self.associated_lookup_cache.put(self.gpa, cache_key, null);
+                    return null;
+                },
+            },
+            .err, .flex, .rigid => {
+                try self.associated_lookup_cache.put(self.gpa, cache_key, null);
+                return null;
+            },
+        }
+    };
+
+    const owner_env, _ = self.ownerEnvForOriginModule(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+        "associated value lookup",
+    );
+    const target = self.lookupStaticDispatchMethodBinding(
+        owner_env,
+        nominal.sourceDeclOptional(),
+        self.cir,
+        item_ident,
+    ) orelse {
+        try self.associated_lookup_cache.put(self.gpa, cache_key, null);
+        return null;
+    };
+    const resolution = AssociatedLookupResolution{
+        .target = target,
+        .module_identity = try self.internCheckedTargetModuleIdentity(target.env),
+    };
+    try self.associated_lookup_cache.put(self.gpa, cache_key, resolution);
+    return resolution;
+}
+
+fn checkResolvedAssociatedLookup(
+    self: *Self,
+    expr_var: Var,
+    lookup: @FieldType(CIR.Expr, "e_lookup_associated_resolved"),
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    const target = self.moduleEnvForIdentity(lookup.module_identity) orelse {
+        std.debug.panic("type checker invariant violated: resolved associated lookup target is unavailable", .{});
+    };
+    try self.checkResolvedAssociatedTarget(
+        expr_var,
+        target.env,
+        target.is_this_module,
+        @enumFromInt(lookup.target_node_idx),
+        lookup.target_def_idx,
+        region,
+        env,
+    );
+}
+
+fn checkResolvedAssociatedTarget(
+    self: *Self,
+    expr_var: Var,
+    target_env: *const ModuleEnv,
+    is_this_module: bool,
+    target_node_idx: CIR.Node.Idx,
+    target_def_idx: CIR.Def.Idx,
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    if (generatedDerivedMethodDef(target_env, target_def_idx)) {
+        try self.reportAnnotationOnlyValueUse(expr_var, region, env);
+        return;
+    }
+
+    const target_var = try self.methodTypeVarFromOriginalEnv(
+        target_env,
+        is_this_module,
+        target_node_idx,
+        env,
+        region,
+    );
+    _ = try self.unify(expr_var, target_var, env);
+}
+
+fn failAssociatedLookup(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    type_ident: Ident.Idx,
+    item_ident: Ident.Idx,
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    _ = try self.problems.appendProblem(self.gpa, .{ .associated_item_not_found = .{
+        .type_name = type_ident,
+        .item_name = item_ident,
+        .region = region,
+    } });
+    const diagnostic_idx = try self.cir.store.addDiagnosticUnregistered(.{ .nested_value_not_found = .{
+        .parent_name = type_ident,
+        .nested_name = item_ident,
+        .region = region,
+    } });
+    try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    try self.unifyWith(expr_var, .err, env);
+}
+
+fn internCheckedTargetModuleIdentity(
+    self: *Self,
+    target_env: *const ModuleEnv,
+) Allocator.Error!base.ModuleIdentity.Idx {
+    if (target_env == self.cir) return self.cir.selfModuleIdentity();
+    const target_hash = target_env.contentIdentityHash() orelse {
+        std.debug.panic("type checker invariant violated: associated lookup target has no content identity", .{});
+    };
+    const display_ident = try self.cir.insertIdent(base.Ident.for_text(target_env.module_name));
+    return try self.cir.internModuleIdentity(target_hash, display_ident);
+}
+
+fn moduleEnvForIdentity(
+    self: *const Self,
+    module_identity: base.ModuleIdentity.Idx,
+) ?OwnerEnvCandidate {
+    const target_hash = self.cir.moduleIdentityHash(module_identity);
+    if (ownerEnvIdentityMatches(self.cir, target_hash)) return .{ .env = self.cir, .is_this_module = true };
+    for (self.imported_modules) |imported_env| {
+        if (ownerEnvIdentityMatches(imported_env, target_hash)) return .{ .env = imported_env, .is_this_module = false };
+    }
+    for (self.owner_modules) |owner_env| {
+        if (ownerEnvIdentityMatches(owner_env, target_hash)) return .{ .env = owner_env, .is_this_module = false };
+    }
+    return null;
+}
+
 /// Copy a variable from another module into this module
 /// The ranks of all variables copied will be generalized
 fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEnv, mb_region: ?Region) std.mem.Allocator.Error!Var {
+    return self.copyVarWithSourceSubstitutions(other_module_var, other_module_env, mb_region, null, null);
+}
+
+/// Copy a variable from another module, replacing exact source roots and alias
+/// declaration occurrences with existing destination roots while traversing.
+fn copyVarWithSourceSubstitutions(
+    self: *Self,
+    other_module_var: Var,
+    other_module_env: *const ModuleEnv,
+    mb_region: ?Region,
+    source_var_substitutions: ?*const std.AutoHashMap(Var, Var),
+    source_alias_substitutions: ?*const std.AutoHashMap(copy_import.AliasSource, Var),
+) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // First, reset state
     self.var_map.clearRetainingCapacity();
+    if (source_var_substitutions) |substitutions| {
+        var iterator = substitutions.iterator();
+        while (iterator.next()) |entry| {
+            try self.var_map.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
 
     // Copy the var from the dest type store into this type store
+    const first_new_var: usize = @intCast(self.types.len());
     const copied_var = try copy_import.copyVar(
         &other_module_env.*.types,
         self.types,
         other_module_var,
         &self.var_map,
+        source_alias_substitutions,
         other_module_env,
         self.cir,
         self.gpa,
@@ -17656,38 +17977,34 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
 
     const region = if (mb_region) |region| region else base.Region.zero();
 
-    try self.postProcessCopiedVars(region);
+    try self.postProcessCopiedVars(first_new_var, region);
 
     return copied_var;
 }
 
 /// Bookkeeping for vars newly minted in this store by a cross-module copy
-/// (`self.var_map` holds source var -> fresh local var): fill in regions for
-/// error reporting and register copied open literals on the defaulting
-/// worklist.
-fn postProcessCopiedVars(self: *Self, region: Region) std.mem.Allocator.Error!void {
+/// (`[first_new_var, types.len())` is the exact allocation range): fill in
+/// regions for error reporting and register copied open literals on the
+/// defaulting worklist.
+fn postProcessCopiedVars(self: *Self, first_new_var: usize, region: Region) std.mem.Allocator.Error!void {
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
-    if (self.var_map.count() > 0) {
-        var iterator = self.var_map.iterator();
-        while (iterator.next()) |x| {
-            // Get the newly created var
-            const fresh_var = x.value_ptr.*;
-            try self.fillInRegionsThrough(fresh_var);
+    for (first_new_var..@as(usize, @intCast(self.types.len()))) |raw_var| {
+        const fresh_var: Var = @enumFromInt(@as(u32, @intCast(raw_var)));
+        try self.fillInRegionsThrough(fresh_var);
 
-            self.setRegionAt(fresh_var, region);
+        self.setRegionAt(fresh_var, region);
 
-            // Register a copied open literal on the worklist so this module's
-            // defaulting passes find it without a whole-store scan — the same
-            // bookkeeping the other literal-creation sites do.
-            const fresh_content = self.types.resolveVar(fresh_var).desc.content;
-            if (fresh_content == .flex) {
-                const constraints = self.types.sliceStaticDispatchConstraints(fresh_content.flex.constraints);
-                for (constraints) |c| {
-                    if (self.constraintIsLiteralConversion(c)) {
-                        try self.recordOpenLiteralVar(fresh_var, constraints, null);
-                        break;
-                    }
+        // Register a copied open literal on the worklist so this module's
+        // defaulting passes find it without a whole-store scan — the same
+        // bookkeeping the other literal-creation sites do.
+        const fresh_content = self.types.resolveVar(fresh_var).desc.content;
+        if (fresh_content == .flex) {
+            const constraints = self.types.sliceStaticDispatchConstraints(fresh_content.flex.constraints);
+            for (constraints) |c| {
+                if (self.constraintIsLiteralConversion(c)) {
+                    try self.recordOpenLiteralVar(fresh_var, constraints, null);
+                    break;
                 }
             }
         }
