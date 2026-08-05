@@ -6103,19 +6103,9 @@ const Builder = struct {
             ctx.frozen_sealed_emission = true;
             ctx.frozen_type_finals = sealer;
 
-            var frozen_codec_calls = std.ArrayList(FrozenPreparedCodecCall).empty;
+            var frozen_codec_calls = try ctx.sealedPreparedCodecCallsForBoundary(boundary.expr, sealer);
             defer frozen_codec_calls.deinit(self.allocator);
-            for (body_draft.prepared_codec_calls.items) |prepared| {
-                if (prepared.boundary_expr != boundary.expr) continue;
-                try frozen_codec_calls.append(self.allocator, .{
-                    .kind = prepared.kind,
-                    .shape_ty = try sealer.sealNode(prepared.shape_node),
-                    .lookup = prepared.lookup,
-                    .callable_ty = try sealer.sealNode(prepared.callable_node),
-                    .callee = prepared.callee,
-                });
-            }
-            ctx.frozen_codec_calls = frozen_codec_calls.items;
+            ctx.frozen_codec_calls = &frozen_codec_calls;
 
             const callable_ty = try sealer.sealNode(boundary.callable_node);
             const callable = self.functionShape(callable_ty, "deferred structural serialization callable was not a function");
@@ -6182,19 +6172,9 @@ const Builder = struct {
             ctx.frozen_sealed_emission = true;
             ctx.frozen_type_finals = sealer;
 
-            var frozen_codec_calls = std.ArrayList(FrozenPreparedCodecCall).empty;
+            var frozen_codec_calls = try ctx.sealedPreparedCodecCallsForBoundary(boundary.expr, sealer);
             defer frozen_codec_calls.deinit(self.allocator);
-            for (body_draft.prepared_codec_calls.items) |prepared| {
-                if (prepared.boundary_expr != boundary.expr) continue;
-                try frozen_codec_calls.append(self.allocator, .{
-                    .kind = prepared.kind,
-                    .shape_ty = try sealer.sealNode(prepared.shape_node),
-                    .lookup = prepared.lookup,
-                    .callable_ty = try sealer.sealNode(prepared.callable_node),
-                    .callee = prepared.callee,
-                });
-            }
-            ctx.frozen_codec_calls = frozen_codec_calls.items;
+            ctx.frozen_codec_calls = &frozen_codec_calls;
 
             const callable = try graph.functionNodes(boundary.callable_node);
             var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
@@ -10004,6 +9984,13 @@ const CodecKind = enum {
     encoder,
 };
 
+const CodecCallPurpose = enum {
+    format,
+    custom,
+};
+
+const PreparedCodecCallId = enum(u32) { _ };
+
 /// One exact codec request prepared while the specialization graph still
 /// accepts relations. The callable node owns every checked/private component;
 /// ordinary procedure targets use the same deferred specialization slot as
@@ -10011,6 +9998,7 @@ const CodecKind = enum {
 const DraftPreparedCodecCall = struct {
     boundary_expr: DraftExprId,
     kind: CodecKind,
+    purpose: CodecCallPurpose = .format,
     shape_node: NodeId,
     lookup: MethodLookup,
     callable_node: NodeId,
@@ -10019,10 +10007,53 @@ const DraftPreparedCodecCall = struct {
 
 const FrozenPreparedCodecCall = struct {
     kind: CodecKind,
+    purpose: CodecCallPurpose,
     shape_ty: Type.TypeId,
     lookup: MethodLookup,
     callable_ty: Type.TypeId,
     callee: DraftFnSlot,
+};
+
+const CustomCodecCallAddress = struct {
+    kind: CodecKind,
+    shape_ty: Type.TypeId,
+};
+
+const FrozenPreparedCodecCalls = struct {
+    calls: []FrozenPreparedCodecCall,
+    custom_call_ids: std.AutoHashMap(CustomCodecCallAddress, PreparedCodecCallId),
+
+    fn init(allocator: Allocator, calls: []FrozenPreparedCodecCall) Allocator.Error!FrozenPreparedCodecCalls {
+        errdefer allocator.free(calls);
+        var custom_call_ids = std.AutoHashMap(CustomCodecCallAddress, PreparedCodecCallId).init(allocator);
+        errdefer custom_call_ids.deinit();
+
+        for (calls, 0..) |call, index| {
+            if (call.purpose != .custom) continue;
+            if (index > std.math.maxInt(u32)) Common.invariant("prepared codec call index exceeded its identity range");
+            const entry = try custom_call_ids.getOrPut(.{ .kind = call.kind, .shape_ty = call.shape_ty });
+            if (entry.found_existing) Common.invariant("frozen codec plan had multiple custom calls for one shape");
+            entry.value_ptr.* = @enumFromInt(index);
+        }
+
+        return .{ .calls = calls, .custom_call_ids = custom_call_ids };
+    }
+
+    fn deinit(self: *FrozenPreparedCodecCalls, allocator: Allocator) void {
+        self.custom_call_ids.deinit();
+        allocator.free(self.calls);
+    }
+
+    fn customCall(
+        self: *const FrozenPreparedCodecCalls,
+        kind: CodecKind,
+        shape_ty: Type.TypeId,
+    ) ?*const FrozenPreparedCodecCall {
+        const id = self.custom_call_ids.get(.{ .kind = kind, .shape_ty = shape_ty }) orelse return null;
+        const index = @intFromEnum(id);
+        if (index >= self.calls.len) Common.invariant("prepared codec call identity was outside its frozen plan");
+        return &self.calls[index];
+    }
 };
 
 const DraftDeferredInspect = struct {
@@ -12202,10 +12233,9 @@ const BodyContext = struct {
     /// Exact custom parser/encoder callees prepared before the graph froze.
     /// Phase-B structural serialization may consume these sealed requests but
     /// may not instantiate or lower another checked callable.
-    frozen_codec_calls: ?[]const FrozenPreparedCodecCall = null,
-    /// Final structural serialization emission consumes only durable types.
-    /// Type instantiation and generated method callees therefore use isolated
-    /// closed lowering rather than mutating this body's frozen graph.
+    frozen_codec_calls: ?*const FrozenPreparedCodecCalls = null,
+    /// Final structural serialization emission consumes only durable types and
+    /// exact prepared call identities instead of reconstructing checked requests.
     frozen_sealed_emission: bool = false,
     /// The one finalizer that owns Phase-B materialization for this frozen
     /// graph. Checked defaults are applied here, never by an eager consumer.
@@ -23961,7 +23991,8 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexIsolated(lookup, 0, encoding_ty);
+        const prepared = self.frozenCustomCodecCall(.parser, shape_ty, lookup);
+        const callable_mono_ty = prepared.callable_ty;
         const parse_fn = self.builder.functionShape(callable_mono_ty, "custom parser target was not a function");
         const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
         if (parse_arg_tys.len != 1) Common.invariant("custom parser target had an unexpected arity");
@@ -24000,7 +24031,7 @@ const BodyContext = struct {
         const parser_expr = try self.addExpr(.{
             .ty = runtime_fn_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -25698,30 +25729,6 @@ const BodyContext = struct {
             try self.graph.importMono(ret_ty),
         );
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
-    }
-
-    fn instantiateTargetCallNodeFromMonoArgAtIndex(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        arg_index: usize,
-        arg_ty: Type.TypeId,
-    ) Allocator.Error!NodeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (arg_index >= function.args.len) {
-            Common.invariant("checked synthetic dispatch target argument index was outside its function type");
-        }
-        const fn_node = try self.instNode(source_fn_ty);
-        const function_nodes = try self.graph.functionNodes(fn_node);
-        const request_args = try self.graph.arena().dupe(NodeId, function_nodes.args);
-        request_args[arg_index] = try checkedMonoRequestNode(
-            self.graph,
-            request_args[arg_index],
-            try self.graph.importMono(arg_ty),
-        );
-        if (try self.graph.containsGeneratedPrivate(request_args[arg_index])) {
-            return try self.graphFunctionNode(request_args, function_nodes.ret);
-        }
-        return fn_node;
     }
 
     /// Return exact producer evidence for a call operand without sealing and
@@ -28687,7 +28694,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
         if (!fn_ctx.frozen_sealed_emission) {
             _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
                 runtime_boundary,
@@ -28696,11 +28703,11 @@ const BodyContext = struct {
                 callable_node,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
         }
         defer {
             fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
         }
         const state_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
         const state_expr = try fn_ctx.localExpr(state_local, runtime_arg_tys[0]);
@@ -28837,7 +28844,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
         if (!fn_ctx.frozen_sealed_emission) {
             _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
                 runtime_boundary,
@@ -28846,11 +28853,11 @@ const BodyContext = struct {
                 callable_node,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
         }
         defer {
             fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
         }
         const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
         const state_expr = try fn_ctx.addExprWithTypeCell(state_cell, .{ .local = state_local });
@@ -29004,7 +29011,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
         if (!fn_ctx.frozen_sealed_emission) {
             _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
                 runtime_boundary,
@@ -29013,11 +29020,11 @@ const BodyContext = struct {
                 callable_node,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
         }
         defer {
             fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
         }
         const value_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
         const value_expr = try fn_ctx.localExpr(value_local, runtime_arg_tys[0]);
@@ -29173,7 +29180,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
         if (!fn_ctx.frozen_sealed_emission) {
             _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
                 runtime_boundary,
@@ -29182,11 +29189,11 @@ const BodyContext = struct {
                 callable_node,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
         }
         defer {
             fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
         }
         const value_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         const value_expr = try fn_ctx.addExprWithTypeCell(value_cell, .{ .local = value_local });
@@ -33242,29 +33249,6 @@ const BodyContext = struct {
         return try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, arg_tys, ret_ty);
     }
 
-    fn methodTargetMonoTypeFromArgAtIndexIsolated(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        arg_index: usize,
-        arg_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const graph = try self.builder.createGraph();
-        defer graph.destroy();
-
-        const owner_template = switch (lookup.target.kind) {
-            .procedure => |procedure| procedure.template,
-            .local_proc => |local| self.localMethodOwnerTemplate(lookup, local),
-            .structural => Common.invariant("structural method registry result has no callable specialization context"),
-        };
-        var body_draft = BodyDraftStore.init(self.allocator);
-        defer body_draft.deinit();
-        var target_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, graph, &body_draft);
-        defer target_ctx.deinit();
-        const fn_node = try target_ctx.instantiateTargetCallNodeFromMonoArgAtIndex(lookup.target.callable_ty, arg_index, arg_ty);
-        try graph.freezeRelations();
-        return try graph.sealNode(fn_node);
-    }
-
     fn methodLookupForTypeName(
         self: *BodyContext,
         owner_ty: Type.TypeId,
@@ -33816,7 +33800,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const prepared_calls = self.frozen_codec_calls orelse return null;
-        for (prepared_calls) |prepared| {
+        for (prepared_calls.calls) |prepared| {
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             const function = self.builder.functionShape(prepared.callable_ty, "prepared codec callable was not a function");
             const prepared_args = self.builder.program.types.span(function.args);
@@ -33844,7 +33828,7 @@ const BodyContext = struct {
         shape_ty: Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const prepared_calls = self.frozen_codec_calls orelse return null;
-        for (prepared_calls) |prepared| {
+        for (prepared_calls.calls) |prepared| {
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             if (try self.builder.program.types.typeEql(
                 &self.builder.program.names,
@@ -33861,7 +33845,7 @@ const BodyContext = struct {
     ) Allocator.Error!?Type.TypeId {
         const prepared_calls = self.frozen_codec_calls orelse return null;
         var found: ?Type.TypeId = null;
-        for (prepared_calls) |prepared| {
+        for (prepared_calls.calls) |prepared| {
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             if (found) |previous| {
                 if (!try self.builder.program.types.typeEql(
@@ -33882,7 +33866,7 @@ const BodyContext = struct {
         callable_ty: Type.TypeId,
     ) Allocator.Error!?DraftFnSlot {
         const prepared_calls = self.frozen_codec_calls orelse return null;
-        for (prepared_calls) |prepared| {
+        for (prepared_calls.calls) |prepared| {
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             if (try self.builder.program.types.typeEql(
                 &self.builder.program.names,
@@ -33891,6 +33875,22 @@ const BodyContext = struct {
             )) return prepared.callee;
         }
         return null;
+    }
+
+    fn frozenCustomCodecCall(
+        self: *BodyContext,
+        kind: CodecKind,
+        shape_ty: Type.TypeId,
+        lookup: MethodLookup,
+    ) FrozenPreparedCodecCall {
+        const prepared_calls = self.frozen_codec_calls orelse
+            Common.invariant("custom codec emission had no prepared call plan");
+        const prepared = prepared_calls.customCall(kind, shape_ty) orelse
+            Common.invariant("custom codec emission reached a shape without a prepared call");
+        if (!self.methodLookupEql(prepared.lookup, lookup)) {
+            Common.invariant("prepared custom codec call resolved to a different method target");
+        }
+        return prepared.*;
     }
 
     fn preparedCodecCalleeAtNode(
@@ -36280,11 +36280,12 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        const prepared = self.frozenCustomCodecCall(.encoder, shape_ty, lookup);
         const runtime_fn_ty = try self.builder.program.types.add(.{ .func = .{
             .args = try self.builder.program.types.addSpan(&.{ shape_ty, state_ty }),
             .ret = ret_ty,
         } });
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{encoding_ty}, runtime_fn_ty);
+        const callable_mono_ty = prepared.callable_ty;
         const encode_fn = self.builder.functionShape(callable_mono_ty, "custom encoder_for target was not a function");
         const encode_arg_tys = self.builder.program.types.span(encode_fn.args);
         if (encode_arg_tys.len != 1) Common.invariant("custom encoder_for target had an unexpected arity");
@@ -36294,7 +36295,7 @@ const BodyContext = struct {
         const encoder_expr = try self.addExpr(.{
             .ty = runtime_fn_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -37038,23 +37039,45 @@ const BodyContext = struct {
         return added_relation;
     }
 
-    fn resolvedPreparedCodecCallsForBoundary(
+    fn sealedPreparedCodecCallsForBoundary(
         self: *BodyContext,
         boundary_expr: DraftExprId,
-    ) Allocator.Error![]FrozenPreparedCodecCall {
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!FrozenPreparedCodecCalls {
         var out = std.ArrayList(FrozenPreparedCodecCall).empty;
         errdefer out.deinit(self.allocator);
         for (self.draft.prepared_codec_calls.items) |prepared| {
             if (prepared.boundary_expr != boundary_expr) continue;
             try out.append(self.allocator, .{
                 .kind = prepared.kind,
+                .purpose = prepared.purpose,
+                .shape_ty = try sealer.sealNode(prepared.shape_node),
+                .lookup = prepared.lookup,
+                .callable_ty = try sealer.sealNode(prepared.callable_node),
+                .callee = prepared.callee,
+            });
+        }
+        return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
+    }
+
+    fn resolvedPreparedCodecCallsForBoundary(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+    ) Allocator.Error!FrozenPreparedCodecCalls {
+        var out = std.ArrayList(FrozenPreparedCodecCall).empty;
+        errdefer out.deinit(self.allocator);
+        for (self.draft.prepared_codec_calls.items) |prepared| {
+            if (prepared.boundary_expr != boundary_expr) continue;
+            try out.append(self.allocator, .{
+                .kind = prepared.kind,
+                .purpose = prepared.purpose,
                 .shape_ty = try self.currentPhaseTypeForNode(prepared.shape_node),
                 .lookup = prepared.lookup,
                 .callable_ty = try self.currentPhaseTypeForNode(prepared.callable_node),
                 .callee = prepared.callee,
             });
         }
-        return try out.toOwnedSlice(self.allocator);
+        return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
     }
 
     fn prepareCustomCodecCall(
@@ -37110,6 +37133,7 @@ const BodyContext = struct {
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
+            .purpose = .custom,
             .shape_node = shape_node,
             .lookup = lookup,
             .callable_node = target_node,

@@ -115,6 +115,21 @@ comptime {
     }
 }
 
+/// A Linux auxiliary-vector lookup that answers in the released binary.
+///
+/// `std.os.linux.getauxval` resolves to Zig's own implementation whenever libc
+/// is linked, and that implementation reads `std.os.linux.elf_aux_maybe` — a
+/// variable assigned only by `posixCallMainAndExit`, the startup path Zig uses
+/// when it owns `_start`. The `roc` binary sets `link_libc = true`, so libc
+/// owns `_start`, Zig never sees the auxiliary vector, and every lookup
+/// answers 0 rather than failing to build. Ask libc itself in that case: it
+/// captured the vector during its own startup, and both musl and glibc expose
+/// it under this name.
+fn getauxval(index: usize) usize {
+    if (comptime builtin.link_libc) return @intCast(std.c.getauxval(@intCast(index)));
+    return std.os.linux.getauxval(index);
+}
+
 /// `0` means "not detected yet"; every other value is `encode`d.
 var cached_level = std.atomic.Value(u8).init(0);
 
@@ -262,7 +277,7 @@ fn detectAarch64() CpuLevel {
     switch (comptime builtin.os.tag) {
         .linux => {
             const required = hwcap_aes | hwcap_pmull | hwcap_asimddp;
-            const hwcap = std.os.linux.getauxval(std.elf.AT_HWCAP);
+            const hwcap = getauxval(std.elf.AT_HWCAP);
             return if (hwcap & required == required) .default else .v1;
         },
         .windows => {
@@ -273,6 +288,28 @@ fn detectAarch64() CpuLevel {
         },
         else => return .v1,
     }
+}
+
+test "the auxiliary vector is readable however this binary was started" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+
+    // `AT_PAGESZ` is present in every Linux process on every architecture and
+    // is never 0, so a 0 here is the lookup coming back empty rather than the
+    // machine lacking something. That is the failure this wrapper exists for:
+    // aarch64 detection reads `AT_HWCAP`, and a lookup that always answers 0
+    // reports every aarch64 machine as `.v1` without any sign of trouble.
+    try std.testing.expect(getauxval(std.elf.AT_PAGESZ) != 0);
+}
+
+test "libc-linked builds do not read the auxiliary vector through Zig's startup path" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    if (comptime !builtin.link_libc) return error.SkipZigTest;
+
+    // The reason `getauxval` above exists, pinned so that a Zig upgrade which
+    // makes `std.os.linux.getauxval` work under libc shows up here as a
+    // failing test rather than as a wrapper nobody can justify removing.
+    try std.testing.expect(std.os.linux.elf_aux_maybe == null);
+    try std.testing.expectEqual(@as(usize, 0), std.os.linux.getauxval(std.elf.AT_PAGESZ));
 }
 
 test "detection answers a level the native target has a spelling for" {

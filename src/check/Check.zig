@@ -13591,6 +13591,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 self.suppress_generalize_expr = closure.lambda_idx;
             }
             does_fx = try self.checkExpr(closure.lambda_idx, env, nested_expected) or does_fx;
+            // The closure is the executable function-value expression. If its
+            // delegated lambda check failed as a whole, poison the closure so
+            // the lambda remains a valid structural child until the closure is
+            // replaced with a runtime error.
+            if (self.erroneous_value_exprs.remove(closure.lambda_idx)) {
+                try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            }
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
             _ = try self.unify(expr_var, lambda_var, env);

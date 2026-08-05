@@ -2012,6 +2012,23 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"12.5\"" },
     },
     .{
+        .name = "low_level - exact from_str accepts exponent notation issue 10550",
+        .source =
+        \\{
+        \\u32 = match U32.from_str("2e5") {
+        \\    Ok(value) => U32.to_str(value)
+        \\    Err(_) => "bad int"
+        \\}
+        \\dec = match Dec.from_str("2e5") {
+        \\    Ok(value) => Dec.to_str(value)
+        \\    Err(_) => "bad dec"
+        \\}
+        \\"${u32}:${dec}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"200000:200000.0\"" },
+    },
+    .{
         .name = "low_level - I64.from_str preserves explicit error path",
         .source =
         \\{

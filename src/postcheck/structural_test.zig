@@ -1251,11 +1251,6 @@ test "Monotype generated-private call requests retain separate request nodes" {
     const full_request = sourceSliceBetween(
         lower_source,
         "fn instantiateTargetCallNodeFromMonoArgs",
-        "fn instantiateTargetCallNodeFromMonoArgAtIndex",
-    );
-    const partial_arg = sourceSliceBetween(
-        lower_source,
-        "fn instantiateTargetCallNodeFromMonoArgAtIndex",
         "fn callArgumentEvidenceNode",
     );
     const iterator = sourceSliceBetween(
@@ -1266,8 +1261,8 @@ test "Monotype generated-private call requests retain separate request nodes" {
 
     try expectContains(full_request, "checkedMonoRequestNode");
     try expectContains(full_request, "functionRequestNode(self.graph, fn_node, request_args, request_ret)");
-    try expectContains(partial_arg, "checkedMonoRequestNode");
-    try expectContains(partial_arg, "self.graphFunctionNode(request_args, function_nodes.ret)");
+    try expectNotContains(lower_source, "instantiateTargetCallNodeFromMonoArgAtIndex");
+    try expectNotContains(lower_source, "methodTargetMonoTypeFromArgAtIndexIsolated");
     try expectContains(iterator, "checkedMonoRequestNode");
     try expectContains(iterator, "self.graphFunctionNode(request_args, request_ret)");
     try expectNotContains(iterator, "self.graph.unify(formal_node, try self.graph.importMono(evidence_ty))");
