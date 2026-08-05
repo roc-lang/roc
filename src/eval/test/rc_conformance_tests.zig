@@ -553,10 +553,10 @@ const cases = [_]Case{
         \\    bytes : List(U8)
         \\    bytes = List.concat([1, 2], [3, 4])
         \\    swapped = bytes.copy_range_within(2, 0, 2).ok_or([])
-        \\    oob_len = match bytes.copy_range_within(3, 0, 2) {
-        \\        Ok(_) => 100
-        \\        Err(_) => 1
-        \\    }
+        \\    # The out-of-bounds copy fails, so `ok_or` yields the empty
+        \\    # fallback; going through it keeps the failing op covered with
+        \\    # no branch on the impossible success.
+        \\    oob_len = List.len(bytes.copy_range_within(3, 0, 2).ok_or([])) + 1
         \\    (swapped.get(2) ?? 0).to_u64()
         \\        + oob_len
         \\        + List.len(unique_fwd)

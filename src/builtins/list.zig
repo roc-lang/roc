@@ -1015,6 +1015,9 @@ pub fn listOwnedUnique(
     return 1;
 }
 
+/// Number of elements appendable in place without any further ownership or
+/// capacity check: the unused capacity when the list is uniquely owned and
+/// not a seamless slice, zero otherwise.
 pub fn listSlackUnique(
     list: RocList,
     roc_ops: *RocOps,
