@@ -208,6 +208,7 @@ pub const GraphDiagnostics = struct {
 
 /// Graph-native named-type cells.
 pub const NamedNodes = struct {
+    kind: Type.NamedKind,
     args: []const NodeId,
     backing: ?InstBacking,
 };
@@ -2388,6 +2389,7 @@ pub const InstGraph = struct {
     pub fn namedNodes(self: *InstGraph, node: NodeId) NamedNodes {
         return switch (self.content(node)) {
             .named => |named| .{
+                .kind = named.kind,
                 .args = named.args,
                 .backing = if (named.backing) |backing| .{
                     .node = self.find(backing.node),
