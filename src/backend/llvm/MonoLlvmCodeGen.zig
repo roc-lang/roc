@@ -5123,14 +5123,43 @@ pub const MonoLlvmCodeGen = struct {
                 return;
             }
         }
-        if (std.mem.find(u8, name, "_to_") != null and args.len >= 1 and
-            std.mem.find(u8, name, "_try") == null and
-            std.mem.find(u8, name, "_str") == null)
-        {
-            const value = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0)));
-            const coerced = try self.coerceScalar(value, self.scalarType(self.localLayout(target)), self.localLayout(GuardedList.at(args, 0)).isSigned());
-            try self.storeScalar(self.slot(target).ptr, self.localLayout(target), coerced);
-            return;
+        // Coerce the operand if the layouts allow.
+        if (args.len >= 1) {
+            const src_layout = self.localLayout(GuardedList.at(args, 0));
+            const target_layout = self.localLayout(target);
+
+            const src_is_int = isIntegerLayout(src_layout);
+            const src_is_float = isFloatLayout(src_layout);
+            const dest_is_int = isIntegerLayout(target_layout);
+            const dest_is_float = isFloatLayout(target_layout);
+
+            // coerceScalar emits a single LLVM conversion instruction, chosen from
+            // the source and target types. These are the three cases where that
+            // instruction is also the semantics Roc wants.
+
+            // sext, zext, or trunc. Wrapping to N bits means keeping the low N
+            // bits, which is what trunc does.
+            const int_to_int = src_is_int and dest_is_int;
+
+            // sitofp or uitofp, defined for every integer, rounding to the nearest
+            // float or to infinity.
+            const int_to_float = src_is_int and dest_is_float;
+
+            // fpext or fptrunc, rounding as required.
+            const float_to_float = src_is_float and dest_is_float;
+
+            // The other cases would coerce too, just wrongly:
+            // - A Dec is an i128 scaled by 10^18, so you would get the stored payload
+            //   instead of the value.
+            // - Float-to-int would get fptosi or fptoui, which give poison out of
+            //   range rather than wrapping.
+
+            if (int_to_int or int_to_float or float_to_float) {
+                const value = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, src_layout);
+                const coerced = try self.coerceScalar(value, self.scalarType(target_layout), src_layout.isSigned());
+                try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
+                return;
+            }
         }
         try self.emitCrashBytes(name);
     }
