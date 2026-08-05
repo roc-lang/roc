@@ -135,7 +135,7 @@ pub const Resolver = struct {
         return self.vtable.builtin_owner(self.context, cursor, nominal);
     }
 
-    fn nominalBacking(self: Resolver, cursor: ModuleCursor, nominal: checked.CheckedNominalType) ?NominalBacking {
+    pub fn nominalBacking(self: Resolver, cursor: ModuleCursor, nominal: checked.CheckedNominalType) ?NominalBacking {
         return self.vtable.nominal_backing(self.context, cursor, nominal);
     }
 

@@ -3390,6 +3390,7 @@ const Builder = struct {
                 .target_kind = std.meta.activeTag(template.target),
                 .template_name = templateExportName(view, template_ref),
                 .template_scheme = template.schemeId(),
+                .stored_request_callable = lower_fn_ty,
             }),
             .provided => rehearsal.attachSpecializationGraph(graph),
         };
@@ -6258,6 +6259,8 @@ const Builder = struct {
                 .target_kind = .roc,
                 .template_name = "",
                 .template_scheme = nested_scheme,
+                .stored_request_callable = rehearsal.innermostStoredCallable() orelse
+                    source_ctx.storedCallableForGeneratedEdge(source_fn_ty),
             });
             break :frame true;
         } else false;
@@ -7276,6 +7279,7 @@ const Builder = struct {
                     .target_kind = std.meta.activeTag(frame_template.target),
                     .template_name = templateExportName(frame_view, spec.template_ref),
                     .template_scheme = frame_template.schemeId(),
+                    .stored_request_callable = fn_ty,
                 });
                 if (comptime census.enabled) {
                     if (rehearsal.currentFrameRequestRoot()) |directed_root| {
@@ -27940,6 +27944,7 @@ const BodyContext = struct {
                 null;
             break :covering .{
                 .rule = .iterator_direct_call,
+                .stored_callable = self.storedCallableForGeneratedEdge(source_fn_ty),
                 .source = .{
                     .module_bytes = self.view.key.bytes,
                     .receiver = .{ .checked_ty = function.args[0] },
@@ -35259,6 +35264,23 @@ const BodyContext = struct {
         }
     }
 
+    /// The callable a requesting site names, read through the directed route
+    /// under the live frame environment, for a generated edge to carry as its
+    /// stored binder source (reunify.md section 9.6). The read happens here,
+    /// while the requesting frame is live, because the environment a deferred
+    /// resolution captures is keyed by module and a generated body's live
+    /// frame can belong to another module. Null where the directed route does
+    /// not answer.
+    fn storedCallableForGeneratedEdge(self: *BodyContext, callable_ty: checked.CheckedTypeId) ?Type.TypeId {
+        const rehearsal = self.builder.rehearsal orelse return null;
+        const address = self.typeAddress(callable_ty);
+        return (rehearsal.typeForCheckedAuthoritativeOrUnstated(
+            .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+            self.callee_context,
+            rehearsal.innermostRequestEdge(),
+        ) catch return null) orelse null;
+    }
+
     fn iteratorProducerHint(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -35275,6 +35297,7 @@ const BodyContext = struct {
             null;
         return .{
             .rule = .iterator_dispatch_receiver,
+            .stored_callable = self.storedCallableForGeneratedEdge(plan.callable_ty),
             .source = .{
                 .module_bytes = self.view.key.bytes,
                 .receiver = .{ .checked_ty = plan.dispatcher_ty },
@@ -35971,7 +35994,14 @@ const BodyContext = struct {
         // enclosed it.
         const generated = edge == .generated;
         if (generated) {
-            if (self.builder.rehearsal) |rehearsal| rehearsal.openGeneratedRequest(edge.generated);
+            if (self.builder.rehearsal) |rehearsal| {
+                var declared = edge.generated;
+                // Every generating walk that reaches here holds the callable it
+                // built; a rule that names no checked source binds its callee
+                // scheme from that callable (reunify.md section 9.6).
+                if (declared.stored_callable == null) declared.stored_callable = callable_mono_ty;
+                rehearsal.openGeneratedRequest(declared);
+            }
         }
         defer if (generated) self.closeRequestEdge();
         if (self.frozen_sealed_emission) {
@@ -45795,6 +45825,7 @@ const BodyContext = struct {
         // 9.6's iterator rule states the callee's binding instead.
         const iterator_rule: spec_rehearsal.GeneratedEdge = .{
             .rule = .iterator_dispatch_receiver,
+            .stored_callable = self.storedCallableForGeneratedEdge(plan.callable_ty),
             .source = .{
                 .module_bytes = self.view.key.bytes,
                 .receiver = .{ .checked_ty = plan.dispatcher_ty },

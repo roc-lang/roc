@@ -276,6 +276,13 @@ const generated_rule_count = @typeInfo(GeneratedInstantiationRule).@"enum".field
 pub const GeneratedEdge = struct {
     rule: GeneratedInstantiationRule,
     source: ?GeneratedSource = null,
+    /// The callable the generating walk built in the program's type store, for
+    /// a rule whose generating site holds no checked data at all (reunify.md
+    /// section 9.6): the walks that descend Monotypes name their callee's type
+    /// here, and the binding reads the callee scheme's binder positions out of
+    /// it directly. The section 7.5 witness still gates the binding — the
+    /// scheme root emitted under it must digest-equal this callable.
+    stored_callable: ?Type.TypeId = null,
 };
 
 /// The checked data one generating site hands over: the module whose store holds
@@ -380,6 +387,62 @@ pub const EmittedPath = struct {
 
     /// The declared steps, in the order they apply.
     pub fn declaredSteps(self: *const EmittedPath) []const EmittedPathStep {
+        return self.steps[0..self.count];
+    }
+};
+
+/// One step of the position a scheme binder occupies, stated in the vocabulary
+/// both stores share: the checked walk that records it reads checked function,
+/// nominal, and tuple components, and the follower reads the same components of
+/// a stored callable. `named_arg` also reads a stored list or box element,
+/// which is where a checked `List`/`Box` nominal argument stands after
+/// translation.
+pub const BinderPathStep = union(enum) {
+    fn_arg: u32,
+    fn_ret,
+    named_arg: u32,
+    tuple_element: u32,
+    /// The extension position of a tag union: the binder stands for whatever
+    /// variants the instance carries beyond the ones the scheme declares at
+    /// that position, so its value is the stored row minus the declared tags.
+    /// Always the final step of its path.
+    tag_union_ext,
+    /// One payload of one variant, positioned by the checked side's variant
+    /// order; the stored variant is found by label text at follow time, since
+    /// the two sides intern their labels in different name stores and need not
+    /// share variant order.
+    checked_tag_payload: CheckedTagPayloadStep,
+};
+
+/// The variant and payload position one `checked_tag_payload` step names, both
+/// in the checked side's order.
+pub const CheckedTagPayloadStep = struct {
+    tag: u32,
+    payload: u32,
+};
+
+/// How many binder-position steps a path holds, and how many binders one
+/// scheme's stored binding resolves; schemes beyond either bound decline.
+const max_binder_path_steps = 12;
+const max_binder_paths = 8;
+
+/// The position one scheme binder occupies in the scheme root, applied to the
+/// callable a generating walk built to read that binder's value.
+pub const BinderPath = struct {
+    steps: [max_binder_path_steps]BinderPathStep = undefined,
+    count: usize = 0,
+
+    /// This path with one more step, or null when the position is deeper than
+    /// a path reaches.
+    pub fn appending(self: BinderPath, step: BinderPathStep) ?BinderPath {
+        if (self.count == max_binder_path_steps) return null;
+        var extended = self;
+        extended.steps[self.count] = step;
+        extended.count = self.count + 1;
+        return extended;
+    }
+
+    pub fn recordedSteps(self: *const BinderPath) []const BinderPathStep {
         return self.steps[0..self.count];
     }
 };
@@ -781,6 +844,13 @@ pub const SpecializationStart = struct {
     /// whose owner is a checked type rather than a defining-module node, which is
     /// the synthesized wrapper kinds.
     template_scheme: ?checked.CheckedTypeSchemeId,
+    /// The callable this specialization was requested at, in the program's
+    /// type store, stamped while the requesting frame was live. A frame whose
+    /// requesting edge resolves no binding binds from this instead — binder
+    /// `i` takes the callable's component at the position binder `i` occupies
+    /// in the scheme root, gated by the section 7.5 witness exactly as a
+    /// declared rule's binding is (reunify.md section 9.6).
+    stored_request_callable: ?Type.TypeId = null,
 };
 
 /// One module's instantiation sites indexed by the edge identity a consumer can
@@ -3130,7 +3200,12 @@ pub const Rehearsal = struct {
         held_env: ?*const direct_translate.BindingEnvironment,
         held_owner_node: u32,
     ) ?EnvironmentChain {
-        if (!edge.rule.declaresBinderSource()) return null;
+        if (!edge.rule.declaresBinderSource()) {
+            // The walks that descend Monotypes declare no checked source; the
+            // callable they built is the binder source instead.
+            const callable = edge.stored_callable orelse return null;
+            return self.bindCalleeFromStoredCallable(defining, scheme_id, scheme, callable);
+        }
         const source = edge.source orelse return null;
         const caller = self.lookup.cursor(source.module_bytes) orelse return null;
         var caller_env = held_env;
@@ -3195,6 +3270,167 @@ pub const Rehearsal = struct {
         census.bump("rehearsal_rule_witness_disagreed");
         chain.release(self.allocator);
         return null;
+    }
+
+    /// Build one callee scheme's dense binding from the callable a generating
+    /// walk built in the program's type store (reunify.md section 9.6). The
+    /// walks that descend Monotypes — inspect, the json codecs, the literal
+    /// helpers — hold no checked type for the call they build, but the callable
+    /// they built is the instance the callee scheme is requested at. Binder `i`
+    /// takes the callable's component at the position binder `i` occupies in
+    /// the scheme root, and the section 7.5 witness gates the result: the
+    /// scheme root emitted under the binding must digest-equal the callable.
+    fn bindCalleeFromStoredCallable(
+        self: *Rehearsal,
+        defining: direct_translate.ModuleCursor,
+        scheme_id: checked.CheckedTypeSchemeId,
+        scheme: checked.CheckedTypeScheme,
+        callable: Type.TypeId,
+    ) ?EnvironmentChain {
+        census.bump("rehearsal_rule_stored_binding_attempt");
+        const binders = scheme.generalizedVars(defining.view);
+        var paths: [max_binder_paths]?BinderPath = @splat(null);
+        if (binders.len > max_binder_paths) {
+            census.bump("rehearsal_rule_stored_binder_count_exceeds_paths");
+            return null;
+        }
+        self.findBinderPaths(defining.view, scheme.root, binders, paths[0..binders.len]);
+        const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
+            self.fail();
+            return null;
+        };
+        defer self.allocator.free(bound);
+        for (paths[0..binders.len], 0..) |path, index| {
+            const declared_path = path orelse {
+                census.bump("rehearsal_rule_stored_binder_position_absent");
+                return null;
+            };
+            const component = self.followBinderPath(defining, scheme.root, callable, &declared_path) orelse {
+                census.bump("rehearsal_rule_stored_callable_position_absent");
+                return null;
+            };
+            bound[index] = direct_translate.BoundType.of(component);
+        }
+        var chain = self.copyEnvironmentChain(null, 0, .{
+            .scheme = .{ .module_bytes = defining.module_bytes, .scheme = @intFromEnum(scheme_id) },
+            .binders = binders,
+            .bound = bound,
+            .captured = &.{},
+        }) orelse {
+            self.fail();
+            return null;
+        };
+        const declared = self.emitQuietly(defining, chain.innermost(), scheme.owner_node, scheme.root);
+        if (self.quietWitnessAgrees(declared, callable)) {
+            census.bump("rehearsal_rule_stored_bound");
+            return chain;
+        }
+        census.bump("rehearsal_rule_stored_witness_disagreed");
+        chain.release(self.allocator);
+        return null;
+    }
+
+    /// Record, for each binder, the position it first occupies in the scheme
+    /// root, walking only through the positions the program's type store
+    /// mirrors: function arguments and returns, nominal type arguments, tuple
+    /// elements, and alias backings (which emit no step of their own). A binder
+    /// whose only occurrences sit elsewhere — a record field, a tag payload, an
+    /// alias argument — keeps a null path and the binding declines.
+    fn findBinderPaths(
+        self: *Rehearsal,
+        view: checked.CheckedTypeStoreView,
+        root: checked.CheckedTypeId,
+        binders: []const checked.CheckedTypeId,
+        paths: []?BinderPath,
+    ) void {
+        const Visit = struct {
+            ty: checked.CheckedTypeId,
+            path: BinderPath,
+        };
+        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Visit).empty;
+        defer stack.deinit(self.allocator);
+        var remaining: usize = 0;
+        for (paths) |path| {
+            if (path == null) remaining += 1;
+        }
+        stack.append(self.allocator, .{ .ty = root, .path = .{} }) catch return;
+        while (stack.pop()) |visit| {
+            if (remaining == 0) return;
+            const gop = visited.getOrPut(visit.ty) catch return;
+            if (gop.found_existing) continue;
+            for (binders, 0..) |binder, index| {
+                if (binder != visit.ty) continue;
+                if (paths[index] != null) continue;
+                paths[index] = visit.path;
+                remaining -= 1;
+            }
+            // A stack pops its most recent entry first, so each arm pushes its
+            // components in reverse for the walk to reach them in declaration
+            // order; the first path recorded per binder is then the leftmost
+            // shallow-first occurrence the pushed order reaches.
+            switch (view.payload(visit.ty)) {
+                .flex, .rigid, .pending, .err, .empty_record, .empty_tag_union => {},
+                .record, .record_unbound => {},
+                .tag_union => |tag_ty| {
+                    // The extension position carries no structural step of its
+                    // own, so a binder standing there is matched here at the
+                    // union rather than by visiting it as a child.
+                    for (binders, 0..) |binder, index| {
+                        if (binder != tag_ty.ext) continue;
+                        if (paths[index] != null) continue;
+                        const extended = visit.path.appending(.tag_union_ext) orelse continue;
+                        paths[index] = extended;
+                        remaining -= 1;
+                    }
+                    var tag_index = tag_ty.tags.len;
+                    while (tag_index > 0) {
+                        tag_index -= 1;
+                        const args = tag_ty.tags[tag_index].argsSlice(view);
+                        var payload_index = args.len;
+                        while (payload_index > 0) {
+                            payload_index -= 1;
+                            const extended = visit.path.appending(.{ .checked_tag_payload = .{
+                                .tag = @intCast(tag_index),
+                                .payload = @intCast(payload_index),
+                            } }) orelse continue;
+                            stack.append(self.allocator, .{ .ty = args[payload_index], .path = extended }) catch return;
+                        }
+                    }
+                },
+                .alias => |alias_ty| {
+                    stack.append(self.allocator, .{ .ty = alias_ty.backing, .path = visit.path }) catch return;
+                },
+                .tuple => |elems| {
+                    var index = elems.len;
+                    while (index > 0) {
+                        index -= 1;
+                        const extended = visit.path.appending(.{ .tuple_element = @intCast(index) }) orelse continue;
+                        stack.append(self.allocator, .{ .ty = elems[index], .path = extended }) catch return;
+                    }
+                },
+                .function => |fn_ty| {
+                    if (visit.path.appending(.fn_ret)) |extended| {
+                        stack.append(self.allocator, .{ .ty = fn_ty.ret, .path = extended }) catch return;
+                    }
+                    var index = fn_ty.args.len;
+                    while (index > 0) {
+                        index -= 1;
+                        const extended = visit.path.appending(.{ .fn_arg = @intCast(index) }) orelse continue;
+                        stack.append(self.allocator, .{ .ty = fn_ty.args[index], .path = extended }) catch return;
+                    }
+                },
+                .nominal => |nominal_ty| {
+                    var index = nominal_ty.args.len;
+                    while (index > 0) {
+                        index -= 1;
+                        const extended = visit.path.appending(.{ .named_arg = @intCast(index) }) orelse continue;
+                        stack.append(self.allocator, .{ .ty = nominal_ty.args[index], .path = extended }) catch return;
+                    }
+                },
+            }
+        }
     }
 
     /// Whether one binding produced the exact witness that accepts it, asked
@@ -3364,6 +3600,22 @@ pub const Rehearsal = struct {
         if (self.frames.items.len == 0) return;
         var frame = self.frames.pop() orelse return;
         self.releaseFrame(&frame);
+    }
+
+    /// The stored callable the innermost open request scope names, for the
+    /// specialization record made under it to carry (reunify.md section 9.6):
+    /// a generated scope carries the callable its walk built, and a checked
+    /// scope carries the one its covering rule derived. Read at recording
+    /// time, while the scope is open, because a deferred or per-context
+    /// reservation resolves its frame long after the scope closes.
+    pub fn innermostStoredCallable(self: *Rehearsal) ?Type.TypeId {
+        if (self.disabled) return null;
+        if (self.requests.items.len == 0) return null;
+        return switch (self.requests.items[self.requests.items.len - 1]) {
+            .none => null,
+            .generated => |request| request.edge.stored_callable,
+            .checked => |edge| if (edge.covering_rule) |covering| covering.stored_callable else null,
+        };
     }
 
     /// Take the innermost open request scope out of the stack and keep it under
@@ -4710,6 +4962,27 @@ pub const Rehearsal = struct {
     /// resolve is a named skip class, never an assumption.
     fn resolveEnvironment(self: *Rehearsal, start: SpecializationStart, frame: *Frame) void {
         const skip = self.resolveEnvironmentFromEdge(start, frame) orelse return;
+        // An edge that resolved no binding still leaves the callable the
+        // requesting site stamped on the specialization record; the stored
+        // binding reads that, under the same witness discipline a declared
+        // rule's binding is gated by (reunify.md section 9.6).
+        if (start.stored_request_callable) |callable| stored: {
+            const scheme_id = start.template_scheme orelse {
+                census.bump("rehearsal_stored_spec_scheme_absent");
+                break :stored;
+            };
+            const scheme = start.cursor.view.schemeById(scheme_id) orelse {
+                census.bump("rehearsal_stored_spec_scheme_absent");
+                break :stored;
+            };
+            if (scheme.gv_len == 0) break :stored;
+            var scratch_outcome = GeneratedOutcome{};
+            if (self.bindGeneratedRuleFromStoredCallable(start, frame, scheme_id, scheme, callable, &scratch_outcome)) {
+                census.bump("rehearsal_stored_spec_bound");
+                return;
+            }
+            census.bump("rehearsal_stored_spec_bind_failed");
+        }
         frame.skip = skip;
         self.resolveGroundTemplateEnvironment(start, frame, skip);
     }
@@ -4725,6 +4998,9 @@ pub const Rehearsal = struct {
                 return .root_request;
             }
             census.bump("rehearsal_skip_generated_edge");
+            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+                std.debug.print("CLAIMLESS name={s}\n", .{start.template_name});
+            }
             return .{ .generated_request = null };
         };
         const edge = switch (claim) {
@@ -4995,8 +5271,46 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_skip_generated_edge");
             return named;
         }
+        // A covering edge names its callable in checked terms; where the rule
+        // declares no binder source, that callable's emission under the held
+        // requesting context is the stored instance the binding reads.
+        const stored_callable: ?Type.TypeId = covering.stored_callable orelse derived: {
+            const covering_source = covering.source orelse {
+                census.bump("rehearsal_stored_derive_source_absent");
+                break :derived null;
+            };
+            const checked_callable = switch (covering_source.witness) {
+                .callable => |callable| callable,
+                .receiver_at_argument => {
+                    census.bump("rehearsal_stored_derive_witness_not_callable");
+                    break :derived null;
+                },
+            };
+            const caller = self.lookup.cursor(covering_source.module_bytes) orelse {
+                census.bump("rehearsal_stored_derive_cursor_absent");
+                break :derived null;
+            };
+            const emitted = self.emitQuietly(
+                caller,
+                if (edge.caller) |*captured| captured.environment() else null,
+                if (edge.caller) |captured| captured.owner_node else checked.checked_residual_disposition_module_body_owner,
+                checked_callable,
+            ) orelse {
+                census.bump("rehearsal_stored_derive_emit_failed");
+                break :derived null;
+            };
+            census.bump("rehearsal_stored_derive_emitted");
+            break :derived emitted;
+        };
         const declared_source = if (covering.rule.declaresBinderSource()) covering.source else null;
         const source = declared_source orelse {
+            if (stored_callable) |callable| {
+                if (self.bindGeneratedRuleFromStoredCallable(start, frame, scheme_id, scheme, callable, outcome)) {
+                    return null;
+                }
+                census.bump("rehearsal_skip_generated_edge");
+                return named;
+            }
             outcome.unbound += 1;
             census.bump("rehearsal_skip_generated_edge");
             census.bump("rehearsal_generated_rule_declared_unbound");
@@ -5004,6 +5318,11 @@ pub const Rehearsal = struct {
         };
         if (self.bindGeneratedRule(start, frame, scheme_id, scheme, source, edge.caller, outcome)) {
             return null;
+        }
+        if (stored_callable) |callable| {
+            if (self.bindGeneratedRuleFromStoredCallable(start, frame, scheme_id, scheme, callable, outcome)) {
+                return null;
+            }
         }
         census.bump("rehearsal_skip_generated_edge");
         return named;
@@ -5052,8 +5371,46 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_skip_generated_edge");
             return named;
         }
+        // The walks that descend Monotypes hand the callable they built over
+        // directly; an edge that names its callable only in checked terms gets
+        // it emitted under the held requesting context instead.
+        const stored_callable: ?Type.TypeId = request.edge.stored_callable orelse derived: {
+            const edge_source = request.edge.source orelse {
+                census.bump("rehearsal_stored_derive_source_absent");
+                break :derived null;
+            };
+            const checked_callable = switch (edge_source.witness) {
+                .callable => |callable| callable,
+                .receiver_at_argument => {
+                    census.bump("rehearsal_stored_derive_witness_not_callable");
+                    break :derived null;
+                },
+            };
+            const caller = self.lookup.cursor(edge_source.module_bytes) orelse {
+                census.bump("rehearsal_stored_derive_cursor_absent");
+                break :derived null;
+            };
+            const emitted = self.emitQuietly(
+                caller,
+                if (request.caller) |*captured| captured.environment() else null,
+                if (request.caller) |captured| captured.owner_node else checked.checked_residual_disposition_module_body_owner,
+                checked_callable,
+            ) orelse {
+                census.bump("rehearsal_stored_derive_emit_failed");
+                break :derived null;
+            };
+            census.bump("rehearsal_stored_derive_emitted");
+            break :derived emitted;
+        };
         const declared_source = if (request.edge.rule.declaresBinderSource()) request.edge.source else null;
         const source = declared_source orelse {
+            if (stored_callable) |callable| {
+                if (self.bindGeneratedRuleFromStoredCallable(start, frame, scheme_id, scheme, callable, outcome)) {
+                    return null;
+                }
+                census.bump("rehearsal_skip_generated_edge");
+                return named;
+            }
             outcome.unbound += 1;
             census.bump("rehearsal_skip_generated_edge");
             census.bump("rehearsal_generated_rule_declared_unbound");
@@ -5061,6 +5418,14 @@ pub const Rehearsal = struct {
         };
         if (self.bindGeneratedRule(start, frame, scheme_id, scheme, source, request.caller, outcome)) {
             return null;
+        }
+        // A declared checked source that does not emit under the requesting
+        // context still leaves the callable the generating walk built; the
+        // stored binding reads that instead, under the same witness discipline.
+        if (stored_callable) |callable| {
+            if (self.bindGeneratedRuleFromStoredCallable(start, frame, scheme_id, scheme, callable, outcome)) {
+                return null;
+            }
         }
         census.bump("rehearsal_skip_generated_edge");
         return named;
@@ -5207,6 +5572,304 @@ pub const Rehearsal = struct {
         return true;
     }
 
+    /// Bind one generated specialization's environment from the callable its
+    /// generating walk built in the program's type store (reunify.md section
+    /// 9.6). The walks that descend Monotypes — inspect, the json codecs, the
+    /// literal helpers — hold no checked type for the call they build, but the
+    /// callable they built is the instance the callee scheme is requested at:
+    /// binder `i` takes the callable's component at the position binder `i`
+    /// occupies in the scheme root, and the section 7.5 witness gates the
+    /// whole binding — the scheme root emitted under it must digest-equal the
+    /// callable, which is therefore also the specialization's requesting root.
+    fn bindGeneratedRuleFromStoredCallable(
+        self: *Rehearsal,
+        start: SpecializationStart,
+        frame: *Frame,
+        scheme_id: checked.CheckedTypeSchemeId,
+        scheme: checked.CheckedTypeScheme,
+        callable: Type.TypeId,
+        outcome: *GeneratedOutcome,
+    ) bool {
+        census.bump("rehearsal_rule_stored_binding_attempt");
+        // The rule's mapping is over the callee scheme's own binders; a scheme
+        // that also captures enclosing binders is outside every declared rule.
+        if (scheme.captured_len != 0) {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_generated_rule_scheme_captures");
+            return false;
+        }
+        const binders = scheme.generalizedVars(start.cursor.view);
+        if (binders.len > max_binder_paths) {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_rule_stored_binder_count_exceeds_paths");
+            return false;
+        }
+        var paths: [max_binder_paths]?BinderPath = @splat(null);
+        self.findBinderPaths(start.cursor.view, scheme.root, binders, paths[0..binders.len]);
+        const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
+            self.fail();
+            return false;
+        };
+        defer self.allocator.free(bound);
+        for (paths[0..binders.len], 0..) |path, index| {
+            const recorded = path orelse {
+                outcome.receiver_unusable += 1;
+                census.bump("rehearsal_rule_stored_binder_position_absent");
+                return false;
+            };
+            const component = self.followBinderPath(start.cursor, scheme.root, callable, &recorded) orelse {
+                outcome.receiver_unusable += 1;
+                census.bump("rehearsal_rule_stored_callable_position_absent");
+                if (std.c.getenv("ROC_PARITY_TRACE") != null) {
+                    std.debug.print("STORED-POSITION-ABSENT name={s} binder={d} steps:", .{ start.template_name, index });
+                    for (recorded.recordedSteps()) |step| std.debug.print(" {s}", .{@tagName(step)});
+                    std.debug.print(" callable={s}\n", .{@tagName(self.types.get(callable))});
+                }
+                return false;
+            };
+            if (self.carriesResidualMaterialization(component)) {
+                noteResidualOrigin(frame, .unresolved_request_context);
+            }
+            bound[index] = direct_translate.BoundType.of(component);
+        }
+        const scheme_ident = direct_translate.SchemeIdent{
+            .module_bytes = start.cursor.module_bytes,
+            .scheme = @intFromEnum(scheme_id),
+        };
+        var chain = self.copyEnvironmentChain(null, 0, .{
+            .scheme = scheme_ident,
+            .binders = binders,
+            .bound = bound,
+            .captured = &.{},
+        }) orelse {
+            self.fail();
+            return false;
+        };
+        const declared = self.emitQuietly(start.cursor, chain.innermost(), scheme.owner_node, scheme.root);
+        if (!self.generatedWitnessAgrees(declared, callable, outcome)) {
+            census.bump("rehearsal_rule_stored_witness_disagreed");
+            chain.release(self.allocator);
+            return false;
+        }
+        frame.chain = chain;
+        frame.env_module_bytes = start.cursor.module_bytes;
+        frame.scheme = scheme_ident;
+        frame.owner_node = scheme.owner_node;
+        frame.binders = binders;
+        frame.env_ready = true;
+        frame.scheme_root_checked = @intFromEnum(scheme.root);
+        frame.interface_root = declared;
+        frame.request_root = callable;
+        census.bump("rehearsal_rule_stored_bound");
+        census.bump("rehearsal_env_resolved");
+        census.bump("rehearsal_env_resolved_generated_rule");
+        noteEnvironmentScheme(scheme);
+        census.bump("rehearsal_env_parent_absent");
+        return true;
+    }
+
+    /// Apply one binder's recorded scheme position to the callable a
+    /// generating walk built, walking the scheme root alongside it so a
+    /// row-extension step can read which variants the scheme declares there.
+    /// Each step reads exactly the component it names — no step searches for a
+    /// shape that would fit — and the section 7.5 witness still gates whatever
+    /// the whole binding produces. Null when either side carries no such
+    /// position.
+    fn followBinderPath(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        checked_root: checked.CheckedTypeId,
+        stored_root: Type.TypeId,
+        path: *const BinderPath,
+    ) ?Type.TypeId {
+        const store = self.types;
+        var checked_pos = checked_root;
+        var current = stored_root;
+        for (path.recordedSteps()) |step| {
+            checked_pos = checkedThroughAliases(cursor.view, checked_pos);
+            switch (step) {
+                .fn_arg => |index| {
+                    current = functionArgumentAt(store, current, index) orelse return null;
+                    checked_pos = switch (cursor.view.payload(checked_pos)) {
+                        .function => |fn_ty| if (index < fn_ty.args.len) fn_ty.args[index] else return null,
+                        else => return null,
+                    };
+                },
+                .fn_ret => {
+                    current = switch (store.get(current)) {
+                        .func => |fn_ty| fn_ty.ret,
+                        else => return null,
+                    };
+                    checked_pos = switch (cursor.view.payload(checked_pos)) {
+                        .function => |fn_ty| fn_ty.ret,
+                        else => return null,
+                    };
+                },
+                .named_arg => |index| {
+                    const nominal_args = switch (cursor.view.payload(checked_pos)) {
+                        .nominal => |nominal_ty| nominal_ty.args,
+                        else => return null,
+                    };
+                    if (index >= nominal_args.len) return null;
+                    current = switch (store.get(current)) {
+                        .named => |named| blk: {
+                            const args = store.span(named.args);
+                            if (index >= GuardedList.borrowLen(args)) return null;
+                            break :blk GuardedList.at(args, index);
+                        },
+                        .list => |elem| if (index == 0) elem else return null,
+                        .box => |elem| if (index == 0) elem else return null,
+                        // An open-representation nominal is emitted as its
+                        // backing structure, so the argument's position is
+                        // wherever the declaration places that formal.
+                        else => self.storedThroughErasedNominal(cursor, checked_pos, current, index) orelse return null,
+                    };
+                    checked_pos = nominal_args[index];
+                },
+                .checked_tag_payload => |position| {
+                    const declared = switch (cursor.view.payload(checked_pos)) {
+                        .tag_union => |tag_ty| tag_ty.tags,
+                        else => return null,
+                    };
+                    if (position.tag >= declared.len) return null;
+                    const declared_tag = declared[position.tag];
+                    const declared_args = declared_tag.argsSlice(cursor.view);
+                    if (position.payload >= declared_args.len) return null;
+                    const declared_text = cursor.source_names.tagLabelText(declared_tag.name);
+                    current = stored: {
+                        switch (store.get(current)) {
+                            .tag_union => |span| {
+                                const entries = store.tagSpan(span);
+                                for (0..GuardedList.borrowLen(entries)) |entry_index| {
+                                    const entry = GuardedList.at(entries, entry_index);
+                                    if (!std.mem.eql(u8, self.program_names.tagLabelText(entry.checked_name), declared_text)) continue;
+                                    const payloads = store.span(entry.payloads);
+                                    if (position.payload >= GuardedList.borrowLen(payloads)) return null;
+                                    break :stored GuardedList.at(payloads, position.payload);
+                                }
+                                return null;
+                            },
+                            else => return null,
+                        }
+                    };
+                    checked_pos = declared_args[position.payload];
+                },
+                .tuple_element => |index| {
+                    current = switch (store.get(current)) {
+                        .tuple => |items| blk: {
+                            const entries = store.span(items);
+                            if (index >= GuardedList.borrowLen(entries)) return null;
+                            break :blk GuardedList.at(entries, index);
+                        },
+                        else => return null,
+                    };
+                    checked_pos = switch (cursor.view.payload(checked_pos)) {
+                        .tuple => |elems| if (index < elems.len) elems[index] else return null,
+                        else => return null,
+                    };
+                },
+                .tag_union_ext => {
+                    const remainder = self.tagRowRemainder(cursor, checked_pos, current);
+                    if (remainder == null and std.c.getenv("ROC_PARITY_TRACE") != null) {
+                        std.debug.print("ROW-REMAINDER-MISS checked={s} stored={s}\n", .{
+                            @tagName(cursor.view.payload(checkedThroughAliases(cursor.view, checked_pos))),
+                            @tagName(self.types.get(current)),
+                        });
+                    }
+                    return remainder;
+                },
+            }
+        }
+        return current;
+    }
+
+    /// The stored position of one argument of a checked nominal whose stored
+    /// instance is its backing structure rather than a named wrapper: the
+    /// declaration says where the formal for that argument stands in the
+    /// backing, and the stored instance mirrors the backing, so the formal's
+    /// recorded position applies to it directly. Substitution changes
+    /// payloads, never variant labels, so the label-text matching the inner
+    /// walk uses reads the instance exactly.
+    fn storedThroughErasedNominal(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        checked_nominal: checked.CheckedTypeId,
+        stored: Type.TypeId,
+        arg_index: u32,
+    ) ?Type.TypeId {
+        const nominal_ty = switch (cursor.view.payload(checked_nominal)) {
+            .nominal => |nominal_ty| nominal_ty,
+            else => return null,
+        };
+        const backing = self.translator.resolver.nominalBacking(cursor, nominal_ty) orelse return null;
+        if (arg_index >= backing.formal_args.len) return null;
+        const formal = backing.formal_args[arg_index];
+        var formal_paths: [1]?BinderPath = .{null};
+        self.findBinderPaths(backing.cursor.view, backing.root, &.{formal}, formal_paths[0..1]);
+        const formal_path = formal_paths[0] orelse return null;
+        census.bump("rehearsal_rule_stored_erased_nominal_arg");
+        return self.followBinderPath(backing.cursor, backing.root, stored, &formal_path);
+    }
+
+    /// The stored row minus the variants the scheme declares at a tag union's
+    /// extension position: the binder standing at that extension takes exactly
+    /// the variants the instance carries beyond the declared ones. Tags are
+    /// matched by label text, since the two sides intern their labels in
+    /// different name stores. The result is interned in the program's store,
+    /// and the section 7.5 witness gates the binding it participates in.
+    fn tagRowRemainder(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        checked_ty: checked.CheckedTypeId,
+        stored_ty: Type.TypeId,
+    ) ?Type.TypeId {
+        const declared = switch (cursor.view.payload(checked_ty)) {
+            .tag_union => |tag_ty| tag_ty.tags,
+            else => return null,
+        };
+        const entries = switch (self.types.get(stored_ty)) {
+            .tag_union => |span| self.types.tagSpan(span),
+            else => return null,
+        };
+        const entry_count = GuardedList.borrowLen(entries);
+        // Copy the surviving variants out before interning: interning grows
+        // the store, and the spans borrowed above read from it.
+        var remainder = std.ArrayList(Type.Store.TagInput).empty;
+        defer remainder.deinit(self.allocator);
+        var payload_ids = std.ArrayList(Type.TypeId).empty;
+        defer payload_ids.deinit(self.allocator);
+        var payload_ranges = std.ArrayList([2]usize).empty;
+        defer payload_ranges.deinit(self.allocator);
+        for (0..entry_count) |index| {
+            const entry = GuardedList.at(entries, index);
+            const entry_text = self.program_names.tagLabelText(entry.checked_name);
+            var is_declared = false;
+            for (declared) |declared_tag| {
+                if (std.mem.eql(u8, cursor.source_names.tagLabelText(declared_tag.name), entry_text)) {
+                    is_declared = true;
+                    break;
+                }
+            }
+            if (is_declared) continue;
+            const payloads = self.types.span(entry.payloads);
+            const start = payload_ids.items.len;
+            for (0..GuardedList.borrowLen(payloads)) |payload_index| {
+                payload_ids.append(self.allocator, GuardedList.at(payloads, payload_index)) catch return null;
+            }
+            payload_ranges.append(self.allocator, .{ start, payload_ids.items.len }) catch return null;
+            remainder.append(self.allocator, .{
+                .name = entry.name,
+                .checked_name = entry.checked_name,
+                .payloads = &.{},
+            }) catch return null;
+        }
+        for (remainder.items, payload_ranges.items) |*input, range| {
+            input.payloads = payload_ids.items[range[0]..range[1]];
+        }
+        census.bump("rehearsal_rule_stored_row_remainder");
+        return self.types.internTagUnion(self.program_names, remainder.items) catch null;
+    }
+
     /// Whether a rule's binding produced the exact witness that accepts it,
     /// counted per rule. Two rooted recursive graphs entered from different
     /// paths store different digests for one type (reunify.md section 8.3), so
@@ -5280,9 +5943,10 @@ pub const Rehearsal = struct {
             noteEdgelessWithBinders(start, scheme, skip);
             self.noteUnresolvedDetail(start, scheme, skip);
             if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                std.debug.print("SEED-UNRESOLVED name={s} skip={s} gv={d}\n", .{
+                std.debug.print("SEED-UNRESOLVED name={s} skip={s} rule={s} gv={d}\n", .{
                     start.template_name,
                     @tagName(skip),
+                    skipRuleName(skip),
                     scheme.gv_len,
                 });
             }
@@ -8105,6 +8769,21 @@ fn receiverArgumentAt(store: *const Type.Store, receiver: Type.TypeId, index: us
 /// The argument at `index` of an emitted function type, or null when the type is
 /// not a function or carries no such argument. The receiver-position witness
 /// reads the callee scheme root through this.
+/// The checked type behind however many alias layers wrap it, which is the
+/// structure a stored instance mirrors: emission expands aliases, so the
+/// stored side of a lockstep walk never has an alias layer of its own.
+fn checkedThroughAliases(view: checked.CheckedTypeStoreView, ty: checked.CheckedTypeId) checked.CheckedTypeId {
+    var current = ty;
+    var remaining: usize = max_binder_path_steps;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (view.payload(current)) {
+            .alias => |alias_ty| current = alias_ty.backing,
+            else => return current,
+        }
+    }
+    return current;
+}
+
 fn functionArgumentAt(store: *const Type.Store, root: Type.TypeId, index: u32) ?Type.TypeId {
     return switch (store.get(root)) {
         .func => |fn_ty| blk: {
