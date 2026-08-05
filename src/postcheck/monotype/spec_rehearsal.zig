@@ -6452,6 +6452,71 @@ pub const Rehearsal = struct {
         return self.schemeRootReachesVariable(view, root);
     }
 
+    /// Whether a checked root reaches a function type anywhere in its
+    /// structure — through nominal backing declarations, aliases, and
+    /// containers — which is the population whose lowering may erase and box
+    /// that callable. Erased-reuse ownership is decided across the
+    /// instantiation graph's relations, so a request whose answer carries one
+    /// must instantiate open nodes rather than a frozen constant. A checked
+    /// nominal names no instantiated backing of its own, so each nominal's
+    /// backing declaration is resolved and walked in its defining module.
+    pub fn checkedRootReachesFunction(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        root: checked.CheckedTypeId,
+    ) bool {
+        const Position = struct {
+            module_bytes: [32]u8,
+            ty: checked.CheckedTypeId,
+        };
+        const Entry = struct {
+            cursor: direct_translate.ModuleCursor,
+            ty: checked.CheckedTypeId,
+        };
+        var visited = std.AutoHashMap(Position, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Entry).empty;
+        defer stack.deinit(self.allocator);
+        stack.append(self.allocator, .{ .cursor = cursor, .ty = root }) catch return true;
+        while (stack.pop()) |entry| {
+            const gop = visited.getOrPut(.{ .module_bytes = entry.cursor.module_bytes, .ty = entry.ty }) catch return true;
+            if (gop.found_existing) continue;
+            const view = entry.cursor.view;
+            switch (view.payload(entry.ty)) {
+                .function => return true,
+                .flex, .rigid, .pending, .err, .empty_record, .empty_tag_union => {},
+                .alias => |alias_ty| {
+                    stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = alias_ty.backing }) catch return true;
+                    for (alias_ty.args) |arg| stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = arg }) catch return true;
+                },
+                .record => |record_ty| {
+                    for (record_ty.fields) |field| stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = field.ty }) catch return true;
+                    stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = record_ty.ext }) catch return true;
+                },
+                .record_unbound => |fields| {
+                    for (fields) |field| stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = field.ty }) catch return true;
+                },
+                .tuple => |elems| {
+                    for (elems) |elem| stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = elem }) catch return true;
+                },
+                .nominal => |nominal_ty| {
+                    for (nominal_ty.args) |arg| stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = arg }) catch return true;
+                    for (nominal_ty.padding_field_types) |field| stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = field }) catch return true;
+                    if (self.translator.resolver.nominalBacking(entry.cursor, nominal_ty)) |backing| {
+                        stack.append(self.allocator, .{ .cursor = backing.cursor, .ty = backing.root }) catch return true;
+                    }
+                },
+                .tag_union => |tag_ty| {
+                    for (tag_ty.tags) |tag| {
+                        for (tag.argsSlice(view)) |arg| stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = arg }) catch return true;
+                    }
+                    stack.append(self.allocator, .{ .cursor = entry.cursor, .ty = tag_ty.ext }) catch return true;
+                },
+            }
+        }
+        return false;
+    }
+
     /// Whether a checked root reaches a variable that would DEFAULT under
     /// directed translation - a numeral or row default - which is the class
     /// whose value the graph takes from the other operand instead (the

@@ -27024,6 +27024,17 @@ const BodyContext = struct {
                 }
                 const rehearsal = self.builder.rehearsal orelse break :born_final;
                 if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) break :born_final;
+                // A callable anywhere in the return may lower erased and
+                // boxed, and erased-reuse ownership is decided across graph
+                // relations a frozen constant never joins.
+                const checked_ret = switch (checkedPayload(self.view, source_fn_ty)) {
+                    .function => |checked_function| checked_function.ret,
+                    else => break :born_final,
+                };
+                if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_ret)) {
+                    census.bump("request_born_final_blocked_erased");
+                    break :born_final;
+                }
                 const address = self.typeAddress(source_fn_ty);
                 const final_ty = (rehearsal.typeForCheckedAuthoritativeOrUnstated(
                     .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
@@ -27180,6 +27191,18 @@ const BodyContext = struct {
                 }
                 const rehearsal = self.builder.rehearsal orelse break :born_final;
                 if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) break :born_final;
+                // As on the direct-call path: a callable anywhere in the
+                // return may lower erased and boxed, and erased-reuse
+                // ownership is decided across graph relations a frozen
+                // constant never joins.
+                const checked_ret = switch (checkedPayload(self.view, source_fn_ty)) {
+                    .function => |checked_function| checked_function.ret,
+                    else => break :born_final,
+                };
+                if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_ret)) {
+                    census.bump("dispatch_born_final_blocked_erased");
+                    break :born_final;
+                }
                 const address = self.typeAddress(source_fn_ty);
                 const final_ty = (rehearsal.typeForCheckedAuthoritativeOrUnstated(
                     .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
