@@ -4998,9 +4998,6 @@ pub const Rehearsal = struct {
                 return .root_request;
             }
             census.bump("rehearsal_skip_generated_edge");
-            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                std.debug.print("CLAIMLESS name={s}\n", .{start.template_name});
-            }
             return .{ .generated_request = null };
         };
         const edge = switch (claim) {
@@ -5620,11 +5617,6 @@ pub const Rehearsal = struct {
             const component = self.followBinderPath(start.cursor, scheme.root, callable, &recorded) orelse {
                 outcome.receiver_unusable += 1;
                 census.bump("rehearsal_rule_stored_callable_position_absent");
-                if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                    std.debug.print("STORED-POSITION-ABSENT name={s} binder={d} steps:", .{ start.template_name, index });
-                    for (recorded.recordedSteps()) |step| std.debug.print(" {s}", .{@tagName(step)});
-                    std.debug.print(" callable={s}\n", .{@tagName(self.types.get(callable))});
-                }
                 return false;
             };
             if (self.carriesResidualMaterialization(component)) {
@@ -5768,16 +5760,7 @@ pub const Rehearsal = struct {
                         else => return null,
                     };
                 },
-                .tag_union_ext => {
-                    const remainder = self.tagRowRemainder(cursor, checked_pos, current);
-                    if (remainder == null and std.c.getenv("ROC_PARITY_TRACE") != null) {
-                        std.debug.print("ROW-REMAINDER-MISS checked={s} stored={s}\n", .{
-                            @tagName(cursor.view.payload(checkedThroughAliases(cursor.view, checked_pos))),
-                            @tagName(self.types.get(current)),
-                        });
-                    }
-                    return remainder;
-                },
+                .tag_union_ext => return self.tagRowRemainder(cursor, checked_pos, current),
             }
         }
         return current;
