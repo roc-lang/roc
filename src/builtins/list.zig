@@ -830,11 +830,7 @@ pub fn listCopyRangeWithin(
     const total = count * element_width;
     const src = base[src_index * element_width ..][0..total];
     const dest = base[dest_index * element_width ..][0..total];
-    if (dest_index < src_index) {
-        std.mem.copyForwards(u8, dest, src);
-    } else {
-        std.mem.copyBackwards(u8, dest, src);
-    }
+    @memmove(dest, src);
     return output;
 }
 
