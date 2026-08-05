@@ -910,6 +910,9 @@ const Frame = struct {
     /// The requesting edge's instantiated root emitted under the CALLER's
     /// environment: the request context's side of the same interface.
     request_root: ?Type.TypeId,
+    /// The function id this specialization reserved, so an open recursive
+    /// request can name the active frame it joins (reunify.md 13.2e, E2).
+    reserved_fn_id: u32 = 0,
     /// The producer representation this frame's covering rule declared at its
     /// scheme's return position, kept so the template body can restate it at
     /// its own result position (the body's ids are instantiation-fresh, so the
@@ -3581,6 +3584,7 @@ pub const Rehearsal = struct {
             .chain = EnvironmentChain.none,
             .interface_root = null,
             .request_root = null,
+            .reserved_fn_id = start.reserved_fn_id,
             .ret_mint = null,
             .env_ready = false,
         };
@@ -3616,6 +3620,27 @@ pub const Rehearsal = struct {
             .generated => |request| request.edge.stored_callable,
             .checked => |edge| if (edge.covering_rule) |covering| covering.stored_callable else null,
         };
+    }
+
+    /// The reserved function id of the innermost active specialization frame
+    /// whose directed request root carries this representation-erased digest:
+    /// the graph-free half of the open recursive-request join (reunify.md
+    /// 13.2e, E2). An open request made while lowering a specialization's own
+    /// body re-enters that specialization exactly when its callable, emitted
+    /// under the live binding, is the identity the active frame was requested
+    /// at; the frame stack is the active-descent set, so no interface walk is
+    /// needed to scope the search.
+    pub fn activeRecursiveJoin(self: *Rehearsal, digest: names.TypeDigest) ?u32 {
+        if (self.disabled) return null;
+        var index = self.frames.items.len;
+        while (index > 0) {
+            index -= 1;
+            const frame = &self.frames.items[index];
+            const root = frame.request_root orelse continue;
+            const root_digest = self.types.specializationDigest(self.program_names, root);
+            if (std.mem.eql(u8, &root_digest.bytes, &digest.bytes)) return frame.reserved_fn_id;
+        }
+        return null;
     }
 
     /// Take the innermost open request scope out of the stack and keep it under
@@ -3747,6 +3772,7 @@ pub const Rehearsal = struct {
             .chain = EnvironmentChain.none,
             .interface_root = null,
             .request_root = null,
+            .reserved_fn_id = start.reserved_fn_id,
             .ret_mint = null,
             .env_ready = false,
         };
@@ -7405,7 +7431,10 @@ pub const Rehearsal = struct {
             .iterator_kind = kind,
             .iterator_depth = depth + 1,
             .topology = topology,
-            .minting = .{ .callable_evidence = null },
+            // The callable evidence the mint is minted under travels on the
+            // edge; the stamped identity folds it in exactly as the graph's
+            // finalize pass does.
+            .minting = .{ .callable_evidence = source.evidence },
             .components = components,
         };
         const floor = self.translator.representationInputCount();

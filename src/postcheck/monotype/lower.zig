@@ -3743,6 +3743,44 @@ const Builder = struct {
                     }
                 }
             }
+            // Debug-only: the graph-free recursive join, compared against the
+            // walk's selection (reunify.md 13.2e, E2). An open request's
+            // callable emitted under the live frame names the active
+            // specialization it re-enters; the interface walk is the graph's
+            // way of deciding the same thing, and the comparison certifies the
+            // replacement before the walk goes.
+            if (comptime census.enabled) shadow: {
+                const rehearsal = self.rehearsal orelse break :shadow;
+                // Some requesting paths hand a callable id from the template's
+                // own module; the requesting view cannot state those, and the
+                // shadow measures rather than guesses.
+                if (@intFromEnum(source_fn_ty) >= source_ctx.view.types.payloadCount()) {
+                    census.bump("recursive_join_shadow_unstatable");
+                    break :shadow;
+                }
+                const directed = source_ctx.storedCallableForGeneratedEdge(source_fn_ty) orelse {
+                    census.bump("recursive_join_shadow_unstatable");
+                    break :shadow;
+                };
+                const shadow_fn_id = rehearsal.activeRecursiveJoin(self.specializationTypeDigest(directed));
+                const walk_fn_id: ?u32 = if (selection.selected()) |raw_spec|
+                    @intFromEnum(source_ctx.draft.template_specs.items[raw_spec].fn_id)
+                else
+                    null;
+                if (walk_fn_id == null and shadow_fn_id == null) {
+                    census.bump("recursive_join_shadow_both_none");
+                } else if (walk_fn_id != null and shadow_fn_id != null) {
+                    if (walk_fn_id.? == shadow_fn_id.?) {
+                        census.bump("recursive_join_shadow_agree");
+                    } else {
+                        census.bump("recursive_join_shadow_differs");
+                    }
+                } else if (walk_fn_id == null) {
+                    census.bump("recursive_join_shadow_extra");
+                } else {
+                    census.bump("recursive_join_shadow_missed");
+                }
+            }
             // Independently instantiated recursive calls do not necessarily share
             // graph cells with the specialization currently being lowered. Once
             // both requests are fully resolved, exact structural type equality is
@@ -34466,7 +34504,10 @@ const BodyContext = struct {
             rehearsal.innermostRequestEdge(),
         ) catch return null;
         const unstamped = emitted orelse return null;
-        return rehearsal.stampGeneratedIdentity(unstamped, null);
+        return rehearsal.stampGeneratedIdentity(
+            unstamped,
+            if (hint.source) |source| source.evidence else null,
+        );
     }
 
 
@@ -45848,6 +45889,16 @@ const BodyContext = struct {
         // The iterator dispatch's own synthetic constraint is introduced with no
         // expression, so no use expression names its edge and reunify.md section
         // 9.6's iterator rule states the callee's binding instead.
+        const plan_procedure = self.iteratorProcedureForMethodTarget(lookup.target);
+        const plan_mint_evidence: ?names.TypeDigest = evidence: {
+            const procedure = plan_procedure orelse break :evidence null;
+            const index = iteratorProcedureEvidenceIndex(procedure) orelse break :evidence null;
+            if (index >= plan_args.len) break :evidence null;
+            break :evidence switch (plan_args[index]) {
+                .checked_expr => |expr| try self.callableArgumentEvidenceDigest(expr),
+                else => null,
+            };
+        };
         const iterator_rule: spec_rehearsal.GeneratedEdge = .{
             .rule = .iterator_dispatch_receiver,
             .stored_callable = self.storedCallableForGeneratedEdge(plan.callable_ty),
@@ -45855,7 +45906,8 @@ const BodyContext = struct {
                 .module_bytes = self.view.key.bytes,
                 .receiver = .{ .checked_ty = plan.dispatcher_ty },
                 .witness = .{ .callable = plan.callable_ty },
-                .procedure = self.iteratorProcedureForMethodTarget(lookup.target),
+                .procedure = plan_procedure,
+                .evidence = plan_mint_evidence,
             },
         };
         const target_node = target: {
