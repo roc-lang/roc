@@ -3461,11 +3461,22 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-Each specialization owns an instantiation graph: union-find nodes with explicit
-row-extension links, created by instantiating checked types on first touch. A
-context-free callee body never joins the caller's graph. Instead CheckedModule
-stores a complete specialization-interface relation table for every procedure
-template. Its records explicitly name checked equalities,
+Each independently sealed specialization group owns an instantiation graph:
+union-find nodes with explicit row-extension links, created by instantiating
+checked types on first touch. An ordinary procedure body begins a group by
+itself. Adjacent explicit procedure-template roots may share one group so a
+callee request proven equivalent under the complete graph-local specialization
+identity is reused before a second root replays that request. Every root still
+uses a fresh instantiation scope, owns its own body and durable specialization
+record, and contributes its own checked relations; sharing the graph never
+authorizes importing a checked node from another scope. The reuse key includes
+callable family, method scope, checked source-function key, exact evidence
+topology, lexical context, and the exact function request interface. A
+different or still-unproven request remains independent.
+
+A context-free callee body never joins the caller group's graph. Instead
+CheckedModule stores a complete specialization-interface relation table for
+every procedure template. Its records explicitly name checked equalities,
 procedure/result relations, ordinary call interfaces and direct targets, and
 generalized local-procedure uses. A generalized scope also records its exact
 checked scheme root, so evidence paths are replayed against the same callable

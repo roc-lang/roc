@@ -14186,7 +14186,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -14198,6 +14198,7 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]p
         .{ .name = "Call expressions", .count = body.call_expressions },
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
         .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
+        .{ .name = "Cross-root template reuses", .count = body.cross_root_template_reuses },
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
@@ -14274,6 +14275,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
+    diagnostics.body.cross_root_template_reuses = 306;
     diagnostics.body.nested_closures_prepared = 302;
 
     const specialization = monotypeSpecializationCounters(diagnostics);
@@ -14293,10 +14295,12 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 303), body[1].count);
     try std.testing.expectEqualStrings("Checked node cache hits", body[3].name);
     try std.testing.expectEqual(@as(u64, 301), body[3].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[10].name);
-    try std.testing.expectEqual(@as(u64, 305), body[10].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[19].name);
-    try std.testing.expectEqual(@as(u64, 302), body[19].count);
+    try std.testing.expectEqualStrings("Cross-root template reuses", body[9].name);
+    try std.testing.expectEqual(@as(u64, 306), body[9].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[11].name);
+    try std.testing.expectEqual(@as(u64, 305), body[11].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[20].name);
+    try std.testing.expectEqual(@as(u64, 302), body[20].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

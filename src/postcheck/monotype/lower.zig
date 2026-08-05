@@ -354,6 +354,7 @@ pub const BodyDiagnostics = struct {
     call_expressions: u64 = 0,
     dispatch_expressions: u64 = 0,
     deferred_template_requests: u64 = 0,
+    cross_root_template_reuses: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
     deferred_template_reuses: u64 = 0,
     deferred_template_bodies_lowered: u64 = 0,
@@ -410,8 +411,19 @@ pub fn run(
 
     const procedures_started_ns = if (options.timing) |timing| timing.start() else 0;
     if (options.timing) |timing| timing.startProcedureBreakdown();
-    for (roots.requests) |request| {
-        try builder.lowerRoot(request);
+    var root_index: usize = 0;
+    while (root_index < roots.requests.len) {
+        if (roots.requests[root_index].procedure_template == null) {
+            try builder.lowerRoot(roots.requests[root_index]);
+            root_index += 1;
+            continue;
+        }
+
+        const batch_start = root_index;
+        while (root_index < roots.requests.len and roots.requests[root_index].procedure_template != null) {
+            root_index += 1;
+        }
+        try builder.lowerTemplateRootBatch(roots.requests[batch_start..root_index]);
     }
     if (options.timing) |timing| timing.finishProcedureBreakdown();
     if (options.timing) |timing| timing.finish(procedures_started_ns, .procedure_specialization);
@@ -1703,6 +1715,30 @@ const LoweredTemplate = struct {
     topology: ?StoredConstFnEvidence = null,
 };
 
+const TemplateReservation = struct {
+    def: Ast.DefId,
+    fn_id: Ast.FnId,
+    symbol: Common.Symbol,
+};
+
+/// One root body lowered into a shared root batch. Its checked type graph is
+/// still instantiated in a fresh scope; only the graph and draft stores are
+/// shared so an exact specialization discovered by an earlier root can be
+/// reused before another root replays and lowers it.
+const PendingRootTemplateBody = struct {
+    reservation: TemplateReservation,
+    fn_template: Ast.FnTemplate,
+    signature_relation: Ast.SignatureRelation,
+    root_node: NodeId,
+    lowered: LoweredTemplateBody,
+};
+
+const RootTemplateBatch = struct {
+    graph: *InstGraph,
+    draft: *BodyDraftStore,
+    pending: std.ArrayList(PendingRootTemplateBody) = .empty,
+};
+
 const FinalBodyOutputCounts = struct {
     exprs: usize = 0,
     pats: usize = 0,
@@ -2505,13 +2541,78 @@ const Builder = struct {
         const def = if (request.procedure_binding) |binding|
             try self.lowerProcedureBindingRoot(request, binding)
         else if (request.procedure_template) |template|
-            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type, request.root_evidence)
+            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type, request.root_evidence, null)
         else if (request.procedure_use) |procedure|
             try self.lowerProcedureUseRoot(request, procedure)
         else
             Common.invariant("root request reached Monotype without a checked procedure template or procedure source");
         try self.appendRuntimeSchemaRequestsForDef(def);
         try self.program.addRoot(.{ .def = def, .request = request });
+    }
+
+    /// Lower adjacent checked template roots into one graph and draft. Every
+    /// root receives a fresh `BodyContext` (and therefore a fresh checked-type
+    /// instantiation scope), but graph-local specialization identities remain
+    /// visible across roots. Equivalent callee requests can consequently reuse
+    /// the first deferred request before either graph sealing or body lowering.
+    fn lowerTemplateRootBatch(self: *Builder, requests: []const checked.RootRequest) Allocator.Error!void {
+        if (requests.len == 0) return;
+
+        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
+        defer graph_setup_timing_scope.end();
+        const graph = try self.createGraph();
+        defer graph.destroy();
+        var body_draft = BodyDraftStore.init(self.allocator);
+        defer body_draft.deinit();
+        var batch = RootTemplateBatch{ .graph = graph, .draft = &body_draft };
+        defer batch.pending.deinit(self.allocator);
+        const defs = try self.allocator.alloc(Ast.DefId, requests.len);
+        defer self.allocator.free(defs);
+        graph_setup_timing_scope.end();
+
+        const draft_guard = FinalBodyOutputGuard.begin(self);
+        for (requests, 0..) |request, index| {
+            const template = request.procedure_template orelse
+                Common.invariant("procedure-template root batch contained another root kind");
+            defs[index] = try self.lowerTemplate(
+                template,
+                moduleView(self.root_view),
+                request.checked_type,
+                request.root_evidence,
+                &batch,
+            );
+        }
+        const draft_end = draft_guard.end(self);
+
+        const root_nodes = try self.allocator.alloc(NodeId, batch.pending.items.len);
+        defer self.allocator.free(root_nodes);
+        for (batch.pending.items, 0..) |pending, index| root_nodes[index] = pending.root_node;
+
+        const sealed = try self.sealActiveBodyDraft(
+            graph,
+            &body_draft,
+            draft_guard,
+            draft_end,
+            null,
+            root_nodes,
+            null,
+            null,
+            null,
+        );
+        defer sealed.deinit(self.allocator);
+
+        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+        defer completion_timing_scope.end();
+        if (sealed.root_tys.len != batch.pending.items.len) {
+            Common.invariant("root template batch sealing returned the wrong number of root types");
+        }
+        for (batch.pending.items, sealed.root_tys) |pending, final_fn_ty| {
+            try self.finishReservedTemplateBody(pending, sealed.ids, final_fn_ty);
+        }
+        for (requests, defs) |request, def| {
+            try self.appendRuntimeSchemaRequestsForDef(def);
+            try self.program.addRoot(.{ .def = def, .request = request });
+        }
     }
 
     fn lowerLayoutRequest(self: *Builder, checked_ty: checked.CheckedTypeId) Allocator.Error!void {
@@ -2758,6 +2859,7 @@ const Builder = struct {
             draft,
             draft_end,
             root_node,
+            &.{},
             null,
             root_def,
             null,
@@ -2951,7 +3053,7 @@ const Builder = struct {
         );
         body_timing_scope.end();
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
+        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
         var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
         defer completion_timing_scope.end();
@@ -2964,6 +3066,7 @@ const Builder = struct {
         source_ty_view: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         root_evidence: ?checked.CheckedEvidenceSpan,
+        root_batch: ?*RootTemplateBatch,
     ) Allocator.Error!Ast.DefId {
         const fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
@@ -2990,6 +3093,7 @@ const Builder = struct {
             .count,
             null,
             null,
+            root_batch,
         );
     }
 
@@ -3119,6 +3223,7 @@ const Builder = struct {
         request_accounting: TemplateRequestAccounting,
         precomputed_request_digest: ?names.TypeDigest,
         retained_topology: ?EvidenceChain,
+        root_batch: ?*RootTemplateBatch,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
@@ -3181,12 +3286,7 @@ const Builder = struct {
             fn_template.const_evidence_frame_head = stored_evidence.head;
         }
 
-        const Reservation = struct {
-            def: Ast.DefId,
-            fn_id: Ast.FnId,
-            symbol: Common.Symbol,
-        };
-        const reservation: Reservation = blk: {
+        const reservation: TemplateReservation = blk: {
             const symbol = self.symbols.fresh();
             try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
             const fn_id = try self.program.addFn(fn_template);
@@ -3269,6 +3369,7 @@ const Builder = struct {
                         .count,
                         null,
                         null,
+                        null,
                     );
                     const adapter_template = Ast.FnTemplate{
                         .fn_def = .{ .checked_generated = template_ref },
@@ -3325,27 +3426,108 @@ const Builder = struct {
             => {},
         }
 
-        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
-        defer graph_setup_timing_scope.end();
+        if (root_batch) |batch| {
+            const pending = try self.lowerReservedTemplateBodyIntoDraft(
+                batch.graph,
+                batch.draft,
+                reservation,
+                fn_template,
+                template_ref,
+                view,
+                method_scope,
+                template,
+                source_fn_key,
+                lower_fn_ty,
+                spec_evidence,
+                retained_topology,
+                signature_relation,
+            );
+            try batch.pending.append(self.allocator, pending);
+            return reservation.def;
+        }
+
         const graph = try self.createGraph();
         defer graph.destroy();
+        var body_draft_storage = BodyDraftStore.init(self.allocator);
+        defer body_draft_storage.deinit();
+        const body_draft = &body_draft_storage;
+        const draft = FinalBodyOutputGuard.begin(self);
+        const pending = try self.lowerReservedTemplateBodyIntoDraft(
+            graph,
+            body_draft,
+            reservation,
+            fn_template,
+            template_ref,
+            view,
+            method_scope,
+            template,
+            source_fn_key,
+            lower_fn_ty,
+            spec_evidence,
+            retained_topology,
+            signature_relation,
+        );
+        const draft_end = draft.end(self);
+        const sealed = try self.sealActiveBodyDraft(
+            graph,
+            body_draft,
+            draft,
+            draft_end,
+            pending.root_node,
+            &.{},
+            null,
+            null,
+            null,
+        );
+        defer sealed.deinit(self.allocator);
+        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+        defer completion_timing_scope.end();
+        try self.finishReservedTemplateBody(pending, sealed.ids, sealed.root_ty.?);
+        return reservation.def;
+    }
+
+    fn lowerReservedTemplateBodyIntoDraft(
+        self: *Builder,
+        graph: *InstGraph,
+        body_draft: *BodyDraftStore,
+        reservation: TemplateReservation,
+        fn_template: Ast.FnTemplate,
+        template_ref: names.ProcTemplate,
+        view: ModuleView,
+        method_scope: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+        source_fn_key: names.TypeDigest,
+        lower_fn_ty: Type.TypeId,
+        spec_evidence: []const SpecEvidence,
+        retained_topology: ?EvidenceChain,
+        signature_relation: Ast.SignatureRelation,
+    ) Allocator.Error!PendingRootTemplateBody {
+        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
+        defer graph_setup_timing_scope.end();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         const saved_template_root = self.active_template_root;
         self.active_graph = graph;
-        defer self.active_graph = saved_graph;
-        var body_draft_storage = BodyDraftStore.init(self.allocator);
-        defer body_draft_storage.deinit();
-        const body_draft = &body_draft_storage;
         self.active_body_draft = body_draft;
+        defer self.active_graph = saved_graph;
         defer self.active_body_draft = saved_body_draft;
         defer self.active_template_root = saved_template_root;
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self, view, method_scope, template_ref, graph, body_draft);
+
+        var body_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self,
+            view,
+            method_scope,
+            template_ref,
+            graph,
+            body_draft,
+        );
         body_ctx.evidence = retained_topology orelse rootEvidence(template_ref, spec_evidence);
         const lowered_template = self.lowered_templates.getPtr(reservation.fn_id) orelse
             Common.invariant("procedure specialization lost its evidence record before body lowering");
         lowered_template.evidence = body_ctx.evidence.vector;
         defer body_ctx.deinit();
+
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, lower_fn_ty);
         self.active_template_root = .{
             .graph = graph,
@@ -3360,21 +3542,20 @@ const Builder = struct {
         graph_setup_timing_scope.end();
 
         // The durable request remains an immutable snapshot. The body keeps
-        // the related request node until the draft's single final seal creates
-        // the solved function type.
+        // the related request node until the shared draft's single final seal
+        // creates the solved function type.
         {
             var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
             defer dispatch_timing_scope.end();
             try body_ctx.instantiateTemplateDispatchRelations(template, null);
         }
-        const draft = FinalBodyOutputGuard.begin(self);
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
-        const sealed_root_node, const draft_end = blk: {
+        const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
-            const completed_root = switch (signature_relation) {
+            break :blk switch (signature_relation) {
                 .exact_graph => root_node,
                 .independent_roots => try body_ctx.completedFunctionNodeForLoweredRet(
                     root_node,
@@ -3382,50 +3563,45 @@ const Builder = struct {
                     body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
                 ),
             };
-            break :blk .{ completed_root, draft.end(self) };
         };
-        const sealed = try self.sealActiveBodyDraft(
-            graph,
-            body_draft,
-            draft,
-            draft_end,
-            sealed_root_node,
-            null,
-            null,
-            null,
-        );
-        defer sealed.deinit(self.allocator);
-        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
-        defer completion_timing_scope.end();
-        const body_ids = sealed.ids;
-        const final_fn_ty = sealed.root_ty.?;
+        return .{
+            .reservation = reservation,
+            .fn_template = fn_template,
+            .signature_relation = signature_relation,
+            .root_node = completed_root,
+            .lowered = lowered,
+        };
+    }
+
+    fn finishReservedTemplateBody(
+        self: *Builder,
+        pending: PendingRootTemplateBody,
+        body_ids: FinalIdOffsets,
+        final_fn_ty: Type.TypeId,
+    ) Allocator.Error!void {
         // The definition records the body's solved view of the root type.
         // Call sites embed the requested type, which digests identically
         // because digests are alias-transparent and a solved request
-        // determines every interface slot; root-class call sites
-        // adopt this recorded template directly.
-        var def_template = fn_template;
-        def_template.mono_fn_ty = switch (signature_relation) {
-            // The request is the producer-authored graph that an exact
-            // signature promises to later stages. The callee body was solved
-            // independently and may seal to an equal but distinct TypeId;
-            // replacing the request with that id would discard the explicit
-            // argument/result identity the producer supplied.
-            .exact_graph => lower_fn_ty,
+        // determines every interface slot; root-class call sites adopt this
+        // recorded template directly.
+        var def_template = pending.fn_template;
+        def_template.mono_fn_ty = switch (pending.signature_relation) {
+            // An exact signature keeps the producer-authored request type. The
+            // independently solved body may seal to an equal, distinct TypeId.
+            .exact_graph => pending.fn_template.mono_fn_ty,
             .independent_roots => final_fn_ty,
         };
-        self.program.setFnSource(reservation.fn_id, def_template);
+        self.program.setFnSource(pending.reservation.fn_id, def_template);
         const sealed_fn_data = self.functionShape(final_fn_ty, "checked procedure template root type was not a function");
-        self.program.setDef(reservation.def, .{
-            .symbol = reservation.symbol,
+        self.program.setDef(pending.reservation.def, .{
+            .symbol = pending.reservation.symbol,
             .fn_def = def_template,
-            .fn_id = reservation.fn_id,
-            .args = body_ids.typedLocalSpan(lowered.args),
-            .body = .{ .roc = body_ids.expr(lowered.body) },
+            .fn_id = pending.reservation.fn_id,
+            .args = body_ids.typedLocalSpan(pending.lowered.args),
+            .body = .{ .roc = body_ids.expr(pending.lowered.body) },
             .ret = sealed_fn_data.ret,
         });
-        try self.markTemplateReady(reservation.fn_id, final_fn_ty);
-        return reservation.def;
+        try self.markTemplateReady(pending.reservation.fn_id, final_fn_ty);
     }
 
     fn lowerDraftTemplateFromContext(
@@ -3630,6 +3806,17 @@ const Builder = struct {
             // resolved identity, never through a partial interface overlap.
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
             self.count("template_hits");
+            const request_owner = source_ctx.draft.current_owner;
+            const candidate_owner = source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].parent_owner;
+            switch (request_owner) {
+                .reserved_fn => |requesting_root| switch (candidate_owner) {
+                    .reserved_fn => |candidate_root| if (requesting_root != candidate_root) {
+                        self.countBodyDiagnostic("cross_root_template_reuses");
+                    },
+                    .root, .draft_fn => {},
+                },
+                .root, .draft_fn => {},
+            }
             const active_recursive_edge = spec.state == .lowering and
                 source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
             if (active_recursive_edge) {
@@ -5020,6 +5207,7 @@ const Builder = struct {
             .count,
             null,
             null,
+            null,
         );
         return .{ .local = self.defFnId(def) };
     }
@@ -5079,7 +5267,7 @@ const Builder = struct {
                     .final => Common.invariant("closed restored nested function resolved before draft commit"),
                 };
                 const draft_end = draft.end(self);
-                const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, request_fn_node, null, null, draft_fn);
+                const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, request_fn_node, &.{}, null, null, draft_fn);
                 defer sealed.deinit(self.allocator);
                 return sealed.root_fn orelse Common.invariant("closed restored nested function did not resolve its final id");
             },
@@ -5108,6 +5296,7 @@ const Builder = struct {
                     .count,
                     null,
                     retained,
+                    null,
                 );
                 return self.defFnId(def);
             },
@@ -5533,12 +5722,14 @@ const Builder = struct {
     const ActiveBodyDraftSeal = struct {
         ids: FinalIdOffsets,
         root_ty: ?Type.TypeId,
+        root_tys: []Type.TypeId,
         extra_ty: ?Type.TypeId,
         root_def: ?Ast.DefId,
         root_fn: ?Ast.FnId,
         core_maps: *DraftCoreMaps,
 
         fn deinit(self: ActiveBodyDraftSeal, allocator: Allocator) void {
+            allocator.free(self.root_tys);
             self.core_maps.deinit(allocator);
             allocator.destroy(self.core_maps);
         }
@@ -6443,6 +6634,7 @@ const Builder = struct {
                     .already_counted,
                     request_digest,
                     null,
+                    null,
                 );
                 break :blk .{ .local = self.defFnId(def) };
             };
@@ -6660,6 +6852,7 @@ const Builder = struct {
         final_guard: FinalBodyOutputGuard,
         final_end: FinalBodyOutputGuard.End,
         root_node: ?NodeId,
+        root_nodes: []const NodeId,
         extra_ty: ?Type.TypeId,
         root_def: ?DraftDefId,
         root_fn: ?DraftFnId,
@@ -6692,6 +6885,12 @@ const Builder = struct {
         try self.emitDraftDeferredInspects(body_draft, graph, &sealer);
         const sealed_root = if (root_node) |node| try sealer.sealNode(node) else null;
         if (sealed_root) |ty| try graph.assertTypeHasNoActiveSnapshots(ty);
+        const sealed_roots = try self.allocator.alloc(Type.TypeId, root_nodes.len);
+        errdefer self.allocator.free(sealed_roots);
+        for (root_nodes, sealed_roots) |node, *ty| {
+            ty.* = try sealer.sealNode(node);
+            try graph.assertTypeHasNoActiveSnapshots(ty.*);
+        }
         try body_draft.finishOwnerRuns();
         try self.resolveDeferredTemplateSpecs(body_draft, &sealer);
         var commit_map = try self.buildDraftCommitMap(
@@ -6730,6 +6929,7 @@ const Builder = struct {
         return .{
             .ids = returned_ids,
             .root_ty = sealed_root,
+            .root_tys = sealed_roots,
             .extra_ty = sealed_extra,
             .root_def = if (root_def) |draft_def| body_ids.def(draft_def) else null,
             .root_fn = if (root_fn) |draft_fn| switch (body_ids.fnSlot(draft_fn)) {
@@ -7605,7 +7805,7 @@ const Builder = struct {
             } },
         );
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
+        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
         return sealed.ids.expr(expr);
     }
@@ -7731,7 +7931,7 @@ const Builder = struct {
         parser_expr = try self.wrapConstSourceCaptureLets(&fn_ctx, source_captures.items, parser_expr, ty);
 
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
+        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
         return sealed.ids.expr(parser_expr);
     }
@@ -7874,7 +8074,7 @@ const Builder = struct {
         encoder_expr = try self.wrapConstSourceCaptureLets(&fn_ctx, source_captures.items, encoder_expr, ty);
 
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
+        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
         return sealed.ids.expr(encoder_expr);
     }
@@ -8216,6 +8416,7 @@ const Builder = struct {
             &.{},
             .independent_roots,
             .count,
+            null,
             null,
             null,
         );
