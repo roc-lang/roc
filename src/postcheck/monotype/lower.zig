@@ -350,7 +350,6 @@ pub const BodyDiagnostics = struct {
     checked_node_requests: u64 = 0,
     checked_node_cache_hits: u64 = 0,
     checked_node_cache_misses: u64 = 0,
-    closed_checked_node_imports: u64 = 0,
     fresh_checked_node_requests: u64 = 0,
     call_expressions: u64 = 0,
     dispatch_expressions: u64 = 0,
@@ -12182,8 +12181,8 @@ const BodyContext = struct {
     /// Draft body output owned by this specialization graph.
     draft: *BodyDraftStore,
     /// Checked-type cache and declaration-scope stack for this exact
-    /// instantiation identity. Separate contexts give generic signatures fresh
-    /// cells; checker-proved closed types may share immutable imports.
+    /// instantiation identity. Separate contexts give every checked graph a
+    /// fresh relation-production identity.
     instantiation: TypeInstantiationContext,
     loop_contexts: std.ArrayList(LoopContext),
     /// Literal sub-patterns on non-builtin number types collected while
@@ -15082,13 +15081,6 @@ const BodyContext = struct {
             return existing;
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
-        if (self.checkedTypeCanReuseClosedImport(checked_ty)) {
-            const closed_ty = try self.builder.lowerType(self.view, checked_ty);
-            const imported = try self.graph.importMono(closed_ty);
-            try self.putScopedNode(address, imported);
-            self.builder.countBodyDiagnostic("closed_checked_node_imports");
-            return imported;
-        }
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
         try self.putScopedNode(address, placeholder);
         const built = try self.instNodeContent(checked_ty);
@@ -26893,18 +26885,6 @@ const BodyContext = struct {
             Common.invariant("checked type closure query referenced a missing root");
         }
         return !self.view.types.roots[raw].contains_identity_variables;
-    }
-
-    fn checkedTypeCanReuseClosedImport(self: *const BodyContext, ty: checked.CheckedTypeId) bool {
-        if (!self.checkedTypeIsClosed(ty)) return false;
-        // A function root is the explicit interface identity for one request.
-        // Keep that root scope-local even when all of its components are closed;
-        // instNodeContent will independently reuse the closed arguments and
-        // result beneath it.
-        return switch (checkedPayload(self.view, ty)) {
-            .function => false,
-            else => true,
-        };
     }
 
     fn lowerLookupExprAtNode(

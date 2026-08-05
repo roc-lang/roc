@@ -3604,16 +3604,14 @@ append duplicate draft literals. Generated strings remain ordinary distinct
 draft entries because they have no checked literal identity.
 
 Checked roots explicitly record whether their graph contains identity
-variables. When that bit is false, lowering the checked root produces an
-immutable closed `TypeId`; instantiation imports that exact type into the graph,
-and the graph's exact `TypeId` import memo may reuse it across scope identities.
-When the bit is true, reuse across scope identities is forbidden and each scope
-instantiates fresh graph cells. This gate consumes checker-produced closure data
-and never attempts to infer closure from Monotype shape or runtime layout.
-Function roots remain scope-local request-interface identities even when all of
-their components are closed. Their argument and result roots independently use
-the checker-produced closure gate, so closed component structure is reused
-without merging the relation identity of distinct callable requests.
+variables, but closure does not authorize reuse across instantiation scopes.
+Specialization relations may still refine representation-bearing nominal
+backings below a closed public type. Every checked graph therefore instantiates
+fresh relation-production cells in its exact scope. Immutable `TypeId` imports
+are reserved for types explicitly completed by an earlier Monotype stage.
+Function roots and their components remain scope-local request-interface
+identities even when the complete checked graph is closed, so distinct
+callable requests never merge their relation-production identity.
 
 This distinction matters most for lambdas and closures. Expression-position
 functions are checked templates. Lowering a lambda or closure at an expected

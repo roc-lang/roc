@@ -887,9 +887,8 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "fn instNode(self: *BodyContext",
         "fn freshInstNode(self: *BodyContext",
     );
-    try expectContains(inst_node, "self.checkedTypeCanReuseClosedImport(checked_ty)");
-    try expectContains(inst_node, "self.builder.lowerType(self.view, checked_ty)");
-    try expectContains(inst_node, "self.graph.importMono(closed_ty)");
+    try expectNotContains(inst_node, "self.builder.lowerType(self.view, checked_ty)");
+    try expectNotContains(inst_node, "self.graph.importMono(closed_ty)");
 
     const fresh_inst_node = sourceSliceBetween(
         lower_source,
