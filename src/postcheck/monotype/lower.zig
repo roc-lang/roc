@@ -14109,6 +14109,25 @@ const BodyContext = struct {
     fn addExprWithTypeCell(self: *BodyContext, ty: DraftTypeCell, data: BodyExprData) Allocator.Error!DraftExprId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
+        // Birth-sealing was tried and refuted here: even a node that is
+        // resolved and snapshot-free at birth carries class membership that
+        // later unifications settle (the lift's capture-slot invariant caught
+        // the divergence), so a cell's value transfers at the SEAL — the
+        // freezing law at the cell layer. The Debug classification stays: the
+        // resolved-at-birth fraction is the population the deletion's
+        // recipe swap serves without any replacement computation.
+        if (comptime census.enabled) {
+            switch (ty) {
+                .graph_node => |node| {
+                    if (try self.graph.typeIsResolved(node)) {
+                        census.bump("cell_born_sealed_candidate");
+                    } else {
+                        census.bump("cell_born_open");
+                    }
+                },
+                else => {},
+            }
+        }
         const id = try self.draft.addExprWithSource(
             .{ .ty = ty, .data = data },
             self.builder.program.current_loc,
