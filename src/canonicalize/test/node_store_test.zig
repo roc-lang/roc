@@ -314,6 +314,29 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_lookup_associated_local = .{
+            .type_node_idx = rand.random().int(u32),
+            .type_ident = rand_ident_idx(),
+            .item_ident = rand_ident_idx(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_lookup_associated = .{
+            .module_idx = rand_idx_u16(CIR.Import.Idx),
+            .type_node_idx = rand.random().int(u32),
+            .type_ident = rand_ident_idx(),
+            .item_ident = rand_ident_idx(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_lookup_associated_resolved = .{
+            .module_identity = rand_idx(base.ModuleIdentity.Idx),
+            .target_node_idx = rand.random().int(u32),
+            .target_def_idx = rand_idx(CIR.Def.Idx),
+            .source_ident = rand_ident_idx(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_lookup_required = .{
             .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(rand.random().int(u32)),
         },

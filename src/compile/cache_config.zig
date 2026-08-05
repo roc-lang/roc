@@ -71,7 +71,8 @@ pub const Constants = struct {
     /// 47: Type descriptors carry the static-dispatch rejection marker.
     /// 48: Source imports retain parser-owned bindings and type-module owners
     ///     instead of reconstructing them from normalized module identities.
-    pub const CACHE_VERSION = 48;
+    /// 49: Associated lookups retain exact alias-resolution targets in CIR.
+    pub const CACHE_VERSION = 49;
 };
 
 /// Configuration for the Roc cache system.

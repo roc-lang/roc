@@ -49,6 +49,7 @@ pub const Problem = union(enum) {
     effectful_expect: EffectfulExpect,
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
+    associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
     host_boundary_open_row: HostBoundaryOpenRow,
     platform_def_not_found: PlatformDefNotFound,
@@ -130,6 +131,14 @@ pub const HostBoundaryOpenRow = struct {
 
 /// A standalone type annotation without an implementation cannot be used as a runtime value.
 pub const AnnotationOnlyValue = struct {
+    region: base.Region,
+};
+
+/// A statically named associated item was absent after transparent aliases
+/// were resolved to their terminal type.
+pub const AssociatedItemNotFound = struct {
+    type_name: Ident.Idx,
+    item_name: Ident.Idx,
     region: base.Region,
 };
 

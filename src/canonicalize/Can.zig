@@ -1643,102 +1643,10 @@ fn typePathForBinding(self: *const Self, binding: Scope.TypeBinding) ?AST.DeclIn
     return self.type_decl_paths.get(stmt_idx);
 }
 
-/// The type name a top-level alias declaration refers to, when its annotation
-/// is a plain (possibly applied) type reference — `ThingAlias : Thing` or
-/// `Wrapped(a) : Wrapper(a)`. Null for every other binding or annotation
-/// shape.
-fn aliasBindingTargetName(self: *const Self, binding: Scope.TypeBinding) ?Ident.Idx {
-    const stmt_idx = switch (binding) {
-        .local_alias => |stmt_idx| stmt_idx,
-        .local_nominal, .local_where_alias, .associated_nominal, .external_nominal => return null,
-    };
-    const alias = switch (self.env.store.getStatement(stmt_idx)) {
-        .s_alias_decl => |alias| alias,
-        else => return null,
-    };
-    if (alias.anno == .placeholder) return null;
-    return switch (self.env.store.getTypeAnno(alias.anno)) {
-        .lookup => |lookup| lookup.name,
-        .apply => |apply| apply.name,
-        else => null,
-    };
-}
-
-/// The type path an alias type path points at, when the alias declaration's
-/// annotation is a plain (possibly applied) type reference — the path-level
-/// counterpart of `aliasBindingTargetName`, covering associated aliases such
-/// as `Api.ThingAlias : Thing`. Null for every other declaration or
-/// annotation shape.
-fn aliasTypePathTarget(
-    self: *Self,
-    path: AST.DeclIndex.TypePathIdx,
-) std.mem.Allocator.Error!?AST.DeclIndex.TypePathIdx {
-    const decl_index = &self.parse_ir.decl_index;
-    const decl_idx = self.firstUsableParserTypeDecl(decl_index.typeDeclsForPath(path)) orelse return null;
-    const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
-    if (decl.kind != .type_alias) return null;
-    const anno_raw = decl.anno orelse return null;
-
-    // Unwrap parens and type application down to the base type reference.
-    const ty = ty_blk: {
-        var current: AST.TypeAnno.Idx = @enumFromInt(anno_raw);
-        while (true) {
-            switch (self.parse_ir.store.getTypeAnno(current)) {
-                .parens => |parens| current = parens.anno,
-                .apply => |apply| {
-                    const args = self.parse_ir.store.typeAnnoSlice(apply.args);
-                    if (args.len == 0) return null;
-                    current = args[0];
-                },
-                .ty => |ty| break :ty_blk ty,
-                else => return null,
-            }
-        }
-    };
-
-    const top = self.scratch_idents.top();
-    defer self.scratch_idents.clearFrom(top);
-    for (self.parse_ir.store.tokenSlice(ty.qualifiers)) |raw_tok| {
-        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse return null;
-        try self.scratch_idents.append(segment);
-    }
-    const name_ident = self.parse_ir.tokens.resolveIdentifier(ty.token) orelse return null;
-    try self.scratch_idents.append(name_ident);
-
-    const target = self.parserTypePathForDependencySegments(decl, self.scratch_idents.sliceFromStart(top)) orelse return null;
-    if (target == path) return null;
-    return target;
-}
-
-/// The dotted source path of a parser type path plus a trailing item, e.g.
-/// the path `Api.ThingAlias` and item `from_u64` produce the ident
-/// `Api.ThingAlias.from_u64`.
-fn qualifiedIdentForTypePathItem(
-    self: *Self,
-    path: AST.DeclIndex.TypePathIdx,
-    item: Ident.Idx,
-) std.mem.Allocator.Error!Ident.Idx {
-    const decl_index = &self.parse_ir.decl_index;
-    const top = self.scratch_idents.top();
-    defer self.scratch_idents.clearFrom(top);
-    var current: ?AST.DeclIndex.TypePathIdx = path;
-    while (current) |idx| {
-        const segment = decl_index.type_paths.items[@intFromEnum(idx)];
-        try self.scratch_idents.append(segment.name);
-        current = segment.parent;
-    }
-
-    const bytes_top = self.scratchBytesTop();
-    defer self.clearScratchBytesFrom(bytes_top);
-    const segments = self.scratch_idents.sliceFromStart(top);
-    var i = segments.len;
-    while (i > 0) {
-        i -= 1;
-        try self.scratchAppendSlice(self.env.getIdent(segments[i]));
-        try self.scratchAppendByte('.');
-    }
-    try self.scratchAppendSlice(self.env.getIdent(item));
-    return self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(bytes_top)));
+fn typeStatementForPath(self: *const Self, path: AST.DeclIndex.TypePathIdx) ?Statement.Idx {
+    const decl_idx = self.firstUsableParserTypeDecl(self.parse_ir.decl_index.typeDeclsForPath(path)) orelse return null;
+    const decl = self.parse_ir.decl_index.decls.items[@intFromEnum(decl_idx)];
+    return self.parserTypeDeclStatement(@enumFromInt(decl.statement));
 }
 
 /// The qualifier chain joined with dots, e.g. tokens for `Api` and
@@ -7397,6 +7305,40 @@ fn canonicalizedExternalLookup(
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
 }
 
+fn canonicalizedLocalAssociatedLookup(
+    self: *Self,
+    type_node_idx: u32,
+    type_ident: Ident.Idx,
+    item_ident: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_associated_local = .{
+        .type_node_idx = type_node_idx,
+        .type_ident = type_ident,
+        .item_ident = item_ident,
+    } }, region);
+
+    return .{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+}
+
+fn canonicalizedExternalAssociatedLookup(
+    self: *Self,
+    import_idx: Import.Idx,
+    type_node_idx: u32,
+    type_ident: Ident.Idx,
+    item_ident: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_associated = .{
+        .module_idx = import_idx,
+        .type_node_idx = type_node_idx,
+        .type_ident = type_ident,
+        .item_ident = item_ident,
+    } }, region);
+
+    return .{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+}
+
 fn canonicalizeIdentExpr(
     self: *Self,
     e: @TypeOf(@as(AST.Expr, undefined).ident),
@@ -7449,20 +7391,19 @@ fn canonicalizeQualifiedIdentExpr(
     }
 
     if (try self.qualifierTypePath(qualifier_tokens)) |owner_path| {
-        // Type aliases are transparent for associated-item lookup through
-        // declared type paths too: `Api.ThingAlias : Thing` resolves
-        // `Api.ThingAlias.from_u64` against `Thing`'s associated items
-        // (#9875). Follow the (finite, cycle-guarded) alias chain of type
-        // paths until an associated item matches.
-        var path = owner_path;
-        var pattern_ident = qualified_ident;
-        var alias_hops: u32 = 32;
-        while (alias_hops > 0) : (alias_hops -= 1) {
-            if (try self.lookupOrCreateAssocValuePattern(path, ident, pattern_ident, region)) |pattern_idx| {
-                return try self.canonicalizedAssociatedLookup(path, pattern_ident, pattern_idx, region);
+        if (try self.lookupOrCreateAssocValuePattern(owner_path, ident, qualified_ident, region)) |pattern_idx| {
+            return try self.canonicalizedAssociatedLookup(owner_path, qualified_ident, pattern_idx, region);
+        }
+        if (self.typeStatementForPath(owner_path)) |type_stmt_idx| {
+            if (self.env.store.getStatement(type_stmt_idx) == .s_alias_decl) {
+                const type_ident = (try self.joinedQualifierIdent(qualifier_tokens)) orelse qualified_ident;
+                return try self.canonicalizedLocalAssociatedLookup(
+                    @intFromEnum(type_stmt_idx),
+                    type_ident,
+                    ident,
+                    region,
+                );
             }
-            path = (try self.aliasTypePathTarget(path)) orelse break;
-            pattern_ident = try self.qualifiedIdentForTypePathItem(path, ident);
         }
     }
 
@@ -7584,19 +7525,7 @@ fn canonicalizeTypeAssociatedLookup(
     ident: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!?CanonicalizedExpr {
-    // Type aliases are transparent for associated-item lookup: given
-    // `ThingAlias : Thing`, `ThingAlias.from_u64` resolves against `Thing`'s
-    // associated items (#9875). Follow the (finite, cycle-guarded) alias
-    // chain to the terminal type name before looking anything up.
-    var module_alias = unresolved_module_alias;
-    var alias_hops: u32 = 32;
-    while (alias_hops > 0) : (alias_hops -= 1) {
-        const binding_location = (try self.scopeLookupOrPrepareTypeBinding(module_alias)) orelse break;
-        const target = self.aliasBindingTargetName(binding_location.binding.*) orelse break;
-        if (target.eql(module_alias)) break;
-        module_alias = target;
-    }
-
+    const module_alias = unresolved_module_alias;
     const local_type_binding = try self.scopeLookupOrPrepareTypeBinding(module_alias);
     const is_type_in_scope = local_type_binding != null;
     const is_auto_imported_type = self.hasAvailableModuleEnv(module_alias);
@@ -7613,6 +7542,18 @@ fn canonicalizeTypeAssociatedLookup(
             }
         }
 
+        switch (binding_location.binding.*) {
+            .local_alias => |type_stmt_idx| {
+                return try self.canonicalizedLocalAssociatedLookup(
+                    @intFromEnum(type_stmt_idx),
+                    module_alias,
+                    ident,
+                    region,
+                );
+            },
+            else => {},
+        }
+
         // A type imported via `import M exposing [T]` is an `external_nominal`
         // binding. Its associated functions live in `M` under the
         // `<M>.<T>.<method>` exposed name, reached through the binding's import.
@@ -7620,6 +7561,19 @@ fn canonicalizeTypeAssociatedLookup(
             .external_nominal => |ext| {
                 if (self.lookupAvailableModuleEnv(ext.module_ident)) |external_type_env| {
                     const module_env = external_type_env.env;
+                    if (ext.target_node_idx) |type_node_idx| {
+                        const type_stmt: Statement.Idx = @enumFromInt(type_node_idx);
+                        if (module_env.store.getStatement(type_stmt) == .s_alias_decl) {
+                            const import_idx = ext.import_idx orelse try self.getOrCreateAutoImportIdent(ext.module_ident);
+                            return try self.canonicalizedExternalAssociatedLookup(
+                                import_idx,
+                                type_node_idx,
+                                module_alias,
+                                ident,
+                                region,
+                            );
+                        }
+                    }
                     const original_type_text = self.env.getIdent(ext.original_ident);
                     const qualified_type_idx = try self.insertQualifiedIdent(module_env.module_name, original_type_text);
                     const fully_qualified_idx = try self.insertQualifiedIdent(self.env.getIdent(qualified_type_idx), field_text);
@@ -7696,6 +7650,39 @@ fn canonicalizeModuleQualifiedIdent(
     const field_text = self.env.getIdent(ident);
     const lookup_scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(lookup_scratch_top);
+
+    if (qualifier_tokens.len > 1) {
+        if (auto_imported_type_info) |info| {
+            const module_env = info.env;
+            for (qualifier_tokens[1..]) |qtok| {
+                const qtok_idx = @as(Token.Idx, @intCast(qtok));
+                const q_ident = self.parse_ir.tokens.resolveIdentifier(qtok_idx) orelse break;
+                try self.scratchAppendSlice(self.env.getIdent(q_ident));
+                try self.scratchAppendByte('.');
+            }
+            const relative_type_path = self.scratchBytesFrom(lookup_scratch_top);
+            if (relative_type_path.len > 0) {
+                const type_path = relative_type_path[0 .. relative_type_path.len - 1];
+                const type_lookup_name = try self.scratchQualifiedText(module_env.module_name, type_path);
+                if (module_env.common.findIdent(type_lookup_name)) |type_qname_ident| {
+                    if (module_env.getExposedTypeNodeIndexById(type_qname_ident)) |type_node_idx| {
+                        const type_stmt: Statement.Idx = @enumFromInt(type_node_idx);
+                        if (module_env.store.getStatement(type_stmt) == .s_alias_decl) {
+                            const type_ident = (try self.joinedQualifierIdent(qualifier_tokens)) orelse module_name;
+                            return try self.canonicalizedExternalAssociatedLookup(
+                                import_idx,
+                                type_node_idx,
+                                type_ident,
+                                ident,
+                                region,
+                            );
+                        }
+                    }
+                }
+            }
+            self.clearScratchBytesFrom(lookup_scratch_top);
+        }
+    }
 
     const nested_path: []const u8 = if (qualifier_tokens.len > 1) nested_blk: {
         for (qualifier_tokens[1..]) |qtok| {
@@ -8601,6 +8588,9 @@ const DefiniteInitAnalyzer = struct {
                 break :blk true;
             },
             .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_num,
             .e_frac_f32,
@@ -9917,6 +9907,9 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                     .e_bytes_literal,
                     .e_lookup_local,
                     .e_lookup_external,
+                    .e_lookup_associated_local,
+                    .e_lookup_associated,
+                    .e_lookup_associated_resolved,
                     .e_lookup_required,
                     .e_empty_list,
                     .e_empty_record,

@@ -344,6 +344,17 @@ fn emitExprFrame(
             }
         },
         .e_lookup_external => |ext| try self.emitIdent(self.module_env.getIdent(ext.ident_idx)),
+        .e_lookup_associated_local => |lookup| try self.output.print(
+            self.allocator,
+            "{s}.{s}",
+            .{ self.module_env.getIdent(lookup.type_ident), self.module_env.getIdent(lookup.item_ident) },
+        ),
+        .e_lookup_associated => |lookup| try self.output.print(
+            self.allocator,
+            "{s}.{s}",
+            .{ self.module_env.getIdent(lookup.type_ident), self.module_env.getIdent(lookup.item_ident) },
+        ),
+        .e_lookup_associated_resolved => |lookup| try self.emitIdent(self.module_env.getIdent(lookup.source_ident)),
         .e_list => |list| {
             try self.write("[");
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(list.elems), "]", ", ");

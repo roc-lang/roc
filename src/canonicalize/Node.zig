@@ -79,6 +79,9 @@ pub const Tag = enum {
     expr_type_dispatch_call,
     expr_static_dispatch,
     expr_external_lookup,
+    expr_associated_lookup_local,
+    expr_associated_lookup,
+    expr_associated_lookup_resolved,
     expr_required_lookup,
     expr_apply,
     expr_string,
@@ -315,6 +318,9 @@ pub const Payload = extern union {
     // === Expression payloads ===
     expr_var: ExprVar,
     expr_external_lookup: ExprExternalLookup,
+    expr_associated_lookup_local: ExprAssociatedLookupLocal,
+    expr_associated_lookup: ExprAssociatedLookup,
+    expr_associated_lookup_resolved: ExprAssociatedLookupResolved,
     expr_required_lookup: ExprRequiredLookup,
     expr_tuple: ExprTuple,
     expr_tuple_access: ExprTupleAccess,
@@ -540,6 +546,29 @@ pub const Payload = extern union {
         module_idx: u32,
         target_node_idx: u32,
         ident_idx: u32,
+    };
+
+    /// expr_associated_lookup_local: local type alias plus associated item.
+    pub const ExprAssociatedLookupLocal = extern struct {
+        type_node_idx: u32,
+        type_ident: u32,
+        item_ident: u32,
+    };
+
+    /// expr_associated_lookup: imported type declaration plus associated item.
+    pub const ExprAssociatedLookup = extern struct {
+        module_idx: u32,
+        type_node_idx: u32,
+        type_ident: u32,
+        item_ident: u32,
+    };
+
+    /// expr_associated_lookup_resolved: checker-selected implementation.
+    pub const ExprAssociatedLookupResolved = extern struct {
+        module_identity: u32,
+        target_node_idx: u32,
+        target_def_idx: u32,
+        source_ident: u32,
     };
 
     /// expr_required_lookup: lookup from platform requires clause
