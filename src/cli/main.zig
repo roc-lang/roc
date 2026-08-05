@@ -1262,7 +1262,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
             break :run_blk rocRun(&ctx, run_args, args[0]);
         },
         .check => |check_args| rocCheck(&ctx, check_args, args[0]),
-        .build => |build_args| rocBuild(&ctx, build_args, args[0]),
+        .build => |build_args| rocBuildCommand(&ctx, build_args, args[0]),
         .bundle => |bundle_args| rocBundle(&ctx, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
@@ -1272,7 +1272,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .bump => |bump_args| rocBump(&ctx, bump_args),
-        .install => |install_args| rocInstall(&ctx, install_args, args[0]),
+        .install => |install_args| rocInstall(&ctx, install_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
@@ -2392,7 +2392,7 @@ fn rocRunInstalled(ctx: *CliCtx, args: cli_args.RunArgs) CliMainError!void {
         return error.InvalidArguments;
     }
     const term = try runCompiledExecutable(ctx, entry.artifact_path, entry.artifact_path, args.app_args);
-    try finishCompiledRun(ctx, entry.artifact_path, term, 0);
+    try finishCompiledRun(ctx, entry.artifact_path, term, .{});
 }
 
 const install_manifest_size_limit = 64 * 1024;
@@ -2630,7 +2630,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     var entrypoint_names: []const []const u8 = &.{};
     var hosted_symbols: []const []const u8 = &.{};
     var checked_host_identity: [32]u8 = undefined;
-    var warning_count: usize = 0;
+    var diagnostics = CheckDiagnosticCounts{};
 
     switch (args.opt) {
         .dev => {
@@ -2651,7 +2651,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             entrypoint_names = result.entrypoint_names;
             hosted_symbols = result.hosted_symbols;
             checked_host_identity = result.checked_host_identity;
-            warning_count = result.counts.warnings;
+            diagnostics = result.counts;
         },
         .interpreter => {
             const shm_result = try buildLirImageWithBuildEnv(
@@ -2669,7 +2669,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             entrypoint_names = shm_result.entrypoint_names;
             hosted_symbols = shm_result.hosted_symbols;
             checked_host_identity = shm_result.checked_host_identity;
-            warning_count = shm_result.warning_count;
+            diagnostics = shm_result.diagnostics;
         },
         .size, .speed => unreachable,
     }
@@ -2987,24 +2987,22 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             checked_host_identity,
             result.watch_inputs,
             null,
-            warning_count,
+            diagnostics,
         );
-    } else if (comptime is_windows) {
-        // Windows: Use handle inheritance approach
-        std.log.debug("Using Windows handle inheritance approach", .{});
-        try runWithWindowsHandleInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
     } else {
-        // POSIX: Use existing file descriptor inheritance approach
-        std.log.debug("Using POSIX file descriptor inheritance approach", .{});
-        try runWithPosixFdInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
+        const termination = if (comptime is_windows) blk: {
+            std.log.debug("Using Windows handle inheritance approach", .{});
+            break :blk try runWithWindowsHandleInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
+        } else blk: {
+            std.log.debug("Using POSIX file descriptor inheritance approach", .{});
+            break :blk try runWithPosixFdInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
+        };
+        std.log.debug("Interpreter execution completed", .{});
+        try finishRunTermination(ctx, exe_path, termination, diagnostics);
     }
-    std.log.debug("Interpreter execution completed", .{});
-
-    // Exit with code 2 if there were warnings (but no errors)
-    exitOnWarnings(ctx, warning_count);
 }
 
-fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
+fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -3019,8 +3017,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) Cl
     const output_filename = try compiledRunOutputFilename(ctx, args.path);
     const exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, output_filename });
 
-    var warning_count: usize = 0;
-    try rocBuild(ctx, .{
+    const build_result = try rocBuildOnce(ctx, .{
         .path = args.path,
         .opt = args.opt,
         .target = args.target,
@@ -3031,8 +3028,6 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) Cl
         .max_threads = args.max_threads,
         .wasm_memory = null,
         .wasm_stack_size = null,
-        .exit_on_warnings = false,
-        .warning_count_out = &warning_count,
         .require_executable_output = true,
         .require_host_runnable_output = true,
         .suppress_build_status = true,
@@ -3040,14 +3035,14 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) Cl
         .synthetic_default_platform = false,
         .source_dir_override = null,
         .root_source_url = args.root_source_url,
-    }, arg0);
+    });
 
-    const term = try runCompiledExecutable(ctx, exe_path, args.path, args.app_args);
+    const term = try runCompiledExecutable(ctx, build_result.output_path, args.path, args.app_args);
 
     compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
     cleanup_temp_dir = false;
 
-    try finishCompiledRun(ctx, exe_path, term, warning_count);
+    try finishCompiledRun(ctx, build_result.output_path, term, build_result.diagnostics);
 }
 
 fn compiledRunOutputFilename(ctx: *CliCtx, roc_path: []const u8) Allocator.Error![]const u8 {
@@ -3190,54 +3185,64 @@ const NativeRunTermination = union(enum) {
     unknown: u32,
 };
 
-fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usize) NativeRunTermination {
+fn classifyNativeRunTermination(term: std.process.Child.Term) NativeRunTermination {
     return switch (term) {
-        .exited => |code| if (code != 0)
-            .{ .exit_code = code }
-        else if (warning_count > 0)
-            .{ .exit_code = 2 }
-        else
-            .success,
+        .exited => |code| if (code == 0) .success else .{ .exit_code = code },
         .signal => |signal| .{ .signal = signal },
         .stopped => |signal| .{ .stopped = signal },
         .unknown => |status| .{ .unknown = status },
     };
 }
 
-fn finishCompiledRun(
+fn finishRunTermination(
     ctx: *CliCtx,
     exe_path: []const u8,
-    term: std.process.Child.Term,
-    warning_count: usize,
-) (CliError || error{WriteFailed})!void {
-    switch (classifyNativeRunTermination(term, warning_count)) {
-        .success => return,
+    termination: NativeRunTermination,
+    diagnostics: CheckDiagnosticCounts,
+) (CliError || error{ WriteFailed, CompilationFailed })!void {
+    switch (termination) {
+        .success => try finishCheckDiagnostics(ctx, diagnostics),
         .exit_code => |code| {
+            std.log.debug("Child process {s} exited with code: {}", .{ exe_path, code });
+            try failOnCheckErrors(diagnostics);
             ctx.io.flush();
             std.process.exit(code);
         },
         .signal => |signal| {
             const sig_num = @intFromEnum(signal);
+            std.log.debug("Child process {s} killed by signal: {}", .{ exe_path, sig_num });
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_signaled = .{ .signal = sig_num },
             };
             renderValidationError(ctx, result);
+            try failOnCheckErrors(diagnostics);
             ctx.io.flush();
             std.process.exit(128 +| @as(u8, @truncate(sig_num)));
         },
         .stopped => |signal| {
+            try failOnCheckErrors(diagnostics);
             return ctx.fail(.{ .child_process_signaled = .{
                 .command = exe_path,
                 .signal = @intFromEnum(signal),
             } });
         },
         .unknown => |status| {
+            try failOnCheckErrors(diagnostics);
             return ctx.fail(.{ .child_process_failed = .{
                 .command = exe_path,
                 .exit_code = status,
             } });
         },
     }
+}
+
+fn finishCompiledRun(
+    ctx: *CliCtx,
+    exe_path: []const u8,
+    term: std.process.Child.Term,
+    diagnostics: CheckDiagnosticCounts,
+) (CliError || error{ WriteFailed, CompilationFailed })!void {
+    return finishRunTermination(ctx, exe_path, classifyNativeRunTermination(term), diagnostics);
 }
 
 /// Check if a file is a default_app (headerless file with a main! function).
@@ -3385,10 +3390,11 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         @ptrCast(&cli_args_list),
     );
 
+    try failOnCheckErrors(shm_result.diagnostics);
     const exit_code = result_buf[0];
     if (exit_code != 0) std.process.exit(exit_code);
     if (echo_env.inline_expect_failed) std.process.exit(1);
-    exitOnWarnings(ctx, shm_result.warning_count);
+    exitOnWarnings(ctx, shm_result.diagnostics.warnings);
 }
 
 fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
@@ -3587,14 +3593,13 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, false);
     defer closeSharedMemoryHandle(shm_handle);
 
-    if (comptime is_windows) {
-        try runWithWindowsHandleInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
-    } else {
+    const termination = if (comptime is_windows)
+        try runWithWindowsHandleInheritance(ctx, exe_path, args.path, shm_handle, args.app_args)
+    else
         try runWithPosixFdInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
-    }
     cleanup_temp_dir = false;
 
-    exitOnWarnings(ctx, lowered_result.counts.warnings);
+    try finishRunTermination(ctx, exe_path, termination, lowered_result.counts);
 }
 
 /// Append an argument to a command line buffer with proper Windows quoting.
@@ -3640,7 +3645,7 @@ fn runWithWindowsHandleInheritance(
     source_path: []const u8,
     shm_handle: SharedMemoryHandle,
     app_args: []const []const u8,
-) (CliError || error{OutOfMemory})!void {
+) (CliError || error{OutOfMemory})!NativeRunTermination {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
         return ctx.fail(.{ .shared_memory_failed = .{
@@ -3782,7 +3787,8 @@ fn runWithWindowsHandleInheritance(
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
-    // Check exit code and propagate to parent
+    // Preserve the exit status so the command boundary can combine it with
+    // checking diagnostics after all requested work has completed.
     if (exit_code != 0) {
         std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
         if (exit_code == 0xC0000005) { // STATUS_ACCESS_VIOLATION
@@ -3796,11 +3802,11 @@ fn runWithWindowsHandleInheritance(
             };
             renderValidationError(ctx, result);
         }
-        // Propagate the exit code (truncated to u8 for compatibility)
-        std.process.exit(@truncate(exit_code));
+        return .{ .exit_code = @truncate(exit_code) };
     }
 
     std.log.debug("Child process completed successfully", .{});
+    return .success;
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
@@ -3811,7 +3817,7 @@ fn runWithPosixFdInheritance(
     source_path: []const u8,
     shm_handle: SharedMemoryHandle,
     app_args: []const []const u8,
-) (CliError || error{OutOfMemory})!void {
+) (CliError || error{OutOfMemory})!NativeRunTermination {
     // Write the coordination file (.txt) next to the executable
     // The executable is already in a unique temp directory
     std.log.debug("Writing fd coordination file for: {s}", .{exe_path});
@@ -3884,40 +3890,7 @@ fn runWithPosixFdInheritance(
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
-    // Check the termination status
-    switch (term) {
-        .exited => |exit_code| {
-            if (exit_code == 0) {
-                std.log.debug("Child process completed successfully", .{});
-            } else {
-                // Propagate the exit code from the child process to our parent
-                std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
-                std.process.exit(exit_code);
-            }
-        },
-        .signal => |signal| {
-            const sig_num = @intFromEnum(signal);
-            std.log.debug("Child process {s} killed by signal: {}", .{ exe_path, sig_num });
-            const result = platform_validation.targets_validator.ValidationResult{
-                .process_signaled = .{ .signal = sig_num },
-            };
-            renderValidationError(ctx, result);
-            // Standard POSIX convention: exit with 128 + signal number
-            std.process.exit(128 +| @as(u8, @truncate(sig_num)));
-        },
-        .stopped => |signal| {
-            return ctx.fail(.{ .child_process_signaled = .{
-                .command = exe_path,
-                .signal = @intFromEnum(signal),
-            } });
-        },
-        .unknown => |status| {
-            return ctx.fail(.{ .child_process_failed = .{
-                .command = exe_path,
-                .exit_code = status,
-            } });
-        },
-    }
+    return classifyNativeRunTermination(term);
 }
 
 const HotShimChild = struct {
@@ -4620,7 +4593,7 @@ fn runHotReloadDevShim(
     expected_host_identity: [32]u8,
     initial_watch_inputs: []const compile.watch_inputs.Input,
     source_rewrite: ?HotReloadSourceRewrite,
-    warning_count: usize,
+    diagnostics: CheckDiagnosticCounts,
 ) CliMainError!void {
     var signal = WatchEventSignal{};
     var state = WatchState{};
@@ -4778,7 +4751,7 @@ fn runHotReloadDevShim(
             .err = error.ProcessWaitFailed,
         } });
     };
-    try finishCompiledRun(ctx, exe_path, term, warning_count);
+    try finishCompiledRun(ctx, exe_path, term, diagnostics);
 }
 
 /// Handle for cross-platform shared memory operations.
@@ -5149,6 +5122,18 @@ test "hot reload allocation can use reclaimed region when append has no room" {
     try std.testing.expectEqual(desc1_offset, allocation.append_offset);
 }
 
+/// Counts of checker diagnostics preserved until the command determines its
+/// final process status.
+const CheckDiagnosticCounts = struct {
+    errors: usize = 0,
+    warnings: usize = 0,
+};
+
+const BuildResult = struct {
+    output_path: []const u8,
+    diagnostics: CheckDiagnosticCounts,
+};
+
 /// Result of setting up shared memory with type checking information.
 /// Contains the shared memory handle for the compiled modules and
 /// counts of errors and warnings encountered during compilation.
@@ -5157,13 +5142,7 @@ pub const SharedMemoryResult = struct {
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
     checked_host_identity: [32]u8,
-    error_count: usize,
-    warning_count: usize,
-};
-
-const CoordinatorReportCounts = struct {
-    errors: usize,
-    warnings: usize,
+    diagnostics: CheckDiagnosticCounts,
 };
 
 fn writeDiagnosticCounts(writer: *std.Io.Writer, error_count: anytype, warning_count: anytype, use_color: bool) std.Io.Writer.Error!void {
@@ -5223,7 +5202,7 @@ const LoweredCoordinatorResult = struct {
     checked_host_identity: [32]u8,
     watch_inputs: []const compile.watch_inputs.Input,
     watch_inputs_allocator: Allocator,
-    counts: CoordinatorReportCounts,
+    counts: CheckDiagnosticCounts,
 
     fn deinit(self: *LoweredCoordinatorResult) void {
         if (self.internal_static_data) |static_data| {
@@ -5254,8 +5233,8 @@ fn successfulInternalStaticData(result: *const LoweredCoordinatorResult, label: 
 /// rather than a call-site convention (the PR 9759 bug class). Version-bump
 /// notes and synthetic default-app path remapping are applied by the core
 /// during the drain.
-fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path: []const u8) Allocator.Error!CoordinatorReportCounts {
-    var counts = CoordinatorReportCounts{ .errors = 0, .warnings = 0 };
+fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path: []const u8) Allocator.Error!CheckDiagnosticCounts {
+    var counts = CheckDiagnosticCounts{};
     const report_config = ctx.reportConfig(.stderr);
 
     const drained = try build_env.drainReports();
@@ -5288,7 +5267,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
 fn sharedMemoryResult(
     shm: *SharedMemoryAllocator,
-    counts: CoordinatorReportCounts,
+    counts: CheckDiagnosticCounts,
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
     checked_host_identity: [32]u8,
@@ -5304,8 +5283,7 @@ fn sharedMemoryResult(
         .entrypoint_names = entrypoint_names,
         .hosted_symbols = hosted_symbols,
         .checked_host_identity = checked_host_identity,
-        .error_count = counts.errors,
-        .warning_count = counts.warnings,
+        .diagnostics = counts,
     };
 }
 
@@ -6591,7 +6569,7 @@ fn sweepStaleStagingDirs(std_io: std.Io, version_dir: []const u8) void {
 /// publish the completed entry with a single atomic rename so a partial
 /// installation is never visible. After this succeeds, `roc run <shorthand>`
 /// needs neither the network nor any cache.
-fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMainError!void {
+fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
     if (!install_store.isValidShorthand(args.shorthand)) {
         return ctx.fail(.{ .invalid_shorthand = .{ .name = args.shorthand } });
     }
@@ -6731,8 +6709,7 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
             try ctx.io.stdout().print("Building {s} with --opt=speed ...\n", .{args.shorthand});
             ctx.io.flush();
 
-            var warning_count: usize = 0;
-            try rocBuild(ctx, .{
+            const build_result = try rocBuildOnce(ctx, .{
                 .path = staging.main_roc_path,
                 .opt = .speed,
                 .target = null,
@@ -6743,8 +6720,6 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
                 .max_threads = args.max_threads,
                 .wasm_memory = null,
                 .wasm_stack_size = null,
-                .exit_on_warnings = false,
-                .warning_count_out = &warning_count,
                 .require_executable_output = true,
                 .require_host_runnable_output = true,
                 .suppress_build_status = true,
@@ -6752,7 +6727,8 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
                 .synthetic_default_platform = false,
                 .source_dir_override = null,
                 .root_source_url = args.url,
-            }, arg0);
+            });
+            try failOnCheckErrors(build_result.diagnostics);
         },
         .glue => {
             try ctx.io.stdout().print("Building {s} glue plugin with --opt=speed ...\n", .{args.shorthand});
@@ -7396,7 +7372,7 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
     }
 }
 
-fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMainError!void {
+fn resolveBuildArgs(ctx: *CliCtx, args_in: cli_args.BuildArgs) SourceRefResolveError!cli_args.BuildArgs {
     var args = args_in;
     const resolved_source = try resolveSourceArg(ctx, args_in.path, args_in.watch);
     args.path = resolved_source.path;
@@ -7411,6 +7387,12 @@ fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMain
         }
     }
 
+    return args;
+}
+
+fn rocBuildCommand(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMainError!void {
+    const args = try resolveBuildArgs(ctx, args_in);
+
     // `roc build --watch` rebuilds on every change. The watch loop reruns this same
     // command (minus --watch) per change; the child writes its discovered inputs to
     // the --watch-inputs-file so the next iteration watches the right files.
@@ -7418,6 +7400,11 @@ fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMain
         return runWatchCommand(ctx, arg0, .{ .build = args });
     }
 
+    const result = try rocBuildOnce(ctx, args);
+    try finishCheckDiagnostics(ctx, result.diagnostics);
+}
+
+fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
     // Headerless apps build through a synthetic default platform.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
         return rocBuildDefaultApp(ctx, args, source);
@@ -7425,13 +7412,13 @@ fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMain
 
     // Select build path based on optimization level
     switch (args.opt) {
-        .dev => try rocBuildNative(ctx, args),
-        .interpreter => try rocBuildEmbedded(ctx, args),
-        .size, .speed => try rocBuildLlvm(ctx, args),
+        .dev => return rocBuildNative(ctx, args),
+        .interpreter => return rocBuildEmbedded(ctx, args),
+        .size, .speed => return rocBuildLlvm(ctx, args),
     }
 }
 
-fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) CliMainError!void {
+fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) CliMainError!BuildResult {
     defer ctx.gpa.free(original_source);
 
     if (defaultBuildTarget(args).toOsTag() == .openbsd) {
@@ -7486,9 +7473,9 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     }
 
     switch (synthetic_args.opt) {
-        .dev => try rocBuildNative(ctx, synthetic_args),
-        .interpreter => try rocBuildEmbedded(ctx, synthetic_args),
-        .size, .speed => try rocBuildLlvm(ctx, synthetic_args),
+        .dev => return rocBuildNative(ctx, synthetic_args),
+        .interpreter => return rocBuildEmbedded(ctx, synthetic_args),
+        .size, .speed => return rocBuildLlvm(ctx, synthetic_args),
     }
 }
 
@@ -8936,7 +8923,7 @@ fn rocBuildWasmLlvm(
     loaded_module = false;
 }
 
-fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
+fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -9025,7 +9012,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        return rejectRequiredExecutableOutput(ctx, selected);
+        try rejectRequiredExecutableOutput(ctx, selected);
+        unreachable;
     }
 
     const final_output_path = if (args.output != null)
@@ -9247,14 +9235,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
     }
 
-    if (args.warning_count_out) |warning_count_out| {
-        warning_count_out.* = total_warning_count;
-    }
-
-    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
+    return .{
+        .output_path = final_output_path,
+        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+    };
 }
 
-fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
+fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -9325,7 +9312,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const link_type = selected.output;
 
     if (args.require_executable_output and link_type != .exe) {
-        return rejectRequiredExecutableOutput(ctx, selected);
+        try rejectRequiredExecutableOutput(ctx, selected);
+        unreachable;
     }
 
     const target_arch = target.toCpuArch();
@@ -9450,7 +9438,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         if (!args.suppress_build_status) {
             try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
         }
-        return;
+        return .{
+            .output_path = final_output_path,
+            .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+        };
     }
 
     reporter.begin(code_generation_phase_name);
@@ -9576,16 +9567,15 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
     }
 
-    if (args.warning_count_out) |warning_count_out| {
-        warning_count_out.* = total_warning_count;
-    }
-
-    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
+    return .{
+        .output_path = final_output_path,
+        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+    };
 }
 
 /// Build a standalone binary with the interpreter and an embedded LIR image.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
-fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
+fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -9665,7 +9655,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        return rejectRequiredExecutableOutput(ctx, selected);
+        try rejectRequiredExecutableOutput(ctx, selected);
+        unreachable;
     }
 
     const target_arch = target.toCpuArch();
@@ -9837,11 +9828,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns_embed, args.verbose, cache_stats, cache_percent);
     }
 
-    if (args.warning_count_out) |warning_count_out| {
-        warning_count_out.* = total_warning_count;
-    }
-
-    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
+    return .{
+        .output_path = final_output_path,
+        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+    };
 }
 
 // Test cache blob format
@@ -12193,10 +12183,13 @@ fn exitOnWarnings(ctx: *CliCtx, warning_count: usize) void {
     std.process.exit(2);
 }
 
-fn exitBuildOnWarningsIfRequested(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv, total_warning_count: usize) void {
-    if (!args.exit_on_warnings) return;
-    if (total_warning_count > 0) writeBuildWatchInputsOnExit(ctx, args, build_env);
-    exitOnWarnings(ctx, total_warning_count);
+fn failOnCheckErrors(diagnostics: CheckDiagnosticCounts) error{CompilationFailed}!void {
+    if (diagnostics.errors > 0) return error.CompilationFailed;
+}
+
+fn finishCheckDiagnostics(ctx: *CliCtx, diagnostics: CheckDiagnosticCounts) error{CompilationFailed}!void {
+    try failOnCheckErrors(diagnostics);
+    exitOnWarnings(ctx, diagnostics.warnings);
 }
 
 fn writeHotReloadWatchPathsFile(
@@ -16287,22 +16280,29 @@ test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content m
     try testing.expect(!isCompilerOwnedBuiltinSourcePath(allocator, io, missing));
 }
 
-test "classifyNativeRunTermination preserves warning exit code" {
+test "classifyNativeRunTermination preserves successful exit" {
     const testing = std.testing;
 
-    const result = classifyNativeRunTermination(.{ .exited = 0 }, 1);
+    const result = classifyNativeRunTermination(.{ .exited = 0 });
 
-    try testing.expect(result == .exit_code);
-    try testing.expectEqual(@as(u8, 2), result.exit_code);
+    try testing.expect(result == .success);
 }
 
 test "classifyNativeRunTermination preserves signal termination" {
     const testing = std.testing;
 
-    const result = classifyNativeRunTermination(.{ .signal = @enumFromInt(11) }, 0);
+    const result = classifyNativeRunTermination(.{ .signal = @enumFromInt(11) });
 
     try testing.expect(result == .signal);
     try testing.expectEqual(@as(std.posix.SIG, @enumFromInt(11)), result.signal);
+}
+
+test "check errors determine command failure after work completes" {
+    const testing = std.testing;
+
+    try testing.expectError(error.CompilationFailed, failOnCheckErrors(.{ .errors = 1, .warnings = 2 }));
+    try failOnCheckErrors(.{ .warnings = 2 });
+    try failOnCheckErrors(.{});
 }
 
 test "longestCommonParentDir" {

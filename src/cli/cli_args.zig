@@ -191,8 +191,6 @@ pub const BuildArgs = struct {
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     wasm_memory: ?usize = null, // initial memory size for WASM targets (default: 64MB)
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
-    exit_on_warnings: bool = true, // exit with code 2 when warnings are emitted
-    warning_count_out: ?*usize = null, // optionally receive the total warning count
     require_executable_output: bool = false, // reject static/shared library targets
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
     suppress_build_status: bool = false, // suppress "Built..." output (used by `roc` execution)

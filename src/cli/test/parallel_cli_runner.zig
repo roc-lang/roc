@@ -5540,10 +5540,16 @@ fn parityCompareVerbs(
 fn customPipelineParityDiagnostics(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // Warnings retain the shared exit-2 policy after every verb completes.
     if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/warn_app/main.roc", .{ 2, 2, 2, 2 }, true)) |failure| return failure;
-    // A build completes and emits its executable despite the diagnostic; check
-    // reports failure, run reaches the checked error, and test reports failure
-    // only after executing all independent roots.
-    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/error_app/main.roc", .{ 1, 0, 1, 1 }, false)) |failure| return failure;
+    // Every verb reports failure for the shared check-phase error, but only
+    // after completing all independent work, including build artifact output.
+    // Repro for https://github.com/roc-lang/roc/issues/10545.
+    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/error_app/main.roc", .{ 1, 1, 1, 1 }, false)) |failure| return failure;
+
+    const build_out = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "parity-build-out" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate build output path: {}", .{err});
+    if (!builtOutputExists(io, allocator, build_out)) {
+        return customFailure(allocator, timer, "roc build did not emit its requested artifact after reporting a check-phase error", .{});
+    }
     return null;
 }
 

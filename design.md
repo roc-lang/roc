@@ -6811,6 +6811,16 @@ and generated glue must document it for platform authors.
 
 ## Build Outputs And The Targets Header
 
+Every CLI command that performs checking resolves its final process status only
+after completing all requested independent work. Any check-phase error makes
+the final status 1. Otherwise, warnings make the final status 2 and a clean
+check leaves status 0 unless the command's own result requires failure.
+Checking diagnostics do not prevent `roc build` from writing its requested
+artifact, and they do not prevent `roc test` from running independent test
+roots. One-shot build pipelines return the artifact path and explicit checking
+diagnostic counts to command orchestration; code generation and linking do not
+decide process status.
+
 A platform's `targets:` header section declares, per target, both the link
 inputs and the output kind the build produces. The application author never
 chooses the output kind; `roc build` produces what the platform declares for
