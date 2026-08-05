@@ -2059,6 +2059,13 @@ pub const MonoLlvmCodeGen = struct {
         shim: LlvmBuilder.Function.Index,
         target: LlvmBuilder.Function.Index,
         fn_ty: LlvmBuilder.Type,
+        /// The wrapped builtin's own signature. Differs from `fn_ty` for
+        /// shims that adapt an out-parameter builtin to a by-value return.
+        target_fn_ty: LlvmBuilder.Type,
+        /// The wrapped builtin writes a three-word list or string through its
+        /// first parameter; the shim drops that parameter and returns the
+        /// words by value, so the caller's result slot never escapes.
+        by_value_out: bool,
         compiled: bool,
     };
 
@@ -6954,7 +6961,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(name, call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(name, call_args.types.items, call_args.values.items);
     }
 
     /// `unique_args` is non-null for wrappers whose first argument carries the
@@ -6966,7 +6973,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(name, call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(name, call_args.types.items, call_args.values.items);
     }
 
     fn emitStrCountUtf8Bytes(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -7590,7 +7597,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
         const cap = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), .i64, false);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_with_capacity)), &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1, try self.ptrType() }, &.{
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_with_capacity)), &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1, try self.ptrType() }, &.{
             self.slot(target).ptr,
             cap,
             builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory,
@@ -7608,7 +7615,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, try self.ptrType(), self.slot(GuardedList.at(args, 1)).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), (self.builder orelse return error.CompilationFailed).intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_append_unsafe)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_unsafe)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListConcat(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -7641,7 +7648,7 @@ pub const MonoLlvmCodeGen = struct {
         // parameter so no two sub-8-byte parameters land adjacent on the stack.
         try call_args.append(self.allocator, .i64, builder.intValue(.i64, unique_args & 0b11) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_concat)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_concat)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendRangeWithin(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -7667,7 +7674,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListCopyRangeWithin(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -7688,7 +7695,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_copy_range_within)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_copy_range_within)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendRangeWithinUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -7712,7 +7719,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, false);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within_unsafe)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within_unsafe)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendLeBytes(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -7725,7 +7732,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, 1) catch return error.OutOfMemory);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_append_le_bytes)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_le_bytes)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendSublist(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -7758,7 +7765,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_append_sublist)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_sublist)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListPrepend(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -7773,7 +7780,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_prepend)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_prepend)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListSublist(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype, unique_args: u64) Error!void {
@@ -7867,7 +7874,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_drop_at)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_drop_at)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListSwap(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -7883,7 +7890,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_swap)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_swap)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -7915,7 +7922,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_set)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_set)), call_args.types.items, call_args.values.items);
         if (abi.contains_refcounted) {
             if (abi.elem_layout_idx) |elem_layout_idx| {
                 try self.emitRcHelperCall(.{ .op = .decref, .layout_idx = elem_layout_idx }, .atomic, old_elem_ptr, null);
@@ -7958,7 +7965,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_replace_unsafe)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_replace_unsafe)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListSlackUnique(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -8073,7 +8080,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_reserve)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_reserve)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListReleaseExcess(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -8087,7 +8094,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_release_excess_capacity)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_release_excess_capacity)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListFirstLast(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
@@ -10331,6 +10338,10 @@ pub const MonoLlvmCodeGen = struct {
             // wrapper moves those saves into the wrapper, so the hot loop
             // keeps its values in registers.
             const shim = try self.declareColdShim(name, ret_type, param_types);
+            // An out-parameter builtin must go through callBuiltinOut, whose
+            // shims drop the out parameter; a full-signature call against one
+            // would corrupt the stack.
+            std.debug.assert(!shim.by_value_out);
             return wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args, "") catch return error.OutOfMemory;
         }
         const func = try self.declareBuiltin(name, ret_type, param_types);
@@ -10354,7 +10365,7 @@ pub const MonoLlvmCodeGen = struct {
             try attrs_wip.addFnAttr(.cold, builder);
             func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         }
-        const shim = ColdShim{ .shim = func, .target = target, .fn_ty = fn_ty, .compiled = false };
+        const shim = ColdShim{ .shim = func, .target = target, .fn_ty = fn_ty, .target_fn_ty = fn_ty, .by_value_out = false, .compiled = false };
         try self.cold_shims.put(name, shim);
         return shim;
     }
@@ -10374,6 +10385,44 @@ pub const MonoLlvmCodeGen = struct {
             const entry = wip.block(0, "entry") catch return error.OutOfMemory;
             wip.cursor = .{ .block = entry };
 
+            if (shim.by_value_out) {
+                // Adapt the builtin's out-parameter ABI inside the shim: give
+                // the builtin a slot that is private to this cold function,
+                // then hand the three words back by value.
+                const slot_ty = try self.listValueType();
+                const out_slot = wip.alloca(
+                    .normal,
+                    slot_ty,
+                    builder.intValue(.i32, 1) catch return error.OutOfMemory,
+                    LlvmBuilder.Alignment.fromByteUnits(self.targetWordSize()),
+                    .default,
+                    "out",
+                ) catch return error.OutOfMemory;
+
+                const param_count = shim.fn_ty.functionParameters(builder).len;
+                const args = try self.allocator.alloc(LlvmBuilder.Value, param_count + 1);
+                defer self.allocator.free(args);
+                args[0] = out_slot;
+                for (args[1..], 0..) |*arg, i| arg.* = wip.arg(@intCast(i));
+
+                _ = wip.call(.normal, .ccc, .none, shim.target_fn_ty, shim.target.toValue(builder), args, "") catch return error.OutOfMemory;
+
+                // `self.wip` is null between procs, so read the slot with
+                // this shim's own instruction builder.
+                const word = self.targetWordSize();
+                const len_ptr = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                const cap_ptr = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, 2 * word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                const fields = [_]LlvmBuilder.Value{
+                    wip.load(.normal, try self.ptrType(), out_slot, self.targetPointerAlignment(), "") catch return error.OutOfMemory,
+                    wip.load(.normal, self.ptrSizedIntType(), len_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory,
+                    wip.load(.normal, self.ptrSizedIntType(), cap_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory,
+                };
+                const aggregate = wip.buildAggregate(slot_ty, &fields, "") catch return error.OutOfMemory;
+                _ = wip.ret(aggregate) catch return error.OutOfMemory;
+                wip.finish() catch return error.OutOfMemory;
+                continue;
+            }
+
             const param_count = shim.fn_ty.functionParameters(builder).len;
             const args = try self.allocator.alloc(LlvmBuilder.Value, param_count);
             defer self.allocator.free(args);
@@ -10391,6 +10440,64 @@ pub const MonoLlvmCodeGen = struct {
 
     fn callBuiltinVoid(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
         _ = try self.callBuiltin(name, .void, param_types, args);
+    }
+
+    /// Call a void builtin whose first argument is a pointer it writes a
+    /// three-word list or string result through. On hot paths this is an
+    /// ordinary call: the builtin inlines and the store through the pointer
+    /// dissolves. On cold paths the call becomes a shim that returns the
+    /// three words by value instead, because handing the out pointer to a
+    /// never-inlined call would make the result slot's address escape, and an
+    /// escaped slot pins the local to memory for every hot-path update too.
+    fn callBuiltinOut(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
+        if (self.cold_depth == 0) {
+            _ = try self.callBuiltin(name, .void, param_types, args);
+            return;
+        }
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const shim = try self.declareColdShimOut(name, param_types);
+        if (!shim.by_value_out) {
+            // The shim was first declared by a caller that keeps the full
+            // out-parameter signature; match it.
+            _ = wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args, "") catch return error.OutOfMemory;
+            return;
+        }
+        const result = wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args[1..], "") catch return error.OutOfMemory;
+        const out_ptr = args[0];
+        try self.storePointer(out_ptr, wip.extractValue(result, &.{0}, "") catch return error.OutOfMemory);
+        try self.storeListLen(out_ptr, wip.extractValue(result, &.{1}, "") catch return error.OutOfMemory);
+        try self.storeListCapacity(out_ptr, wip.extractValue(result, &.{2}, "") catch return error.OutOfMemory);
+    }
+
+    /// Three-word list/string value as an aggregate returned in registers.
+    fn listValueType(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Type {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        return builder.structType(.normal, &.{ try self.ptrType(), usize_ty, usize_ty }) catch return error.OutOfMemory;
+    }
+
+    fn declareColdShimOut(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type) Error!ColdShim {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (self.cold_shims.get(name)) |shim| return shim;
+        const target = try self.declareBuiltin(name, .void, param_types);
+        const target_fn_ty = builder.fnType(.void, param_types, .normal) catch return error.OutOfMemory;
+        const fn_ty = builder.fnType(try self.listValueType(), param_types[1..], .normal) catch return error.OutOfMemory;
+        const shim_name = try std.fmt.allocPrint(self.allocator, "roc_cold_shim.{s}", .{name});
+        defer self.allocator.free(shim_name);
+        const func = builder.addFunction(fn_ty, builder.strtabString(shim_name) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
+        func.setLinkage(.internal, builder);
+        func.setCallConv(.preserve_mostcc, builder);
+        {
+            var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+            defer attrs_wip.deinit(builder);
+            try attrs_wip.addFnAttr(.@"noinline", builder);
+            try attrs_wip.addFnAttr(.cold, builder);
+            func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
+        }
+        const shim = ColdShim{ .shim = func, .target = target, .fn_ty = fn_ty, .target_fn_ty = target_fn_ty, .by_value_out = true, .compiled = false };
+        try self.cold_shims.put(name, shim);
+        return shim;
     }
 
     fn declareBuiltin(self: *MonoLlvmCodeGen, name: []const u8, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
