@@ -5426,20 +5426,11 @@ pub fn build(b: *std.Build) void {
     boxy_abi_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
     boxy_abi_test.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, boxy_abi_test, target, true, flag_enable_tracy);
-    build_test_zig_step.dependOn(&boxy_abi_test.step);
-
-    const run_boxy_abi_test = b.addRunArtifact(boxy_abi_test);
-    if (run_args.len != 0) {
-        run_boxy_abi_test.addArgs(run_args);
-    }
-
-    tests_summary.addRun(&run_boxy_abi_test.step);
-
-    const run_boxy_abi_test_step = b.step(
-        "run-test-zig-boxy-abi",
-        "Run boxy C-ABI wrapper Zig tests",
-    );
-    run_boxy_abi_test_step.dependOn(&run_boxy_abi_test.step);
+    test_suites.register(.{
+        .step_suffix = "boxy-abi",
+        .description = "Run boxy C-ABI wrapper Zig tests",
+        .compile = boxy_abi_test,
+    });
 
     const rc_conformance_test = b.addTest(.{
         .name = "rc_conformance_test",
