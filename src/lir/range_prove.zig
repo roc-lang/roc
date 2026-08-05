@@ -52,6 +52,7 @@
 //! and the comparison's facts flow there without any merge in between.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -123,11 +124,21 @@ const Binding = struct {
     pred: ?Pred = null,
 };
 
+/// Where an ordering fact's justification lives.
+const FactOrigin = union(enum) {
+    /// Asserted by taking one arm of this switch statement.
+    branch: CFStmtId,
+    /// Survived a merge meet whose incoming copies had differing origins.
+    /// Its truth rests on the meet, not on a single dominating edge.
+    meet,
+};
+
 /// One ordering fact between root nodes: `value(a) <= value(b) + c`.
 const Fact = struct {
     a: NodeId,
     b: NodeId,
     c: i128,
+    origin: FactOrigin,
 };
 
 /// Saved path-environment entry for backtracking.
@@ -149,6 +160,18 @@ const Frame = struct {
 const JumpRecord = struct {
     target: JoinPointId,
     stmt: CFStmtId,
+};
+
+/// Debug-only record of one applied rewrite: the statement changed, the
+/// root-level claim its proof established, and the path facts available when
+/// it was proven. Certified independently at the end of the round.
+const ProofRecord = struct {
+    stmt: CFStmtId,
+    claim_a: NodeId,
+    claim_b: NodeId,
+    claim_m: i128,
+    facts_start: u32,
+    facts_len: u32,
 };
 
 /// Meet of one local's value across a merge's incoming edges: every edge
@@ -204,6 +227,10 @@ const Pass = struct {
     scratch: std.ArrayList(CFStmtId),
     query_best: std.AutoHashMap(NodeId, i128),
     rewrites: u32,
+    // Debug-only certification state; unused (and empty) in release builds.
+    proof_records: std.ArrayList(ProofRecord),
+    proof_facts: std.ArrayList(Fact),
+    last_claim: ?struct { a: NodeId, b: NodeId, m: i128 },
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store) Pass {
         const allocator = store.allocator;
@@ -233,6 +260,9 @@ const Pass = struct {
             .scratch = .empty,
             .query_best = std.AutoHashMap(NodeId, i128).init(allocator),
             .rewrites = 0,
+            .proof_records = .empty,
+            .proof_facts = .empty,
+            .last_claim = null,
         };
     }
 
@@ -258,6 +288,8 @@ const Pass = struct {
         self.body_joins.deinit();
         self.scratch.deinit(self.allocator);
         self.query_best.deinit();
+        self.proof_records.deinit(self.allocator);
+        self.proof_facts.deinit(self.allocator);
     }
 
     fn resetRound(self: *Pass) void {
@@ -281,6 +313,9 @@ const Pass = struct {
         self.body_joins.clearRetainingCapacity();
         self.max_join_id = 0;
         self.scratch.clearRetainingCapacity();
+        self.proof_records.clearRetainingCapacity();
+        self.proof_facts.clearRetainingCapacity();
+        self.last_claim = null;
         self.rewrites = 0;
     }
 
@@ -385,11 +420,12 @@ const Pass = struct {
     /// Fact form of `value(a) <= value(b) + k`, normalized to roots. The
     /// widest offsets keep the root-level fact sound for any value in either
     /// node's window.
-    fn orderingFact(self: *const Pass, a: NodeId, b: NodeId, k: i128) Fact {
+    fn orderingFact(self: *const Pass, a: NodeId, b: NodeId, k: i128, origin: FactOrigin) Fact {
         return .{
             .a = self.rootOf(a),
             .b = self.rootOf(b),
             .c = k + self.offHiOf(b) - self.offLoOf(a),
+            .origin = origin,
         };
     }
 
@@ -452,6 +488,7 @@ const Pass = struct {
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
         const m = k + self.offLoOf(b) - self.offHiOf(a);
+        if (builtin.mode == .Debug) self.last_claim = .{ .a = ra, .b = rb, .m = m };
         if (ra == rb) return m >= 0;
 
         // Reach rb from ra along fact edges with accumulated slack <= m.
@@ -741,14 +778,17 @@ const Pass = struct {
             var keep: usize = 0;
             for (state.facts.items) |fact| {
                 var present = false;
+                var same_origin = false;
                 for (self.facts.items) |mine| {
                     if (mine.a == fact.a and mine.b == fact.b and mine.c == fact.c) {
                         present = true;
+                        same_origin = std.meta.eql(mine.origin, fact.origin);
                         break;
                     }
                 }
                 if (present) {
                     state.facts.items[keep] = fact;
+                    if (!same_origin) state.facts.items[keep].origin = .meet;
                     keep += 1;
                 }
             }
@@ -896,6 +936,60 @@ const Pass = struct {
         return self.jump_counts.get(id) orelse 0;
     }
 
+    /// Debug-only: snapshot the deciding proof of a rewrite for independent
+    /// certification at the end of the round.
+    fn recordProof(self: *Pass, stmt: CFStmtId) ResourceError!void {
+        if (builtin.mode != .Debug) return;
+        const claim = self.last_claim orelse return;
+        const start: u32 = @intCast(self.proof_facts.items.len);
+        try self.proof_facts.appendSlice(self.allocator, self.facts.items);
+        try self.proof_records.append(self.allocator, .{
+            .stmt = stmt,
+            .claim_a = claim.a,
+            .claim_b = claim.b,
+            .claim_m = claim.m,
+            .facts_start = start,
+            .facts_len = @intCast(self.facts.items.len),
+        });
+    }
+
+    /// Debug-only certification of every rewrite the round applied, using
+    /// machinery independent of the prover's walk: an iterative dominator
+    /// computation over the statement graph checks that each branch-origin
+    /// fact's switch dominates the rewritten statement, and a transitive
+    /// closure over the snapshot facts re-derives the claim. A failure is a
+    /// compiler bug in the pass, never a property of the compiled program.
+    fn certifyRound(self: *Pass, body: CFStmtId) ResourceError!void {
+        if (builtin.mode != .Debug) return;
+        if (self.proof_records.items.len == 0) return;
+
+        var doms = try RangeProveCertify.dominators(self.allocator, self.store, body);
+        defer doms.deinit();
+
+        for (self.proof_records.items) |record| {
+            const facts = self.proof_facts.items[record.facts_start..][0..record.facts_len];
+            for (facts) |fact| {
+                switch (fact.origin) {
+                    .branch => |origin_stmt| {
+                        if (!doms.dominates(origin_stmt, record.stmt)) {
+                            std.debug.panic(
+                                "range_prove certification failed: fact from s{d} does not dominate rewritten s{d}",
+                                .{ @intFromEnum(origin_stmt), @intFromEnum(record.stmt) },
+                            );
+                        }
+                    },
+                    .meet => {},
+                }
+            }
+            if (!RangeProveCertify.implies(self.allocator, facts, self.nodes.items, record.claim_a, record.claim_b, record.claim_m)) {
+                std.debug.panic(
+                    "range_prove certification failed: claim at s{d} does not follow from its facts",
+                    .{@intFromEnum(record.stmt)},
+                );
+            }
+        }
+    }
+
     // Proc driver
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
@@ -910,6 +1004,7 @@ const Pass = struct {
             // stops there and the next round re-derives the graph facts.
             if (try self.threadBoolJoins() == 0) {
                 try self.walkRegions(proc.body.?);
+                try self.certifyRound(proc.body.?);
             }
             if (self.rewrites == 0) return;
         }
@@ -1098,7 +1193,7 @@ const Pass = struct {
                             continue :walk;
                         }
                         try self.visited.put(current, {});
-                        try self.pushSwitchArms(s);
+                        try self.pushSwitchArms(s, current);
                         break :walk;
                     },
                     .switch_initialized_payload => |s| {
@@ -1168,7 +1263,7 @@ const Pass = struct {
     /// Push switch arms, asserting the condition's comparison along Bool
     /// edges: the `1` arm asserts it and the `0`/default arm asserts its
     /// negation.
-    fn pushSwitchArms(self: *Pass, s: anytype) ResourceError!void {
+    fn pushSwitchArms(self: *Pass, s: anytype, switch_stmt: CFStmtId) ResourceError!void {
         const pred: ?Pred = if (self.lookup(s.cond)) |binding| binding.pred else null;
         const cond_is_bool = self.localLayout(s.cond) == .bool;
 
@@ -1179,9 +1274,9 @@ const Pass = struct {
         if (pred != null and cond_is_bool and branch_count == 1) {
             const only = GuardedList.at(branches, 0);
             if (only.value == 1) {
-                default_fact = self.predFact(pred.?, false);
+                default_fact = self.predFact(pred.?, false, switch_stmt);
             } else if (only.value == 0) {
-                default_fact = self.predFact(pred.?, true);
+                default_fact = self.predFact(pred.?, true, switch_stmt);
             }
         }
         try self.pushFrame(s.default_branch, default_fact);
@@ -1191,9 +1286,9 @@ const Pass = struct {
             var edge_fact: ?Fact = null;
             if (pred != null and cond_is_bool) {
                 if (branch.value == 1) {
-                    edge_fact = self.predFact(pred.?, true);
+                    edge_fact = self.predFact(pred.?, true, switch_stmt);
                 } else if (branch.value == 0) {
-                    edge_fact = self.predFact(pred.?, false);
+                    edge_fact = self.predFact(pred.?, false, switch_stmt);
                 }
             }
             try self.pushFrame(branch.body, edge_fact);
@@ -1202,24 +1297,25 @@ const Pass = struct {
 
     /// Ordering fact asserted when a comparison holds (or fails, for the
     /// negated edge). Unsigned only: `a < b` failing means `b <= a`.
-    fn predFact(self: *const Pass, pred: Pred, holds: bool) Fact {
+    fn predFact(self: *const Pass, pred: Pred, holds: bool, switch_stmt: CFStmtId) Fact {
+        const origin = FactOrigin{ .branch = switch_stmt };
         return switch (pred.op) {
             .lt => if (holds)
-                self.orderingFact(pred.a, pred.b, -1)
+                self.orderingFact(pred.a, pred.b, -1, origin)
             else
-                self.orderingFact(pred.b, pred.a, 0),
+                self.orderingFact(pred.b, pred.a, 0, origin),
             .lte => if (holds)
-                self.orderingFact(pred.a, pred.b, 0)
+                self.orderingFact(pred.a, pred.b, 0, origin)
             else
-                self.orderingFact(pred.b, pred.a, -1),
+                self.orderingFact(pred.b, pred.a, -1, origin),
             .gt => if (holds)
-                self.orderingFact(pred.b, pred.a, -1)
+                self.orderingFact(pred.b, pred.a, -1, origin)
             else
-                self.orderingFact(pred.a, pred.b, 0),
+                self.orderingFact(pred.a, pred.b, 0, origin),
             .gte => if (holds)
-                self.orderingFact(pred.b, pred.a, 0)
+                self.orderingFact(pred.b, pred.a, 0, origin)
             else
-                self.orderingFact(pred.a, pred.b, -1),
+                self.orderingFact(pred.a, pred.b, -1, origin),
         };
     }
 
@@ -1390,6 +1486,7 @@ const Pass = struct {
         };
 
         if (holds or fails) {
+            try self.recordProof(stmt);
             const truth: u16 = if (holds) 1 else 0;
             self.store.getCFStmtPtr(stmt).* = .{ .assign_tag = .{
                 .target = s.target,
@@ -1470,6 +1567,7 @@ const Pass = struct {
 
         if (provable) {
             if (CheckedArithmetic.uncheckedOp(s.op)) |unchecked| {
+                try self.recordProof(stmt);
                 const ptr = &self.store.getCFStmtPtr(stmt).assign_low_level;
                 ptr.op = unchecked;
                 ptr.rc_effect = unchecked.rcEffect();
@@ -1517,5 +1615,198 @@ const Pass = struct {
         if (rhs_lo < 0) return null;
         if (!try self.proveLe(rhs, lhs, 0)) return null;
         return try self.derivedRange(lhs, -rhs_hi, -rhs_lo);
+    }
+};
+
+/// Debug-only certification helpers, deliberately independent of the pass's
+/// own walk: dominance is answered by deleted-node reachability over a freshly
+/// built successor graph, and implication by a dense all-pairs closure.
+const RangeProveCertify = struct {
+    const Graph = struct {
+        allocator: Allocator,
+        root: CFStmtId,
+        succs: std.AutoHashMap(CFStmtId, []CFStmtId),
+
+        fn deinit(self: *Graph) void {
+            var it = self.succs.valueIterator();
+            while (it.next()) |list| self.allocator.free(list.*);
+            self.succs.deinit();
+        }
+
+        /// `a` dominates `b` when every path from the root to `b` passes
+        /// through `a`: removing `a` must make `b` unreachable.
+        fn dominates(self: *Graph, a: CFStmtId, b: CFStmtId) bool {
+            if (a == b) return true;
+            var seen = std.AutoHashMap(CFStmtId, void).init(self.allocator);
+            defer seen.deinit();
+            var stack = std.ArrayList(CFStmtId).empty;
+            defer stack.deinit(self.allocator);
+            if (self.root == a) return true;
+            stack.append(self.allocator, self.root) catch return false;
+            seen.put(self.root, {}) catch return false;
+            while (stack.pop()) |current| {
+                const succs = self.succs.get(current) orelse continue;
+                for (succs) |succ| {
+                    if (succ == a) continue;
+                    if (succ == b) return false;
+                    if (seen.contains(succ)) continue;
+                    seen.put(succ, {}) catch return false;
+                    stack.append(self.allocator, succ) catch return false;
+                }
+            }
+            return true;
+        }
+    };
+
+    fn dominators(allocator: Allocator, store: *const LirStore, body: CFStmtId) ResourceError!Graph {
+        var graph = Graph{
+            .allocator = allocator,
+            .root = body,
+            .succs = std.AutoHashMap(CFStmtId, []CFStmtId).init(allocator),
+        };
+        errdefer graph.deinit();
+
+        var join_bodies = std.AutoHashMap(JoinPointId, CFStmtId).init(allocator);
+        defer join_bodies.deinit();
+
+        var stack = std.ArrayList(CFStmtId).empty;
+        defer stack.deinit(allocator);
+        var list = std.ArrayList(CFStmtId).empty;
+        defer list.deinit(allocator);
+
+        try stack.append(allocator, body);
+        while (stack.pop()) |current| {
+            if (graph.succs.contains(current)) continue;
+            list.clearRetainingCapacity();
+            switch (store.getCFStmt(current)) {
+                .init_uninitialized => |t| try list.append(allocator, t.next),
+                .assign_ref => |t| try list.append(allocator, t.next),
+                .assign_literal => |t| try list.append(allocator, t.next),
+                .assign_call => |t| try list.append(allocator, t.next),
+                .assign_call_erased => |t| try list.append(allocator, t.next),
+                .assign_packed_erased_fn => |t| try list.append(allocator, t.next),
+                .assign_low_level => |t| try list.append(allocator, t.next),
+                .assign_list => |t| try list.append(allocator, t.next),
+                .assign_struct => |t| try list.append(allocator, t.next),
+                .assign_tag => |t| try list.append(allocator, t.next),
+                .store_struct => |t| try list.append(allocator, t.next),
+                .store_tag => |t| try list.append(allocator, t.next),
+                .set_local => |t| try list.append(allocator, t.next),
+                .debug => |t| try list.append(allocator, t.next),
+                .expect => |t| try list.append(allocator, t.next),
+                .comptime_branch_taken => |t| try list.append(allocator, t.next),
+                .incref => |t| try list.append(allocator, t.next),
+                .decref => |t| try list.append(allocator, t.next),
+                .decref_if_initialized => |t| try list.append(allocator, t.next),
+                .free => |t| try list.append(allocator, t.next),
+                .switch_stmt => |t| {
+                    const branches = store.getCFSwitchBranches(t.branches);
+                    for (0..GuardedList.borrowLen(branches)) |i| {
+                        try list.append(allocator, GuardedList.at(branches, i).body);
+                    }
+                    try list.append(allocator, t.default_branch);
+                },
+                .switch_initialized_payload => |t| {
+                    try list.append(allocator, t.initialized_branch);
+                    try list.append(allocator, t.uninitialized_branch);
+                },
+                .str_match => |t| {
+                    try list.append(allocator, t.on_match);
+                    try list.append(allocator, t.on_miss);
+                },
+                .str_match_set => |t| {
+                    const arms = store.getStrMatchArms(t.arms);
+                    for (0..GuardedList.borrowLen(arms)) |i| {
+                        try list.append(allocator, GuardedList.at(arms, i).on_match);
+                    }
+                    try list.append(allocator, t.on_miss);
+                },
+                .join => |t| {
+                    try join_bodies.put(t.id, t.body);
+                    try list.append(allocator, t.remainder);
+                },
+                .jump => |t| {
+                    if (join_bodies.get(t.target)) |target_body| {
+                        try list.append(allocator, target_body);
+                    }
+                },
+                .ret, .crash, .runtime_error, .expect_err, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+            }
+            const owned = try allocator.dupe(CFStmtId, list.items);
+            try graph.succs.put(current, owned);
+            for (owned) |succ| try stack.append(allocator, succ);
+        }
+        return graph;
+    }
+
+    /// Re-derive `value(ra) <= value(rb) + m` from the snapshot facts and the
+    /// root nodes' constant bounds, by dense all-pairs shortest offsets.
+    fn implies(allocator: Allocator, facts: []const Fact, nodes: []const Node, ra: NodeId, rb: NodeId, m: i128) bool {
+        if (ra == rb) return m >= 0;
+
+        var roots = std.ArrayList(NodeId).empty;
+        defer roots.deinit(allocator);
+        var index_of = std.AutoHashMap(NodeId, usize).init(allocator);
+        defer index_of.deinit();
+        const add_root = struct {
+            fn add(list: *std.ArrayList(NodeId), map: *std.AutoHashMap(NodeId, usize), alloc: Allocator, id: NodeId) bool {
+                const entry = map.getOrPut(id) catch return false;
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = list.items.len;
+                    list.append(alloc, id) catch return false;
+                }
+                return true;
+            }
+        }.add;
+        if (!add_root(&roots, &index_of, allocator, ra)) return false;
+        if (!add_root(&roots, &index_of, allocator, rb)) return false;
+        for (facts) |fact| {
+            if (!add_root(&roots, &index_of, allocator, fact.a)) return false;
+            if (!add_root(&roots, &index_of, allocator, fact.b)) return false;
+        }
+
+        const n = roots.items.len;
+        const infinite = std.math.maxInt(i128);
+        const dist = allocator.alloc(i128, n * n) catch return false;
+        defer allocator.free(dist);
+        @memset(dist, infinite);
+        for (0..n) |i| dist[i * n + i] = 0;
+        for (facts) |fact| {
+            const i = index_of.get(fact.a).?;
+            const j = index_of.get(fact.b).?;
+            if (fact.c < dist[i * n + j]) dist[i * n + j] = fact.c;
+        }
+        for (0..n) |k| {
+            for (0..n) |i| {
+                if (dist[i * n + k] == infinite) continue;
+                for (0..n) |j| {
+                    if (dist[k * n + j] == infinite) continue;
+                    const through = dist[i * n + k] + dist[k * n + j];
+                    if (through < dist[i * n + j]) dist[i * n + j] = through;
+                }
+            }
+        }
+
+        const ia = index_of.get(ra).?;
+        const ib = index_of.get(rb).?;
+        if (dist[ia * n + ib] != infinite and dist[ia * n + ib] <= m) return true;
+
+        // Constant route: the tightest reachable upper bound of ra against
+        // the tightest reverse-reachable lower bound of rb.
+        var hi: i128 = nodes[ra].hi;
+        var lo: i128 = nodes[rb].lo;
+        for (0..n) |j| {
+            if (dist[ia * n + j] != infinite) {
+                const through = nodes[roots.items[j]].hi;
+                if (through != std.math.maxInt(i128) and through + dist[ia * n + j] < hi) {
+                    hi = through + dist[ia * n + j];
+                }
+            }
+            if (dist[j * n + ib] != infinite) {
+                const through = nodes[roots.items[j]].lo - dist[j * n + ib];
+                if (through > lo) lo = through;
+            }
+        }
+        return hi <= lo + m;
     }
 };
