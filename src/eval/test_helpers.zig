@@ -406,6 +406,7 @@ pub const DevBoolRootTimingSnapshot = struct {
     root_execution_ns: u64 = 0,
 };
 
+/// Mutable timing collector for one dev-backend boolean-root evaluation batch.
 pub const DevBoolRootTiming = struct {
     std_io: std.Io,
     snapshot_value: DevBoolRootTimingSnapshot = .{},
@@ -2377,6 +2378,7 @@ pub fn devEvalBoolRoots(
     return devEvalBoolRootsWithTiming(allocator, store, layouts, roots, null);
 }
 
+/// JIT-compile and run boolean roots while accumulating detailed dev-backend timings.
 pub fn devEvalBoolRootsWithTiming(
     allocator: Allocator,
     store: *const lir.LirStore,

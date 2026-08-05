@@ -98,6 +98,10 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             result.value_ptr.* = value;
         }
 
+        pub fn putAssumeCapacity(self: *Self, key: K, value: V) void {
+            self.put(key, value) catch @panic("DenseMap.putAssumeCapacity exceeded reserved storage");
+        }
+
         pub fn getOrPut(self: *Self, key: K) Allocator.Error!GetOrPutResult {
             const index = keyIndex(key);
             try self.ensureIndex(index);
@@ -116,6 +120,10 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
                     .found_existing = true,
                 },
             };
+        }
+
+        pub fn getOrPutAssumeCapacity(self: *Self, key: K) GetOrPutResult {
+            return self.getOrPut(key) catch @panic("DenseMap.getOrPutAssumeCapacity exceeded reserved storage");
         }
 
         pub fn getOrPutValue(self: *Self, key: K, value: V) Allocator.Error!GetOrPutResult {
@@ -175,7 +183,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         }
 
         pub fn keyIterator(self: *Self) KeyIterator {
-            return .{ .slots = self.slots.items };
+            return .{ .inner = .{ .slots = self.slots.items } };
         }
 
         pub fn valueIterator(self: *Self) ValueIterator {

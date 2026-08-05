@@ -1393,7 +1393,7 @@ pub fn collectProcStatements(
     stmts: *std.ArrayList(LIR.CFStmtId),
 ) SolveError!void {
     stmts.clearRetainingCapacity();
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
     var stack = std.ArrayList(LIR.CFStmtId).empty;
     defer stack.deinit(allocator);
@@ -2258,7 +2258,7 @@ fn computeVisibilityFromLift(
         for (by_proc) |stmts| for (stmts.items) |stmt| reachable.set(@intFromEnum(stmt));
     }
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
     var stack = std.ArrayList(LIR.CFStmtId).empty;
     defer stack.deinit(allocator);

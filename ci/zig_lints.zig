@@ -116,7 +116,39 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Lint 4: Check for top level comments in new Zig files
+    // Lint 4: Check for hash maps keyed by dense compiler IDs.
+    try stdout.print("Checking for ID-keyed hash maps...\n", .{});
+
+    {
+        var dense_id_files: PathList = .empty;
+        defer freePathList(&dense_id_files, gpa);
+
+        try walkTree(gpa, io, "src", &dense_id_files);
+        try walkTree(gpa, io, "test", &dense_id_files);
+        try dense_id_files.append(gpa, try gpa.dupe(u8, "build.zig"));
+
+        for (dense_id_files.items) |file_path| {
+            const errors = try checkDenseIdHashMaps(gpa, io, file_path);
+            defer gpa.free(errors);
+
+            if (errors.len > 0) {
+                try stdout.print("{s}", .{errors});
+                found_errors = true;
+            }
+        }
+
+        if (found_errors) {
+            try stdout.print("\n", .{});
+            try stdout.print("Compiler IDs are dense indices into an owning store; hashing them adds unnecessary work and allocation.\n", .{});
+            try stdout.print("Use collections.DenseMap for a dynamic ID-keyed column, or put a parallel column directly on the owning store.\n", .{});
+            try stdout.print("If the key is structural rather than a dense index, name it Key instead of Id.\n", .{});
+            try stdout.print("\n", .{});
+            try stdout.flush();
+            std.process.exit(1);
+        }
+    }
+
+    // Lint 5: Check for top level comments in new Zig files
     try stdout.print("Checking for top level comments in new Zig files...\n", .{});
 
     var new_zig_files = try getNewZigFiles(gpa, io);
@@ -386,6 +418,49 @@ fn checkDebugAllocatorConfig(allocator: Allocator, io: std.Io, file_path: []cons
     return errors.toOwnedSlice(allocator);
 }
 
+fn checkDenseIdHashMaps(allocator: Allocator, io: std.Io, file_path: []const u8) ![]u8 {
+    const source = readSourceFile(allocator, io, file_path) catch |err| switch (err) {
+        error.FileNotFound => return try allocator.dupe(u8, ""),
+        else => return err,
+    };
+    defer allocator.free(source);
+
+    var errors: std.ArrayList(u8) = .empty;
+    errdefer errors.deinit(allocator);
+
+    var rest = source[0..];
+    var base: usize = 0;
+    while (std.mem.find(u8, rest, "HashMap(")) |relative_index| {
+        const absolute_index = base + relative_index;
+        const key_start = absolute_index + "HashMap(".len;
+        defer {
+            base = key_start;
+            rest = source[key_start..];
+        }
+
+        if (isLineComment(source, absolute_index)) continue;
+
+        const key = denseIdHashMapKey(source, absolute_index) orelse continue;
+
+        const msg = try std.fmt.allocPrint(
+            allocator,
+            "{s}:{d}: ID-keyed hash map `{s}` must be a dense column\n",
+            .{ file_path, lineNumber(source, absolute_index), key },
+        );
+        defer allocator.free(msg);
+        try errors.appendSlice(allocator, msg);
+    }
+
+    return errors.toOwnedSlice(allocator);
+}
+
+fn denseIdHashMapKey(source: []const u8, hash_map_start: usize) ?[]const u8 {
+    const key_start = hash_map_start + "HashMap(".len;
+    const comma = std.mem.findScalarPos(u8, source, key_start, ',') orelse return null;
+    const key = std.mem.trim(u8, source[key_start..comma], " \t\r\n");
+    return if (std.mem.endsWith(u8, key, "Id")) key else null;
+}
+
 fn debugAllocatorInvocationEnd(source: []const u8, start: usize) usize {
     const open_paren = std.mem.findScalarPos(u8, source, start, '(') orelse return lineEnd(source, start);
 
@@ -509,4 +584,28 @@ fn freePathList(list: *PathList, allocator: Allocator) void {
         allocator.free(path);
     }
     list.deinit(allocator);
+}
+
+test "dense ID hash map lint recognizes qualified and multiline keys" {
+    const source =
+        \\var a: std.AutoHashMap(Ast.LocalId, void);
+        \\var b: std.AutoHashMap(
+        \\    NodeId,
+        \\    u32,
+        \\);
+        \\var c: std.AutoHashMap(Ast.LocalIdx, void);
+        \\var d: std.AutoHashMap(StructuralKey, void);
+    ;
+
+    const first = std.mem.find(u8, source, "HashMap(").?;
+    try std.testing.expectEqualStrings("Ast.LocalId", denseIdHashMapKey(source, first).?);
+
+    const second = std.mem.findPos(u8, source, first + 1, "HashMap(").?;
+    try std.testing.expectEqualStrings("NodeId", denseIdHashMapKey(source, second).?);
+
+    const third = std.mem.findPos(u8, source, second + 1, "HashMap(").?;
+    try std.testing.expect(denseIdHashMapKey(source, third) == null);
+
+    const fourth = std.mem.findPos(u8, source, third + 1, "HashMap(").?;
+    try std.testing.expect(denseIdHashMapKey(source, fourth) == null);
 }

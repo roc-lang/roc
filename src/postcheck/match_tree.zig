@@ -42,6 +42,7 @@
 //! site, `runtime_error` otherwise.
 
 const std = @import("std");
+const collections = @import("collections");
 
 /// Pattern kinds the accessor context reports. This is the module's neutral
 /// view of `PatData` across Monotype Lifted and Lambda Mono inputs; `callable`
@@ -1042,7 +1043,7 @@ pub fn Compiler(comptime Ctx: type) type {
             occs: []const OccEntry,
             tree_stats: Stats,
             done: Ctx.JoinPointId,
-            uses: std.AutoHashMap(OccId, OccUse),
+            uses: collections.DenseMap(OccId, OccUse),
             exit_joins: std.AutoHashMap(u32, Ctx.JoinPointId),
             /// Statements added by delegated body/guard lowering, excluded
             /// from the lint's machinery count.

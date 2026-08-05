@@ -1,6 +1,7 @@
 //! Lambda solving over lifted Monotype IR.
 
 const std = @import("std");
+const collections = @import("collections");
 const can = @import("can");
 const check = @import("check");
 
@@ -118,11 +119,11 @@ const Solver = struct {
     /// reachable from it. The forced-dynamic scan materializes exactly these
     /// leaves so the named nodes it must mark exist in the solved store.
     contains_forced_dynamic: []bool,
-    shared_clones: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
+    shared_clones: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
     /// One memo map per lazily materialized tree, tying recursive
     /// back-references to their existing vars exactly as an eager clone's
     /// per-call memo did. Allocated on a leaf's first expansion.
-    leaf_contexts: std.ArrayList(std.AutoHashMap(MonoType.TypeId, Type.TypeVarId)),
+    leaf_contexts: std.ArrayList(collections.DenseMap(MonoType.TypeId, Type.TypeVarId)),
 
     const FunctionShape = struct {
         args: Type.Span,
@@ -185,7 +186,7 @@ const Solver = struct {
             .active_private_evidence_relations = std.AutoHashMap(UnifyPair, void).init(allocator),
             .contains_callable = masks.contains_callable,
             .contains_forced_dynamic = masks.contains_forced_dynamic,
-            .shared_clones = std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
+            .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
             .leaf_contexts = .empty,
         };
     }
@@ -1158,7 +1159,7 @@ const Solver = struct {
     }
 
     fn markErasedCallablesReachedByType(self: *Solver, ty: Type.TypeVarId) Allocator.Error!void {
-        var active = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
+        var active = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
         defer active.deinit();
         try self.markErasedCallablesReachedByTypeInner(ty, &active);
     }
@@ -1166,7 +1167,7 @@ const Solver = struct {
     fn markErasedCallablesReachedByTypeInner(
         self: *Solver,
         ty: Type.TypeVarId,
-        active: *std.AutoHashMap(Type.TypeVarId, void),
+        active: *collections.DenseMap(Type.TypeVarId, void),
     ) Allocator.Error!void {
         const root = self.program.types.rootCompressed(ty);
         if (active.contains(root)) return;
@@ -1237,7 +1238,7 @@ const Solver = struct {
     fn markErasedCallablesReachedByMembers(
         self: *Solver,
         members: Type.Span,
-        active: *std.AutoHashMap(Type.TypeVarId, void),
+        active: *collections.DenseMap(Type.TypeVarId, void),
     ) Allocator.Error!void {
         for (0..members.count()) |member_index| {
             const member = self.program.types.memberItem(members, member_index);
@@ -1269,7 +1270,7 @@ const Solver = struct {
     fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
         const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else blk: {
             const index: u32 = @intCast(self.leaf_contexts.items.len);
-            try self.leaf_contexts.append(self.allocator, std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
+            try self.leaf_contexts.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
             break :blk index;
         };
         if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
@@ -1306,7 +1307,7 @@ const Solver = struct {
     /// callable-free Monotype share one clone; callable-bearing leaves get a
     /// private clone whose callable-free subgraphs still share.
     fn finalizeMonoLeaves(self: *Solver) Allocator.Error!void {
-        var visited = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
+        var visited = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
         defer visited.deinit();
         var work = std.ArrayList(Type.TypeVarId).empty;
         defer work.deinit(self.allocator);
@@ -2026,7 +2027,7 @@ const Solver = struct {
     }
 
     fn typeIsProvenUninhabited(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
-        var visiting = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
+        var visiting = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
         defer visiting.deinit();
         return self.typeIsProvenUninhabitedInner(ty, &visiting);
     }
@@ -2034,7 +2035,7 @@ const Solver = struct {
     fn typeIsProvenUninhabitedInner(
         self: *Solver,
         ty: Type.TypeVarId,
-        visiting: *std.AutoHashMap(Type.TypeVarId, void),
+        visiting: *collections.DenseMap(Type.TypeVarId, void),
     ) Allocator.Error!bool {
         const root = self.program.types.rootCompressed(ty);
         const entry = try visiting.getOrPut(root);
@@ -2045,7 +2046,7 @@ const Solver = struct {
             // Probe leaves against the lifted store instead of materializing:
             // uninhabitedness is a pure function of the Monotype.
             .mono => |leaf| blk: {
-                var mono_visiting = std.AutoHashMap(MonoType.TypeId, void).init(self.allocator);
+                var mono_visiting = collections.DenseMap(MonoType.TypeId, void).init(self.allocator);
                 defer mono_visiting.deinit();
                 break :blk try self.monoProvenUninhabited(leaf.id, &mono_visiting);
             },
@@ -2093,7 +2094,7 @@ const Solver = struct {
     fn monoProvenUninhabited(
         self: *Solver,
         id: MonoType.TypeId,
-        visiting: *std.AutoHashMap(MonoType.TypeId, void),
+        visiting: *collections.DenseMap(MonoType.TypeId, void),
     ) Allocator.Error!bool {
         const entry = try visiting.getOrPut(id);
         if (entry.found_existing) return false;
@@ -2601,7 +2602,7 @@ const Solver = struct {
 
     fn solvedTypeDigest(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        var active = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
+        var active = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
         defer active.deinit();
         try self.writeSolvedTypeDigest(&hasher, ty, &active);
         return .{ .bytes = hasher.finalResult() };
@@ -2611,7 +2612,7 @@ const Solver = struct {
         self: *Solver,
         hasher: *std.crypto.hash.sha2.Sha256,
         ty: Type.TypeVarId,
-        active: *std.AutoHashMap(Type.TypeVarId, void),
+        active: *collections.DenseMap(Type.TypeVarId, void),
     ) Allocator.Error!void {
         const root = self.program.types.rootCompressed(ty);
         if (active.contains(root)) {
@@ -2706,7 +2707,7 @@ const Solver = struct {
         self: *Solver,
         hasher: *std.crypto.hash.sha2.Sha256,
         span: Type.Span,
-        active: *std.AutoHashMap(Type.TypeVarId, void),
+        active: *collections.DenseMap(Type.TypeVarId, void),
     ) Allocator.Error!void {
         writeU32(hasher, @intCast(span.count()));
         for (0..span.count()) |index| {
@@ -2856,7 +2857,7 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
 
 const TypeCloner = struct {
     solver: *Solver,
-    map: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
+    map: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
     /// Unification rewrites var contents in place (alias backings, named
     /// absorption, uninhabited links), so clones that can still reach `unify`
     /// must stay per-use. After solving no var is unified again, and clones of
@@ -2871,7 +2872,7 @@ const TypeCloner = struct {
     fn init(solver: *Solver) TypeCloner {
         return .{
             .solver = solver,
-            .map = std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
+            .map = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
         };
     }
 
@@ -3019,7 +3020,7 @@ const TypeCloner = struct {
         owner_def: MonoType.TypeDef,
         backing: MonoType.TypeId,
     ) Allocator.Error!MonoType.TypeId {
-        var seen = std.AutoHashMap(MonoType.TypeId, void).init(self.solver.allocator);
+        var seen = collections.DenseMap(MonoType.TypeId, void).init(self.solver.allocator);
         defer seen.deinit();
         var current = backing;
         while (true) {

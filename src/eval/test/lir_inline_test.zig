@@ -1,6 +1,7 @@
 //! Structural LIR tests for post-check wrapper inlining.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 const eval = @import("eval");
@@ -1087,7 +1088,7 @@ fn collectAssignCallProcs(
     defer work.deinit(allocator);
     try work.append(allocator, body);
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |stmt_id| {
@@ -1247,7 +1248,7 @@ fn reachableIterCollectShape(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |proc_id| {
@@ -1273,7 +1274,7 @@ fn reachableProcShapeCount(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var count: usize = 0;
@@ -3350,7 +3351,7 @@ fn collectLirResultProcShape(
     defer work.deinit(allocator);
     try work.append(allocator, body);
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |stmt_id| {
@@ -3492,7 +3493,7 @@ fn reachableProcDebugName(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |proc_id| {
@@ -3519,7 +3520,7 @@ fn reachableProcShapeFieldTotal(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var total: usize = 0;
@@ -3946,7 +3947,7 @@ fn reachableReturnSlotProcCount(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var count: usize = 0;
@@ -6765,7 +6766,7 @@ fn recordFieldReadCounts(
     const proc = store.getProcSpec(proc_id);
     const body = proc.body orelse return .{ .before_first_call = 0, .total = 0 };
 
-    var aliases = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var aliases = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer aliases.deinit();
     try aliases.put(record, {});
 
@@ -6870,9 +6871,9 @@ fn fieldReadRetainCount(
     const proc = store.getProcSpec(proc_id);
     const body = proc.body orelse return 0;
 
-    var read_targets = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var read_targets = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer read_targets.deinit();
-    var retained = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var retained = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer retained.deinit();
     var visited = std.AutoHashMap(u32, void).init(allocator);
     defer visited.deinit();

@@ -199,9 +199,9 @@ const Pass = struct {
     allocator: Allocator,
     local_info: []ValueInfo,
     proc_returns: []ValueInfo,
-    visited: std.AutoHashMap(LIR.CFStmtId, void),
+    visited: collections.DenseMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId),
-    redirects: std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId),
+    redirects: collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId),
     use_counts: []u32,
 
     fn init(result: *LirProgram.Result) Allocator.Error!Pass {
@@ -224,9 +224,9 @@ const Pass = struct {
             .allocator = allocator,
             .local_info = local_info,
             .proc_returns = proc_returns,
-            .visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator),
+            .visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
             .stack = .empty,
-            .redirects = std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
+            .redirects = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
             .use_counts = use_counts,
         };
     }

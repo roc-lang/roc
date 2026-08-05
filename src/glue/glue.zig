@@ -23,6 +23,7 @@
 //! 6. Compile the glue spec through checked artifacts, lower to LIR, and run it with the requested backend
 
 const std = @import("std");
+const collections = @import("collections");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
@@ -4205,7 +4206,7 @@ fn appendRecordRowFields(
     try fields.appendSlice(gpa, head);
 
     var current = ext;
-    var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    var seen = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
     defer seen.deinit();
 
     while (current) |current_id| {
@@ -4257,7 +4258,7 @@ fn appendTagRowTags(
     try tags.appendSlice(gpa, head);
 
     var current = ext;
-    var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    var seen = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
     defer seen.deinit();
 
     while (current) |current_id| {
@@ -4287,7 +4288,7 @@ fn typeStringAlloc(
 ) Allocator.Error![]const u8 {
     var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(gpa);
-    var active = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    var active = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
     defer active.deinit();
     try writeTypeString(gpa, artifact, checked_type, &buf, &active);
     return buf.toOwnedSlice(gpa);
@@ -4298,7 +4299,7 @@ fn writeTypeString(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
     buf: *std.ArrayList(u8),
-    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
 ) Allocator.Error!void {
     if (active.contains(checked_type)) {
         try buf.appendSlice(gpa, "<cycle>");
@@ -4329,7 +4330,7 @@ fn writeNominalTypeString(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     nominal: CheckedArtifact.CheckedNominalType,
     buf: *std.ArrayList(u8),
-    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
 ) Allocator.Error!void {
     const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
     try buf.appendSlice(gpa, name);
@@ -4347,7 +4348,7 @@ fn writeFunctionTypeString(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     func: CheckedArtifact.CheckedFunctionType,
     buf: *std.ArrayList(u8),
-    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
 ) Allocator.Error!void {
     if (func.args.len == 0) {
         try buf.appendSlice(gpa, "{}");
@@ -4367,7 +4368,7 @@ fn writeRecordTypeString(
     fields: []const CheckedArtifact.CheckedRecordField,
     ext: ?CheckedArtifact.CheckedTypeId,
     buf: *std.ArrayList(u8),
-    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
 ) Allocator.Error!void {
     var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
     defer all_fields.deinit(gpa);
@@ -4411,7 +4412,7 @@ fn writeTupleTypeString(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     items: []const CheckedArtifact.CheckedTypeId,
     buf: *std.ArrayList(u8),
-    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
 ) Allocator.Error!void {
     try buf.append(gpa, '(');
     for (items, 0..) |item, i| {
@@ -4427,7 +4428,7 @@ fn writeTagUnionTypeString(
     tags: []const CheckedArtifact.CheckedTag,
     ext: CheckedArtifact.CheckedTypeId,
     buf: *std.ArrayList(u8),
-    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
 ) Allocator.Error!void {
     var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
     defer all_tags.deinit(gpa);

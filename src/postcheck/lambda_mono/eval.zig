@@ -126,7 +126,7 @@ fn tagView(value: Value) ?TagValue {
 }
 
 /// Per-call binding scope from `LocalId` to `Value`.
-const Frame = std.AutoHashMap(Ast.LocalId, Value);
+const Frame = collections.DenseMap(Ast.LocalId, Value);
 
 const recursion_depth_cap = 4000;
 

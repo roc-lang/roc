@@ -302,7 +302,7 @@ const Detection = struct {
     eligible_trmc: bool = false,
     /// Set when the proc exceeds a pass limit; the proc is left untouched.
     bail: bool = false,
-    joins: std.AutoHashMap(JoinPointId, JoinInfo),
+    joins: collections.DenseMap(JoinPointId, JoinInfo),
     max_join_id: u32 = 0,
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) Detection {
@@ -312,7 +312,7 @@ const Detection = struct {
             .layouts = layouts,
             .proc_id = proc_id,
             .scratch = scratch,
-            .joins = std.AutoHashMap(JoinPointId, JoinInfo).init(scratch.gpa),
+            .joins = collections.DenseMap(JoinPointId, JoinInfo).init(scratch.gpa),
         };
     }
 

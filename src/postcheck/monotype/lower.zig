@@ -1494,7 +1494,7 @@ const HostedCatalogEntry = struct {
     def_idx: u32,
 };
 
-const HostedProcedureId = struct {
+const HostedProcedureKey = struct {
     checked_module_digest: [32]u8,
     def_idx: u32,
 };
@@ -1972,12 +1972,12 @@ const Builder = struct {
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Exact inhabitation answers for sealed Monotype types. These types are
     /// immutable, so the structural walk is needed at most once per TypeId.
-    uninhabited_type_cache: std.AutoHashMap(Type.TypeId, bool),
+    uninhabited_type_cache: collections.DenseMap(Type.TypeId, bool),
     spec_store: specialize.SpecBuilder,
-    lowered_templates: std.AutoHashMap(Ast.FnId, LoweredTemplate),
+    lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
     /// identity and status live on the `Ast.SpecRecord`.
-    lowered_nested_by_fn: std.AutoHashMap(Ast.FnId, Ast.SpecId),
+    lowered_nested_by_fn: collections.DenseMap(Ast.FnId, Ast.SpecId),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
@@ -2049,10 +2049,10 @@ const Builder = struct {
             .target_usize = options.target_usize,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
-            .uninhabited_type_cache = std.AutoHashMap(Type.TypeId, bool).init(allocator),
+            .uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .spec_store = spec_store,
-            .lowered_templates = std.AutoHashMap(Ast.FnId, LoweredTemplate).init(allocator),
-            .lowered_nested_by_fn = std.AutoHashMap(Ast.FnId, Ast.SpecId).init(allocator),
+            .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
+            .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
@@ -2246,7 +2246,7 @@ const Builder = struct {
                 );
             }
 
-            var entries_by_target = std.AutoHashMap(HostedProcedureId, usize).init(self.allocator);
+            var entries_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
             defer entries_by_target.deinit();
             try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
             for (entries.items, 0..) |entry, index| {
@@ -2388,7 +2388,7 @@ const Builder = struct {
         view: ModuleView,
         checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!bool {
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
         return try self.checkedTypeHasVariable(view, checked_ty, &seen);
     }
@@ -2397,7 +2397,7 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         checked_ty: checked.CheckedTypeId,
-        seen: *std.AutoHashMap(checked.CheckedTypeId, void),
+        seen: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         if ((try seen.getOrPut(checked_ty)).found_existing) return false;
         switch (checkedPayload(view, checked_ty)) {
@@ -2442,7 +2442,7 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         types: []const checked.CheckedTypeId,
-        seen: *std.AutoHashMap(checked.CheckedTypeId, void),
+        seen: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         for (types) |ty| {
             if (try self.checkedTypeHasVariable(view, ty, seen)) return true;
@@ -2656,7 +2656,7 @@ const Builder = struct {
     }
 
     fn appendRuntimeSchemaRequestsForType(self: *Builder, ty: Type.TypeId) Allocator.Error!void {
-        var active = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var active = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer active.deinit();
         try self.appendRuntimeSchemaRequestsForTypeInner(ty, &active);
     }
@@ -2664,7 +2664,7 @@ const Builder = struct {
     fn appendRuntimeSchemaRequestsForTypeInner(
         self: *Builder,
         ty: Type.TypeId,
-        active: *std.AutoHashMap(Type.TypeId, void),
+        active: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!void {
         if (active.contains(ty)) return;
         try active.put(ty, {});
@@ -3917,7 +3917,7 @@ const Builder = struct {
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
-        var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var indexed_nodes = collections.DenseMap(NodeId, void).init(self.allocator);
         defer indexed_nodes.deinit();
         var spec_interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
         while (spec_interface.next()) |interface_node| {
@@ -4545,7 +4545,7 @@ const Builder = struct {
         backing: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const owner_def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl);
-        var seen = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer seen.deinit();
         var current = backing;
         while (true) {
@@ -4616,7 +4616,7 @@ const Builder = struct {
         defer fields.deinit(self.allocator);
         try self.appendRecordFields(view, &fields, head);
 
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         var current = ext;
@@ -4671,7 +4671,7 @@ const Builder = struct {
         defer tags.deinit(self.allocator);
         try self.appendTags(view, &tags, head);
 
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         var current = ext;
@@ -5626,7 +5626,7 @@ const Builder = struct {
             .fn_id = fn_id,
             .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
         });
-        var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var indexed_nodes = collections.DenseMap(NodeId, void).init(self.allocator);
         defer indexed_nodes.deinit();
         var spec_interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
         while (spec_interface.next()) |interface_node| {
@@ -6108,7 +6108,7 @@ const Builder = struct {
         ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         var added_method_call = false;
         try ctx.prepareStructuralEqNode(
@@ -6147,7 +6147,7 @@ const Builder = struct {
         try ctx.restoreCodecLexicalContext(boundary.lexical);
         if (try ctx.deferredInspectHasProvenUninhabitedValueGuard(boundary)) return false;
 
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         return try ctx.prepareInspectMethodsAtNode(boundary.value_node, boundary.ret_ty, &seen);
     }
@@ -6429,7 +6429,7 @@ const Builder = struct {
         graph: *InstGraph,
         sealer: *GraphTypeFinals,
     ) Allocator.Error!void {
-        var prepared_methods = std.AutoHashMap(Type.TypeId, DraftFnSlot).init(self.allocator);
+        var prepared_methods = collections.DenseMap(Type.TypeId, DraftFnSlot).init(self.allocator);
         defer prepared_methods.deinit();
         for (body_draft.prepared_inspect_methods.items) |prepared| {
             const value_ty = try sealer.sealNode(prepared.value_node);
@@ -6519,7 +6519,7 @@ const Builder = struct {
         ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
-        var method_calls = std.AutoHashMap(Type.TypeId, DraftFnSlot).init(self.allocator);
+        var method_calls = collections.DenseMap(Type.TypeId, DraftFnSlot).init(self.allocator);
         defer method_calls.deinit();
         for (body_draft.structural_eq_method_calls.items) |planned| {
             if (planned.boundary != boundary_index) continue;
@@ -7259,9 +7259,9 @@ const Builder = struct {
         expr: Ast.ExprId,
         target: Ast.LocalId,
     ) Allocator.Error!bool {
-        var bound = std.AutoHashMap(Ast.LocalId, void).init(self.allocator);
+        var bound = collections.DenseMap(Ast.LocalId, void).init(self.allocator);
         defer bound.deinit();
-        var active_fns = std.AutoHashMap(Ast.FnId, void).init(self.allocator);
+        var active_fns = collections.DenseMap(Ast.FnId, void).init(self.allocator);
         defer active_fns.deinit();
         return try self.exprDependsOnFreeLocalInner(expr, target, &bound, &active_fns);
     }
@@ -7270,8 +7270,8 @@ const Builder = struct {
         self: *Builder,
         expr_id: Ast.ExprId,
         target: Ast.LocalId,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
-        active_fns: *std.AutoHashMap(Ast.FnId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
+        active_fns: *collections.DenseMap(Ast.FnId, void),
     ) Allocator.Error!bool {
         const expr = self.program.getExpr(expr_id);
         switch (expr.data) {
@@ -7463,7 +7463,7 @@ const Builder = struct {
         self: *Builder,
         local: Ast.LocalId,
         target: Ast.LocalId,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
     ) bool {
         if (!self.sameLocalIdentity(local, target)) return false;
         return !self.boundContainsLocalIdentity(bound, local);
@@ -7471,7 +7471,7 @@ const Builder = struct {
 
     fn boundContainsLocalIdentity(
         self: *Builder,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
         local: Ast.LocalId,
     ) bool {
         if (bound.contains(local)) return true;
@@ -7507,8 +7507,8 @@ const Builder = struct {
         self: *Builder,
         stmt_id: Ast.StmtId,
         target: Ast.LocalId,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
-        active_fns: *std.AutoHashMap(Ast.FnId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
+        active_fns: *collections.DenseMap(Ast.FnId, void),
         added: *std.ArrayList(Ast.LocalId),
     ) Allocator.Error!bool {
         const stmt = self.program.getStmt(stmt_id);
@@ -7540,8 +7540,8 @@ const Builder = struct {
         self: *Builder,
         fn_id: Ast.FnId,
         target: Ast.LocalId,
-        caller_bound: *std.AutoHashMap(Ast.LocalId, void),
-        active_fns: *std.AutoHashMap(Ast.FnId, void),
+        caller_bound: *collections.DenseMap(Ast.LocalId, void),
+        active_fns: *collections.DenseMap(Ast.FnId, void),
     ) Allocator.Error!bool {
         if (active_fns.contains(fn_id)) return false;
         try active_fns.put(fn_id, {});
@@ -7563,8 +7563,8 @@ const Builder = struct {
         args: Ast.Span(Ast.TypedLocal),
         body: Ast.FnBody,
         target: Ast.LocalId,
-        caller_bound: *std.AutoHashMap(Ast.LocalId, void),
-        active_fns: *std.AutoHashMap(Ast.FnId, void),
+        caller_bound: *collections.DenseMap(Ast.LocalId, void),
+        active_fns: *collections.DenseMap(Ast.FnId, void),
     ) Allocator.Error!bool {
         var bound = try caller_bound.clone();
         defer bound.deinit();
@@ -7580,7 +7580,7 @@ const Builder = struct {
     fn bindTypedLocalLocals(
         self: *Builder,
         span: Ast.Span(Ast.TypedLocal),
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
         added: *std.ArrayList(Ast.LocalId),
     ) Allocator.Error!void {
         for (self.program.typedLocalSpan(span)) |local| {
@@ -7592,7 +7592,7 @@ const Builder = struct {
     fn bindPatLocals(
         self: *Builder,
         pat_id: Ast.PatId,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
         added: *std.ArrayList(Ast.LocalId),
     ) Allocator.Error!void {
         const pat = self.program.getPat(pat_id);
@@ -7638,7 +7638,7 @@ const Builder = struct {
     }
 
     fn removeBoundLocals(
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
         locals: []const Ast.LocalId,
     ) void {
         var index = locals.len;
@@ -8472,7 +8472,7 @@ const Builder = struct {
 
     fn typeIsProvenUninhabited(self: *Builder, ty: Type.TypeId) Allocator.Error!bool {
         if (self.uninhabited_type_cache.get(ty)) |cached| return cached;
-        var visiting = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var visiting = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer visiting.deinit();
         const result = try self.typeIsProvenUninhabitedInner(ty, &visiting);
         try self.uninhabited_type_cache.put(ty, result);
@@ -8482,7 +8482,7 @@ const Builder = struct {
     fn typeIsProvenUninhabitedInner(
         self: *Builder,
         ty: Type.TypeId,
-        visiting: *std.AutoHashMap(Type.TypeId, void),
+        visiting: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!bool {
         const entry = try visiting.getOrPut(ty);
         if (entry.found_existing) return false;
@@ -9780,7 +9780,7 @@ fn registerTemplateSpecInterfaceLookups(
     request_fn_node: NodeId,
     raw_spec: u32,
 ) Allocator.Error!void {
-    var indexed_nodes = std.AutoHashMap(NodeId, void).init(allocator);
+    var indexed_nodes = collections.DenseMap(NodeId, void).init(allocator);
     defer indexed_nodes.deinit();
     var spec_interface = try graph.functionInterfaceIterator(request_fn_node);
     while (spec_interface.next()) |interface_node| {
@@ -9827,7 +9827,7 @@ fn registerNestedSpecInterfaceLookups(
     request_fn_node: NodeId,
     raw_spec: u32,
 ) Allocator.Error!void {
-    var indexed_nodes = std.AutoHashMap(NodeId, void).init(allocator);
+    var indexed_nodes = collections.DenseMap(NodeId, void).init(allocator);
     defer indexed_nodes.deinit();
     var spec_interface = try graph.functionInterfaceIterator(request_fn_node);
     while (spec_interface.next()) |interface_node| {
@@ -10582,7 +10582,7 @@ const BodyDraftStore = struct {
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
     template_specs: std.ArrayList(DraftTemplateSpec),
-    template_spec_by_fn: std.AutoHashMap(DraftFnId, u32),
+    template_spec_by_fn: collections.DenseMap(DraftFnId, u32),
     template_spec_lookup: std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)),
     /// Exact checked identities bypass the general graph/digest lookup after
     /// the first closed direct call in this draft.
@@ -10652,7 +10652,7 @@ const BodyDraftStore = struct {
     owner_runs: std.ArrayList(DraftOwnerRun),
     /// Closed static-data candidates are shared by every child lowering
     /// context writing into this specialization draft.
-    static_data_candidate_exprs: std.AutoHashMap(Common.StaticDataId, DraftExprId),
+    static_data_candidate_exprs: collections.DenseMap(Common.StaticDataId, DraftExprId),
 
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
@@ -10662,7 +10662,7 @@ const BodyDraftStore = struct {
             .def_owners = .empty,
             .nested_defs = .empty,
             .template_specs = .empty,
-            .template_spec_by_fn = std.AutoHashMap(DraftFnId, u32).init(allocator),
+            .template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(allocator),
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
             .closed_direct_specializations = std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization).init(allocator),
             .active_callable_eval_bindings = .empty,
@@ -10726,7 +10726,7 @@ const BodyDraftStore = struct {
             .current_owner = .root,
             .owner_starts = @splat(0),
             .owner_runs = .empty,
-            .static_data_candidate_exprs = std.AutoHashMap(Common.StaticDataId, DraftExprId).init(allocator),
+            .static_data_candidate_exprs = collections.DenseMap(Common.StaticDataId, DraftExprId).init(allocator),
         };
     }
 
@@ -11413,7 +11413,7 @@ const BodyDraftStore = struct {
         // This commit is one Monotype materialization. Checked capture
         // identities identify aliases within it, while separate commits get
         // separate durable ids even when they instantiate the same binder.
-        var durable_capture_ids = std.AutoHashMap(checked.CaptureId, checked.CaptureId).init(program.allocator);
+        var durable_capture_ids = collections.DenseMap(checked.CaptureId, checked.CaptureId).init(program.allocator);
         defer durable_capture_ids.deinit();
         for (self.locals.items, 0..) |local, index| {
             if (!ids.retained(.locals, index)) continue;
@@ -12367,10 +12367,10 @@ const TypeInstantiationContext = struct {
     allocator: Allocator,
     id: InstantiationScopeId,
     module_bytes: [32]u8,
-    node_map: std.AutoHashMap(checked.CheckedTypeId, NodeId),
+    node_map: collections.DenseMap(checked.CheckedTypeId, NodeId),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
-    decl_scopes: std.ArrayList(*std.AutoHashMap(checked.CheckedTypeId, NodeId)) = .empty,
+    decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, NodeId)) = .empty,
 
     fn init(
         allocator: Allocator,
@@ -12381,7 +12381,7 @@ const TypeInstantiationContext = struct {
             .allocator = allocator,
             .id = id,
             .module_bytes = module_bytes,
-            .node_map = std.AutoHashMap(checked.CheckedTypeId, NodeId).init(allocator),
+            .node_map = collections.DenseMap(checked.CheckedTypeId, NodeId).init(allocator),
         };
     }
 
@@ -12455,11 +12455,11 @@ const BodyContext = struct {
     /// Structural equality types currently being expanded in this context.
     /// Seeing the same type again is a real recursive edge, which lowers to a
     /// reserved generated equality helper instead of recursively expanding AST.
-    equality_expansion_stack: std.AutoHashMap(Type.TypeId, void),
+    equality_expansion_stack: collections.DenseMap(Type.TypeId, void),
     /// Structural hash types currently being expanded in this context.
     /// Seeing the same type again is a real recursive edge, which lowers to a
     /// reserved generated hash helper instead of recursively expanding AST.
-    hash_expansion_stack: std.AutoHashMap(Type.TypeId, void),
+    hash_expansion_stack: collections.DenseMap(Type.TypeId, void),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
@@ -12468,10 +12468,10 @@ const BodyContext = struct {
     /// Frozen Phase-B lookup from each sealed equality component with an exact
     /// method to the procedure slot reserved while relations were still being
     /// produced.
-    frozen_equality_method_calls: ?*const std.AutoHashMap(Type.TypeId, DraftFnSlot) = null,
+    frozen_equality_method_calls: ?*const collections.DenseMap(Type.TypeId, DraftFnSlot) = null,
     /// Frozen Phase-B lookup from a sealed inspected nominal type to the
     /// attached `to_inspect` slot reserved while relations were still open.
-    frozen_inspect_method_calls: ?*const std.AutoHashMap(Type.TypeId, DraftFnSlot) = null,
+    frozen_inspect_method_calls: ?*const collections.DenseMap(Type.TypeId, DraftFnSlot) = null,
     /// Exact custom parser/encoder callees prepared before the graph froze.
     /// Phase-B structural serialization may consume these sealed requests but
     /// may not instantiate or lower another checked callable.
@@ -12589,14 +12589,14 @@ const BodyContext = struct {
     const SerializationPlanInputs = struct {
         locals: std.ArrayList(DraftLocalId) = .empty,
         record_keys: std.AutoHashMap(names.TypeDigest, void),
-        seen_types: std.AutoHashMap(Type.TypeId, void),
-        seen_locals: std.AutoHashMap(DraftLocalId, void),
+        seen_types: collections.DenseMap(Type.TypeId, void),
+        seen_locals: collections.DenseMap(DraftLocalId, void),
 
         fn init(allocator: Allocator) SerializationPlanInputs {
             return .{
                 .record_keys = std.AutoHashMap(names.TypeDigest, void).init(allocator),
-                .seen_types = std.AutoHashMap(Type.TypeId, void).init(allocator),
-                .seen_locals = std.AutoHashMap(DraftLocalId, void).init(allocator),
+                .seen_types = collections.DenseMap(Type.TypeId, void).init(allocator),
+                .seen_locals = collections.DenseMap(DraftLocalId, void).init(allocator),
             };
         }
 
@@ -12754,9 +12754,9 @@ const BodyContext = struct {
         errdefer helper.deinit(self.allocator);
         helper.plan.next_capture_id = source.next_capture_id;
 
-        var local_map = std.AutoHashMap(DraftLocalId, DraftLocalId).init(self.allocator);
+        var local_map = collections.DenseMap(DraftLocalId, DraftLocalId).init(self.allocator);
         defer local_map.deinit();
-        var expr_map = std.AutoHashMap(DraftLocalId, DraftExprId).init(self.allocator);
+        var expr_map = collections.DenseMap(DraftLocalId, DraftExprId).init(self.allocator);
         defer expr_map.deinit();
         for (inputs.locals.items, 0..) |source_local, index| {
             const helper_local = try self.addLocal(self.builder.symbols.fresh(), str_ty);
@@ -13019,8 +13019,8 @@ const BodyContext = struct {
             .instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), view.key.bytes),
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
-            .equality_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
-            .hash_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
+            .equality_expansion_stack = collections.DenseMap(Type.TypeId, void).init(allocator),
+            .hash_expansion_stack = collections.DenseMap(Type.TypeId, void).init(allocator),
             .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
             .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
@@ -13905,7 +13905,7 @@ const BodyContext = struct {
         self: *BodyContext,
         node: NodeId,
         str_ty: Type.TypeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const entry = try seen.getOrPut(node);
         if (entry.found_existing) return false;
@@ -14728,7 +14728,7 @@ const BodyContext = struct {
         expr: DraftExprId,
         target: DraftLocalId,
     ) Allocator.Error!bool {
-        var bound = std.AutoHashMap(DraftLocalId, void).init(self.allocator);
+        var bound = collections.DenseMap(DraftLocalId, void).init(self.allocator);
         defer bound.deinit();
         return try self.exprDependsOnFreeLocalInner(expr, target, &bound);
     }
@@ -14737,7 +14737,7 @@ const BodyContext = struct {
         self: *BodyContext,
         expr_id: DraftExprId,
         target: DraftLocalId,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
     ) Allocator.Error!bool {
         const expr = self.draft.exprs.items[@intFromEnum(expr_id)];
         switch (expr.data) {
@@ -14926,7 +14926,7 @@ const BodyContext = struct {
         self: *BodyContext,
         local: DraftLocalId,
         target: DraftLocalId,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
     ) Allocator.Error!bool {
         if (!try self.sameLocalIdentity(local, target)) return false;
         return !try self.boundContainsLocalIdentity(bound, local);
@@ -14934,7 +14934,7 @@ const BodyContext = struct {
 
     fn boundContainsLocalIdentity(
         self: *BodyContext,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
         local: DraftLocalId,
     ) Allocator.Error!bool {
         if (bound.contains(local)) return true;
@@ -14961,7 +14961,7 @@ const BodyContext = struct {
         self: *BodyContext,
         stmt_id: DraftStmtId,
         target: DraftLocalId,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
         added: *std.ArrayList(DraftLocalId),
     ) Allocator.Error!bool {
         const stmt = self.draft.stmts.items[@intFromEnum(stmt_id)];
@@ -14992,7 +14992,7 @@ const BodyContext = struct {
     fn bindTypedLocalLocals(
         self: *BodyContext,
         span: DraftSpan(DraftTypedLocal),
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
         added: *std.ArrayList(DraftLocalId),
     ) Allocator.Error!void {
         for (self.typedLocalSpan(span)) |local| {
@@ -15004,7 +15004,7 @@ const BodyContext = struct {
     fn bindPatLocals(
         self: *BodyContext,
         pat_id: DraftPatId,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
         added: *std.ArrayList(DraftLocalId),
     ) Allocator.Error!void {
         const pat = self.draft.pats.items[@intFromEnum(pat_id)];
@@ -15049,7 +15049,7 @@ const BodyContext = struct {
         }
     }
 
-    fn removeBoundLocals(bound: *std.AutoHashMap(DraftLocalId, void), locals: []const DraftLocalId) void {
+    fn removeBoundLocals(bound: *collections.DenseMap(DraftLocalId, void), locals: []const DraftLocalId) void {
         var index = locals.len;
         while (index > 0) {
             index -= 1;
@@ -15161,7 +15161,7 @@ const BodyContext = struct {
     }
 
     fn checkedTypeContainsError(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
-        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
         return try self.checkedTypeContainsErrorInner(checked_ty, &visited);
     }
@@ -15169,7 +15169,7 @@ const BodyContext = struct {
     fn checkedTypeContainsErrorInner(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         if (visited.contains(checked_ty)) return false;
         try visited.put(checked_ty, {});
@@ -15206,7 +15206,7 @@ const BodyContext = struct {
     fn checkedTypeSpanContainsError(
         self: *BodyContext,
         checked_tys: []const checked.CheckedTypeId,
-        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         for (checked_tys) |ty| {
             if (try self.checkedTypeContainsErrorInner(ty, visited)) return true;
@@ -15217,7 +15217,7 @@ const BodyContext = struct {
     fn checkedRecordFieldsContainError(
         self: *BodyContext,
         fields: []const checked.CheckedRecordField,
-        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         for (fields) |field| {
             if (try self.checkedTypeContainsErrorInner(field.ty, visited)) return true;
@@ -15228,7 +15228,7 @@ const BodyContext = struct {
     fn checkedTagsContainError(
         self: *BodyContext,
         tags: []const checked.CheckedTag,
-        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         for (tags) |tag| {
             if (try self.checkedTypeSpanContainsError(tag.argsSlice(self.view.types), visited)) return true;
@@ -15580,7 +15580,7 @@ const BodyContext = struct {
         if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
-        var scope = std.AutoHashMap(checked.CheckedTypeId, NodeId).init(self.allocator);
+        var scope = collections.DenseMap(checked.CheckedTypeId, NodeId).init(self.allocator);
         defer scope.deinit();
         for (formal_args, args) |formal, arg| {
             try scope.put(self.scopedCheckedType(formal), arg);
@@ -15715,7 +15715,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var replay_state = InterfaceReplayState.init(self.allocator);
         defer replay_state.deinit(self.allocator);
-        var active_local_scopes = std.AutoHashMap(checked.DispatchScopeId, NodeId).init(self.allocator);
+        var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);
         defer active_local_scopes.deinit();
         try self.applyCheckedTemplateInterfaceScopeRelations(
             template,
@@ -15732,7 +15732,7 @@ const BodyContext = struct {
         template: checked.CheckedProcedureTemplate,
         scope_id: ?checked.DispatchScopeId,
         scope_root_node: NodeId,
-        active_local_scopes: *std.AutoHashMap(checked.DispatchScopeId, NodeId),
+        active_local_scopes: *collections.DenseMap(checked.DispatchScopeId, NodeId),
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!void {
         const PendingDependency = struct {
@@ -15977,7 +15977,7 @@ const BodyContext = struct {
         }
         try callee_ctx.instantiateTemplateDispatchRelations(template, null);
 
-        var active_local_scopes = std.AutoHashMap(checked.DispatchScopeId, NodeId).init(self.allocator);
+        var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);
         defer active_local_scopes.deinit();
         try callee_ctx.applyCheckedTemplateInterfaceScopeRelations(
             template,
@@ -21283,7 +21283,7 @@ const BodyContext = struct {
     ) Allocator.Error![]Type.TypeId {
         var shapes = std.ArrayList(Type.TypeId).empty;
         errdefer shapes.deinit(self.allocator);
-        var seen = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer seen.deinit();
 
         try self.appendParserPrecomputedRecordShapes(plan, &shapes, &seen, union_ty);
@@ -21294,7 +21294,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: ?*const ParserPrecomputedPlan,
         shapes: *std.ArrayList(Type.TypeId),
-        seen: *std.AutoHashMap(Type.TypeId, void),
+        seen: *collections.DenseMap(Type.TypeId, void),
         shape_ty: Type.TypeId,
     ) Allocator.Error!void {
         if (self.tryNullInfo(shape_ty)) |info| {
@@ -24902,7 +24902,7 @@ const BodyContext = struct {
             // payload is converter-fed and never parsed from source text, so
             // the impossible parse lowers to the failure mapping instead of
             // generating helpers over unparsable internals.
-            var required_visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+            var required_visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
             defer required_visited.deinit();
             if (try self.parserShapeNeedsRequiredFieldError(payload_ty, &required_visited) and
                 self.monoTagByTextOptional(ret_info.err_ty, "MissingRequiredField") == null)
@@ -26517,7 +26517,7 @@ const BodyContext = struct {
         self: *BodyContext,
         context: LocalProcContext,
     ) Allocator.Error![]LocalProcCaptureBinding {
-        var seen = std.AutoHashMap(checked.CaptureId, void).init(self.allocator);
+        var seen = collections.DenseMap(checked.CaptureId, void).init(self.allocator);
         defer seen.deinit();
         var bindings = std.ArrayList(LocalProcCaptureBinding).empty;
         errdefer bindings.deinit(self.allocator);
@@ -28222,7 +28222,7 @@ const BodyContext = struct {
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
     ) Allocator.Error!Type.TypeId {
-        var map = std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId).init(self.allocator);
+        var map = collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId).init(self.allocator);
         defer map.deinit();
         return try self.lowerConstCaptureTypeInner(store_view, ty, &map);
     }
@@ -28231,7 +28231,7 @@ const BodyContext = struct {
         self: *BodyContext,
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
-        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
+        map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
     ) Allocator.Error!Type.TypeId {
         if (map.get(ty)) |existing| return existing;
         const context = ConstTypeLowerContext{
@@ -28250,7 +28250,7 @@ const BodyContext = struct {
         body: *BodyContext,
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
-        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
+        map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
 
         fn fill(self: ConstTypeLowerContext, reserved: Type.TypeId) Allocator.Error!Type.Content {
             try self.map.put(self.ty, reserved);
@@ -28262,7 +28262,7 @@ const BodyContext = struct {
         self: *BodyContext,
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
-        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
+        map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
     ) Allocator.Error!Type.Content {
         const type_store = &store_view.const_store.type_store;
         return switch (type_store.get(ty)) {
@@ -34585,7 +34585,7 @@ const BodyContext = struct {
             .encoder_for => .encoder,
             .value, .equality, .hash, .map, .map_effectful => Common.invariant("non-codec result mode reached structural serialization deferral"),
         };
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         _ = try self.prepareCustomCodecCallsAtNode(expr, kind, shape_node, callable_node, &seen);
         return expr;
@@ -37223,14 +37223,14 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         var added_relation = false;
         if (kind == .parser) {
-            var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+            var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer required_error_seen.deinit();
             if (try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen)) {
                 added_relation = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
             }
             const runtime = try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret);
             const outer_result = try self.graphParserResultNodes(runtime.ret);
-            var invalid_value_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+            var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer invalid_value_seen.deinit();
             if (try self.graphParserShapeNeedsInvalidValue(shape_node, outer_result.err, &invalid_value_seen)) {
                 added_relation = try self.prepareParserInvalidValueCodecCall(
@@ -37240,7 +37240,7 @@ const BodyContext = struct {
                 ) or added_relation;
             }
         }
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         return try self.prepareCustomCodecCallsAtNode(
             boundary_expr,
@@ -37265,11 +37265,11 @@ const BodyContext = struct {
         var added_relation = false;
         var missing_required_field_ready = false;
 
-        var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer required_error_seen.deinit();
-        var invalid_value_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer invalid_value_seen.deinit();
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
 
         for ((try self.graph.tagRowNodes(union_node)).tags) |tag| {
@@ -37541,7 +37541,7 @@ const BodyContext = struct {
         self: *BodyContext,
         raw_node: NodeId,
         shapes: *std.ArrayList(NodeId),
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!void {
         const node = raw_node;
         const seen_entry = try seen.getOrPut(node);
@@ -37586,7 +37586,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         var record_shapes = std.ArrayList(NodeId).empty;
         defer record_shapes.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         try self.appendGraphParserRecordShapes(union_node, &record_shapes, &seen);
 
@@ -38212,7 +38212,7 @@ const BodyContext = struct {
         kind: CodecKind,
         key_node: NodeId,
         boundary_callable_node: NodeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         switch (kind) {
             .parser => {
@@ -38685,7 +38685,7 @@ const BodyContext = struct {
     fn graphParserShapeNeedsRequiredFieldError(
         self: *BodyContext,
         raw_node: NodeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const node = raw_node;
         const entry = try seen.getOrPut(node);
@@ -38757,7 +38757,7 @@ const BodyContext = struct {
         self: *BodyContext,
         raw_node: NodeId,
         err_node: NodeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const node = raw_node;
         const entry = try seen.getOrPut(node);
@@ -38919,7 +38919,7 @@ const BodyContext = struct {
         kind: CodecKind,
         raw_shape_node: NodeId,
         boundary_callable_node: NodeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const shape_node = raw_shape_node;
         const seen_entry = try seen.getOrPut(shape_node);
@@ -39340,7 +39340,7 @@ const BodyContext = struct {
     fn parserShapeNeedsRequiredFieldError(
         self: *BodyContext,
         ty: Type.TypeId,
-        visited: *std.AutoHashMap(Type.TypeId, void),
+        visited: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!bool {
         if (visited.contains(ty)) return false;
         try visited.put(ty, {});
@@ -39684,7 +39684,7 @@ const BodyContext = struct {
         mode: DraftStructuralDerivationMode,
         raw_node: NodeId,
         result_ty: Type.TypeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
         added_method_call: *bool,
     ) Allocator.Error!void {
         const entry = try seen.getOrPut(raw_node);
@@ -41786,7 +41786,7 @@ const BodyContext = struct {
     ) Allocator.Error![]const NodeId {
         var guards = std.ArrayList(NodeId).empty;
         defer guards.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         var active = std.AutoHashMap(PatternNodeVisit, void).init(self.allocator);
         defer active.deinit();
@@ -41799,7 +41799,7 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
         guards: *std.ArrayList(NodeId),
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
         active: *std.AutoHashMap(PatternNodeVisit, void),
     ) Allocator.Error!void {
         const key: PatternNodeVisit = .{ .pattern = pattern_id, .node = node };
@@ -46375,7 +46375,7 @@ const EqDeriver = struct {
     /// earlier `if` bodies, matching source field/element order.
     const forward = false;
 
-    fn expansionStack(self: *BodyContext) *std.AutoHashMap(Type.TypeId, void) {
+    fn expansionStack(self: *BodyContext) *collections.DenseMap(Type.TypeId, void) {
         return &self.equality_expansion_stack;
     }
 
@@ -46604,7 +46604,7 @@ const HashDeriver = struct {
     /// the previous one.
     const forward = true;
 
-    fn expansionStack(self: *BodyContext) *std.AutoHashMap(Type.TypeId, void) {
+    fn expansionStack(self: *BodyContext) *collections.DenseMap(Type.TypeId, void) {
         return &self.hash_expansion_stack;
     }
 
