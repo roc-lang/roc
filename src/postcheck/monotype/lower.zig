@@ -33761,6 +33761,10 @@ const BodyContext = struct {
         };
         try relateFunctionRequestInterface(self.graph, target_node, callable_node);
         const fn_nodes = try self.graph.functionNodes(callable_node);
+        // Stays on the node: a numeral call's checked return is the
+        // pre-target numeral variable, whose value the target supplies
+        // through the relation — the literal-leaves law verbatim; a directed
+        // read would default what the target made concrete.
         const ret_ty = try self.activeTypeFromNode(fn_nodes.ret);
 
         const call_expr = try self.addExprWithTypeCell(
