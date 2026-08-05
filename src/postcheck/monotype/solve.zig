@@ -2726,7 +2726,31 @@ pub const InstGraph = struct {
     }
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
+        // Debug-only: whether this relation states anything. A relation whose
+        // operands already share a class, and whose classes carry no
+        // undisposed residual either side, changed nothing that a directed
+        // read could not have stated on its own; the informative remainder is
+        // what the residual resolver must keep (reunify.md 13.2e).
+        if (comptime census.enabled) {
+            if (self.find(a) == self.find(b)) {
+                census.bump("relation_noop_same_class");
+            } else if (self.classHasResidual(a) or self.classHasResidual(b)) {
+                census.bump("relation_resolves_residual");
+            } else {
+                census.bump("relation_joins_two_stated");
+            }
+        }
         try self.unifyRootsTransitively(a, b, false);
+    }
+
+    /// Debug/probe-only: whether a class holds a variable the checked module
+    /// left undisposed, which is the population the seal comparison isolated
+    /// as the graph's only irreplaceable contribution.
+    fn classHasResidual(self: *InstGraph, node: NodeId) bool {
+        return switch (self.nodes.items[@intFromEnum(self.find(node))]) {
+            .unresolved => true,
+            else => false,
+        };
     }
 
     /// Join two matching structural request containers after their components

@@ -1716,6 +1716,15 @@ const Walk = struct {
                 .empty_tag_union => try self.build_store.internTagUnion(self.owner.target_names, &.{}),
             };
         }
+        if (comptime census.enabled) {
+            if (self.dispositionFor(checked_ty) != null) {
+                census.bump("residual_had_disposition");
+            } else if (self.cursor.view.residualDispositions().len == 0) {
+                census.bump("residual_module_has_no_dispositions");
+            } else {
+                census.bump("residual_absent_from_table");
+            }
+        }
         if (self.dispose_residual_as_uninhabited) {
             return try self.build_store.internTagUnion(self.owner.target_names, &.{});
         }
