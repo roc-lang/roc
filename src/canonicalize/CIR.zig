@@ -863,39 +863,30 @@ pub const Import = struct {
             self.map.deinit(allocator);
         }
 
-        /// Get or create an Import.Idx for the given module name.
-        /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (unresolved).
+        /// Get or create an Import.Idx for the given module name in a fresh CommonEnv.
+        /// New imports are initially unresolved.
         /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8) Allocator.Error!Import.Idx {
             return self.getOrPutWithIdent(allocator, common, module_name, null);
         }
 
-        /// Get or create an Import.Idx for the given module name, with an associated ident.
-        /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (unresolved).
+        /// Get or create an Import.Idx for the given module name in a fresh CommonEnv,
+        /// with an associated ident. New imports are initially unresolved.
         /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8, ident_idx: ?base.Ident.Idx) Allocator.Error!Import.Idx {
-            // First check if we already have this module name by comparing strings
-            for (self.imports.items.items, 0..) |existing_string_idx, i| {
-                const existing_name = common.getString(existing_string_idx);
-                if (std.mem.eql(u8, existing_name, module_name)) {
-                    // Found existing import with same name
-                    // Update ident if provided and not already set
-                    if (ident_idx) |ident| {
-                        if (i < self.import_idents.len()) {
-                            const current = self.import_idents.items.items[i];
-                            if (current.isNone()) {
-                                self.import_idents.items.items[i] = ident;
-                            }
-                        }
+            const string_idx = try common.insertString(allocator, module_name);
+
+            if (self.map.get(string_idx)) |idx| {
+                if (ident_idx) |ident| {
+                    const i = @intFromEnum(idx);
+                    if (i < self.import_idents.len() and self.import_idents.items.items[i].isNone()) {
+                        self.import_idents.items.items[i] = ident;
                     }
-                    return @as(Import.Idx, @enumFromInt(i));
                 }
+
+                return idx;
             }
 
-            // Not found - create new import
-            const string_idx = try common.insertString(allocator, module_name);
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
             // Add to both the list and the map, with unresolved module initially
