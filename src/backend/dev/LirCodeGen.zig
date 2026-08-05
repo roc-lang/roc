@@ -22154,9 +22154,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const args_ptr_slot = self.codegen.allocStackSlot(8);
             const ret_ptr_slot = self.codegen.allocStackSlot(8);
             const ret_desc_ptr_slot = self.codegen.allocStackSlot(8);
-            try self.emitStore(.w64, frame_ptr, args_ptr_slot, self.getArgumentRegister(2));
-            try self.emitStore(.w64, frame_ptr, ret_ptr_slot, self.getArgumentRegister(3));
-            try self.emitStore(.w64, frame_ptr, ret_desc_ptr_slot, self.getArgumentRegister(4));
+            try self.saveIncomingPointerArg(args_ptr_slot, 2);
+            try self.saveIncomingPointerArg(ret_ptr_slot, 3);
+            try self.saveIncomingPointerArg(ret_desc_ptr_slot, 4);
 
             // Claim the RocOps register. RocOps-threaded modes pass live ops in
             // the first argument register; the object-file symbol ABI threads a
@@ -23522,6 +23522,38 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     try codegen.bindErasedCallableAdapterParams(proc, arg_plan);
 
     _ = codegen.local_locations.get(@intFromEnum(reuse_arg)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(codegen.codegen.getCode().len > 0);
+}
+
+test "Windows dictionary thunk ABI reads result descriptor pointer from caller stack" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const proc_id = try addLiteralProc(
+        &store,
+        .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .u64,
+    );
+    const proc = store.getProcSpec(proc_id);
+
+    const WinCodeGen = LirCodeGen(.x64win);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    defer codegen.deinit();
+
+    try codegen.proc_registry.put(@intFromEnum(proc_id), .{
+        .id = proc_id,
+        .code_start = 0,
+        .code_end = 0,
+        .name = proc.name,
+        .args = proc.args,
+    });
+
+    const thunk_offset = try codegen.generateBoxyDictProcThunk(proc_id);
+
+    try std.testing.expectEqual(@as(usize, 0), thunk_offset);
     try std.testing.expect(codegen.codegen.getCode().len > 0);
 }
 
