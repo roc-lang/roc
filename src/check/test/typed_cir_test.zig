@@ -28,14 +28,12 @@ test "typed CIR exposes solved vars on defs exprs and patterns" {
         try std.testing.expectEqual(module.exprType(typed_cir_def.data.expr), typed_cir_def.expr.ty());
         try std.testing.expectEqual(module.patternType(typed_cir_def.data.pattern), typed_cir_def.pattern.ty());
 
-        switch (typed_cir_def.expr.data) {
-            .e_lambda => |lambda| {
-                const arg_patterns = test_env.module_env.store.slicePatterns(lambda.args);
-                try std.testing.expect(arg_patterns.len > 0);
-                const typed_cir_arg = module.pattern(arg_patterns[0]);
-                try std.testing.expectEqual(module.patternType(arg_patterns[0]), typed_cir_arg.ty());
-            },
-            else => {},
+        const expr = typed_cir_def.expr.data;
+        if (expr == .e_lambda) {
+            const arg_patterns = test_env.module_env.store.slicePatterns(expr.e_lambda.args);
+            try std.testing.expect(arg_patterns.len > 0);
+            const typed_cir_arg = module.pattern(arg_patterns[0]);
+            try std.testing.expectEqual(module.patternType(arg_patterns[0]), typed_cir_arg.ty());
         }
     }
 }

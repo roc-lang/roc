@@ -34,14 +34,10 @@ pub fn unwrapAliases(type_store: *const TypeStore, type_var: Var, max_depth: usi
     var depth: usize = 0;
 
     while (depth < max_depth) : (depth += 1) {
-        switch (content) {
-            .alias => |alias| {
-                const backing_var = type_store.getAliasBackingVar(alias);
-                resolved = type_store.resolveVar(backing_var);
-                content = resolved.desc.content;
-            },
-            else => break,
-        }
+        if (std.meta.activeTag(content) != .alias) break;
+        const backing_var = type_store.getAliasBackingVar(content.alias);
+        resolved = type_store.resolveVar(backing_var);
+        content = resolved.desc.content;
     }
 
     return .{
@@ -135,19 +131,13 @@ pub fn extractBaseTypeName(type_str: []const u8) []const u8 {
 /// Get the alias type identifier if the content is an alias.
 /// Returns null if the content is not an alias.
 pub fn getAliasIdent(content: Content) ?TypeIdent {
-    return switch (content) {
-        .alias => |alias| alias.ident,
-        else => null,
-    };
+    return if (std.meta.activeTag(content) == .alias) content.alias.ident else null;
 }
 
 /// Check if a content is an alias and get the backing var.
 /// Returns the backing var if the content is an alias, null otherwise.
 pub fn getAliasBackingVar(type_store: *const TypeStore, content: Content) ?Var {
-    return switch (content) {
-        .alias => |alias| type_store.getAliasBackingVar(alias),
-        else => null,
-    };
+    return if (std.meta.activeTag(content) == .alias) type_store.getAliasBackingVar(content.alias) else null;
 }
 
 /// Get the backing var for a type variable if it's an alias.

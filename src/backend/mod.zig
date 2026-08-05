@@ -251,15 +251,10 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     const code = codegen.getGeneratedCode();
     var return_code: ?[]const u8 = null;
     for (codegen.getRelocations()) |relocation| {
-        switch (relocation) {
-            .linked_function => |linked| {
-                if (std.mem.eql(u8, linked.name, "hosted_u128_identity")) {
-                    const call_end: usize = @intCast(linked.offset + 4);
-                    return_code = code[call_end..@min(call_end + 32, code.len)];
-                    break;
-                }
-            },
-            else => {},
+        if (relocation == .linked_function and std.mem.eql(u8, relocation.linked_function.name, "hosted_u128_identity")) {
+            const call_end: usize = @intCast(relocation.linked_function.offset + 4);
+            return_code = code[call_end..@min(call_end + 32, code.len)];
+            break;
         }
     }
     const after_hosted_call = return_code orelse return error.TestUnexpectedResult;

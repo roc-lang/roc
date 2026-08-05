@@ -67,21 +67,19 @@ pub fn spliceDwarf(gpa: Allocator, io: Io, exe_path: []const u8, obj_path: []con
         var it = LoadCommandWalker.init(obj_bytes, obj_header);
         var ordinal: u32 = 1;
         while (try it.next()) |lc| {
-            switch (lc.cmd.cmd) {
-                .SEGMENT_64 => {
-                    const seg = std.mem.bytesToValue(macho.segment_command_64, lc.bytes[0..seg_cmd_size]);
-                    var sect_off: usize = seg_cmd_size;
-                    var i: u32 = 0;
-                    while (i < seg.nsects) : (i += 1) {
-                        if (sect_off + sect_size > lc.bytes.len) return SpliceError.UnexpectedEof;
-                        const sect = std.mem.bytesToValue(macho.section_64, lc.bytes[sect_off..][0..sect_size]);
-                        try obj_sections.append(gpa, .{ .header = sect, .ordinal = ordinal });
-                        ordinal += 1;
-                        sect_off += sect_size;
-                    }
-                },
-                .SYMTAB => obj_symtab = std.mem.bytesToValue(macho.symtab_command, lc.bytes[0..@sizeOf(macho.symtab_command)]),
-                else => {},
+            if (lc.cmd.cmd == .SEGMENT_64) {
+                const seg = std.mem.bytesToValue(macho.segment_command_64, lc.bytes[0..seg_cmd_size]);
+                var sect_off: usize = seg_cmd_size;
+                var i: u32 = 0;
+                while (i < seg.nsects) : (i += 1) {
+                    if (sect_off + sect_size > lc.bytes.len) return SpliceError.UnexpectedEof;
+                    const sect = std.mem.bytesToValue(macho.section_64, lc.bytes[sect_off..][0..sect_size]);
+                    try obj_sections.append(gpa, .{ .header = sect, .ordinal = ordinal });
+                    ordinal += 1;
+                    sect_off += sect_size;
+                }
+            } else if (lc.cmd.cmd == .SYMTAB) {
+                obj_symtab = std.mem.bytesToValue(macho.symtab_command, lc.bytes[0..@sizeOf(macho.symtab_command)]);
             }
         }
     }
@@ -453,7 +451,49 @@ fn rewriteExecutable(
                     shiftField(u32, out.items, base + 32, link_shift);
                     shiftField(u32, out.items, base + 40, link_shift);
                 },
-                else => {},
+                .NONE,
+                .SEGMENT,
+                .SYMSEG,
+                .THREAD,
+                .UNIXTHREAD,
+                .LOADFVMLIB,
+                .IDFVMLIB,
+                .IDENT,
+                .FVMFILE,
+                .PREPAGE,
+                .LOAD_DYLIB,
+                .ID_DYLIB,
+                .LOAD_DYLINKER,
+                .ID_DYLINKER,
+                .PREBOUND_DYLIB,
+                .ROUTINES,
+                .SUB_FRAMEWORK,
+                .SUB_UMBRELLA,
+                .SUB_CLIENT,
+                .SUB_LIBRARY,
+                .TWOLEVEL_HINTS,
+                .PREBIND_CKSUM,
+                .LOAD_WEAK_DYLIB,
+                .ROUTINES_64,
+                .UUID,
+                .RPATH,
+                .REEXPORT_DYLIB,
+                .LAZY_LOAD_DYLIB,
+                .ENCRYPTION_INFO,
+                .LOAD_UPWARD_DYLIB,
+                .VERSION_MIN_MACOSX,
+                .VERSION_MIN_IPHONEOS,
+                .DYLD_ENVIRONMENT,
+                .MAIN,
+                .SOURCE_VERSION,
+                .ENCRYPTION_INFO_64,
+                .LINKER_OPTION,
+                .VERSION_MIN_TVOS,
+                .VERSION_MIN_WATCHOS,
+                .NOTE,
+                .BUILD_VERSION,
+                _,
+                => {},
             }
         }
     }

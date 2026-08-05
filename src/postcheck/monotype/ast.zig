@@ -1144,28 +1144,24 @@ pub const ProgramView = struct {
         }
 
         for (self.exprs) |expr| {
-            switch (expr.data) {
-                .call_proc => |call| switch (call.callee) {
-                    .func => |slot| switch (slot) {
-                        .local => |fn_id| {
-                            const raw_fn = @intFromEnum(fn_id);
-                            if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
-                            const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
-                            if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
-                            switch (self.types.get(self.fns[raw_fn].source.mono_fn_ty)) {
-                                .func => |func| {
-                                    if (func.args.len != call.args.len) return .local_call_arity_mismatch;
-                                },
-                                else => return .local_fn_type_not_function,
-                            }
-                        },
-                        .imported => |imported| {
-                            if (@intFromEnum(imported) >= self.imported_fns.len) return .imported_fn_out_of_bounds;
-                        },
+            if (std.meta.activeTag(expr.data) != .call_proc) continue;
+            const call = expr.data.call_proc;
+            switch (call.callee) {
+                .func => |slot| switch (slot) {
+                    .local => |fn_id| {
+                        const raw_fn = @intFromEnum(fn_id);
+                        if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
+                        const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
+                        if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
+                        const fn_ty = self.types.get(self.fns[raw_fn].source.mono_fn_ty);
+                        if (std.meta.activeTag(fn_ty) != .func) return .local_fn_type_not_function;
+                        if (fn_ty.func.args.len != call.args.len) return .local_call_arity_mismatch;
                     },
-                    .lifted => return .lifted_fn_before_lifting,
+                    .imported => |imported| {
+                        if (@intFromEnum(imported) >= self.imported_fns.len) return .imported_fn_out_of_bounds;
+                    },
                 },
-                else => {},
+                .lifted => return .lifted_fn_before_lifting,
             }
         }
         return null;
@@ -1180,13 +1176,10 @@ pub const ProgramView = struct {
         if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
         const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
         if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
-        return switch (self.types.get(self.fns[raw_fn].source.mono_fn_ty)) {
-            .func => |func| {
-                if (func.args.len != args.len) return .local_fn_definition_arity_mismatch;
-                return null;
-            },
-            else => .local_fn_type_not_function,
-        };
+        const fn_ty = self.types.get(self.fns[raw_fn].source.mono_fn_ty);
+        if (std.meta.activeTag(fn_ty) != .func) return .local_fn_type_not_function;
+        if (fn_ty.func.args.len != args.len) return .local_fn_definition_arity_mismatch;
+        return null;
     }
 };
 
@@ -2298,15 +2291,13 @@ fn collectSingleShardLocalCallTargets(
     out: *std.ArrayList(FnId),
 ) (std.mem.Allocator.Error || error{TestUnexpectedResult})!void {
     for (exprs) |expr| {
-        switch (expr.data) {
-            .call_proc => |call| switch (call.callee) {
-                .func => |slot| switch (slot) {
-                    .local => |fn_id| try out.append(allocator, fn_id),
-                    .imported => return error.TestUnexpectedResult,
-                },
-                .lifted => return error.TestUnexpectedResult,
+        if (std.meta.activeTag(expr.data) != .call_proc) continue;
+        switch (expr.data.call_proc.callee) {
+            .func => |slot| switch (slot) {
+                .local => |fn_id| try out.append(allocator, fn_id),
+                .imported => return error.TestUnexpectedResult,
             },
-            else => {},
+            .lifted => return error.TestUnexpectedResult,
         }
     }
 }

@@ -13,57 +13,37 @@ pub const ErrorKind = enum {
 
 /// Returns whether a layout is one of Roc's fixed-width integer layouts.
 pub fn isIntegerLayout(layout_idx: layout.Idx) bool {
-    return switch (layout_idx) {
-        .u8,
-        .i8,
-        .u16,
-        .i16,
-        .u32,
-        .i32,
-        .u64,
-        .i64,
-        .u128,
-        .i128,
-        => true,
-        else => false,
-    };
+    return layout_idx == .u8 or layout_idx == .i8 or
+        layout_idx == .u16 or layout_idx == .i16 or
+        layout_idx == .u32 or layout_idx == .i32 or
+        layout_idx == .u64 or layout_idx == .i64 or
+        layout_idx == .u128 or layout_idx == .i128;
 }
 
 /// Returns whether a layout is one of Roc's signed fixed-width integer layouts.
 pub fn isSignedIntegerLayout(layout_idx: layout.Idx) bool {
-    return switch (layout_idx) {
-        .i8,
-        .i16,
-        .i32,
-        .i64,
-        .i128,
-        => true,
-        else => false,
-    };
+    return layout_idx == .i8 or layout_idx == .i16 or layout_idx == .i32 or
+        layout_idx == .i64 or layout_idx == .i128;
 }
 
 /// Returns the integer bit width represented by a fixed-width integer layout.
 pub fn intBits(layout_idx: layout.Idx) u16 {
-    return switch (layout_idx) {
-        .u8, .i8 => 8,
-        .u16, .i16 => 16,
-        .u32, .i32 => 32,
-        .u64, .i64 => 64,
-        .u128, .i128 => 128,
-        else => unreachable,
-    };
+    if (layout_idx == .u8 or layout_idx == .i8) return 8;
+    if (layout_idx == .u16 or layout_idx == .i16) return 16;
+    if (layout_idx == .u32 or layout_idx == .i32) return 32;
+    if (layout_idx == .u64 or layout_idx == .i64) return 64;
+    if (layout_idx == .u128 or layout_idx == .i128) return 128;
+    unreachable;
 }
 
 /// Returns the lowest representable value for a signed numeric layout.
 pub fn signedLowestValue(layout_idx: layout.Idx) ?i128 {
-    return switch (layout_idx) {
-        .i8 => std.math.minInt(i8),
-        .i16 => std.math.minInt(i16),
-        .i32 => std.math.minInt(i32),
-        .i64 => std.math.minInt(i64),
-        .i128, .dec => std.math.minInt(i128),
-        else => null,
-    };
+    if (layout_idx == .i8) return std.math.minInt(i8);
+    if (layout_idx == .i16) return std.math.minInt(i16);
+    if (layout_idx == .i32) return std.math.minInt(i32);
+    if (layout_idx == .i64) return std.math.minInt(i64);
+    if (layout_idx == .i128 or layout_idx == .dec) return std.math.minInt(i128);
+    return null;
 }
 
 /// Returns the checked LIR operation required by a plain numeric operation.
@@ -72,59 +52,49 @@ pub fn checkedOp(op: LIR.LowLevel, layout_idx: layout.Idx) ?LIR.LowLevel {
         return if (op == .num_abs) .num_abs_checked else null;
     }
     if (!isIntegerLayout(layout_idx)) return null;
-    return switch (op) {
-        .num_plus => .num_plus_checked,
-        .num_minus => .num_minus_checked,
-        .num_times => .num_times_checked,
-        .num_div_by => .num_div_by_checked,
-        .num_div_trunc_by => .num_div_trunc_by_checked,
-        .num_rem_by => .num_rem_by_checked,
-        .num_mod_by => .num_mod_by_checked,
-        .num_negate => if (isSignedIntegerLayout(layout_idx)) .num_negate_checked else null,
-        .num_abs => if (isSignedIntegerLayout(layout_idx)) .num_abs_checked else null,
-        else => null,
-    };
+    if (op == .num_plus) return .num_plus_checked;
+    if (op == .num_minus) return .num_minus_checked;
+    if (op == .num_times) return .num_times_checked;
+    if (op == .num_div_by) return .num_div_by_checked;
+    if (op == .num_div_trunc_by) return .num_div_trunc_by_checked;
+    if (op == .num_rem_by) return .num_rem_by_checked;
+    if (op == .num_mod_by) return .num_mod_by_checked;
+    if (op == .num_negate and isSignedIntegerLayout(layout_idx)) return .num_negate_checked;
+    if (op == .num_abs and isSignedIntegerLayout(layout_idx)) return .num_abs_checked;
+    return null;
 }
 
 /// Commits the source arithmetic policy to its LIR operation.
 pub fn lowerOp(op: LIR.LowLevel, layout_idx: layout.Idx) LIR.LowLevel {
-    return switch (op) {
-        .num_plus_wrap => .num_plus,
-        .num_minus_wrap => .num_minus,
-        .num_times_wrap => .num_times,
-        else => checkedOp(op, layout_idx) orelse op,
-    };
+    if (op == .num_plus_wrap) return .num_plus;
+    if (op == .num_minus_wrap) return .num_minus;
+    if (op == .num_times_wrap) return .num_times;
+    return checkedOp(op, layout_idx) orelse op;
 }
 
 /// Returns the plain wrapping LIR operation for a checked arithmetic operation.
 pub fn uncheckedOp(op: LIR.LowLevel) ?LIR.LowLevel {
-    return switch (op) {
-        .num_plus_checked => .num_plus,
-        .num_minus_checked => .num_minus,
-        .num_times_checked => .num_times,
-        .num_div_by_checked => .num_div_by,
-        .num_div_trunc_by_checked => .num_div_trunc_by,
-        .num_rem_by_checked => .num_rem_by,
-        .num_mod_by_checked => .num_mod_by,
-        .num_negate_checked => .num_negate,
-        .num_abs_checked => .num_abs,
-        else => null,
-    };
+    if (op == .num_plus_checked) return .num_plus;
+    if (op == .num_minus_checked) return .num_minus;
+    if (op == .num_times_checked) return .num_times;
+    if (op == .num_div_by_checked) return .num_div_by;
+    if (op == .num_div_trunc_by_checked) return .num_div_trunc_by;
+    if (op == .num_rem_by_checked) return .num_rem_by;
+    if (op == .num_mod_by_checked) return .num_mod_by;
+    if (op == .num_negate_checked) return .num_negate;
+    if (op == .num_abs_checked) return .num_abs;
+    return null;
 }
 
 /// Returns the canonical crash message for a checked arithmetic overflow.
 pub fn overflowMessage(op: LIR.LowLevel) ?[]const u8 {
-    return switch (op) {
-        .num_plus_checked => "Integer addition overflowed",
-        .num_minus_checked => "Integer subtraction overflowed",
-        .num_times_checked => "Integer multiplication overflowed",
-        .num_negate_checked => "Integer negation overflowed",
-        .num_abs_checked => "Integer absolute value overflowed",
-        .num_div_by_checked,
-        .num_div_trunc_by_checked,
-        => "Integer division overflowed",
-        else => null,
-    };
+    if (op == .num_plus_checked) return "Integer addition overflowed";
+    if (op == .num_minus_checked) return "Integer subtraction overflowed";
+    if (op == .num_times_checked) return "Integer multiplication overflowed";
+    if (op == .num_negate_checked) return "Integer negation overflowed";
+    if (op == .num_abs_checked) return "Integer absolute value overflowed";
+    if (op == .num_div_by_checked or op == .num_div_trunc_by_checked) return "Integer division overflowed";
+    return null;
 }
 
 /// Returns the overflow message for a checked operation and operand layout.
@@ -137,62 +107,52 @@ pub fn overflowMessageForLayout(op: LIR.LowLevel, layout_idx: layout.Idx) ?[]con
 
 /// Returns the canonical crash message for a checked zero-denominator operation.
 pub fn zeroDenominatorMessage(op: LIR.LowLevel, layout_idx: layout.Idx) ?[]const u8 {
-    return switch (op) {
-        .num_div_by_checked,
-        .num_div_trunc_by_checked,
-        => divisionByZeroMessage(layout_idx),
-        .num_rem_by_checked => remainderByZeroMessage(layout_idx),
-        .num_mod_by_checked => moduloByZeroMessage(layout_idx),
-        else => null,
-    };
+    if (op == .num_div_by_checked or op == .num_div_trunc_by_checked) return divisionByZeroMessage(layout_idx);
+    if (op == .num_rem_by_checked) return remainderByZeroMessage(layout_idx);
+    if (op == .num_mod_by_checked) return moduloByZeroMessage(layout_idx);
+    return null;
 }
 
 fn divisionByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
-    return switch (layout_idx) {
-        .u8 => "U8 division by zero",
-        .i8 => "I8 division by zero",
-        .u16 => "U16 division by zero",
-        .i16 => "I16 division by zero",
-        .u32 => "U32 division by zero",
-        .i32 => "I32 division by zero",
-        .u64 => "U64 division by zero",
-        .i64 => "I64 division by zero",
-        .u128 => "U128 division by zero",
-        .i128 => "I128 division by zero",
-        else => null,
-    };
+    if (layout_idx == .u8) return "U8 division by zero";
+    if (layout_idx == .i8) return "I8 division by zero";
+    if (layout_idx == .u16) return "U16 division by zero";
+    if (layout_idx == .i16) return "I16 division by zero";
+    if (layout_idx == .u32) return "U32 division by zero";
+    if (layout_idx == .i32) return "I32 division by zero";
+    if (layout_idx == .u64) return "U64 division by zero";
+    if (layout_idx == .i64) return "I64 division by zero";
+    if (layout_idx == .u128) return "U128 division by zero";
+    if (layout_idx == .i128) return "I128 division by zero";
+    return null;
 }
 
 fn remainderByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
-    return switch (layout_idx) {
-        .u8 => "U8 remainder by zero",
-        .i8 => "I8 remainder by zero",
-        .u16 => "U16 remainder by zero",
-        .i16 => "I16 remainder by zero",
-        .u32 => "U32 remainder by zero",
-        .i32 => "I32 remainder by zero",
-        .u64 => "U64 remainder by zero",
-        .i64 => "I64 remainder by zero",
-        .u128 => "U128 remainder by zero",
-        .i128 => "I128 remainder by zero",
-        else => null,
-    };
+    if (layout_idx == .u8) return "U8 remainder by zero";
+    if (layout_idx == .i8) return "I8 remainder by zero";
+    if (layout_idx == .u16) return "U16 remainder by zero";
+    if (layout_idx == .i16) return "I16 remainder by zero";
+    if (layout_idx == .u32) return "U32 remainder by zero";
+    if (layout_idx == .i32) return "I32 remainder by zero";
+    if (layout_idx == .u64) return "U64 remainder by zero";
+    if (layout_idx == .i64) return "I64 remainder by zero";
+    if (layout_idx == .u128) return "U128 remainder by zero";
+    if (layout_idx == .i128) return "I128 remainder by zero";
+    return null;
 }
 
 fn moduloByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
-    return switch (layout_idx) {
-        .u8 => "U8 modulo by zero",
-        .i8 => "I8 modulo by zero",
-        .u16 => "U16 modulo by zero",
-        .i16 => "I16 modulo by zero",
-        .u32 => "U32 modulo by zero",
-        .i32 => "I32 modulo by zero",
-        .u64 => "U64 modulo by zero",
-        .i64 => "I64 modulo by zero",
-        .u128 => "U128 modulo by zero",
-        .i128 => "I128 modulo by zero",
-        else => null,
-    };
+    if (layout_idx == .u8) return "U8 modulo by zero";
+    if (layout_idx == .i8) return "I8 modulo by zero";
+    if (layout_idx == .u16) return "U16 modulo by zero";
+    if (layout_idx == .i16) return "I16 modulo by zero";
+    if (layout_idx == .u32) return "U32 modulo by zero";
+    if (layout_idx == .i32) return "I32 modulo by zero";
+    if (layout_idx == .u64) return "U64 modulo by zero";
+    if (layout_idx == .i64) return "I64 modulo by zero";
+    if (layout_idx == .u128) return "U128 modulo by zero";
+    if (layout_idx == .i128) return "I128 modulo by zero";
+    return null;
 }
 
 test "checkedOp maps integer arithmetic and checked Dec absolute value" {

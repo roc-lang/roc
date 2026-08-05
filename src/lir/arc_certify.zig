@@ -363,13 +363,16 @@ fn certifyRcAtomicity(
 
     for (0..store.cfStmtCount()) |stmt_index| {
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = switch (stmt) {
-            .incref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
-            .decref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
-            .decref_if_initialized => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
-            .free => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
-            else => continue,
-        };
+        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = if (stmt == .incref)
+            .{ .value = stmt.incref.value, .atomicity = stmt.incref.atomicity }
+        else if (stmt == .decref)
+            .{ .value = stmt.decref.value, .atomicity = stmt.decref.atomicity }
+        else if (stmt == .decref_if_initialized)
+            .{ .value = stmt.decref_if_initialized.value, .atomicity = stmt.decref_if_initialized.atomicity }
+        else if (stmt == .free)
+            .{ .value = stmt.free.value, .atomicity = stmt.free.atomicity }
+        else
+            continue;
         if (checked.atomicity == .atomic) continue;
         const index = @intFromEnum(checked.value);
         if (index < visible.capacity() and visible.isSet(index)) {
@@ -450,10 +453,9 @@ fn certifyUniqueArgs(
         defer uniqueness.deinit(allocator);
 
         for (proc_stmts.items) |current| {
-            const assign = switch (store.getCFStmt(current)) {
-                .assign_low_level => |assign| assign,
-                else => continue,
-            };
+            const stmt = store.getCFStmt(current);
+            if (stmt != .assign_low_level) continue;
+            const assign = stmt.assign_low_level;
             if (assign.unique_args == 0) continue;
             const stmt_index = @intFromEnum(current);
             if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
@@ -642,10 +644,8 @@ fn writeFailureContext(
         for (extra_locals) |extra| {
             mentions = mentions or stmtMentionsLocal(store, stmt, extra);
         }
-        const structural = switch (stmt) {
-            .join, .jump, .incref, .decref, .decref_if_initialized, .free => true,
-            else => false,
-        };
+        const structural = stmt == .join or stmt == .jump or stmt == .incref or
+            stmt == .decref or stmt == .decref_if_initialized or stmt == .free;
         const nearby = if (stmt_id) |focus_stmt| if (index > @intFromEnum(focus_stmt))
             index - @intFromEnum(focus_stmt) <= 12
         else
@@ -732,7 +732,18 @@ fn writeFailureContext(
                 context.append(" next={d}", .{@intFromEnum(a.next)});
             },
             inline .assign_literal, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
-            else => {},
+            .store_struct,
+            .store_tag,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .loop_continue,
+            .loop_break,
+            .crash,
+            => {},
         }
         context.append("\n", .{});
     }
@@ -2065,7 +2076,7 @@ const Certifier = struct {
                 if (data.discriminant_size != 0) break :blk null;
                 break :blk payload.source;
             },
-            else => null,
+            .discriminant, .field, .list_reinterpret => null,
         } orelse return null;
 
         const source_layout = self.store.getLocal(source).layout_idx;

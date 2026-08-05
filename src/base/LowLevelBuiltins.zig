@@ -16,53 +16,56 @@ const builtins = @import("builtins");
 
 pub const BuiltinFn = builtins.builtin_registry.BuiltinFn;
 
+fn lookup(op: LowLevel, mappings: anytype) BuiltinFn {
+    inline for (mappings) |mapping| {
+        if (op == mapping[0]) return mapping[1];
+    }
+    unreachable;
+}
+
 /// Float variant of a unary transcendental math op.
 pub fn unaryMathFloat(op: LowLevel, is_f32: bool) BuiltinFn {
-    return switch (op) {
-        .num_sin => if (is_f32) .float_sin_f32 else .float_sin,
-        .num_cos => if (is_f32) .float_cos_f32 else .float_cos,
-        .num_tan => if (is_f32) .float_tan_f32 else .float_tan,
-        .num_asin => if (is_f32) .float_asin_f32 else .float_asin,
-        .num_acos => if (is_f32) .float_acos_f32 else .float_acos,
-        .num_atan => if (is_f32) .float_atan_f32 else .float_atan,
-        else => unreachable,
-    };
+    return lookup(op, .{
+        .{ LowLevel.num_sin, if (is_f32) BuiltinFn.float_sin_f32 else BuiltinFn.float_sin },
+        .{ LowLevel.num_cos, if (is_f32) BuiltinFn.float_cos_f32 else BuiltinFn.float_cos },
+        .{ LowLevel.num_tan, if (is_f32) BuiltinFn.float_tan_f32 else BuiltinFn.float_tan },
+        .{ LowLevel.num_asin, if (is_f32) BuiltinFn.float_asin_f32 else BuiltinFn.float_asin },
+        .{ LowLevel.num_acos, if (is_f32) BuiltinFn.float_acos_f32 else BuiltinFn.float_acos },
+        .{ LowLevel.num_atan, if (is_f32) BuiltinFn.float_atan_f32 else BuiltinFn.float_atan },
+    });
 }
 
 /// Dec variant of a unary math op.
 pub fn unaryMathDec(op: LowLevel) BuiltinFn {
-    return switch (op) {
-        .num_sin => .dec_sin,
-        .num_cos => .dec_cos,
-        .num_tan => .dec_tan,
-        .num_asin => .dec_asin,
-        .num_acos => .dec_acos,
-        .num_atan => .dec_atan,
-        .num_sqrt => .dec_sqrt,
-        else => unreachable,
-    };
+    return lookup(op, .{
+        .{ LowLevel.num_sin, BuiltinFn.dec_sin },
+        .{ LowLevel.num_cos, BuiltinFn.dec_cos },
+        .{ LowLevel.num_tan, BuiltinFn.dec_tan },
+        .{ LowLevel.num_asin, BuiltinFn.dec_asin },
+        .{ LowLevel.num_acos, BuiltinFn.dec_acos },
+        .{ LowLevel.num_atan, BuiltinFn.dec_atan },
+        .{ LowLevel.num_sqrt, BuiltinFn.dec_sqrt },
+    });
 }
 
 /// Float rounding ops, for backends that call rather than inline them.
 pub fn floatRounding(op: LowLevel, is_f32: bool) BuiltinFn {
-    return switch (op) {
-        .num_floor => if (is_f32) .float_floor_f32 else .float_floor,
-        .num_ceiling => if (is_f32) .float_ceiling_f32 else .float_ceiling,
-        else => unreachable,
-    };
+    return lookup(op, .{
+        .{ LowLevel.num_floor, if (is_f32) BuiltinFn.float_floor_f32 else BuiltinFn.float_floor },
+        .{ LowLevel.num_ceiling, if (is_f32) BuiltinFn.float_ceiling_f32 else BuiltinFn.float_ceiling },
+    });
 }
 
 /// Binary Dec arithmetic. `num_times` maps to `dec_mul`, which crashes on
 /// overflow like the interpreter's Dec multiply; the saturating
 /// `dec_mul_saturated` wrapper is not the lowering of any current op.
 pub fn decBinaryArith(op: LowLevel) BuiltinFn {
-    return switch (op) {
-        .num_times => .dec_mul,
-        .num_div_by => .dec_div,
-        .num_div_trunc_by => .dec_div_trunc,
-        .num_pow => .dec_pow,
-        else => unreachable,
-    };
+    return lookup(op, .{
+        .{ LowLevel.num_times, BuiltinFn.dec_mul },
+        .{ LowLevel.num_div_by, BuiltinFn.dec_div },
+        .{ LowLevel.num_div_trunc_by, BuiltinFn.dec_div_trunc },
+        .{ LowLevel.num_pow, BuiltinFn.dec_pow },
+    });
 }
 
 /// Float `num_pow`, for backends that call rather than inline it.
@@ -72,11 +75,11 @@ pub fn floatPow(is_f32: bool) BuiltinFn {
 
 /// Float binary operations which lower through shared wrappers.
 pub fn floatBinaryArith(op: LowLevel, is_f32: bool) BuiltinFn {
-    return switch (op) {
-        .num_div_trunc_by => if (is_f32) .float_div_trunc_f32 else .float_div_trunc,
-        .num_rem_by, .num_mod_by => if (is_f32) .float_rem_f32 else .float_rem,
-        else => unreachable,
-    };
+    return lookup(op, .{
+        .{ LowLevel.num_div_trunc_by, if (is_f32) BuiltinFn.float_div_trunc_f32 else BuiltinFn.float_div_trunc },
+        .{ LowLevel.num_rem_by, if (is_f32) BuiltinFn.float_rem_f32 else BuiltinFn.float_rem },
+        .{ LowLevel.num_mod_by, if (is_f32) BuiltinFn.float_rem_f32 else BuiltinFn.float_rem },
+    });
 }
 
 /// 128-bit truncating division / remainder.
@@ -163,68 +166,66 @@ pub fn intTryConvert(src_is_128: bool, src_is_signed: bool) BuiltinFn {
 /// String ops that lower to a single builtin, for backends that call rather
 /// than inline them.
 pub fn strOp(op: LowLevel) BuiltinFn {
-    return switch (op) {
-        .str_is_eq => .str_equal,
-        .str_is_eq_static_small => .str_equal_static_small,
-        .str_static_small_word_eq => .str_static_small_word_eq,
-        .str_static_small_word_caseless_eq => .str_static_small_word_caseless_eq,
-        .str_concat => .str_concat,
-        .str_contains => .str_contains,
-        .str_trim => .str_trim,
-        .str_trim_start => .str_trim_start,
-        .str_trim_end => .str_trim_end,
-        .str_caseless_ascii_equals => .str_caseless_ascii_equals,
-        .str_with_ascii_lowercased => .str_with_ascii_lowercased,
-        .str_with_ascii_uppercased => .str_with_ascii_uppercased,
-        .str_starts_with => .str_starts_with,
-        .str_ends_with => .str_ends_with,
-        .str_repeat => .str_repeat,
-        .str_drop_prefix => .str_drop_prefix,
-        .str_drop_prefix_caseless_ascii => .str_drop_prefix_caseless_ascii,
-        .str_drop_suffix => .str_drop_suffix,
-        .str_split_first => .str_split_first,
-        .str_split_last => .str_split_last,
-        .str_count_utf8_bytes => .str_count_utf8_bytes,
-        .str_get_utf8_byte_unsafe => .str_get_utf8_byte_unsafe,
-        .str_substring_unsafe => .str_substring_unsafe,
-        .str_with_capacity => .str_with_capacity,
-        .str_reserve => .str_reserve,
-        .str_release_excess_capacity => .str_release_excess_capacity,
-        .str_to_utf8 => .str_to_utf8,
-        .str_from_utf8_lossy => .str_from_utf8_lossy,
-        .str_from_utf8 => .str_from_utf8_result,
-        .str_split_on => .str_split,
-        .str_join_with => .str_join_with,
-        .str_inspect => .str_escape_and_quote,
-        else => unreachable,
-    };
+    return lookup(op, .{
+        .{ LowLevel.str_is_eq, BuiltinFn.str_equal },
+        .{ LowLevel.str_is_eq_static_small, BuiltinFn.str_equal_static_small },
+        .{ LowLevel.str_static_small_word_eq, BuiltinFn.str_static_small_word_eq },
+        .{ LowLevel.str_static_small_word_caseless_eq, BuiltinFn.str_static_small_word_caseless_eq },
+        .{ LowLevel.str_concat, BuiltinFn.str_concat },
+        .{ LowLevel.str_contains, BuiltinFn.str_contains },
+        .{ LowLevel.str_trim, BuiltinFn.str_trim },
+        .{ LowLevel.str_trim_start, BuiltinFn.str_trim_start },
+        .{ LowLevel.str_trim_end, BuiltinFn.str_trim_end },
+        .{ LowLevel.str_caseless_ascii_equals, BuiltinFn.str_caseless_ascii_equals },
+        .{ LowLevel.str_with_ascii_lowercased, BuiltinFn.str_with_ascii_lowercased },
+        .{ LowLevel.str_with_ascii_uppercased, BuiltinFn.str_with_ascii_uppercased },
+        .{ LowLevel.str_starts_with, BuiltinFn.str_starts_with },
+        .{ LowLevel.str_ends_with, BuiltinFn.str_ends_with },
+        .{ LowLevel.str_repeat, BuiltinFn.str_repeat },
+        .{ LowLevel.str_drop_prefix, BuiltinFn.str_drop_prefix },
+        .{ LowLevel.str_drop_prefix_caseless_ascii, BuiltinFn.str_drop_prefix_caseless_ascii },
+        .{ LowLevel.str_drop_suffix, BuiltinFn.str_drop_suffix },
+        .{ LowLevel.str_split_first, BuiltinFn.str_split_first },
+        .{ LowLevel.str_split_last, BuiltinFn.str_split_last },
+        .{ LowLevel.str_count_utf8_bytes, BuiltinFn.str_count_utf8_bytes },
+        .{ LowLevel.str_get_utf8_byte_unsafe, BuiltinFn.str_get_utf8_byte_unsafe },
+        .{ LowLevel.str_substring_unsafe, BuiltinFn.str_substring_unsafe },
+        .{ LowLevel.str_with_capacity, BuiltinFn.str_with_capacity },
+        .{ LowLevel.str_reserve, BuiltinFn.str_reserve },
+        .{ LowLevel.str_release_excess_capacity, BuiltinFn.str_release_excess_capacity },
+        .{ LowLevel.str_to_utf8, BuiltinFn.str_to_utf8 },
+        .{ LowLevel.str_from_utf8_lossy, BuiltinFn.str_from_utf8_lossy },
+        .{ LowLevel.str_from_utf8, BuiltinFn.str_from_utf8_result },
+        .{ LowLevel.str_split_on, BuiltinFn.str_split },
+        .{ LowLevel.str_join_with, BuiltinFn.str_join_with },
+        .{ LowLevel.str_inspect, BuiltinFn.str_escape_and_quote },
+    });
 }
 
 /// List ops that lower to a single builtin, for backends that call rather
 /// than inline them. The owned sublist-shaped ops share one wrapper; ARC's
 /// borrowed sublist variant uses its non-consuming wrapper.
 pub fn listOp(op: LowLevel) BuiltinFn {
-    return switch (op) {
-        .list_with_capacity => .list_with_capacity,
-        .list_append_unsafe => .list_append_unsafe,
-        .list_concat => .list_concat,
-        .list_prepend => .list_prepend,
-        .list_sublist,
-        .list_drop_first,
-        .list_drop_last,
-        .list_take_first,
-        .list_take_last,
-        => .list_sublist,
-        .list_sublist_borrowed => .list_sublist_borrowed,
-        .list_drop_at => .list_drop_at,
-        .list_swap => .list_swap,
-        .list_set, .list_replace_unsafe => .list_replace,
-        .list_reserve => .list_reserve,
-        .list_release_excess_capacity => .list_release_excess_capacity,
-        .list_reverse => .list_reverse,
-        .list_map_can_reuse => .list_map_can_reuse,
-        else => unreachable,
-    };
+    return lookup(op, .{
+        .{ LowLevel.list_with_capacity, BuiltinFn.list_with_capacity },
+        .{ LowLevel.list_append_unsafe, BuiltinFn.list_append_unsafe },
+        .{ LowLevel.list_concat, BuiltinFn.list_concat },
+        .{ LowLevel.list_prepend, BuiltinFn.list_prepend },
+        .{ LowLevel.list_sublist, BuiltinFn.list_sublist },
+        .{ LowLevel.list_drop_first, BuiltinFn.list_sublist },
+        .{ LowLevel.list_drop_last, BuiltinFn.list_sublist },
+        .{ LowLevel.list_take_first, BuiltinFn.list_sublist },
+        .{ LowLevel.list_take_last, BuiltinFn.list_sublist },
+        .{ LowLevel.list_sublist_borrowed, BuiltinFn.list_sublist_borrowed },
+        .{ LowLevel.list_drop_at, BuiltinFn.list_drop_at },
+        .{ LowLevel.list_swap, BuiltinFn.list_swap },
+        .{ LowLevel.list_set, BuiltinFn.list_replace },
+        .{ LowLevel.list_replace_unsafe, BuiltinFn.list_replace },
+        .{ LowLevel.list_reserve, BuiltinFn.list_reserve },
+        .{ LowLevel.list_release_excess_capacity, BuiltinFn.list_release_excess_capacity },
+        .{ LowLevel.list_reverse, BuiltinFn.list_reverse },
+        .{ LowLevel.list_map_can_reuse, BuiltinFn.list_map_can_reuse },
+    });
 }
 
 /// Element kind selecting a structural list-equality wrapper.
@@ -252,41 +253,40 @@ pub fn listEq(elem: ListEqElem) BuiltinFn {
 /// The Dec's actual value was never read, and Dict lookups on Dec-keyed records
 /// and tuples returned KeyNotFound on x86_64-windows.
 pub fn hasherOp(op: LowLevel) BuiltinFn {
-    return switch (op) {
-        .dict_pseudo_seed => .dict_pseudo_seed,
-        .hasher_finish => .hasher_finish,
-        .hasher_write_bool,
-        .hasher_write_u8,
-        .hasher_write_u16,
-        .hasher_write_u32,
-        .hasher_write_u64,
-        .hasher_write_i8,
-        .hasher_write_i16,
-        .hasher_write_i32,
-        .hasher_write_i64,
-        => .hasher_write_u64,
-        .hasher_write_u128, .hasher_write_i128, .hasher_write_dec => .hasher_write_u128,
-        .hasher_write_f32 => .hasher_write_f32_bits,
-        .hasher_write_f64 => .hasher_write_f64_bits,
-        .hasher_write_bytes => .hasher_write_bytes,
-        .hasher_write_str => .hasher_write_str,
-        else => unreachable,
-    };
+    return lookup(op, .{
+        .{ LowLevel.dict_pseudo_seed, BuiltinFn.dict_pseudo_seed },
+        .{ LowLevel.hasher_finish, BuiltinFn.hasher_finish },
+        .{ LowLevel.hasher_write_bool, BuiltinFn.hasher_write_u64 },
+        .{ LowLevel.hasher_write_u8, BuiltinFn.hasher_write_u64 },
+        .{ LowLevel.hasher_write_u16, BuiltinFn.hasher_write_u64 },
+        .{ LowLevel.hasher_write_u32, BuiltinFn.hasher_write_u64 },
+        .{ LowLevel.hasher_write_u64, BuiltinFn.hasher_write_u64 },
+        .{ LowLevel.hasher_write_i8, BuiltinFn.hasher_write_u64 },
+        .{ LowLevel.hasher_write_i16, BuiltinFn.hasher_write_u64 },
+        .{ LowLevel.hasher_write_i32, BuiltinFn.hasher_write_u64 },
+        .{ LowLevel.hasher_write_i64, BuiltinFn.hasher_write_u64 },
+        .{ LowLevel.hasher_write_u128, BuiltinFn.hasher_write_u128 },
+        .{ LowLevel.hasher_write_i128, BuiltinFn.hasher_write_u128 },
+        .{ LowLevel.hasher_write_dec, BuiltinFn.hasher_write_u128 },
+        .{ LowLevel.hasher_write_f32, BuiltinFn.hasher_write_f32_bits },
+        .{ LowLevel.hasher_write_f64, BuiltinFn.hasher_write_f64_bits },
+        .{ LowLevel.hasher_write_bytes, BuiltinFn.hasher_write_bytes },
+        .{ LowLevel.hasher_write_str, BuiltinFn.hasher_write_str },
+    });
 }
 
 /// Crypto primitives, 1:1 with their wrappers.
 pub fn cryptoOp(op: LowLevel) BuiltinFn {
-    return switch (op) {
-        .crypto_sha256_hash_bytes => .crypto_sha256_hash_bytes,
-        .crypto_sha256_hasher_empty => .crypto_sha256_hasher_empty,
-        .crypto_sha256_hasher_write => .crypto_sha256_hasher_write,
-        .crypto_sha256_hasher_finish => .crypto_sha256_hasher_finish,
-        .crypto_blake3_hash_bytes => .crypto_blake3_hash_bytes,
-        .crypto_blake3_hasher_empty => .crypto_blake3_hasher_empty,
-        .crypto_blake3_hasher_write => .crypto_blake3_hasher_write,
-        .crypto_blake3_hasher_finish => .crypto_blake3_hasher_finish,
-        else => unreachable,
-    };
+    return lookup(op, .{
+        .{ LowLevel.crypto_sha256_hash_bytes, BuiltinFn.crypto_sha256_hash_bytes },
+        .{ LowLevel.crypto_sha256_hasher_empty, BuiltinFn.crypto_sha256_hasher_empty },
+        .{ LowLevel.crypto_sha256_hasher_write, BuiltinFn.crypto_sha256_hasher_write },
+        .{ LowLevel.crypto_sha256_hasher_finish, BuiltinFn.crypto_sha256_hasher_finish },
+        .{ LowLevel.crypto_blake3_hash_bytes, BuiltinFn.crypto_blake3_hash_bytes },
+        .{ LowLevel.crypto_blake3_hasher_empty, BuiltinFn.crypto_blake3_hasher_empty },
+        .{ LowLevel.crypto_blake3_hasher_write, BuiltinFn.crypto_blake3_hasher_write },
+        .{ LowLevel.crypto_blake3_hasher_finish, BuiltinFn.crypto_blake3_hasher_finish },
+    });
 }
 
 /// Refcount-helper shapes that lower to builtin calls.

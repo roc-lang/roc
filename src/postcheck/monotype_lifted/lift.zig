@@ -265,13 +265,15 @@ pub fn checkCaptureInvariants(program: *const Ast.Program) Allocator.Error!?[]co
     }
 
     for (program.exprsView()) |expr| {
-        switch (expr.data) {
-            .fn_ref => |fn_ref| if (try checkOperandSpan(program, fn_ref.fn_id, fn_ref.captures)) |message| return message,
-            .call_proc => |call| switch (call.callee) {
+        if (expr.data == .fn_ref) {
+            const fn_ref = expr.data.fn_ref;
+            if (try checkOperandSpan(program, fn_ref.fn_id, fn_ref.captures)) |message| return message;
+        } else if (expr.data == .call_proc) {
+            const call = expr.data.call_proc;
+            switch (call.callee) {
                 .lifted => |fn_id| if (try checkOperandSpan(program, fn_id, call.captures)) |message| return message,
                 .func => {},
-            },
-            else => {},
+            }
         }
     }
     return null;
@@ -287,18 +289,16 @@ fn checkActiveCaptureInvariants(program: *const Ast.Program, graph: *const Captu
         switch (edge.site) {
             .pre_lift => return "post-lift capture graph contained an active pre-lift edge",
             .fn_ref => |expr_id| {
-                const fn_ref = switch (program.getExpr(expr_id).data) {
-                    .fn_ref => |fn_ref| fn_ref,
-                    else => return "active capture graph function-reference site changed expression kind",
-                };
+                const data = program.getExpr(expr_id).data;
+                if (data != .fn_ref) return "active capture graph function-reference site changed expression kind";
+                const fn_ref = data.fn_ref;
                 if (fn_ref.fn_id != edge.target) return "active capture graph function-reference target changed";
                 if (try checkOperandSpan(program, edge.target, fn_ref.captures)) |message| return message;
             },
             .call_proc => |expr_id| {
-                const call = switch (program.getExpr(expr_id).data) {
-                    .call_proc => |call| call,
-                    else => return "active capture graph direct-call site changed expression kind",
-                };
+                const data = program.getExpr(expr_id).data;
+                if (data != .call_proc) return "active capture graph direct-call site changed expression kind";
+                const call = data.call_proc;
                 const target = switch (call.callee) {
                     .lifted => |fn_id| fn_id,
                     .func => return "active capture graph direct-call target changed kind",
@@ -982,13 +982,11 @@ fn operandValueForSlot(program: *const Ast.Program, existing: anytype, slot: Ast
         } else if (checked_id != null and operand.id == checked_id.? and fallback_by_checked_id == null) {
             fallback_by_checked_id = operand.value;
         }
-        switch (program.getExpr(operand.value).data) {
-            .local => |local| {
-                if (program.getLocal(local).capture_id) |value_id| {
-                    if (value_id == id) return operand.value;
-                }
-            },
-            else => {},
+        const data = program.getExpr(operand.value).data;
+        if (data == .local) {
+            if (program.getLocal(data.local).capture_id) |value_id| {
+                if (value_id == id) return operand.value;
+            }
         }
     }
     return fallback_by_runtime_id orelse fallback_by_checked_id;
@@ -1027,10 +1025,9 @@ fn rebuildCaptureOperandSpan(
         const id = slotCaptureId(program, slot);
         const existing_value = operandValueForSlot(program, existing, slot);
         const value = if (existing_value) |candidate| blk: {
-            const candidate_local = switch (program.getExpr(candidate).data) {
-                .local => |local| local,
-                else => break :blk candidate,
-            };
+            const data = program.getExpr(candidate).data;
+            if (data != .local) break :blk candidate;
+            const candidate_local = data.local;
             if (program.getLocal(candidate_local).capture_id != id) break :blk candidate;
             const active = (try bound.bindingFor(program, candidate_local)) orelse break :blk candidate;
             if (active == candidate_local) break :blk candidate;
@@ -1950,10 +1947,9 @@ const CaptureDependencyGraph = struct {
         const edge = self.edges.items[@intFromEnum(edge_id)];
         const id = slotCaptureId(self.program, slot);
         if (self.edgeSupply(edge_id, slot)) |supply| {
-            const candidate_local = switch (self.program.getExpr(supply.value).data) {
-                .local => |local| local,
-                else => return supply.value,
-            };
+            const data = self.program.getExpr(supply.value).data;
+            if (data != .local) return supply.value;
+            const candidate_local = data.local;
             if (self.program.getLocal(candidate_local).capture_id != id) return supply.value;
             const active = (try self.scopeBindingFor(edge.scope, candidate_local)) orelse return supply.value;
             if (active == candidate_local) return supply.value;
@@ -1994,10 +1990,9 @@ const CaptureDependencyGraph = struct {
             switch (edge.site) {
                 .pre_lift => {},
                 .fn_ref => |expr_id| {
-                    const fn_ref = switch (self.program.getExpr(expr_id).data) {
-                        .fn_ref => |fn_ref| fn_ref,
-                        else => Common.invariant("capture graph function-reference site changed expression kind"),
-                    };
+                    const data = self.program.getExpr(expr_id).data;
+                    if (data != .fn_ref) Common.invariant("capture graph function-reference site changed expression kind");
+                    const fn_ref = data.fn_ref;
                     if (fn_ref.fn_id != edge.target) Common.invariant("capture graph function-reference target changed");
                     self.program.setExprData(expr_id, .{ .fn_ref = .{
                         .fn_id = fn_ref.fn_id,
@@ -2005,10 +2000,9 @@ const CaptureDependencyGraph = struct {
                     } });
                 },
                 .call_proc => |expr_id| {
-                    const call = switch (self.program.getExpr(expr_id).data) {
-                        .call_proc => |call| call,
-                        else => Common.invariant("capture graph direct-call site changed expression kind"),
-                    };
+                    const data = self.program.getExpr(expr_id).data;
+                    if (data != .call_proc) Common.invariant("capture graph direct-call site changed expression kind");
+                    const call = data.call_proc;
                     const target = switch (call.callee) {
                         .lifted => |fn_id| fn_id,
                         .func => Common.invariant("capture graph direct-call site changed target kind"),
@@ -2181,13 +2175,13 @@ const CaptureGraphBuilder = struct {
             if (!hasSupplyId(declared.items, operand.id)) {
                 try declared.append(self.graph.allocator, supply);
             }
-            switch (self.graph.program.getExpr(operand.value).data) {
-                .local => |local| if (self.graph.program.getLocal(local).capture_id) |id| {
+            const data = self.graph.program.getExpr(operand.value).data;
+            if (data == .local) {
+                if (self.graph.program.getLocal(data.local).capture_id) |id| {
                     if (!hasSupplyId(exact.items, id)) {
                         try exact.append(self.graph.allocator, .{ .id = id, .value = operand.value, .node = child });
                     }
-                },
-                else => {},
+                }
             }
         }
         try self.finishEdge(parent, target, site, &exact, &declared);
@@ -2210,13 +2204,13 @@ const CaptureGraphBuilder = struct {
             if (!hasSupplyId(declared.items, declared_id)) {
                 try declared.append(self.graph.allocator, .{ .id = declared_id, .value = capture.value, .node = child });
             }
-            switch (self.graph.program.getExpr(capture.value).data) {
-                .local => |local| if (self.graph.program.getLocal(local).capture_id) |value_id| {
+            const data = self.graph.program.getExpr(capture.value).data;
+            if (data == .local) {
+                if (self.graph.program.getLocal(data.local).capture_id) |value_id| {
                     if (!hasSupplyId(exact.items, value_id)) {
                         try exact.append(self.graph.allocator, .{ .id = value_id, .value = capture.value, .node = child });
                     }
-                },
-                else => {},
+                }
             }
         }
         try self.finishEdge(parent, target, .pre_lift, &exact, &declared);
@@ -2435,24 +2429,24 @@ const CaptureGraphBuilder = struct {
 };
 
 fn functionRet(types: *const MonoType.Store, ty: MonoType.TypeId) MonoType.TypeId {
-    return switch (shapeContent(types, ty)) {
-        .func => |fn_ty| fn_ty.ret,
-        else => Common.invariant("lifted lambda expression did not have a function type"),
-    };
+    const content = shapeContent(types, ty);
+    if (content != .func) Common.invariant("lifted lambda expression did not have a function type");
+    return content.func.ret;
 }
 
 fn shapeContent(types: *const MonoType.Store, ty: MonoType.TypeId) MonoType.Content {
     var current = ty;
     while (true) {
-        switch (types.get(current)) {
-            .named => |named| if (named.backing) |backing| {
+        const content = types.get(current);
+        if (content == .named) {
+            if (content.named.backing) |backing| {
                 current = backing.ty;
                 continue;
             } else {
-                return types.get(current);
-            },
-            else => |content| return content,
+                return content;
+            }
         }
+        return content;
     }
 }
 
@@ -2521,10 +2515,9 @@ test "monotype lifting preserves imported direct call slots" {
     defer lifted.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), lifted.importedFnCount());
-    const call = switch (lifted.getExpr(body).data) {
-        .call_proc => |call| call,
-        else => return error.TestUnexpectedResult,
-    };
+    const call_data = lifted.getExpr(body).data;
+    if (call_data != .call_proc) return error.TestUnexpectedResult;
+    const call = call_data.call_proc;
     switch (call.callee) {
         .func => |slot| switch (slot) {
             .imported => |actual| try std.testing.expectEqual(imported, actual),
@@ -2680,18 +2673,16 @@ test "capture finalization supplies the caller's active binder local" {
 
     try recomputeCaptures(allocator, &program);
 
-    const finalized = switch (program.getExpr(call).data) {
-        .call_proc => |value| value,
-        else => return error.TestUnexpectedResult,
-    };
+    const finalized_data = program.getExpr(call).data;
+    if (finalized_data != .call_proc) return error.TestUnexpectedResult;
+    const finalized = finalized_data.call_proc;
     const operands = program.captureOperandSpan(finalized.captures);
     try std.testing.expectEqual(@as(usize, 1), operands.len);
     const operand = GuardedList.at(operands, 0);
     try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), operand.id);
-    const supplied = switch (program.getExpr(operand.value).data) {
-        .local => |local| local,
-        else => return error.TestUnexpectedResult,
-    };
+    const supplied_data = program.getExpr(operand.value).data;
+    if (supplied_data != .local) return error.TestUnexpectedResult;
+    const supplied = supplied_data.local;
     try std.testing.expectEqual(active_arg, supplied);
 }
 
@@ -2742,10 +2733,9 @@ test "function reference supplies rewritten slot by checked capture identity" {
     try std.testing.expectEqual(rewritten_capture, GuardedList.at(callee_captures, 0).local);
     try std.testing.expectEqual(@as(usize, 0), program.typedLocalSpan(program.getFn(caller).captures).len);
 
-    const finalized = switch (program.getExpr(reference).data) {
-        .fn_ref => |fn_ref| fn_ref,
-        else => return error.TestUnexpectedResult,
-    };
+    const finalized_data = program.getExpr(reference).data;
+    if (finalized_data != .fn_ref) return error.TestUnexpectedResult;
+    const finalized = finalized_data.fn_ref;
     const operands = program.captureOperandSpan(finalized.captures);
     try std.testing.expectEqual(@as(usize, 1), operands.len);
     const operand = GuardedList.at(operands, 0);
@@ -2792,10 +2782,9 @@ test "capture graph does not activate an operand for a removed target slot" {
 
     try std.testing.expectEqual(@as(usize, 0), program.typedLocalSpan(program.getFn(callee).captures).len);
     try std.testing.expectEqual(@as(usize, 0), program.typedLocalSpan(program.getFn(caller).captures).len);
-    const finalized = switch (program.getExpr(reference).data) {
-        .fn_ref => |fn_ref| fn_ref,
-        else => return error.TestUnexpectedResult,
-    };
+    const finalized_data = program.getExpr(reference).data;
+    if (finalized_data != .fn_ref) return error.TestUnexpectedResult;
+    const finalized = finalized_data.fn_ref;
     try std.testing.expectEqual(@as(usize, 0), program.captureOperandSpan(finalized.captures).len);
 }
 
@@ -2830,10 +2819,9 @@ test "capture recomputation excludes replaced bodies from the active invariant" 
     try recomputeCaptures(allocator, &program);
 
     try std.testing.expectEqual(@as(usize, 0), program.typedLocalSpan(program.getFn(callee).captures).len);
-    const stale_reference = switch (program.getExpr(replaced_reference).data) {
-        .fn_ref => |fn_ref| fn_ref,
-        else => return error.TestUnexpectedResult,
-    };
+    const stale_data = program.getExpr(replaced_reference).data;
+    if (stale_data != .fn_ref) return error.TestUnexpectedResult;
+    const stale_reference = stale_data.fn_ref;
     try std.testing.expectEqual(@as(usize, 1), program.captureOperandSpan(stale_reference.captures).len);
     try std.testing.expectEqualStrings(
         "operand count differed from target capture slot count",
@@ -2882,14 +2870,12 @@ test "capture graph propagates recursive captures with a worklist" {
 
     try std.testing.expectEqual(@as(usize, 1), program.typedLocalSpan(program.getFn(first).captures).len);
     try std.testing.expectEqual(@as(usize, 1), program.typedLocalSpan(program.getFn(second).captures).len);
-    const finalized_first = switch (program.getExpr(call_first).data) {
-        .call_proc => |call| call,
-        else => return error.TestUnexpectedResult,
-    };
-    const finalized_second = switch (program.getExpr(call_second).data) {
-        .call_proc => |call| call,
-        else => return error.TestUnexpectedResult,
-    };
+    const finalized_first_data = program.getExpr(call_first).data;
+    if (finalized_first_data != .call_proc) return error.TestUnexpectedResult;
+    const finalized_first = finalized_first_data.call_proc;
+    const finalized_second_data = program.getExpr(call_second).data;
+    if (finalized_second_data != .call_proc) return error.TestUnexpectedResult;
+    const finalized_second = finalized_second_data.call_proc;
     try std.testing.expectEqual(@as(usize, 1), program.captureOperandSpan(finalized_first.captures).len);
     try std.testing.expectEqual(@as(usize, 1), program.captureOperandSpan(finalized_second.captures).len);
 }

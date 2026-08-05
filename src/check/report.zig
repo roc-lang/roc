@@ -1031,7 +1031,7 @@ pub const ReportBuilder = struct {
             };
         const value_range = switch (try self.snapshots.gatherRecordFields(value_snapshot, self.gpa, &self.diff_fields)) {
             .record => |r| r,
-            else => return false,
+            .empty_record, .not_a_record => return false,
         };
 
         // Slice only after both gathers, since the second append may reallocate.
@@ -1683,13 +1683,10 @@ pub const ReportBuilder = struct {
         // shape of the nominal's declared backing. In particular, tag syntax
         // can mismatch a value-, record-, tuple-, or empty-tag-backed nominal.
         const expected_content = self.snapshots.getContentUnwrapAlias(types.expected_snapshot);
-        const expected_tag_union = switch (expected_content) {
-            .structure => |structure| switch (structure) {
-                .tag_union => |tag_union| tag_union,
-                else => null,
-            },
-            else => null,
-        };
+        const expected_tag_union = if (expected_content == .structure and expected_content.structure == .tag_union)
+            expected_content.structure.tag_union
+        else
+            null;
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
@@ -2773,7 +2770,12 @@ pub const ReportBuilder = struct {
                     }, self, &report);
                     try report.document.addLineBreak();
                 },
-                else => {},
+                .box,
+                .record_unbound,
+                .empty_record,
+                .nominal_type,
+                .empty_tag_union,
+                => {},
             }
         }
 
@@ -3065,7 +3067,7 @@ pub const ReportBuilder = struct {
                         std.debug.assert(false);
                         return try self.buildGenericMismatch(types);
                     },
-                    else => {
+                    .empty_record, .not_a_record => {
                         // Should be impossible for the thing we're updating to
                         // not be a record, but if so show a generic message.
                         std.debug.assert(false);
@@ -3452,12 +3454,12 @@ pub const ReportBuilder = struct {
                     return true;
                 },
                 // Other types (box, etc.) assumed to support equality
-                else => true,
+                .box, .record_unbound => true,
             },
             // Aliases: check the underlying type
             .alias => |alias| self.snapshotSupportsEquality(alias.backing),
             // Other types (flex, rigid, recursive, err) assumed to support equality
-            else => true,
+            .flex, .rigid, .recursive, .err => true,
         };
     }
 
@@ -3561,7 +3563,7 @@ pub const ReportBuilder = struct {
                     }
                     return false;
                 },
-                else => return false,
+                .box, .record_unbound, .empty_record, .empty_tag_union => return false,
             },
             .alias => |alias| {
                 if (!self.snapshotSupportsEquality(alias.backing)) {
@@ -3569,7 +3571,7 @@ pub const ReportBuilder = struct {
                 }
                 return false;
             },
-            else => return false,
+            .flex, .rigid, .recursive, .err => return false,
         }
     }
 

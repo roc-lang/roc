@@ -142,26 +142,23 @@ const CheckOccurs = struct {
 
                         // Classify using only the edges inside that cycle.
                         const classified = self.classifyCycle(match_idx, start.edge);
-                        switch (classified) {
-                            .valid => {
-                                // It the recursion was valid (ie passed thru
-                                // nominal) then continue processing
-                                continue;
-                            },
-                            else => {
-                                // If the recursion observed is invalid (infinite or
-                                // anonymous) then return the error immediately.
-
-                                // Report the deepest var on the seen stack (the
-                                // parent of the cycle-closing edge) as the error
-                                // var.
-                                const seen_len: usize = @intCast(self.scratch.seen.len());
-                                std.debug.assert(seen_len > 0);
-                                self.scratch.err_var = self.scratch.seen.items.items[seen_len - 1].var_;
-
-                                return classified;
-                            },
+                        if (classified == .valid) {
+                            // It the recursion was valid (ie passed thru
+                            // nominal) then continue processing
+                            continue;
                         }
+
+                        // If the recursion observed is invalid (infinite or
+                        // anonymous) then return the error immediately.
+
+                        // Report the deepest var on the seen stack (the
+                        // parent of the cycle-closing edge) as the error
+                        // var.
+                        const seen_len: usize = @intCast(self.scratch.seen.len());
+                        std.debug.assert(seen_len > 0);
+                        self.scratch.err_var = self.scratch.seen.items.items[seen_len - 1].var_;
+
+                        return classified;
                     } else {
                         // Push this var to the seen stack
                         try self.scratch.pushSeen(root_var, start.edge);

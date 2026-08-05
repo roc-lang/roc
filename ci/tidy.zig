@@ -863,7 +863,8 @@ fn tidyDeadDeclarations(
     defer counter.clear();
 
     var identifier_start: ?Ast.ByteOffset = 0;
-    inline for (.{ .fill, .check }) |phase| {
+    const Phase = enum { fill, check };
+    inline for ([_]Phase{ .fill, .check }) |phase| {
         next_token: for (
             tree.tokens.items(.tag),
             tree.tokens.items(.start),
@@ -871,10 +872,7 @@ fn tidyDeadDeclarations(
         ) |tag, start, index_usize| {
             const index: Ast.TokenIndex = @intCast(index_usize);
             const identifier_start_previous = identifier_start;
-            identifier_start = switch (tag) {
-                .identifier => start,
-                else => null,
-            };
+            identifier_start = if (tag == .identifier) start else null;
 
             const start_previous = identifier_start_previous orelse continue :next_token;
             const token_text = std.mem.trim(
@@ -894,7 +892,6 @@ fn tidyDeadDeclarations(
                         }
                     }
                 },
-                else => comptime unreachable,
             }
         }
     }
@@ -915,28 +912,21 @@ fn tidyDeadDeclarationsIsPrivateDeclaration(
             tree.tokens.items(.tag)[token_index - context_offset - 1];
 
         if (declaration_keyword == null) {
-            switch (context_tag) {
-                .keyword_fn, .keyword_const => declaration_keyword = context_tag,
-                // Not a declaration.
-                else => return false,
-            }
+            if (context_tag != .keyword_fn and context_tag != .keyword_const) return false;
+            declaration_keyword = context_tag;
         } else {
-            switch (context_tag) {
-                .keyword_inline, .string_literal => {},
-                .keyword_extern => saw_extern = true,
-                // Public declaration can be used in a different file.
-                .keyword_pub, .keyword_export => return false,
-                // []const u8 or *const u8, not a declaration.
-                .r_bracket, .asterisk => return false,
-                // Non public declarations, never used.
-                else => {
-                    // Extern fn declarations are FFI bindings called by external code
-                    if (saw_extern and declaration_keyword == .keyword_fn) {
-                        return false;
-                    }
-                    return true;
-                },
+            if (context_tag == .keyword_inline or context_tag == .string_literal) continue;
+            if (context_tag == .keyword_extern) {
+                saw_extern = true;
+                continue;
             }
+            // Public declaration can be used in a different file.
+            if (context_tag == .keyword_pub or context_tag == .keyword_export) return false;
+            // []const u8 or *const u8, not a declaration.
+            if (context_tag == .r_bracket or context_tag == .asterisk) return false;
+            // Extern fn declarations are FFI bindings called by external code.
+            if (saw_extern and declaration_keyword == .keyword_fn) return false;
+            return true;
         }
     } else unreachable;
 }
@@ -995,13 +985,10 @@ fn tidyInferredErrorUnion(file: SourceFile, tree: *const Ast, errors: *Errors) v
 
     var buffer: [1]Ast.Node.Index = undefined;
     for (node_tags, 0..) |tag, node_usize| {
-        switch (tag) {
-            // Each function is reached exactly once via its prototype node; a
-            // `fn_decl` always wraps one of these, so we don't match `fn_decl`
-            // here (that would double-count).
-            .fn_proto, .fn_proto_multi, .fn_proto_one, .fn_proto_simple => {},
-            else => continue,
-        }
+        // Each function is reached exactly once via its prototype node; a
+        // `fn_decl` always wraps one of these, so we don't match `fn_decl`
+        // here (that would double-count).
+        if (tag != .fn_proto and tag != .fn_proto_multi and tag != .fn_proto_one and tag != .fn_proto_simple) continue;
 
         const node: Ast.Node.Index = @enumFromInt(@as(u32, @intCast(node_usize)));
         const fn_proto = tree.fullFnProto(&buffer, node) orelse continue;
@@ -1021,22 +1008,14 @@ fn isBinOp(tag: Ast.Node.Tag) bool {
 }
 
 fn isBinOpBitwise(tag: Ast.Node.Tag) bool {
-    return switch (tag) {
-        .shl, .shl_sat => true,
-        .shr => true,
-        .bit_xor, .bit_or, .bit_and => true,
-        else => false,
-    };
+    return tag == .shl or tag == .shl_sat or tag == .shr or tag == .bit_xor or tag == .bit_or or tag == .bit_and;
 }
 
 fn isBinOpArithmetic(tag: Ast.Node.Tag) bool {
-    return switch (tag) {
-        .add, .add_sat, .add_wrap => true,
-        .sub, .sub_sat, .sub_wrap => true,
-        .mul, .mul_sat, .mul_wrap => true,
-        .div, .mod => true,
-        else => false,
-    };
+    return tag == .add or tag == .add_sat or tag == .add_wrap or
+        tag == .sub or tag == .sub_sat or tag == .sub_wrap or
+        tag == .mul or tag == .mul_sat or tag == .mul_wrap or
+        tag == .div or tag == .mod;
 }
 
 /// Checks that each markdown document has exactly one h1.
@@ -1265,7 +1244,51 @@ fn listFilePaths(allocator: Allocator, io: std.Io) ![][]const u8 {
 fn runForStdout(allocator: Allocator, io: std.Io, argv: []const []const u8) !?[]u8 {
     const run_result = std.process.run(allocator, io, .{ .argv = argv }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return null, // command not found / failed to spawn
+        error.Timeout,
+        error.ConcurrencyUnavailable,
+        error.Canceled,
+        error.InputOutput,
+        error.SystemResources,
+        error.IsDir,
+        error.ConnectionResetByPeer,
+        error.NotOpenForReading,
+        error.SocketUnconnected,
+        error.WouldBlock,
+        error.AccessDenied,
+        error.LockViolation,
+        error.Unexpected,
+        error.FileTooBig,
+        error.NoSpaceLeft,
+        error.DeviceBusy,
+        error.PermissionDenied,
+        error.NoDevice,
+        error.FileBusy,
+        error.ProcessFdQuotaExceeded,
+        error.SystemFdQuotaExceeded,
+        error.PathAlreadyExists,
+        error.SymLinkLoop,
+        error.FileNotFound,
+        error.NotDir,
+        error.ReadOnlyFileSystem,
+        error.NetworkNotFound,
+        error.NameTooLong,
+        error.BadPathName,
+        error.PipeBusy,
+        error.AntivirusInterference,
+        error.FileLocksUnsupported,
+        error.OperationUnsupported,
+        error.FileSystem,
+        error.UnrecognizedVolume,
+        error.InvalidWtf8,
+        error.InvalidExe,
+        error.InvalidBatchScriptArg,
+        error.ResourceLimitReached,
+        error.InvalidUserId,
+        error.InvalidProcessGroupId,
+        error.InvalidName,
+        error.ProcessAlreadyExec,
+        error.StreamTooLong,
+        => return null, // command not found / failed to spawn
     };
     defer allocator.free(run_result.stderr);
     if (run_result.term != .exited or run_result.term.exited != 0) {

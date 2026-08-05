@@ -22,6 +22,60 @@ const types = @import("types");
 const base = @import("base");
 const Region = base.Region;
 
+fn statementAnnotation(statement: CIR.Statement) ?CIR.Annotation.Idx {
+    return switch (statement) {
+        .s_decl => |decl| decl.anno,
+        .s_var => |var_stmt| var_stmt.anno,
+        .s_var_uninitialized => |var_stmt| var_stmt.anno,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
+fn statementPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
+    return switch (statement) {
+        .s_decl => |decl| decl.pattern,
+        .s_var => |var_stmt| var_stmt.pattern_idx,
+        .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
 // Result Types
 
 /// Result of finding a type at an offset.
@@ -159,24 +213,14 @@ const FindTypeContext = struct {
     /// Pre-visit callback for statements (to check annotations).
     fn visitStmtPre(ctx: *FindTypeContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
         // Check if cursor is in a type annotation
-        const anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
-            .s_decl => |d| d.anno,
-            .s_var => |v| v.anno,
-            .s_var_uninitialized => |v| v.anno,
-            else => null,
-        };
+        const anno_idx = statementAnnotation(stmt);
 
         if (anno_idx) |anno| {
             const annotation = ctx.store.getAnnotation(anno);
             const type_anno_region = ctx.store.getTypeAnnoRegion(annotation.anno);
             if (ctx.checkAndUpdate(type_anno_region)) {
                 // Get the pattern for this statement to get the type var
-                const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
-                    .s_decl => |d| d.pattern,
-                    .s_var => |v| v.pattern_idx,
-                    .s_var_uninitialized => |v| v.pattern_idx,
-                    else => null,
-                };
+                const pattern_idx = statementPattern(stmt);
                 if (pattern_idx) |pat| {
                     ctx.result = .{
                         .type_var = ModuleEnv.varFrom(pat),
@@ -188,12 +232,7 @@ const FindTypeContext = struct {
             // Also check the annotation identifier region
             const anno_region = ctx.store.getAnnotationRegion(anno);
             if (ctx.checkAndUpdate(anno_region)) {
-                const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
-                    .s_decl => |d| d.pattern,
-                    .s_var => |v| v.pattern_idx,
-                    .s_var_uninitialized => |v| v.pattern_idx,
-                    else => null,
-                };
+                const pattern_idx = statementPattern(stmt);
                 if (pattern_idx) |pat| {
                     ctx.result = .{
                         .type_var = ModuleEnv.varFrom(pat),
@@ -224,32 +263,26 @@ const FindLookupContext = struct {
         }
 
         // Check if this expression is a lookup or relevant field access.
-        switch (expr) {
-            .e_lookup_local, .e_lookup_external => {
-                const size = regionSize(region);
+        const expr_tag = std.meta.activeTag(expr);
+        if (expr_tag == .e_lookup_local or expr_tag == .e_lookup_external or
+            expr_tag == .e_method_call or expr_tag == .e_dispatch_call or
+            expr_tag == .e_type_method_call or expr_tag == .e_type_dispatch_call or
+            expr_tag == .e_structural_eq or expr_tag == .e_structural_hash or expr_tag == .e_method_eq)
+        {
+            const size = regionSize(region);
+            if (size < ctx.best_size) {
+                ctx.best_size = size;
+                ctx.result = expr_idx;
+            }
+        } else if (expr_tag == .e_field_access) {
+            // Check if cursor is on the field name.
+            if (regionContainsOffset(expr.e_field_access.field_name_region, ctx.target_offset)) {
+                const size = regionSize(expr.e_field_access.field_name_region);
                 if (size < ctx.best_size) {
                     ctx.best_size = size;
                     ctx.result = expr_idx;
                 }
-            },
-            .e_method_call, .e_dispatch_call, .e_type_method_call, .e_type_dispatch_call, .e_structural_eq, .e_structural_hash, .e_method_eq => {
-                const size = regionSize(region);
-                if (size < ctx.best_size) {
-                    ctx.best_size = size;
-                    ctx.result = expr_idx;
-                }
-            },
-            .e_field_access => |field_access| {
-                // Check if cursor is on the field name.
-                if (regionContainsOffset(field_access.field_name_region, ctx.target_offset)) {
-                    const size = regionSize(field_access.field_name_region);
-                    if (size < ctx.best_size) {
-                        ctx.best_size = size;
-                        ctx.result = expr_idx;
-                    }
-                }
-            },
-            else => {},
+            }
         }
 
         return .continue_traversal;
@@ -271,19 +304,14 @@ const CollectReferencesContext = struct {
 
     /// Pre-visit callback for expressions.
     fn visitExprPre(ctx: *CollectReferencesContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
-        switch (expr) {
-            .e_lookup_local => |lookup| {
-                if (@intFromEnum(lookup.pattern_idx) == @intFromEnum(ctx.target_pattern)) {
-                    const region = ctx.store.getExprRegion(expr_idx);
-                    if (regionToRange(ctx.module_env, region)) |range| {
-                        ctx.results.append(ctx.allocator, range) catch |err| {
-                            ctx.oom = err;
-                            return .stop;
-                        };
-                    }
-                }
-            },
-            else => {},
+        if (std.meta.activeTag(expr) == .e_lookup_local and @intFromEnum(expr.e_lookup_local.pattern_idx) == @intFromEnum(ctx.target_pattern)) {
+            const region = ctx.store.getExprRegion(expr_idx);
+            if (regionToRange(ctx.module_env, region)) |range| {
+                ctx.results.append(ctx.allocator, range) catch |err| {
+                    ctx.oom = err;
+                    return .stop;
+                };
+            }
         }
         return .continue_traversal;
     }
@@ -325,10 +353,8 @@ const FindFieldAccessReceiverContext = struct {
 
     /// Pre-visit callback for expressions.
     fn visitExprPre(ctx: *FindFieldAccessReceiverContext, _: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
-        const region = switch (expr) {
-            .e_field_access => |field_access| field_access.field_name_region,
-            else => return .continue_traversal,
-        };
+        if (std.meta.activeTag(expr) != .e_field_access) return .continue_traversal;
+        const region = expr.e_field_access.field_name_region;
 
         // Early exit if region doesn't contain target
         if (!regionContainsOffset(region, ctx.target_offset)) {

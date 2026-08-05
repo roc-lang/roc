@@ -1187,9 +1187,9 @@ fn liftProcStmtFacts(
             .callee = assign.proc,
             .args = assign.args,
             .target = assign.target,
-            .tail = switch (solver.store.getCFStmt(assign.next)) {
-                .ret => |ret_stmt| ret_stmt.value == assign.target,
-                else => false,
+            .tail = blk: {
+                const next = solver.store.getCFStmt(assign.next);
+                break :blk next == .ret and next.ret.value == assign.target;
             },
         }),
         .assign_low_level => |assign| {
@@ -1231,7 +1231,34 @@ fn liftProcStmtFacts(
             }
             solver.switch_count_by_proc[proc_index] += 1;
         },
-        else => {},
+        .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .crash,
+        => {},
     }
 }
 
@@ -1672,10 +1699,7 @@ fn propagateAliasDemands(solver: *Solver) void {
         while (true) {
             // A multi-bound alias names different values over time; its
             // recorded edge is not a same-value link.
-            switch (solver.defs[cursor]) {
-                .multi => break,
-                else => {},
-            }
+            if (solver.defs[cursor] == .multi) break;
             const source = solver.alias_source[cursor];
             if (source == no_local or solver.demand[source]) break;
             solver.demand[source] = true;
@@ -1781,14 +1805,21 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         },
         .assign_literal => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            switch (assign.value) {
-                .proc_ref => |proc| solver.address_taken.set(@intFromEnum(proc)),
-                .str_literal, .static_data, .bytes_literal => try solver.unique_facts.append(allocator, .{ .foreign = assign.target }),
-                else => {},
+            if (assign.value == .proc_ref) {
+                solver.address_taken.set(@intFromEnum(assign.value.proc_ref));
+            } else if (assign.value == .str_literal or assign.value == .static_data or assign.value == .bytes_literal) {
+                try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
             }
             switch (assign.value) {
                 .str_literal, .static_data, .bytes_literal => {},
-                else => try solver.unique_facts.append(allocator, .{ .birth = assign.target }),
+                .i64_literal,
+                .i128_literal,
+                .f64_literal,
+                .f32_literal,
+                .dec_literal,
+                .null_ptr,
+                .proc_ref,
+                => try solver.unique_facts.append(allocator, .{ .birth = assign.target }),
             }
         },
         .init_uninitialized => {},
@@ -2114,14 +2145,14 @@ pub fn computePinnedProcs(
     var reachable = try reachableStatementSet(allocator, store, null);
     defer reachable.deinit(allocator);
     var iter = reachable.iterator(.{});
-    while (iter.next()) |stmt_index| switch (store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))))) {
-        .assign_literal => |assign| switch (assign.value) {
-            .proc_ref => |proc| pinned.set(@intFromEnum(proc)),
-            else => {},
-        },
-        .assign_packed_erased_fn => |assign| pinned.set(@intFromEnum(assign.proc)),
-        else => {},
-    };
+    while (iter.next()) |stmt_index| {
+        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
+            pinned.set(@intFromEnum(stmt.assign_literal.value.proc_ref));
+        } else if (stmt == .assign_packed_erased_fn) {
+            pinned.set(@intFromEnum(stmt.assign_packed_erased_fn.proc));
+        }
+    }
     return pinned;
 }
 
@@ -2551,7 +2582,27 @@ fn computeVisibilityFromLift(
                     }
                 }
             },
-            else => {},
+            .init_uninitialized,
+            .assign_literal,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => {},
         }
     }
 
@@ -2719,7 +2770,14 @@ fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, st
         },
         .assign_literal => |assign| switch (assign.value) {
             .str_literal, .static_data, .bytes_literal => facts.noteForeign(assign.target),
-            else => facts.noteBirth(assign.target),
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .null_ptr,
+            .proc_ref,
+            => facts.noteBirth(assign.target),
         },
         .assign_call => |assign| try facts.noteCall(assign.proc, assign.target),
         .assign_call_erased => |assign| facts.noteForeign(assign.target),
@@ -2753,7 +2811,27 @@ fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, st
             const params = store.getLocalSpan(join_stmt.params);
             for (0..GuardedList.borrowLen(params)) |param_index| facts.noteForeign(GuardedList.at(params, param_index));
         },
-        else => {},
+        .init_uninitialized,
+        .store_struct,
+        .store_tag,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .loop_continue,
+        .loop_break,
+        .jump,
+        .ret,
+        .crash,
+        => {},
     }
 }
 
@@ -3207,7 +3285,14 @@ fn computeUniquenessDetailed(
                     // static sentinel, never 1, so they are not unique births
                     // and must never take in-place paths.
                     .str_literal, .static_data, .bytes_literal => marks.destroy(&foreign_def, assign.target),
-                    else => marks.noteBirth(&born, assign.target),
+                    .i64_literal,
+                    .i128_literal,
+                    .f64_literal,
+                    .f32_literal,
+                    .dec_literal,
+                    .null_ptr,
+                    .proc_ref,
+                    => marks.noteBirth(&born, assign.target),
                 }
             },
             .assign_call => |assign| {

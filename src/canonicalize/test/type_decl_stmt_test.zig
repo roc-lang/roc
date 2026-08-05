@@ -57,13 +57,9 @@ fn canonicalizeModuleAndCheck(source: []const u8, check: anytype) TypeDeclTestEr
 fn countRedeclarationDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
     var count: usize = 0;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .type_redeclared,
-            .type_alias_redeclared,
-            .nominal_type_redeclared,
-            => count += 1,
-            else => {},
-        }
+        if (diagnostic == .type_redeclared or
+            diagnostic == .type_alias_redeclared or
+            diagnostic == .nominal_type_redeclared) count += 1;
     }
     return count;
 }
@@ -71,10 +67,7 @@ fn countRedeclarationDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
 fn countMutualAliasDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
     var count: usize = 0;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .mutually_recursive_type_aliases => count += 1,
-            else => {},
-        }
+        if (diagnostic == .mutually_recursive_type_aliases) count += 1;
     }
     return count;
 }
@@ -82,10 +75,7 @@ fn countMutualAliasDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
 fn countUndeclaredTypeDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
     var count: usize = 0;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .undeclared_type => count += 1,
-            else => {},
-        }
+        if (diagnostic == .undeclared_type) count += 1;
     }
     return count;
 }
@@ -93,11 +83,8 @@ fn countUndeclaredTypeDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
 fn countIdentNotInScopeDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
     var count: usize = 0;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .ident_not_in_scope => |d| {
-                if (std.mem.eql(u8, env.getIdent(d.ident), name)) count += 1;
-            },
-            else => {},
+        if (diagnostic == .ident_not_in_scope) {
+            if (std.mem.eql(u8, env.getIdent(diagnostic.ident_not_in_scope.ident), name)) count += 1;
         }
     }
     return count;
@@ -106,11 +93,8 @@ fn countIdentNotInScopeDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Dia
 fn countLocalReferenceBeforeDefinitionDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
     var count: usize = 0;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .local_reference_before_definition => |d| {
-                if (std.mem.eql(u8, env.getIdent(d.ident), name)) count += 1;
-            },
-            else => {},
+        if (diagnostic == .local_reference_before_definition) {
+            if (std.mem.eql(u8, env.getIdent(diagnostic.local_reference_before_definition.ident), name)) count += 1;
         }
     }
     return count;
@@ -119,16 +103,13 @@ fn countLocalReferenceBeforeDefinitionDiagnostics(env: *ModuleEnv, diagnostics: 
 fn countAssociatedLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
     var count: usize = 0;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .qualified_ident_does_not_exist => |d| {
-                if (std.mem.eql(u8, env.getIdent(d.ident), name)) count += 1;
-            },
-            .nested_value_not_found => |d| {
-                const parent = env.getIdent(d.parent_name);
-                const nested = env.getIdent(d.nested_name);
-                if (std.mem.eql(u8, name, parent) or std.mem.eql(u8, name, nested)) count += 1;
-            },
-            else => {},
+        if (diagnostic == .qualified_ident_does_not_exist) {
+            if (std.mem.eql(u8, env.getIdent(diagnostic.qualified_ident_does_not_exist.ident), name)) count += 1;
+        } else if (diagnostic == .nested_value_not_found) {
+            const d = diagnostic.nested_value_not_found;
+            const parent = env.getIdent(d.parent_name);
+            const nested = env.getIdent(d.nested_name);
+            if (std.mem.eql(u8, name, parent) or std.mem.eql(u8, name, nested)) count += 1;
         }
     }
     return count;
@@ -158,20 +139,18 @@ fn countValueLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnos
     var count: usize = 0;
 
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .ident_not_in_scope => |d| {
-                const ident = env.getIdent(d.ident);
-                if (isNameOrQualifiedSuffix(ident, parent_name) or isQualifiedName(ident, parent_name, child_name)) count += 1;
-            },
-            .qualified_ident_does_not_exist => |d| {
-                if (isQualifiedName(env.getIdent(d.ident), parent_name, child_name)) count += 1;
-            },
-            .nested_value_not_found => |d| {
-                const parent = env.getIdent(d.parent_name);
-                const nested = env.getIdent(d.nested_name);
-                if (std.mem.eql(u8, parent, parent_name) and std.mem.eql(u8, nested, child_name)) count += 1;
-            },
-            else => {},
+        if (diagnostic == .ident_not_in_scope) {
+            const d = diagnostic.ident_not_in_scope;
+            const ident = env.getIdent(d.ident);
+            if (isNameOrQualifiedSuffix(ident, parent_name) or isQualifiedName(ident, parent_name, child_name)) count += 1;
+        } else if (diagnostic == .qualified_ident_does_not_exist) {
+            const d = diagnostic.qualified_ident_does_not_exist;
+            if (isQualifiedName(env.getIdent(d.ident), parent_name, child_name)) count += 1;
+        } else if (diagnostic == .nested_value_not_found) {
+            const d = diagnostic.nested_value_not_found;
+            const parent = env.getIdent(d.parent_name);
+            const nested = env.getIdent(d.nested_name);
+            if (std.mem.eql(u8, parent, parent_name) and std.mem.eql(u8, nested, child_name)) count += 1;
         }
     }
     return count;
@@ -309,10 +288,9 @@ test "canonicalization records explicit type declaration tables" {
     try testing.expectEqual(@as(u32, 1), env.forward_type_decls.span.len);
 
     const forward_stmt = env.store.statementAt(env.forward_type_decls, 0);
-    const header = switch (env.store.getStatement(forward_stmt)) {
-        .s_alias_decl => |alias| env.store.getTypeHeader(alias.header),
-        else => return error.ExpectedForwardAlias,
-    };
+    const statement = env.store.getStatement(forward_stmt);
+    if (statement != .s_alias_decl) return error.ExpectedForwardAlias;
+    const header = env.store.getTypeHeader(statement.s_alias_decl.header);
     try testing.expectEqualStrings("B", env.getIdent(header.relative_name));
 }
 
@@ -352,13 +330,11 @@ test "nested type redeclarations are detected after previous associated scope ex
     var saw_l2_redeclared = false;
     var saw_l3_redeclared = false;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .type_redeclared => |data| {
-                const name = env.getIdent(data.name);
-                if (std.mem.eql(u8, name, "Test.T.L2")) saw_l2_redeclared = true;
-                if (std.mem.eql(u8, name, "Test.T.L2.L3")) saw_l3_redeclared = true;
-            },
-            else => {},
+        if (diagnostic == .type_redeclared) {
+            const data = diagnostic.type_redeclared;
+            const name = env.getIdent(data.name);
+            if (std.mem.eql(u8, name, "Test.T.L2")) saw_l2_redeclared = true;
+            if (std.mem.eql(u8, name, "Test.T.L2.L3")) saw_l3_redeclared = true;
         }
     }
 
@@ -617,14 +593,11 @@ test "local type alias redeclaration diagnostic renders" {
         fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             var count: usize = 0;
             for (diagnostics) |diagnostic| {
-                switch (diagnostic) {
-                    .type_alias_redeclared => {
-                        count += 1;
-                        var report = try env.diagnosticToReport(diagnostic, testing.allocator, env.module_name);
-                        defer report.deinit();
-                        try testing.expect(report.title.len > 0);
-                    },
-                    else => {},
+                if (diagnostic == .type_alias_redeclared) {
+                    count += 1;
+                    var report = try env.diagnosticToReport(diagnostic, testing.allocator, env.module_name);
+                    defer report.deinit();
+                    try testing.expect(report.title.len > 0);
                 }
             }
             try testing.expectEqual(@as(usize, 1), count);
@@ -652,12 +625,7 @@ test "local type with type parameters" {
 
     var error_count: usize = 0;
     for (diagnostics) |diag| {
-        switch (diag) {
-            .not_implemented => error_count += 1,
-            .undeclared_type => error_count += 1,
-            .ident_not_in_scope => error_count += 1,
-            else => {},
-        }
+        if (diag == .not_implemented or diag == .undeclared_type or diag == .ident_not_in_scope) error_count += 1;
     }
     try testing.expectEqual(@as(usize, 0), error_count);
 }
@@ -685,10 +653,7 @@ test "expression that looks like type decl but isn't - record field" {
 
     var type_decl_errors: usize = 0;
     for (diagnostics) |diag| {
-        switch (diag) {
-            .undeclared_type => type_decl_errors += 1,
-            else => {},
-        }
+        if (diag == .undeclared_type) type_decl_errors += 1;
     }
     try testing.expectEqual(@as(usize, 0), type_decl_errors);
 }
@@ -715,12 +680,7 @@ test "local type alias can be used in annotation" {
 
     var error_count: usize = 0;
     for (diagnostics) |diag| {
-        switch (diag) {
-            .not_implemented => error_count += 1,
-            .undeclared_type => error_count += 1,
-            .ident_not_in_scope => error_count += 1,
-            else => {},
-        }
+        if (diag == .not_implemented or diag == .undeclared_type or diag == .ident_not_in_scope) error_count += 1;
     }
     try testing.expectEqual(@as(usize, 0), error_count);
 }
@@ -821,10 +781,7 @@ test "open ext not allowed in type decl" {
 
     var diag_count: usize = 0;
     for (diagnostics) |diag| {
-        switch (diag) {
-            .open_ext_not_allowed_in_type_decl => diag_count += 1,
-            else => {},
-        }
+        if (diag == .open_ext_not_allowed_in_type_decl) diag_count += 1;
     }
     try testing.expectEqual(@as(usize, 1), diag_count);
 }

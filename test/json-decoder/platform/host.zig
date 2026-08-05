@@ -13,6 +13,56 @@ const stdin_fd: c_int = 0;
 const stdout_fd: c_int = 1;
 const stderr_fd: c_int = 2;
 
+const HostOs = enum { linux, macos, windows, unsupported };
+
+fn classifyHostOs(os: std.Target.Os.Tag) HostOs {
+    return switch (os) {
+        .linux => .linux,
+        .macos => .macos,
+        .windows => .windows,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .unsupported,
+    };
+}
+
 const HostError = error{
     UnsupportedOperatingSystem,
     InputTooLarge,
@@ -80,7 +130,7 @@ comptime {
         .crashed = &hostCrashed,
     });
 
-    switch (builtin.os.tag) {
+    switch (classifyHostOs(builtin.os.tag)) {
         .linux => {
             if (builtin.cpu.arch == .x86_64) {
                 @export(&linuxStartX86_64, .{ .name = "_start" });
@@ -98,7 +148,7 @@ comptime {
                 @export(&windowsMainStub, .{ .name = "__main" });
             }
         },
-        else => {},
+        .unsupported => {},
     }
 }
 
@@ -253,11 +303,11 @@ fn readAllStdin(buffer: *[input_buffer_size]u8) HostError![]const u8 {
 }
 
 fn rawRead(fd: c_int, buffer: []u8) HostError!usize {
-    return switch (builtin.os.tag) {
+    return switch (comptime classifyHostOs(builtin.os.tag)) {
         .linux => linux.rawRead(fd, buffer),
         .macos => darwin.rawRead(fd, buffer),
         .windows => windows.rawRead(fd, buffer),
-        else => error.UnsupportedOperatingSystem,
+        .unsupported => error.UnsupportedOperatingSystem,
     };
 }
 
@@ -270,20 +320,20 @@ fn rawWriteStderr(bytes: []const u8) void {
 }
 
 fn rawWrite(fd: c_int, bytes: []const u8) void {
-    switch (builtin.os.tag) {
+    switch (comptime classifyHostOs(builtin.os.tag)) {
         .linux => linux.rawWrite(fd, bytes),
         .macos => darwin.rawWrite(fd, bytes),
         .windows => windows.rawWrite(fd, bytes),
-        else => {},
+        .unsupported => {},
     }
 }
 
 fn abortProcess() noreturn {
-    switch (builtin.os.tag) {
+    switch (comptime classifyHostOs(builtin.os.tag)) {
         .linux => linux.exitGroup(134),
         .macos => darwin.abort(),
         .windows => windows.exitProcess(134),
-        else => @trap(),
+        .unsupported => @trap(),
     }
 }
 
@@ -385,10 +435,9 @@ const windows = struct {
         const chunk_len = @min(buffer.len, @as(usize, std.math.maxInt(u32)));
         var read: u32 = 0;
         if (ReadFile(handle, buffer.ptr, @intCast(chunk_len), &read, null) == 0) {
-            return switch (GetLastError()) {
-                ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF => 0,
-                else => error.ReadFailed,
-            };
+            const last_error = GetLastError();
+            if (last_error == ERROR_BROKEN_PIPE or last_error == ERROR_HANDLE_EOF) return 0;
+            return error.ReadFailed;
         }
         return read;
     }

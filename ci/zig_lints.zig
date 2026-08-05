@@ -60,7 +60,38 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Lint 2: Check for pub declarations without doc comments
+    // Lint 2: Check for non-exhaustive switch prongs
+    try stdout.print("Checking for non-exhaustive switch prongs...\n", .{});
+
+    {
+        var switch_files: PathList = .empty;
+        defer freePathList(&switch_files, gpa);
+
+        try walkTree(gpa, io, "src", &switch_files);
+        try walkTree(gpa, io, "test", &switch_files);
+        try walkTree(gpa, io, "ci", &switch_files);
+        try switch_files.append(gpa, try gpa.dupe(u8, "build.zig"));
+
+        for (switch_files.items) |file_path| {
+            const errors = try checkElseSwitchProngs(gpa, io, file_path);
+            defer gpa.free(errors);
+
+            if (errors.len > 0) {
+                try stdout.print("{s}", .{errors});
+                found_errors = true;
+            }
+        }
+
+        if (found_errors) {
+            try stdout.print("\n", .{});
+            try stdout.print("Switches must list every case instead of using an else prong, except for literal and error switches.\n", .{});
+            try stdout.print("\n", .{});
+            try stdout.flush();
+            std.process.exit(1);
+        }
+    }
+
+    // Lint 3: Check for pub declarations without doc comments
     try stdout.print("Checking for pub declarations without doc comments...\n", .{});
 
     var zig_files: PathList = .empty;
@@ -86,7 +117,7 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
-    // Lint 3: Check first-party DebugAllocator stack trace wiring.
+    // Lint 4: Check first-party DebugAllocator stack trace wiring.
     try stdout.print("Checking DebugAllocator stack trace wiring...\n", .{});
 
     {
@@ -116,7 +147,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Lint 4: Check for hash maps keyed by dense compiler IDs.
+    // Lint 5: Check for hash maps keyed by dense compiler IDs.
     try stdout.print("Checking for ID-keyed hash maps...\n", .{});
 
     {
@@ -148,7 +179,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Lint 5: Check for top level comments in new Zig files
+    // Lint 6: Check for top level comments in new Zig files
     try stdout.print("Checking for top level comments in new Zig files...\n", .{});
 
     var new_zig_files = try getNewZigFiles(gpa, io);
@@ -201,34 +232,24 @@ fn walkTree(allocator: Allocator, io: std.Io, dir_path: []const u8, zig_files: *
 
         const next_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
 
-        switch (entry.kind) {
-            .directory => {
-                // Skip .zig-cache directories
-                if (std.mem.eql(u8, entry.name, ".zig-cache")) {
-                    allocator.free(next_path);
-                    continue;
-                }
-                defer allocator.free(next_path);
-                try walkTree(allocator, io, next_path, zig_files);
-            },
-            .file => {
-                if (std.mem.endsWith(u8, entry.name, ".zig")) {
-                    try zig_files.append(allocator, next_path);
-                } else {
-                    allocator.free(next_path);
-                }
-            },
-            else => allocator.free(next_path),
+        if (entry.kind == .directory) {
+            // Skip .zig-cache directories
+            if (std.mem.eql(u8, entry.name, ".zig-cache")) {
+                allocator.free(next_path);
+                continue;
+            }
+            defer allocator.free(next_path);
+            try walkTree(allocator, io, next_path, zig_files);
+        } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
+            try zig_files.append(allocator, next_path);
+        } else {
+            allocator.free(next_path);
         }
     }
 }
 
 fn checkSeparatorComments(allocator: Allocator, io: std.Io, file_path: []const u8) ![]u8 {
-    const source = readSourceFile(allocator, io, file_path) catch |err| switch (err) {
-        // Skip files we can't read
-        error.FileNotFound => return try allocator.dupe(u8, ""),
-        else => return err,
-    };
+    const source = (try readSourceFileIfExists(allocator, io, file_path)) orelse return try allocator.dupe(u8, "");
     defer allocator.free(source);
 
     var errors: std.ArrayList(u8) = .empty;
@@ -251,6 +272,67 @@ fn checkSeparatorComments(allocator: Allocator, io: std.Io, file_path: []const u
             const after_slashes = trimmed[2..];
             if (isSeparatorComment(after_slashes)) {
                 const msg = try std.fmt.allocPrint(allocator, "{s}:{d}: horizontal line separator comment not allowed\n", .{ file_path, line_num });
+                defer allocator.free(msg);
+                try errors.appendSlice(allocator, msg);
+            }
+        }
+    }
+
+    return errors.toOwnedSlice(allocator);
+}
+
+fn checkElseSwitchProngs(allocator: Allocator, io: std.Io, file_path: []const u8) ![]u8 {
+    const source = (try readSourceFileIfExists(allocator, io, file_path)) orelse return try allocator.dupe(u8, "");
+    defer allocator.free(source);
+
+    var tree = try std.zig.Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+
+    var errors: std.ArrayList(u8) = .empty;
+    errdefer errors.deinit(allocator);
+
+    for (tree.nodes.items(.tag), 0..) |tag, node_usize| {
+        if (tag != .@"switch" and tag != .switch_comma) continue;
+
+        const node: std.zig.Ast.Node.Index = @enumFromInt(@as(u32, @intCast(node_usize)));
+        const switch_node = tree.fullSwitch(node) orelse unreachable;
+        var else_offset: ?usize = null;
+        var has_literal_case = false;
+        var has_error_case = false;
+
+        for (switch_node.ast.cases) |case_node| {
+            const case = tree.fullSwitchCase(case_node) orelse unreachable;
+            if (case.ast.values.len == 0) {
+                else_offset = tree.tokens.items(.start)[tree.firstToken(case_node)];
+                continue;
+            }
+
+            for (case.ast.values) |value| {
+                const first_token = tree.firstToken(value);
+                const last_token = tree.lastToken(value);
+                if (std.mem.eql(u8, tree.tokenSlice(first_token), "error")) {
+                    has_error_case = true;
+                }
+                for (first_token..last_token + 1) |token| {
+                    const token_tag = tree.tokens.items(.tag)[token];
+                    if (token_tag == .number_literal or
+                        token_tag == .char_literal or
+                        token_tag == .string_literal or
+                        token_tag == .multiline_string_literal_line)
+                    {
+                        has_literal_case = true;
+                    }
+                }
+            }
+        }
+
+        if (else_offset) |offset| {
+            if (!has_literal_case and !has_error_case) {
+                const msg = try std.fmt.allocPrint(
+                    allocator,
+                    "{s}:{d}: switch else prong must be exhaustive\n",
+                    .{ file_path, lineNumber(source, offset) },
+                );
                 defer allocator.free(msg);
                 try errors.appendSlice(allocator, msg);
             }
@@ -336,11 +418,7 @@ fn containsBoxDrawingCorner(content: []const u8) bool {
 }
 
 fn checkPubDocComments(allocator: Allocator, io: std.Io, file_path: []const u8) ![]u8 {
-    const source = readSourceFile(allocator, io, file_path) catch |err| switch (err) {
-        // Skip files we can't read
-        error.FileNotFound => return try allocator.dupe(u8, ""),
-        else => return err,
-    };
+    const source = (try readSourceFileIfExists(allocator, io, file_path)) orelse return try allocator.dupe(u8, "");
     defer allocator.free(source);
 
     var errors: std.ArrayList(u8) = .empty;
@@ -381,10 +459,7 @@ fn checkPubDocComments(allocator: Allocator, io: std.Io, file_path: []const u8) 
 }
 
 fn checkDebugAllocatorConfig(allocator: Allocator, io: std.Io, file_path: []const u8) ![]u8 {
-    const source = readSourceFile(allocator, io, file_path) catch |err| switch (err) {
-        error.FileNotFound => return try allocator.dupe(u8, ""),
-        else => return err,
-    };
+    const source = (try readSourceFileIfExists(allocator, io, file_path)) orelse return try allocator.dupe(u8, "");
     defer allocator.free(source);
 
     var errors: std.ArrayList(u8) = .empty;
@@ -558,17 +633,14 @@ fn getNewZigFiles(allocator: Allocator, io: std.Io) !PathList {
 }
 
 fn fileHasTopLevelComment(allocator: Allocator, io: std.Io, file_path: []const u8) !bool {
-    const source = readSourceFile(allocator, io, file_path) catch |err| switch (err) {
-        // File was deleted but still shows in git diff - skip it
-        error.FileNotFound => return true,
-        else => return err,
-    };
+    // A file can be deleted after `git diff` lists it; skip it in that case.
+    const source = (try readSourceFileIfExists(allocator, io, file_path)) orelse return true;
     defer allocator.free(source);
 
     return std.mem.find(u8, source, "//!") != null;
 }
 
-fn readSourceFile(allocator: Allocator, io: std.Io, path: []const u8) ![:0]u8 {
+fn readSourceFile(allocator: Allocator, io: std.Io, path: []const u8) std.Io.Dir.ReadFileAllocError![:0]u8 {
     return try std.Io.Dir.cwd().readFileAllocOptions(
         io,
         path,
@@ -577,6 +649,44 @@ fn readSourceFile(allocator: Allocator, io: std.Io, path: []const u8) ![:0]u8 {
         std.mem.Alignment.of(u8),
         0,
     );
+}
+
+fn readSourceFileIfExists(allocator: Allocator, io: std.Io, path: []const u8) std.Io.Dir.ReadFileAllocError!?[:0]u8 {
+    return readSourceFile(allocator, io, path) catch |err| switch (err) {
+        error.FileNotFound => null,
+        error.Canceled,
+        error.InputOutput,
+        error.SystemResources,
+        error.IsDir,
+        error.ConnectionResetByPeer,
+        error.NotOpenForReading,
+        error.SocketUnconnected,
+        error.WouldBlock,
+        error.AccessDenied,
+        error.LockViolation,
+        error.Unexpected,
+        error.FileTooBig,
+        error.NoSpaceLeft,
+        error.DeviceBusy,
+        error.PermissionDenied,
+        error.NoDevice,
+        error.FileBusy,
+        error.ProcessFdQuotaExceeded,
+        error.SystemFdQuotaExceeded,
+        error.PathAlreadyExists,
+        error.SymLinkLoop,
+        error.NotDir,
+        error.ReadOnlyFileSystem,
+        error.NetworkNotFound,
+        error.NameTooLong,
+        error.BadPathName,
+        error.PipeBusy,
+        error.AntivirusInterference,
+        error.FileLocksUnsupported,
+        error.OutOfMemory,
+        error.StreamTooLong,
+        => return err,
+    };
 }
 
 fn freePathList(list: *PathList, allocator: Allocator) void {

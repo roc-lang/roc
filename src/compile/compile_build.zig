@@ -85,7 +85,35 @@ fn nativeFetchUrlImpl(_: ?*anyopaque, std_io: std.Io, allocator: Allocator, url:
     }) catch |err| switch (err) {
         error.ExpandedSizeLimitExceeded => error.ExpandedSizeLimitExceeded,
         error.OutOfMemory => error.OutOfMemory,
-        else => error.DownloadFailed,
+        error.AmbiguousVersion,
+        error.ChecksumFailure,
+        error.DecompressionFailed,
+        error.DictionaryIdFlagUnsupported,
+        error.DirectoryCreateFailed,
+        error.EndOfStream,
+        error.FileCreateFailed,
+        error.FileError,
+        error.FileTooLarge,
+        error.FileWriteFailed,
+        error.HashMismatch,
+        error.HttpError,
+        error.InvalidFilename,
+        error.InvalidHash,
+        error.InvalidPath,
+        error.InvalidProxyUrl,
+        error.InvalidTarHeader,
+        error.InvalidUrl,
+        error.InvalidVersion,
+        error.LocalhostWasNotLoopback,
+        error.MalformedBlock,
+        error.MalformedFrame,
+        error.NetworkError,
+        error.NoDataExtracted,
+        error.NoHashInUrl,
+        error.ReadFailed,
+        error.UnexpectedEndOfStream,
+        error.WriteFailed,
+        => error.DownloadFailed,
     };
 }
 
@@ -674,7 +702,7 @@ pub const BuildEnv = struct {
             .hosted => .hosted,
             .type_module => if (ast.hasMainBangDecl()) .default_app else .type_module,
             .default_app => .default_app,
-            else => null,
+            .malformed => null,
         };
     }
 
@@ -1164,14 +1192,18 @@ pub const BuildEnv = struct {
                     break :blk report;
                 },
 
-                else => {
+                error.AccessDenied,
+                error.IoError,
+                error.OutOfMemory,
+                error.StreamTooLong,
+                => {
                     const headline = try std.fmt.allocPrint(self.gpa, "I could not read the file {s}.", .{file_abs});
                     defer self.gpa.free(headline);
-                    var report = try Report.init(self.gpa, "Could Not Read File", headline, .fatal);
-                    try report.document.addText("I did get the following error: ");
-                    try report.addErrorMessage(@errorName(err));
-                    try report.document.addText("Make sure the file can be read.");
-                    break :blk report;
+                    var other_report = try Report.init(self.gpa, "Could Not Read File", headline, .fatal);
+                    try other_report.document.addText("I did get the following error: ");
+                    try other_report.addErrorMessage(@errorName(err));
+                    try other_report.document.addText("Make sure the file can be read.");
+                    break :blk other_report;
                 },
             };
             try self.sink.emitReport("main", file_abs, report);
@@ -1272,7 +1304,7 @@ pub const BuildEnv = struct {
                 info.kind = .default_app;
                 // Default app headers are for REPL-style execution
             },
-            else => return error.UnsupportedHeader,
+            .malformed => return error.UnsupportedHeader,
         }
 
         return info;
@@ -1287,7 +1319,10 @@ pub const BuildEnv = struct {
         const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.FileNotFound,
+            error.AccessDenied,
+            error.IoError,
+            error.StreamTooLong,
+            => return error.FileNotFound,
         };
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
@@ -1495,7 +1530,32 @@ pub const BuildEnv = struct {
         if (self.package_cache_dir == null) {
             self.package_cache_dir = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => null,
+                error.AccessDenied,
+                error.BuiltinLowLevelAnnotationMustBeFunction,
+                error.DownloadFailed,
+                error.ExpectedPlatformString,
+                error.ExpectedString,
+                error.FileError,
+                error.FileNotFound,
+                error.Internal,
+                error.InvalidDependency,
+                error.InvalidNullByteInPath,
+                error.InvalidUrl,
+                error.IoError,
+                error.LockedMemoryLimitExceeded,
+                error.LowLevelOperationsNotFound,
+                error.MissingFilesDirectory,
+                error.MissingTargetFile,
+                error.NoCacheDir,
+                error.NoPackageSource,
+                error.PathOutsideWorkspace,
+                error.StreamTooLong,
+                error.SystemResources,
+                error.ThreadQuotaExceeded,
+                error.Unexpected,
+                error.UnsupportedBuiltinAnnotationOnly,
+                error.UnsupportedHeader,
+                => null,
             };
         }
 
@@ -1938,7 +1998,21 @@ pub const BuildEnv = struct {
                     }
                 }
             },
-            else => {},
+            .text,
+            .annotated,
+            .line_break,
+            .indent,
+            .space,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .raw,
+            .reflowing_text,
+            .link,
+            .vertical_stack,
+            .horizontal_concat,
+            .source_code_multi_region,
+            => {},
         }
     }
 
@@ -2367,7 +2441,7 @@ pub const BuildEnv = struct {
                 if (self.packages.getPtr(root_name)) |root_pkg| {
                     return switch (root_pkg.kind) {
                         .app, .default_app => "app",
-                        else => "module",
+                        .package, .platform, .module, .hosted, .type_module => "module",
                     };
                 }
             }
@@ -2523,7 +2597,7 @@ pub const BuildEnv = struct {
         for (all_modules) |mod| {
             switch (mod.semantic.env.module_kind) {
                 .package, .platform => continue,
-                else => {},
+                .type_module, .default_app, .app, .hosted, .module, .malformed => {},
             }
             try docs_modules.append(allocator, mod);
         }

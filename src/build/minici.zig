@@ -851,7 +851,7 @@ fn runCommand(
 
     const status: []const u8 = switch (result.term) {
         .exited => |code| if (code == 0) "pass" else "fail",
-        else => "crash",
+        .signal, .stopped, .unknown => "crash",
     };
     const ended = nowNs(io);
 
@@ -1447,7 +1447,7 @@ pub fn main(init: std.process.Init) !void {
     const args: []const []const u8 = @ptrCast(raw_args);
     const parsed_args = parseMiniArgs(allocator, args) catch |err| switch (err) {
         error.OutOfMemory => return err,
-        else => std.process.exit(2),
+        error.InvalidMiniCiArgument => std.process.exit(2),
     };
     const selected_jobs = resolveSelection(parsed_args.selection) catch |err| {
         printSelectionError(parsed_args.selection, err);

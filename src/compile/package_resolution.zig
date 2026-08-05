@@ -430,7 +430,12 @@ pub const Resolver = struct {
         const root_path = try self.arena().dupe(u8, root_file_abs);
         const root_node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), root_path) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => {
+            error.DownloadFailed,
+            error.ExpandedSizeLimitExceeded,
+            error.FileNotFound,
+            error.HeaderParseFailed,
+            error.Unsupported,
+            => {
                 try self.addDiagnostic("Invalid Package Header", "Could not load the header of {s}: {s}.", .{ root_path, @errorName(err) });
                 return error.ResolutionFailed;
             },
@@ -624,11 +629,15 @@ pub const Resolver = struct {
                             .alias = dep.alias,
                             .spec = dep.spec,
                             .is_platform = dep.is_platform,
-                            .target = .{ .invalid = switch (err) {
-                                error.InvalidVersion => .reserved_version,
-                                error.AmbiguousVersion => .ambiguous_version,
-                                else => .unparsable_url,
-                            } },
+                            .target = .{
+                                .invalid = switch (err) {
+                                    error.InvalidVersion => .reserved_version,
+                                    error.AmbiguousVersion => .ambiguous_version,
+                                    error.InvalidUrl,
+                                    error.NoHashInUrl,
+                                    => .unparsable_url,
+                                },
+                            },
                         });
                         continue;
                     };
@@ -782,7 +791,12 @@ pub const Resolver = struct {
         for (missing_locals) |abs| {
             const node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), abs) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => {
+                error.DownloadFailed,
+                error.ExpandedSizeLimitExceeded,
+                error.FileNotFound,
+                error.HeaderParseFailed,
+                error.Unsupported,
+                => {
                     try self.addDiagnostic("Invalid Package Dependency", "Could not load the package at {s}: {s}.", .{ abs, @errorName(err) });
                     continue;
                 },
@@ -793,7 +807,12 @@ pub const Resolver = struct {
         for (missing_compiler_owned) |platform| {
             const fetched = self.fetcher.loadCompilerOwnedPlatformFn(self.fetcher.ctx, self.arena(), platform) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => {
+                error.DownloadFailed,
+                error.ExpandedSizeLimitExceeded,
+                error.FileNotFound,
+                error.HeaderParseFailed,
+                error.Unsupported,
+                => {
                     try self.addDiagnostic(
                         "Invalid Compiler Platform",
                         "Could not load the compiler-owned platform {s}: {s}.",
@@ -874,7 +893,11 @@ pub const Resolver = struct {
                     );
                     continue;
                 },
-                else => {
+                error.DownloadFailed,
+                error.FileNotFound,
+                error.HeaderParseFailed,
+                error.Unsupported,
+                => {
                     try self.addDiagnostic(
                         "Package Download Failed",
                         "Failed to download and extract this package:\n\n    {s}\n\nError: {s}.",
@@ -1055,10 +1078,8 @@ pub const Resolver = struct {
             var pins: std.StringHashMapUnmanaged(UrlTarget) = .{};
             for (walk_result.edges.items) |edge| {
                 if (edge.parent != null) continue;
-                const target = switch (edge.target) {
-                    .url => |t| t,
-                    else => continue,
-                };
+                if (edge.target != .url) continue;
+                const target = edge.target.url;
                 if (!target.version.isPresent()) continue;
                 const gop = try pins.getOrPut(self.arena(), target.group);
                 if (gop.found_existing) {
@@ -1078,10 +1099,8 @@ pub const Resolver = struct {
 
             for (walk_result.edges.items) |edge| {
                 if (edge.parent == null) continue;
-                const target = switch (edge.target) {
-                    .url => |t| t,
-                    else => continue,
-                };
+                if (edge.target != .url) continue;
+                const target = edge.target.url;
                 const pin = pins.get(target.group) orelse continue;
                 if (pin.version.orderWithinMajor(target.version) == .lt) {
                     const chain = try self.describeChain(walk_result, edge.parent);
@@ -1227,10 +1246,10 @@ pub const Resolver = struct {
                 .alias = try out.dupe(u8, edge.alias),
                 .target = target_index,
                 .is_platform = edge.is_platform,
-                .declared_version = switch (edge.target) {
-                    .url => |t| if (t.version.isPresent()) t.version else null,
-                    else => null,
-                },
+                .declared_version = if (edge.target == .url and edge.target.url.version.isPresent())
+                    edge.target.url.version
+                else
+                    null,
             });
         }
 
@@ -1483,17 +1502,17 @@ pub fn scanParsedHeader(
         .app => |a| blk: {
             const platform_field = ast.store.getRecordField(a.platform_idx);
             if (platform_field.value) |value_expr| {
-                switch (ast.store.getExpr(value_expr)) {
-                    .string => {
-                        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
-                        try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
-                    },
-                    .ident => |ident| {
-                        if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
-                        const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
-                        try appendCompilerOwnedScannedDep(allocator, &deps, ast.resolve(platform_field.name), platform);
-                    },
-                    else => return error.HeaderParseFailed,
+                const platform_expr = ast.store.getExpr(value_expr);
+                if (platform_expr == .string) {
+                    const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
+                    try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
+                } else if (platform_expr == .ident) {
+                    const ident = platform_expr.ident;
+                    if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
+                    const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
+                    try appendCompilerOwnedScannedDep(allocator, &deps, ast.resolve(platform_field.name), platform);
+                } else {
+                    return error.HeaderParseFailed;
                 }
             } else {
                 return error.HeaderParseFailed;
@@ -1605,25 +1624,22 @@ fn appendCompilerOwnedScannedDep(
 
 fn stringFromExpr(allocator: Allocator, ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) Allocator.Error!?[]const u8 {
     const expr = ast.store.getExpr(expr_idx);
-    switch (expr) {
-        .string => |s| {
-            var buf = std.ArrayListUnmanaged(u8).empty;
-            errdefer buf.deinit(allocator);
-            for (ast.store.exprSlice(s.parts)) |part_idx| {
-                const part = ast.store.getExpr(part_idx);
-                if (part == .string_part) {
-                    try buf.appendSlice(allocator, ast.resolve(part.string_part.token));
-                }
-            }
-            // Null bytes are invalid in both file paths and URLs.
-            if (std.mem.findScalar(u8, buf.items, 0) != null) {
-                buf.deinit(allocator);
-                return null;
-            }
-            return try buf.toOwnedSlice(allocator);
-        },
-        else => return null,
+    if (expr != .string) return null;
+
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    errdefer buf.deinit(allocator);
+    for (ast.store.exprSlice(expr.string.parts)) |part_idx| {
+        const part = ast.store.getExpr(part_idx);
+        if (part == .string_part) {
+            try buf.appendSlice(allocator, ast.resolve(part.string_part.token));
+        }
     }
+    // Null bytes are invalid in both file paths and URLs.
+    if (std.mem.findScalar(u8, buf.items, 0) != null) {
+        buf.deinit(allocator);
+        return null;
+    }
+    return try buf.toOwnedSlice(allocator);
 }
 
 /// The production fetcher: downloads bundles through the CoreCtx vtable into
@@ -1693,7 +1709,11 @@ pub const CtxFetcher = struct {
         self.writeSidecar(allocator, sidecar_path, scanned, recorded_expanded) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // A missing sidecar only costs a rescan next build.
-            else => {},
+            error.AccessDenied,
+            error.FileNotFound,
+            error.IoError,
+            error.WriteFailed,
+            => {},
         };
 
         return scanned;
@@ -1728,7 +1748,7 @@ pub const CtxFetcher = struct {
         const staging_dir = try self.stagingDirPath(allocator, package_dir);
         self.fs.createDir(staging_dir) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.DownloadFailed,
+            error.AccessDenied, error.IoError => return error.DownloadFailed,
         };
 
         const expanded_bytes = self.fs.fetchUrl(self.gpa, url, staging_dir, max_expanded_bytes) catch |err| {
@@ -1736,7 +1756,7 @@ pub const CtxFetcher = struct {
             return switch (err) {
                 error.OutOfMemory => error.OutOfMemory,
                 error.ExpandedSizeLimitExceeded => error.ExpandedSizeLimitExceeded,
-                else => error.DownloadFailed,
+                error.Unsupported, error.DownloadFailed => error.DownloadFailed,
             };
         };
 
@@ -1829,7 +1849,10 @@ pub const CtxFetcher = struct {
         const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
         const materialized = compiler_platforms.materialize(allocator, self.fs, self.compiler_owned_source_dir, platform) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.Unsupported,
+            error.AccessDenied,
+            error.IoError,
+            error.NoHomeDirectory,
+            => return error.Unsupported,
         };
         const src = try self.readNormalizedSource(allocator, materialized.root_file);
         var scanned = try scanHeaderSource(allocator, self.gpa, materialized.root_file, src);
@@ -1841,7 +1864,11 @@ pub const CtxFetcher = struct {
     fn readNormalizedSource(self: *CtxFetcher, allocator: Allocator, root_file_abs: []const u8) FetchError![]u8 {
         var src = self.fs.readFile(root_file_abs, allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.FileNotFound,
+            error.AccessDenied,
+            error.FileNotFound,
+            error.IoError,
+            error.StreamTooLong,
+            => return error.FileNotFound,
         };
         src = base.source_utils.normalizeLineEndingsRealloc(allocator, src) catch return error.OutOfMemory;
         return src;

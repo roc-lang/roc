@@ -20,7 +20,15 @@ const page_size: usize = 4096;
 const allocation_header_words = 3;
 const allocation_header_size = allocation_header_words * @sizeOf(usize);
 
-const syscall_number = switch (builtin.os.tag) {
+const BsdOs = enum { freebsd, netbsd };
+const bsd_os: BsdOs = if (builtin.os.tag == .freebsd)
+    .freebsd
+else if (builtin.os.tag == .netbsd)
+    .netbsd
+else
+    @compileError("default platform BSD runtime must be built for FreeBSD or NetBSD");
+
+const syscall_number = switch (bsd_os) {
     .freebsd => struct {
         const exit: usize = 1;
         const write: usize = 4;
@@ -33,7 +41,6 @@ const syscall_number = switch (builtin.os.tag) {
         const munmap: usize = 73;
         const mmap: usize = 197;
     },
-    else => @compileError("default platform BSD runtime must be built for FreeBSD or NetBSD"),
 };
 
 const SourceFrame = extern struct {
@@ -73,7 +80,7 @@ comptime {
         @export(&bsdStartMain, .{ .name = "roc_default_bsd_start_main", .visibility = .hidden });
     }
 
-    switch (builtin.os.tag) {
+    switch (bsd_os) {
         .freebsd => asm (
             \\.section .note.tag,"a",@note
             \\.p2align 2
@@ -108,7 +115,6 @@ comptime {
             \\.size roc_default_netbsd_mmap, .-roc_default_netbsd_mmap
             \\.section .note.GNU-stack,"",@progbits
         ),
-        else => unreachable,
     }
 }
 
@@ -242,10 +248,9 @@ fn rocDealloc(ptr: *anyopaque, _: usize) callconv(.c) void {
 fn rawMmap(length: usize) usize {
     const map_private_anonymous: usize = 0x0002 | 0x1000;
     const fd: usize = @bitCast(@as(isize, -1));
-    return switch (builtin.os.tag) {
+    return switch (bsd_os) {
         .freebsd => rawSyscall6(syscall_number.mmap, 0, length, 0x01 | 0x02, map_private_anonymous, fd, 0),
         .netbsd => rawNetBsdMmap(length, map_private_anonymous, fd),
-        else => unreachable,
     };
 }
 

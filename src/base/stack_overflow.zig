@@ -248,7 +248,7 @@ fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8, 
 
             std.debug.print("Unexpected termination signal: {}\n", .{sig});
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Unexpected termination: {}\n", .{term});
         },
     }

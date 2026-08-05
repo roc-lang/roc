@@ -288,7 +288,26 @@ fn assertNoPostCheckType(comptime T: type, comptime path: []const u8) void {
                 assertNoPostCheckType(field.type, path ++ "." ++ field.name);
             }
         },
-        else => {},
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .int,
+        .float,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        => {},
     }
 }
 
