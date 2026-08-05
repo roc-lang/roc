@@ -1052,8 +1052,9 @@ pub fn listSwap(
 ///
 /// This operation never changes a reference count or consumes `list`. ARC
 /// keeps `list` live for the complete lifetime of the returned view. For
-/// refcounted elements it initializes whole-allocation teardown metadata, so a
-/// later owned occurrence can safely retain the view.
+/// refcounted elements it initializes whole-allocation teardown metadata while
+/// the source is exclusive, so a later owned occurrence can safely retain the
+/// view. Shared sources already had that metadata initialized before sharing.
 pub fn listSublistBorrowed(
     list: RocList,
     element_width: usize,
@@ -1071,7 +1072,9 @@ pub fn listSublistBorrowed(
     const start: usize = @intCast(start_u64);
     const size_minus_start = size - start;
     const keep_len: usize = @intCast(@min(len_u64, @as(u64, @intCast(size_minus_start))));
-    list.setAllocationElementCount(elements_refcounted, roc_ops);
+    if (elements_refcounted and list.canReuseAllocation(.Immutable, roc_ops)) {
+        list.setAllocationElementCount(elements_refcounted, roc_ops);
+    }
     const list_alloc_ptr = RocList.encodeSliceAllocationPtr(source_ptr);
     const slice_alloc_ptr = list.capacity_or_alloc_ptr;
     const slice_mask = list.seamlessSliceMask();
