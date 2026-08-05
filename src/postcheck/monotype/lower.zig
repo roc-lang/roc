@@ -353,6 +353,12 @@ pub const BodyDiagnostics = struct {
     fresh_checked_node_requests: u64 = 0,
     call_expressions: u64 = 0,
     dispatch_expressions: u64 = 0,
+    deferred_template_requests: u64 = 0,
+    caller_owned_template_bodies_lowered: u64 = 0,
+    deferred_template_reuses: u64 = 0,
+    deferred_template_bodies_lowered: u64 = 0,
+    lowered_template_bodies_discarded: u64 = 0,
+    lowered_nested_bodies_discarded: u64 = 0,
     expr_relation_requests: u64 = 0,
     argument_spans_prepared: u64 = 0,
     arguments_prepared: u64 = 0,
@@ -3684,6 +3690,11 @@ const Builder = struct {
         if (local_context_dependent and template.target == .hosted) {
             Common.invariant("hosted template specialization depended on a local procedure context");
         }
+        if (local_context_dependent) {
+            self.countBodyDiagnostic("caller_owned_template_bodies_lowered");
+        } else {
+            self.countBodyDiagnostic("deferred_template_requests");
+        }
         const spec_index = source_ctx.draft.template_specs.items.len;
         const lexical = if (local_context_dependent)
             try source_ctx.captureCodecLexicalContext()
@@ -6389,13 +6400,17 @@ const Builder = struct {
                 request_digest,
             );
 
+            var found_local = false;
             const loaded_slot: ?Ast.FnSlot = if (spec.requires_local)
                 null
             else if (try self.spec_store.find(identity, specializationEvidenceView(requested_evidence))) |hit|
                 switch (hit) {
                     // `lowerTemplateWithMono` owns the validation and recursive
                     // state handling for local specializations.
-                    .local => null,
+                    .local => blk: {
+                        found_local = true;
+                        break :blk null;
+                    },
                     .loaded => |imported| blk: {
                         if (draft_fn.signature_relation == .exact_graph and
                             self.importedFnSignatureRelation(imported) != .exact_graph)
@@ -6411,6 +6426,11 @@ const Builder = struct {
             else
                 null;
 
+            if (found_local or loaded_slot != null) {
+                self.countBodyDiagnostic("deferred_template_reuses");
+            } else {
+                self.countBodyDiagnostic("deferred_template_bodies_lowered");
+            }
             spec.resolved_slot = loaded_slot orelse blk: {
                 const def = try self.lowerTemplateWithMono(
                     spec.template_ref,
@@ -6527,6 +6547,11 @@ const Builder = struct {
                     }
                     if (!emit_fns[parent_raw]) {
                         emit_fns[raw_index] = false;
+                        if (template_spec != null) {
+                            self.countBodyDiagnostic("lowered_template_bodies_discarded");
+                        } else {
+                            self.countBodyDiagnostic("lowered_nested_bodies_discarded");
+                        }
                         continue;
                     }
                 },
@@ -6548,6 +6573,11 @@ const Builder = struct {
                             if (!storedConstFnEvidenceEql(prior_evidence, requested_evidence)) continue;
                             fn_slots[raw_index] = fn_slots[prior];
                             emit_fns[raw_index] = false;
+                            if (template_spec != null) {
+                                self.countBodyDiagnostic("lowered_template_bodies_discarded");
+                            } else {
+                                self.countBodyDiagnostic("lowered_nested_bodies_discarded");
+                            }
                             break;
                         }
                     }
@@ -6570,6 +6600,11 @@ const Builder = struct {
                         }
                         fn_slots[raw_index] = hit.target();
                         emit_fns[raw_index] = false;
+                        if (template_spec != null) {
+                            self.countBodyDiagnostic("lowered_template_bodies_discarded");
+                        } else {
+                            self.countBodyDiagnostic("lowered_nested_bodies_discarded");
+                        }
                     } else {
                         fn_slots[raw_index] = .{ .local = @enumFromInt(next_fn) };
                         next_fn += 1;
