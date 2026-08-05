@@ -276,6 +276,56 @@ const MergeState = struct {
     captures: u32,
     facts: std.ArrayList(Fact),
     env: std.ArrayList(EnvMeet),
+    /// Facts held by every captured edge arriving from OUTSIDE the merge
+    /// head's own region. For a loop join these are its entry edges; a fact
+    /// between round-stable single-assignment values that holds on entry is
+    /// a loop invariant outright, because nothing in the loop can reassign
+    /// the values it relates.
+    entry_captures: u32,
+    entry_facts: std.ArrayList(Fact),
+};
+
+/// One endpoint of a cross-round persisted fact, in round-stable form.
+const StableTerm = union(enum) {
+    /// The value of this single-assignment integer local.
+    value_of: LocalId,
+    /// The length of the list held by this single-assignment local.
+    len_of: LocalId,
+    constant: i128,
+};
+
+/// A persisted fact `value(a) <= value(b) + c` between round-stable terms,
+/// re-seeded into its loop body each round (whose walk always precedes its
+/// back-edge captures, so in-round meets can never deliver it).
+const StableFact = struct {
+    a: StableTerm,
+    b: StableTerm,
+    c: i128,
+};
+
+/// Bound on persisted facts per loop join.
+const loop_fact_cap: usize = 16;
+
+const LoopFacts = struct {
+    items: [loop_fact_cap]StableFact = undefined,
+    len: usize = 0,
+};
+
+/// Bound on persisted per-merge env locals.
+const merge_env_persist_cap: usize = 64;
+
+/// One local's stable upper bounds carried across rounds for a merge head.
+const StoredEnvBound = struct {
+    local: LocalId,
+    bounds: [meet_bound_cap]StableBound,
+    len: usize,
+};
+
+/// Last round's stabilized env meet of one merge head, seeded when the
+/// region must walk before its captures complete.
+const MergeEnvBounds = struct {
+    items: [merge_env_persist_cap]StoredEnvBound = undefined,
+    len: usize = 0,
 };
 
 const Pass = struct {
@@ -305,6 +355,29 @@ const Pass = struct {
     len_roots: std.AutoHashMap(NodeId, LocalId),
     value_roots: std.AutoHashMap(NodeId, LocalId),
     loop_bounds: std.AutoHashMap(u64, LoopBounds),
+    loop_facts: std.AutoHashMap(JoinPointId, LoopFacts),
+    /// Per merge head: last round's all-edge fact intersection in stable
+    /// form, seeded when the merge must walk before its captures complete
+    /// (a forced loop-body or cycle-interior region). Facts held by every
+    /// path in a round still hold after rewrites, which only remove paths;
+    /// round one's intersections are seed-free, grounding the induction.
+    merge_facts: std.AutoHashMap(CFStmtId, LoopFacts),
+    /// Per merge head: last round's env meet in stable form, seeded with
+    /// merge_facts under the same induction.
+    merge_env: std.AutoHashMap(CFStmtId, MergeEnvBounds),
+    /// Facts about the values of single-assignment locals, valid wherever
+    /// the value is in scope, like the global env bindings they describe.
+    /// Replayed into every region's fact base rather than rewound with the
+    /// path.
+    global_facts: std.ArrayList(Fact),
+    /// Field reads unified by (struct value root, field index): reading the
+    /// same field of the same struct value yields the same value, so every
+    /// read site shares one node and facts proved through one site's read
+    /// reach the others.
+    field_values: std.AutoHashMap(u64, NodeId),
+    /// The merge head whose region is currently being walked; captures into
+    /// it from within are its own back or interior edges.
+    current_region: ?CFStmtId,
     new_loop_bounds: bool,
     /// An unverified length invariant was seeded this round: every fact-based
     /// rewrite is deferred until the assumption is promoted or discarded.
@@ -347,6 +420,12 @@ const Pass = struct {
             .len_roots = std.AutoHashMap(NodeId, LocalId).init(allocator),
             .value_roots = std.AutoHashMap(NodeId, LocalId).init(allocator),
             .loop_bounds = std.AutoHashMap(u64, LoopBounds).init(allocator),
+            .loop_facts = std.AutoHashMap(JoinPointId, LoopFacts).init(allocator),
+            .merge_facts = std.AutoHashMap(CFStmtId, LoopFacts).init(allocator),
+            .merge_env = std.AutoHashMap(CFStmtId, MergeEnvBounds).init(allocator),
+            .global_facts = .empty,
+            .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
+            .current_region = null,
             .new_loop_bounds = false,
             .live_pending = false,
             .deferred_rewrites = false,
@@ -383,6 +462,11 @@ const Pass = struct {
         self.len_roots.deinit();
         self.value_roots.deinit();
         self.loop_bounds.deinit();
+        self.loop_facts.deinit();
+        self.merge_facts.deinit();
+        self.merge_env.deinit();
+        self.global_facts.deinit(self.allocator);
+        self.field_values.deinit();
         self.scratch.deinit(self.allocator);
         self.query_best.deinit();
         self.proof_records.deinit(self.allocator);
@@ -392,6 +476,8 @@ const Pass = struct {
     fn resetRound(self: *Pass) void {
         self.nodes.clearRetainingCapacity();
         self.facts.clearRetainingCapacity();
+        self.global_facts.clearRetainingCapacity();
+        self.field_values.clearRetainingCapacity();
         self.global_env.clearRetainingCapacity();
         self.path_env.clearRetainingCapacity();
         self.undo.clearRetainingCapacity();
@@ -662,7 +748,29 @@ const Pass = struct {
 
     fn bindFresh(self: *Pass, local: LocalId) ResourceError!void {
         const node = (try self.unknownFor(self.localLayout(local))) orelse return;
+        // As in valueOf: a single-assignment integer local's fresh root
+        // denotes its value in round-stable form.
+        if (trackedIntMax(self.localLayout(local)) != null and self.isSingleAssign(local)) {
+            try self.value_roots.put(node, local);
+        }
         try self.bind(local, .{ .node = node });
+    }
+
+    /// Bind a field-read target, unifying with earlier reads of the same
+    /// field of the same struct value so facts reach every read site.
+    fn bindFieldRead(self: *Pass, target: LocalId, source: LocalId, field_idx: u16) ResourceError!void {
+        const src_node = (try self.valueOf(source)) orelse return self.bindFresh(target);
+        const key = (@as(u64, self.rootOf(src_node)) << 16) | field_idx;
+        if (self.field_values.get(key)) |node| {
+            try self.bind(target, .{ .node = node });
+            return;
+        }
+        const node = (try self.unknownFor(self.localLayout(target))) orelse return self.bindFresh(target);
+        try self.field_values.put(key, node);
+        if (trackedIntMax(self.localLayout(target)) != null and self.isSingleAssign(target)) {
+            try self.value_roots.put(node, target);
+        }
+        try self.bind(target, .{ .node = node });
     }
 
     fn rewindTo(self: *Pass, facts_len: usize, undo_len: usize) ResourceError!void {
@@ -837,6 +945,7 @@ const Pass = struct {
         while (it.next()) |state| {
             state.facts.deinit(self.allocator);
             state.env.deinit(self.allocator);
+            state.entry_facts.deinit(self.allocator);
         }
         self.merge_states.clearRetainingCapacity();
     }
@@ -863,9 +972,31 @@ const Pass = struct {
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty };
+            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty, .entry_captures = 0, .entry_facts = .empty };
         }
         const state = entry.value_ptr;
+
+        // An edge arriving from another region is an entry edge; its facts
+        // meet separately so loop-invariant relations survive the back
+        // edge's inability to derive them before its region is seeded.
+        if (self.current_region != head) {
+            if (state.entry_captures == 0) {
+                try state.entry_facts.appendSlice(self.allocator, self.facts.items);
+            } else {
+                var keep_entry: usize = 0;
+                for (state.entry_facts.items) |fact| {
+                    for (self.facts.items) |mine| {
+                        if (mine.a == fact.a and mine.b == fact.b and mine.c == fact.c) {
+                            state.entry_facts.items[keep_entry] = fact;
+                            keep_entry += 1;
+                            break;
+                        }
+                    }
+                }
+                state.entry_facts.shrinkRetainingCapacity(keep_entry);
+            }
+            state.entry_captures += 1;
+        }
 
         if (state.captures == 0) {
             try state.facts.appendSlice(self.allocator, self.facts.items);
@@ -994,6 +1125,9 @@ const Pass = struct {
             const state = self.merge_states.get(head);
             const captures = if (state) |st| st.captures else 0;
             if (captures != self.jumpCount(join_id)) {
+                try self.seedMergeFacts(head);
+                try self.seedMergeEnv(head);
+                try self.seedLoopFacts(join_id);
                 if (self.join_stmts.get(join_id)) |join_stmt| {
                     const join = self.store.getCFStmt(join_stmt).join;
                     const params = self.store.getLocalSpan(join.params);
@@ -1004,9 +1138,17 @@ const Pass = struct {
                 return;
             }
         }
-        const state = self.merge_states.getPtr(head) orelse return;
+        const state = self.merge_states.getPtr(head) orelse {
+            try self.seedMergeFacts(head);
+            try self.seedMergeEnv(head);
+            return;
+        };
         const expected = self.mergeExpected(head);
-        if (state.captures != expected or expected == 0) return;
+        if (state.captures != expected or expected == 0) {
+            try self.seedMergeFacts(head);
+            try self.seedMergeEnv(head);
+            return;
+        }
 
         try self.facts.appendSlice(self.allocator, state.facts.items);
 
@@ -1098,12 +1240,187 @@ const Pass = struct {
         };
     }
 
+    /// Round-stable form of a fact endpoint root, or null.
+    fn stabilizeTerm(self: *const Pass, root: NodeId) ?StableTerm {
+        if (self.len_roots.get(root)) |list_local| return .{ .len_of = list_local };
+        if (self.value_roots.get(root)) |scalar_local| return .{ .value_of = scalar_local };
+        const node = self.nodes.items[root];
+        if (node.lo == node.hi) return .{ .constant = node.lo };
+        return null;
+    }
+
+    /// Persist a loop join's entry-edge facts whose endpoints are all
+    /// round-stable. Such a fact relates values no loop iteration can
+    /// reassign—the endpoint locals were bound before entry—so holding on
+    /// every entry edge makes it hold throughout the loop.
+    fn persistLoopFacts(self: *Pass, join_id: JoinPointId, state: *const MergeState) ResourceError!void {
+        if (state.entry_captures == 0) return;
+        const stable = self.stabilizeFacts(state.entry_facts.items);
+        if (stable.len == 0) return;
+        const previous = self.loop_facts.get(join_id);
+        if (previous == null or previous.?.len != stable.len) self.new_loop_bounds = true;
+        try self.loop_facts.put(join_id, stable);
+    }
+
+    /// Seed a loop body region with its persisted entry-invariant facts,
+    /// materialized against this round's nodes.
+    fn seedLoopFacts(self: *Pass, join_id: JoinPointId) ResourceError!void {
+        const stored = self.loop_facts.get(join_id) orelse return;
+        for (stored.items[0..stored.len]) |fact| {
+            const a = (try self.materializeTerm(fact.a)) orelse continue;
+            const b = (try self.materializeTerm(fact.b)) orelse continue;
+            // The persisted relation is between values; restated on roots:
+            // root_a <= value_a - off_lo_a and value_b <= root_b + off_hi_b.
+            const c = fact.c + self.offHiOf(b) - self.offLoOf(a);
+            try self.addFact(.{ .a = self.rootOf(a), .b = self.rootOf(b), .c = c, .origin = .meet });
+        }
+    }
+
+    /// This round's node for a stable term: the local's value, the list
+    /// local's length term, or a constant.
+    fn materializeTerm(self: *Pass, term: StableTerm) ResourceError!?NodeId {
+        switch (term) {
+            .value_of => |scalar_local| return try self.valueOf(scalar_local),
+            .len_of => |list_local| {
+                const ln = (try self.valueOf(list_local)) orelse return null;
+                const root = self.rootOf(ln);
+                if (self.len_terms.get(root)) |len_term| return len_term;
+                const fresh = (try self.freshRoot(0, std.math.maxInt(i64))) orelse return null;
+                try self.len_terms.put(root, fresh);
+                if (self.isSingleAssign(list_local)) {
+                    try self.len_roots.put(fresh, list_local);
+                }
+                return fresh;
+            },
+            .constant => |v| return try self.constNode(v),
+        }
+    }
+
+    /// Stabilize a fact list into round-stable form, keeping facts whose
+    /// endpoints all denote something stable.
+    fn stabilizeFacts(self: *const Pass, facts: []const Fact) LoopFacts {
+        var stable = LoopFacts{};
+        for (facts) |fact| {
+            if (stable.len >= loop_fact_cap) break;
+            const a = self.stabilizeTerm(fact.a) orelse continue;
+            const b = self.stabilizeTerm(fact.b) orelse continue;
+            if (a == .constant and b == .constant) continue;
+            stable.items[stable.len] = .{ .a = a, .b = b, .c = fact.c };
+            stable.len += 1;
+        }
+        return stable;
+    }
+
+    /// Persist a fully-captured merge's all-edge fact intersection for
+    /// seeding when a later round must walk it before capture completes.
+    fn persistMergeFacts(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
+        const stable = self.stabilizeFacts(state.facts.items);
+        if (stable.len == 0) return;
+        if (self.merge_facts.get(head)) |previous| {
+            if (previous.len != stable.len) {
+                self.new_loop_bounds = true;
+            } else for (previous.items[0..previous.len], stable.items[0..stable.len]) |old, new| {
+                if (!std.meta.eql(old, new)) {
+                    self.new_loop_bounds = true;
+                    break;
+                }
+            }
+        } else self.new_loop_bounds = true;
+        try self.merge_facts.put(head, stable);
+    }
+
+    /// Seed a region walked before its captures complete with the facts
+    /// every edge carried last round.
+    fn seedMergeFacts(self: *Pass, head: CFStmtId) ResourceError!void {
+        const stored = self.merge_facts.get(head) orelse return;
+        for (stored.items[0..stored.len]) |fact| {
+            const a = (try self.materializeTerm(fact.a)) orelse continue;
+            const b = (try self.materializeTerm(fact.b)) orelse continue;
+            const c = fact.c + self.offHiOf(b) - self.offLoOf(a);
+            try self.addFact(.{ .a = self.rootOf(a), .b = self.rootOf(b), .c = c, .origin = .meet });
+        }
+    }
+
+    /// Persist a fully-captured merge's env meet in round-stable form.
+    fn persistMergeEnv(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
+        var stable = MergeEnvBounds{};
+        for (state.env.items) |meet| {
+            if (stable.len >= merge_env_persist_cap) break;
+            var entry = StoredEnvBound{ .local = meet.local, .bounds = undefined, .len = 0 };
+            for (meet.bounds.slice()) |bound| {
+                if (self.stableBase(bound.root)) |base| {
+                    if (entry.len < meet_bound_cap) {
+                        entry.bounds[entry.len] = .{ .base = base.base, .c = base.c + bound.c };
+                        entry.len += 1;
+                    }
+                }
+            }
+            if (entry.len == 0) continue;
+            stable.items[stable.len] = entry;
+            stable.len += 1;
+        }
+        if (stable.len == 0) return;
+        if (self.merge_env.get(head)) |previous| {
+            if (previous.len != stable.len) {
+                self.new_loop_bounds = true;
+            } else for (previous.items[0..previous.len], stable.items[0..stable.len]) |old, new| {
+                if (old.local != new.local or old.len != new.len) {
+                    self.new_loop_bounds = true;
+                    break;
+                }
+                for (old.bounds[0..old.len], new.bounds[0..new.len]) |ob, nb| {
+                    if (!std.meta.eql(ob, nb)) {
+                        self.new_loop_bounds = true;
+                        break;
+                    }
+                }
+            }
+        } else self.new_loop_bounds = true;
+        try self.merge_env.put(head, stable);
+    }
+
+    /// Seed the env of a region walked before its captures complete from
+    /// last round's stabilized meet: each local binds to a fresh value
+    /// carrying the upper bounds every edge proved.
+    fn seedMergeEnv(self: *Pass, head: CFStmtId) ResourceError!void {
+        const stored = self.merge_env.get(head) orelse return;
+        for (stored.items[0..stored.len]) |entry| {
+            const node = (try self.unknownFor(self.localLayout(entry.local))) orelse continue;
+            var used = false;
+            for (entry.bounds[0..entry.len]) |bound| {
+                switch (bound.base) {
+                    .len_of => |list_local| {
+                        const term = (try self.materializeTerm(.{ .len_of = list_local })) orelse continue;
+                        try self.addFact(.{ .a = node, .b = term, .c = bound.c, .origin = .meet });
+                        used = true;
+                    },
+                    .value_of => |scalar_local| {
+                        const v = (try self.valueOf(scalar_local)) orelse continue;
+                        try self.addFact(.{ .a = node, .b = self.rootOf(v), .c = bound.c + self.offHiOf(v), .origin = .meet });
+                        used = true;
+                    },
+                    .constant => {
+                        const const_node = (try self.constNode(bound.c)) orelse continue;
+                        try self.addFact(.{ .a = node, .b = const_node, .c = 0, .origin = .meet });
+                        used = true;
+                    },
+                }
+            }
+            if (used) try self.bind(entry.local, .{ .node = node });
+        }
+    }
+
     fn persistLoopBounds(self: *Pass) ResourceError!void {
         var it = self.merge_states.iterator();
         while (it.next()) |entry| {
             const head = entry.key_ptr.*;
             const state = entry.value_ptr;
+            if (!self.live_pending and state.captures == self.mergeExpected(head) and state.captures >= 2) {
+                try self.persistMergeFacts(head, state);
+                try self.persistMergeEnv(head, state);
+            }
             const join_id = self.body_joins.get(head) orelse continue;
+            if (!self.live_pending) try self.persistLoopFacts(join_id, state);
             if (state.captures != self.jumpCount(join_id) or state.captures < 2) continue;
             for (state.env.items) |meet| {
                 const key = loopBoundKey(join_id, meet.local);
@@ -1510,6 +1827,9 @@ const Pass = struct {
         if (proc.body == null or proc.hosted != null) return;
 
         self.loop_bounds.clearRetainingCapacity();
+        self.loop_facts.clearRetainingCapacity();
+        self.merge_facts.clearRetainingCapacity();
+        self.merge_env.clearRetainingCapacity();
         var round: u32 = 0;
         while (round < max_rounds) : (round += 1) {
             self.resetRound();
@@ -1553,10 +1873,12 @@ const Pass = struct {
                 continue;
             }
             defer_streak = 0;
+            self.current_region = head;
             self.path_env.clearRetainingCapacity();
             self.undo.clearRetainingCapacity();
             self.facts.clearRetainingCapacity();
             self.frames.clearRetainingCapacity();
+            try self.facts.appendSlice(self.allocator, self.global_facts.items);
             try self.seedFromMerge(head);
             try self.frames.append(self.allocator, .{
                 .stmt = head,
@@ -1595,6 +1917,9 @@ const Pass = struct {
                                 } else {
                                     try self.bindFresh(s.target);
                                 }
+                            },
+                            .field => |f| {
+                                try self.bindFieldRead(s.target, f.source, f.field_idx);
                             },
                             else => try self.bindFresh(s.target),
                         }
@@ -1953,11 +2278,33 @@ const Pass = struct {
                         }
                     }
                 }
-                if (mask) |m| {
-                    if (try self.freshRoot(0, m)) |node| {
-                        try self.bind(s.target, .{ .node = node });
-                        return;
+                const bound: ?NodeId = if (mask) |m| try self.freshRoot(0, m) else try self.unknownFor(self.localLayout(s.target));
+                if (bound) |node| {
+                    // An unsigned AND is at most either operand, so the
+                    // result chains to a dynamic mask's own bounds (a table
+                    // index masked by a runtime table size, say).
+                    if (arg_count == 2) {
+                        for (0..2) |i| {
+                            if (try self.valueOf(GuardedList.at(args, i))) |operand| {
+                                const fact = Fact{
+                                    .a = node,
+                                    .b = self.rootOf(operand),
+                                    .c = self.offHiOf(operand),
+                                    .origin = .meet,
+                                };
+                                try self.addFact(fact);
+                                // The result value outlives this path when
+                                // its local is single-assignment; regions
+                                // reading it through the global env replay
+                                // the fact with it.
+                                if (self.isSingleAssign(s.target)) {
+                                    try self.global_facts.append(self.allocator, fact);
+                                }
+                            }
+                        }
                     }
+                    try self.bind(s.target, .{ .node = node });
+                    return;
                 }
                 try self.bindFresh(s.target);
             },
