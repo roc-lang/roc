@@ -346,12 +346,20 @@ pub const SpecializationCounters = specialize.Counters;
 pub const BodyDiagnostics = struct {
     graphs_created: u64 = 0,
     body_contexts_created: u64 = 0,
+    instantiation_scopes_created: u64 = 0,
     checked_node_requests: u64 = 0,
     checked_node_cache_hits: u64 = 0,
     checked_node_cache_misses: u64 = 0,
     fresh_checked_node_requests: u64 = 0,
     call_expressions: u64 = 0,
     dispatch_expressions: u64 = 0,
+    deferred_template_requests: u64 = 0,
+    cross_root_template_reuses: u64 = 0,
+    caller_owned_template_bodies_lowered: u64 = 0,
+    deferred_template_reuses: u64 = 0,
+    deferred_template_bodies_lowered: u64 = 0,
+    lowered_template_bodies_discarded: u64 = 0,
+    lowered_nested_bodies_discarded: u64 = 0,
     expr_relation_requests: u64 = 0,
     argument_spans_prepared: u64 = 0,
     arguments_prepared: u64 = 0,
@@ -403,8 +411,24 @@ pub fn run(
 
     const procedures_started_ns = if (options.timing) |timing| timing.start() else 0;
     if (options.timing) |timing| timing.startProcedureBreakdown();
-    for (roots.requests) |request| {
-        try builder.lowerRoot(request);
+    switch (roots.procedure_template_root_grouping) {
+        .isolated => for (roots.requests) |request| try builder.lowerRoot(request),
+        .shared_adjacent => {
+            var root_index: usize = 0;
+            while (root_index < roots.requests.len) {
+                if (roots.requests[root_index].procedure_template == null) {
+                    try builder.lowerRoot(roots.requests[root_index]);
+                    root_index += 1;
+                    continue;
+                }
+
+                const batch_start = root_index;
+                while (root_index < roots.requests.len and roots.requests[root_index].procedure_template != null) {
+                    root_index += 1;
+                }
+                try builder.lowerTemplateRootBatch(roots.requests[batch_start..root_index]);
+            }
+        },
     }
     if (options.timing) |timing| timing.finishProcedureBreakdown();
     if (options.timing) |timing| timing.finish(procedures_started_ns, .procedure_specialization);
@@ -1475,7 +1499,7 @@ const HostedCatalogEntry = struct {
     def_idx: u32,
 };
 
-const HostedProcedureId = struct {
+const HostedProcedureKey = struct {
     checked_module_digest: [32]u8,
     def_idx: u32,
 };
@@ -1485,11 +1509,13 @@ const HostedBindingView = struct {
     names: *const names.NameStore,
 };
 
-/// Pattern binders are dense IDs allocated by `CheckedBodyStore`, so their
-/// active local bindings belong in indexed storage rather than a hash table.
+/// Pattern binders are dense IDs allocated by `CheckedBodyStore`. Most
+/// short-lived contexts only instantiate types and never bind a pattern, so
+/// defer materializing the dense table until the first binding is installed.
 const BinderMap = struct {
     allocator: Allocator,
-    locals: []?DraftLocalId,
+    binder_count: usize,
+    locals: ?[]?DraftLocalId = null,
     active_count: usize = 0,
 
     const Entry = struct {
@@ -1514,34 +1540,42 @@ const BinderMap = struct {
     };
 
     fn init(allocator: Allocator, binder_count: usize) Allocator.Error!BinderMap {
-        const locals = try allocator.alloc(?DraftLocalId, binder_count);
-        @memset(locals, null);
-        return .{ .allocator = allocator, .locals = locals };
+        return .{ .allocator = allocator, .binder_count = binder_count };
     }
 
     fn deinit(self: *BinderMap) void {
-        self.allocator.free(self.locals);
+        if (self.locals) |locals| self.allocator.free(locals);
         self.* = undefined;
     }
 
     fn index(self: *const BinderMap, binder: checked.PatternBinderId) usize {
         const raw = @intFromEnum(binder);
-        if (raw >= self.locals.len) Common.invariant("pattern binder was outside its checked body store");
+        if (raw >= self.binder_count) Common.invariant("pattern binder was outside its checked body store");
         return raw;
     }
 
     fn get(self: *const BinderMap, binder: checked.PatternBinderId) ?DraftLocalId {
-        return self.locals[self.index(binder)];
+        const index_ = self.index(binder);
+        const locals = self.locals orelse return null;
+        return locals[index_];
     }
 
     fn put(self: *BinderMap, binder: checked.PatternBinderId, local: DraftLocalId) Allocator.Error!void {
-        const slot = &self.locals[self.index(binder)];
+        const index_ = self.index(binder);
+        if (self.locals == null) {
+            const locals = try self.allocator.alloc(?DraftLocalId, self.binder_count);
+            @memset(locals, null);
+            self.locals = locals;
+        }
+        const slot = &self.locals.?[index_];
         if (slot.* == null) self.active_count += 1;
         slot.* = local;
     }
 
     fn remove(self: *BinderMap, binder: checked.PatternBinderId) bool {
-        const slot = &self.locals[self.index(binder)];
+        const index_ = self.index(binder);
+        const locals = self.locals orelse return false;
+        const slot = &locals[index_];
         if (slot.* == null) return false;
         slot.* = null;
         self.active_count -= 1;
@@ -1557,7 +1591,7 @@ const BinderMap = struct {
     }
 
     fn iterator(self: *const BinderMap) Iterator {
-        return .{ .locals = self.locals };
+        return .{ .locals = self.locals orelse &.{} };
     }
 };
 const TypedBinder = struct {
@@ -1684,6 +1718,30 @@ const LoweredTemplate = struct {
     evidence: []const SpecEvidence = &.{},
     /// Exact durable topology for the complete lexical evidence chain.
     topology: ?StoredConstFnEvidence = null,
+};
+
+const TemplateReservation = struct {
+    def: Ast.DefId,
+    fn_id: Ast.FnId,
+    symbol: Common.Symbol,
+};
+
+/// One root body lowered into a shared root batch. Its checked type graph is
+/// still instantiated in a fresh scope; only the graph and draft stores are
+/// shared so an exact specialization discovered by an earlier root can be
+/// reused before another root replays and lowers it.
+const PendingRootTemplateBody = struct {
+    reservation: TemplateReservation,
+    fn_template: Ast.FnTemplate,
+    signature_relation: Ast.SignatureRelation,
+    root_node: NodeId,
+    lowered: LoweredTemplateBody,
+};
+
+const RootTemplateBatch = struct {
+    graph: *InstGraph,
+    draft: *BodyDraftStore,
+    pending: std.ArrayList(PendingRootTemplateBody) = .empty,
 };
 
 const FinalBodyOutputCounts = struct {
@@ -1915,15 +1973,16 @@ const Builder = struct {
     target_usize: base.target.TargetUsize,
     timing: ?*Timing,
     symbols: Common.SymbolGen = .{},
+    next_instantiation_scope: u64 = 0,
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Exact inhabitation answers for sealed Monotype types. These types are
     /// immutable, so the structural walk is needed at most once per TypeId.
-    uninhabited_type_cache: std.AutoHashMap(Type.TypeId, bool),
+    uninhabited_type_cache: collections.DenseMap(Type.TypeId, bool),
     spec_store: specialize.SpecBuilder,
-    lowered_templates: std.AutoHashMap(Ast.FnId, LoweredTemplate),
+    lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
     /// identity and status live on the `Ast.SpecRecord`.
-    lowered_nested_by_fn: std.AutoHashMap(Ast.FnId, Ast.SpecId),
+    lowered_nested_by_fn: collections.DenseMap(Ast.FnId, Ast.SpecId),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
@@ -1995,10 +2054,10 @@ const Builder = struct {
             .target_usize = options.target_usize,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
-            .uninhabited_type_cache = std.AutoHashMap(Type.TypeId, bool).init(allocator),
+            .uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .spec_store = spec_store,
-            .lowered_templates = std.AutoHashMap(Ast.FnId, LoweredTemplate).init(allocator),
-            .lowered_nested_by_fn = std.AutoHashMap(Ast.FnId, Ast.SpecId).init(allocator),
+            .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
+            .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
@@ -2122,6 +2181,16 @@ const Builder = struct {
         }
     }
 
+    fn allocateInstantiationScope(self: *Builder) InstantiationScopeId {
+        if (self.next_instantiation_scope == std.math.maxInt(u64)) {
+            Common.invariant("Monotype instantiation scope identity exhausted");
+        }
+        const id: InstantiationScopeId = @enumFromInt(self.next_instantiation_scope);
+        self.next_instantiation_scope += 1;
+        self.countBodyDiagnostic("instantiation_scopes_created");
+        return id;
+    }
+
     fn createGraph(self: *Builder) Allocator.Error!*InstGraph {
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
         if (self.diagnostics) |diagnostics| {
@@ -2182,7 +2251,7 @@ const Builder = struct {
                 );
             }
 
-            var entries_by_target = std.AutoHashMap(HostedProcedureId, usize).init(self.allocator);
+            var entries_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
             defer entries_by_target.deinit();
             try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
             for (entries.items, 0..) |entry, index| {
@@ -2324,7 +2393,7 @@ const Builder = struct {
         view: ModuleView,
         checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!bool {
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
         return try self.checkedTypeHasVariable(view, checked_ty, &seen);
     }
@@ -2333,7 +2402,7 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         checked_ty: checked.CheckedTypeId,
-        seen: *std.AutoHashMap(checked.CheckedTypeId, void),
+        seen: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         if ((try seen.getOrPut(checked_ty)).found_existing) return false;
         switch (checkedPayload(view, checked_ty)) {
@@ -2378,7 +2447,7 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         types: []const checked.CheckedTypeId,
-        seen: *std.AutoHashMap(checked.CheckedTypeId, void),
+        seen: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         for (types) |ty| {
             if (try self.checkedTypeHasVariable(view, ty, seen)) return true;
@@ -2477,13 +2546,78 @@ const Builder = struct {
         const def = if (request.procedure_binding) |binding|
             try self.lowerProcedureBindingRoot(request, binding)
         else if (request.procedure_template) |template|
-            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type, request.root_evidence)
+            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type, request.root_evidence, null)
         else if (request.procedure_use) |procedure|
             try self.lowerProcedureUseRoot(request, procedure)
         else
             Common.invariant("root request reached Monotype without a checked procedure template or procedure source");
         try self.appendRuntimeSchemaRequestsForDef(def);
         try self.program.addRoot(.{ .def = def, .request = request });
+    }
+
+    /// Lower adjacent checked template roots into one graph and draft. Every
+    /// root receives a fresh `BodyContext` (and therefore a fresh checked-type
+    /// instantiation scope), but graph-local specialization identities remain
+    /// visible across roots. Equivalent callee requests can consequently reuse
+    /// the first deferred request before either graph sealing or body lowering.
+    fn lowerTemplateRootBatch(self: *Builder, requests: []const checked.RootRequest) Allocator.Error!void {
+        if (requests.len == 0) return;
+
+        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
+        defer graph_setup_timing_scope.end();
+        const graph = try self.createGraph();
+        defer graph.destroy();
+        var body_draft = BodyDraftStore.init(self.allocator);
+        defer body_draft.deinit();
+        var batch = RootTemplateBatch{ .graph = graph, .draft = &body_draft };
+        defer batch.pending.deinit(self.allocator);
+        const defs = try self.allocator.alloc(Ast.DefId, requests.len);
+        defer self.allocator.free(defs);
+        graph_setup_timing_scope.end();
+
+        const draft_guard = FinalBodyOutputGuard.begin(self);
+        for (requests, 0..) |request, index| {
+            const template = request.procedure_template orelse
+                Common.invariant("procedure-template root batch contained another root kind");
+            defs[index] = try self.lowerTemplate(
+                template,
+                moduleView(self.root_view),
+                request.checked_type,
+                request.root_evidence,
+                &batch,
+            );
+        }
+        const draft_end = draft_guard.end(self);
+
+        const root_nodes = try self.allocator.alloc(NodeId, batch.pending.items.len);
+        defer self.allocator.free(root_nodes);
+        for (batch.pending.items, 0..) |pending, index| root_nodes[index] = pending.root_node;
+
+        const sealed = try self.sealActiveBodyDraft(
+            graph,
+            &body_draft,
+            draft_guard,
+            draft_end,
+            null,
+            root_nodes,
+            null,
+            null,
+            null,
+        );
+        defer sealed.deinit(self.allocator);
+
+        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+        defer completion_timing_scope.end();
+        if (sealed.root_tys.len != batch.pending.items.len) {
+            Common.invariant("root template batch sealing returned the wrong number of root types");
+        }
+        for (batch.pending.items, sealed.root_tys) |pending, final_fn_ty| {
+            try self.finishReservedTemplateBody(pending, sealed.ids, final_fn_ty);
+        }
+        for (requests, defs) |request, def| {
+            try self.appendRuntimeSchemaRequestsForDef(def);
+            try self.program.addRoot(.{ .def = def, .request = request });
+        }
     }
 
     fn lowerLayoutRequest(self: *Builder, checked_ty: checked.CheckedTypeId) Allocator.Error!void {
@@ -2527,7 +2661,7 @@ const Builder = struct {
     }
 
     fn appendRuntimeSchemaRequestsForType(self: *Builder, ty: Type.TypeId) Allocator.Error!void {
-        var active = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var active = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer active.deinit();
         try self.appendRuntimeSchemaRequestsForTypeInner(ty, &active);
     }
@@ -2535,7 +2669,7 @@ const Builder = struct {
     fn appendRuntimeSchemaRequestsForTypeInner(
         self: *Builder,
         ty: Type.TypeId,
-        active: *std.AutoHashMap(Type.TypeId, void),
+        active: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!void {
         if (active.contains(ty)) return;
         try active.put(ty, {});
@@ -2730,6 +2864,7 @@ const Builder = struct {
             draft,
             draft_end,
             root_node,
+            &.{},
             null,
             root_def,
             null,
@@ -2923,7 +3058,7 @@ const Builder = struct {
         );
         body_timing_scope.end();
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
+        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
         var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
         defer completion_timing_scope.end();
@@ -2936,6 +3071,7 @@ const Builder = struct {
         source_ty_view: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         root_evidence: ?checked.CheckedEvidenceSpan,
+        root_batch: ?*RootTemplateBatch,
     ) Allocator.Error!Ast.DefId {
         const fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
@@ -2962,6 +3098,7 @@ const Builder = struct {
             .count,
             null,
             null,
+            root_batch,
         );
     }
 
@@ -3091,6 +3228,7 @@ const Builder = struct {
         request_accounting: TemplateRequestAccounting,
         precomputed_request_digest: ?names.TypeDigest,
         retained_topology: ?EvidenceChain,
+        root_batch: ?*RootTemplateBatch,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
@@ -3153,12 +3291,7 @@ const Builder = struct {
             fn_template.const_evidence_frame_head = stored_evidence.head;
         }
 
-        const Reservation = struct {
-            def: Ast.DefId,
-            fn_id: Ast.FnId,
-            symbol: Common.Symbol,
-        };
-        const reservation: Reservation = blk: {
+        const reservation: TemplateReservation = blk: {
             const symbol = self.symbols.fresh();
             try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
             const fn_id = try self.program.addFn(fn_template);
@@ -3241,6 +3374,7 @@ const Builder = struct {
                         .count,
                         null,
                         null,
+                        null,
                     );
                     const adapter_template = Ast.FnTemplate{
                         .fn_def = .{ .checked_generated = template_ref },
@@ -3297,27 +3431,108 @@ const Builder = struct {
             => {},
         }
 
-        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
-        defer graph_setup_timing_scope.end();
+        if (root_batch) |batch| {
+            const pending = try self.lowerReservedTemplateBodyIntoDraft(
+                batch.graph,
+                batch.draft,
+                reservation,
+                fn_template,
+                template_ref,
+                view,
+                method_scope,
+                template,
+                source_fn_key,
+                lower_fn_ty,
+                spec_evidence,
+                retained_topology,
+                signature_relation,
+            );
+            try batch.pending.append(self.allocator, pending);
+            return reservation.def;
+        }
+
         const graph = try self.createGraph();
         defer graph.destroy();
+        var body_draft_storage = BodyDraftStore.init(self.allocator);
+        defer body_draft_storage.deinit();
+        const body_draft = &body_draft_storage;
+        const draft = FinalBodyOutputGuard.begin(self);
+        const pending = try self.lowerReservedTemplateBodyIntoDraft(
+            graph,
+            body_draft,
+            reservation,
+            fn_template,
+            template_ref,
+            view,
+            method_scope,
+            template,
+            source_fn_key,
+            lower_fn_ty,
+            spec_evidence,
+            retained_topology,
+            signature_relation,
+        );
+        const draft_end = draft.end(self);
+        const sealed = try self.sealActiveBodyDraft(
+            graph,
+            body_draft,
+            draft,
+            draft_end,
+            pending.root_node,
+            &.{},
+            null,
+            null,
+            null,
+        );
+        defer sealed.deinit(self.allocator);
+        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+        defer completion_timing_scope.end();
+        try self.finishReservedTemplateBody(pending, sealed.ids, sealed.root_ty.?);
+        return reservation.def;
+    }
+
+    fn lowerReservedTemplateBodyIntoDraft(
+        self: *Builder,
+        graph: *InstGraph,
+        body_draft: *BodyDraftStore,
+        reservation: TemplateReservation,
+        fn_template: Ast.FnTemplate,
+        template_ref: names.ProcTemplate,
+        view: ModuleView,
+        method_scope: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+        source_fn_key: names.TypeDigest,
+        lower_fn_ty: Type.TypeId,
+        spec_evidence: []const SpecEvidence,
+        retained_topology: ?EvidenceChain,
+        signature_relation: Ast.SignatureRelation,
+    ) Allocator.Error!PendingRootTemplateBody {
+        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
+        defer graph_setup_timing_scope.end();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         const saved_template_root = self.active_template_root;
         self.active_graph = graph;
-        defer self.active_graph = saved_graph;
-        var body_draft_storage = BodyDraftStore.init(self.allocator);
-        defer body_draft_storage.deinit();
-        const body_draft = &body_draft_storage;
         self.active_body_draft = body_draft;
+        defer self.active_graph = saved_graph;
         defer self.active_body_draft = saved_body_draft;
         defer self.active_template_root = saved_template_root;
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self, view, method_scope, template_ref, graph, body_draft);
+
+        var body_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self,
+            view,
+            method_scope,
+            template_ref,
+            graph,
+            body_draft,
+        );
         body_ctx.evidence = retained_topology orelse rootEvidence(template_ref, spec_evidence);
         const lowered_template = self.lowered_templates.getPtr(reservation.fn_id) orelse
             Common.invariant("procedure specialization lost its evidence record before body lowering");
         lowered_template.evidence = body_ctx.evidence.vector;
         defer body_ctx.deinit();
+
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, lower_fn_ty);
         self.active_template_root = .{
             .graph = graph,
@@ -3332,21 +3547,20 @@ const Builder = struct {
         graph_setup_timing_scope.end();
 
         // The durable request remains an immutable snapshot. The body keeps
-        // the related request node until the draft's single final seal creates
-        // the solved function type.
+        // the related request node until the shared draft's single final seal
+        // creates the solved function type.
         {
             var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
             defer dispatch_timing_scope.end();
             try body_ctx.instantiateTemplateDispatchRelations(template, null);
         }
-        const draft = FinalBodyOutputGuard.begin(self);
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
-        const sealed_root_node, const draft_end = blk: {
+        const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
-            const completed_root = switch (signature_relation) {
+            break :blk switch (signature_relation) {
                 .exact_graph => root_node,
                 .independent_roots => try body_ctx.completedFunctionNodeForLoweredRet(
                     root_node,
@@ -3354,50 +3568,45 @@ const Builder = struct {
                     body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
                 ),
             };
-            break :blk .{ completed_root, draft.end(self) };
         };
-        const sealed = try self.sealActiveBodyDraft(
-            graph,
-            body_draft,
-            draft,
-            draft_end,
-            sealed_root_node,
-            null,
-            null,
-            null,
-        );
-        defer sealed.deinit(self.allocator);
-        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
-        defer completion_timing_scope.end();
-        const body_ids = sealed.ids;
-        const final_fn_ty = sealed.root_ty.?;
+        return .{
+            .reservation = reservation,
+            .fn_template = fn_template,
+            .signature_relation = signature_relation,
+            .root_node = completed_root,
+            .lowered = lowered,
+        };
+    }
+
+    fn finishReservedTemplateBody(
+        self: *Builder,
+        pending: PendingRootTemplateBody,
+        body_ids: FinalIdOffsets,
+        final_fn_ty: Type.TypeId,
+    ) Allocator.Error!void {
         // The definition records the body's solved view of the root type.
         // Call sites embed the requested type, which digests identically
         // because digests are alias-transparent and a solved request
-        // determines every interface slot; root-class call sites
-        // adopt this recorded template directly.
-        var def_template = fn_template;
-        def_template.mono_fn_ty = switch (signature_relation) {
-            // The request is the producer-authored graph that an exact
-            // signature promises to later stages. The callee body was solved
-            // independently and may seal to an equal but distinct TypeId;
-            // replacing the request with that id would discard the explicit
-            // argument/result identity the producer supplied.
-            .exact_graph => lower_fn_ty,
+        // determines every interface slot; root-class call sites adopt this
+        // recorded template directly.
+        var def_template = pending.fn_template;
+        def_template.mono_fn_ty = switch (pending.signature_relation) {
+            // An exact signature keeps the producer-authored request type. The
+            // independently solved body may seal to an equal, distinct TypeId.
+            .exact_graph => pending.fn_template.mono_fn_ty,
             .independent_roots => final_fn_ty,
         };
-        self.program.setFnSource(reservation.fn_id, def_template);
+        self.program.setFnSource(pending.reservation.fn_id, def_template);
         const sealed_fn_data = self.functionShape(final_fn_ty, "checked procedure template root type was not a function");
-        self.program.setDef(reservation.def, .{
-            .symbol = reservation.symbol,
+        self.program.setDef(pending.reservation.def, .{
+            .symbol = pending.reservation.symbol,
             .fn_def = def_template,
-            .fn_id = reservation.fn_id,
-            .args = body_ids.typedLocalSpan(lowered.args),
-            .body = .{ .roc = body_ids.expr(lowered.body) },
+            .fn_id = pending.reservation.fn_id,
+            .args = body_ids.typedLocalSpan(pending.lowered.args),
+            .body = .{ .roc = body_ids.expr(pending.lowered.body) },
             .ret = sealed_fn_data.ret,
         });
-        try self.markTemplateReady(reservation.fn_id, final_fn_ty);
-        return reservation.def;
+        try self.markTemplateReady(pending.reservation.fn_id, final_fn_ty);
     }
 
     fn lowerDraftTemplateFromContext(
@@ -3602,6 +3811,17 @@ const Builder = struct {
             // resolved identity, never through a partial interface overlap.
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
             self.count("template_hits");
+            const request_owner = source_ctx.draft.current_owner;
+            const candidate_owner = source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].parent_owner;
+            switch (request_owner) {
+                .reserved_fn => |requesting_root| switch (candidate_owner) {
+                    .reserved_fn => |candidate_root| if (requesting_root != candidate_root) {
+                        self.countBodyDiagnostic("cross_root_template_reuses");
+                    },
+                    .root, .draft_fn => {},
+                },
+                .root, .draft_fn => {},
+            }
             const active_recursive_edge = spec.state == .lowering and
                 source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
             if (active_recursive_edge) {
@@ -3662,6 +3882,11 @@ const Builder = struct {
         if (local_context_dependent and template.target == .hosted) {
             Common.invariant("hosted template specialization depended on a local procedure context");
         }
+        if (local_context_dependent) {
+            self.countBodyDiagnostic("caller_owned_template_bodies_lowered");
+        } else {
+            self.countBodyDiagnostic("deferred_template_requests");
+        }
         const spec_index = source_ctx.draft.template_specs.items.len;
         const lexical = if (local_context_dependent)
             try source_ctx.captureCodecLexicalContext()
@@ -3697,7 +3922,7 @@ const Builder = struct {
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
-        var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var indexed_nodes = collections.DenseMap(NodeId, void).init(self.allocator);
         defer indexed_nodes.deinit();
         var spec_interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
         while (spec_interface.next()) |interface_node| {
@@ -4325,7 +4550,7 @@ const Builder = struct {
         backing: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const owner_def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl);
-        var seen = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer seen.deinit();
         var current = backing;
         while (true) {
@@ -4396,7 +4621,7 @@ const Builder = struct {
         defer fields.deinit(self.allocator);
         try self.appendRecordFields(view, &fields, head);
 
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         var current = ext;
@@ -4451,7 +4676,7 @@ const Builder = struct {
         defer tags.deinit(self.allocator);
         try self.appendTags(view, &tags, head);
 
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         var current = ext;
@@ -5023,6 +5248,7 @@ const Builder = struct {
             .count,
             null,
             null,
+            null,
         );
         return .{ .local = self.defFnId(def) };
     }
@@ -5082,7 +5308,7 @@ const Builder = struct {
                     .final => Common.invariant("closed restored nested function resolved before draft commit"),
                 };
                 const draft_end = draft.end(self);
-                const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, request_fn_node, null, null, draft_fn);
+                const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, request_fn_node, &.{}, null, null, draft_fn);
                 defer sealed.deinit(self.allocator);
                 return sealed.root_fn orelse Common.invariant("closed restored nested function did not resolve its final id");
             },
@@ -5111,6 +5337,7 @@ const Builder = struct {
                     .count,
                     null,
                     retained,
+                    null,
                 );
                 return self.defFnId(def);
             },
@@ -5440,7 +5667,7 @@ const Builder = struct {
             .fn_id = fn_id,
             .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
         });
-        var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var indexed_nodes = collections.DenseMap(NodeId, void).init(self.allocator);
         defer indexed_nodes.deinit();
         var spec_interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
         while (spec_interface.next()) |interface_node| {
@@ -5536,12 +5763,14 @@ const Builder = struct {
     const ActiveBodyDraftSeal = struct {
         ids: FinalIdOffsets,
         root_ty: ?Type.TypeId,
+        root_tys: []Type.TypeId,
         extra_ty: ?Type.TypeId,
         root_def: ?Ast.DefId,
         root_fn: ?Ast.FnId,
         core_maps: *DraftCoreMaps,
 
         fn deinit(self: ActiveBodyDraftSeal, allocator: Allocator) void {
+            allocator.free(self.root_tys);
             self.core_maps.deinit(allocator);
             allocator.destroy(self.core_maps);
         }
@@ -5920,7 +6149,7 @@ const Builder = struct {
         ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         var added_method_call = false;
         try ctx.prepareStructuralEqNode(
@@ -5959,7 +6188,7 @@ const Builder = struct {
         try ctx.restoreCodecLexicalContext(boundary.lexical);
         if (try ctx.deferredInspectHasProvenUninhabitedValueGuard(boundary)) return false;
 
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         return try ctx.prepareInspectMethodsAtNode(boundary.value_node, boundary.ret_ty, &seen);
     }
@@ -6221,7 +6450,7 @@ const Builder = struct {
         graph: *InstGraph,
         sealer: *GraphTypeFinals,
     ) Allocator.Error!void {
-        var prepared_methods = std.AutoHashMap(Type.TypeId, DraftFnSlot).init(self.allocator);
+        var prepared_methods = collections.DenseMap(Type.TypeId, DraftFnSlot).init(self.allocator);
         defer prepared_methods.deinit();
         for (body_draft.prepared_inspect_methods.items) |prepared| {
             const value_ty = try sealer.sealNode(prepared.value_node);
@@ -6311,7 +6540,7 @@ const Builder = struct {
         ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
-        var method_calls = std.AutoHashMap(Type.TypeId, DraftFnSlot).init(self.allocator);
+        var method_calls = collections.DenseMap(Type.TypeId, DraftFnSlot).init(self.allocator);
         defer method_calls.deinit();
         for (body_draft.structural_eq_method_calls.items) |planned| {
             if (planned.boundary != boundary_index) continue;
@@ -6383,13 +6612,17 @@ const Builder = struct {
                 request_digest,
             );
 
+            var found_local = false;
             const loaded_slot: ?Ast.FnSlot = if (spec.requires_local)
                 null
             else if (try self.spec_store.find(identity, specializationEvidenceView(requested_evidence))) |hit|
                 switch (hit) {
                     // `lowerTemplateWithMono` owns the validation and recursive
                     // state handling for local specializations.
-                    .local => null,
+                    .local => blk: {
+                        found_local = true;
+                        break :blk null;
+                    },
                     .loaded => |imported| blk: {
                         if (draft_fn.signature_relation == .exact_graph and
                             self.importedFnSignatureRelation(imported) != .exact_graph)
@@ -6405,6 +6638,11 @@ const Builder = struct {
             else
                 null;
 
+            if (found_local or loaded_slot != null) {
+                self.countBodyDiagnostic("deferred_template_reuses");
+            } else {
+                self.countBodyDiagnostic("deferred_template_bodies_lowered");
+            }
             spec.resolved_slot = loaded_slot orelse blk: {
                 const def = try self.lowerTemplateWithMono(
                     spec.template_ref,
@@ -6416,6 +6654,7 @@ const Builder = struct {
                     draft_fn.signature_relation,
                     .already_counted,
                     request_digest,
+                    null,
                     null,
                 );
                 break :blk .{ .local = self.defFnId(def) };
@@ -6521,6 +6760,11 @@ const Builder = struct {
                     }
                     if (!emit_fns[parent_raw]) {
                         emit_fns[raw_index] = false;
+                        if (template_spec != null) {
+                            self.countBodyDiagnostic("lowered_template_bodies_discarded");
+                        } else {
+                            self.countBodyDiagnostic("lowered_nested_bodies_discarded");
+                        }
                         continue;
                     }
                 },
@@ -6542,6 +6786,11 @@ const Builder = struct {
                             if (!storedConstFnEvidenceEql(prior_evidence, requested_evidence)) continue;
                             fn_slots[raw_index] = fn_slots[prior];
                             emit_fns[raw_index] = false;
+                            if (template_spec != null) {
+                                self.countBodyDiagnostic("lowered_template_bodies_discarded");
+                            } else {
+                                self.countBodyDiagnostic("lowered_nested_bodies_discarded");
+                            }
                             break;
                         }
                     }
@@ -6564,6 +6813,11 @@ const Builder = struct {
                         }
                         fn_slots[raw_index] = hit.target();
                         emit_fns[raw_index] = false;
+                        if (template_spec != null) {
+                            self.countBodyDiagnostic("lowered_template_bodies_discarded");
+                        } else {
+                            self.countBodyDiagnostic("lowered_nested_bodies_discarded");
+                        }
                     } else {
                         fn_slots[raw_index] = .{ .local = @enumFromInt(next_fn) };
                         next_fn += 1;
@@ -6619,6 +6873,7 @@ const Builder = struct {
         final_guard: FinalBodyOutputGuard,
         final_end: FinalBodyOutputGuard.End,
         root_node: ?NodeId,
+        root_nodes: []const NodeId,
         extra_ty: ?Type.TypeId,
         root_def: ?DraftDefId,
         root_fn: ?DraftFnId,
@@ -6651,6 +6906,12 @@ const Builder = struct {
         try self.emitDraftDeferredInspects(body_draft, graph, &sealer);
         const sealed_root = if (root_node) |node| try sealer.sealNode(node) else null;
         if (sealed_root) |ty| try graph.assertTypeHasNoActiveSnapshots(ty);
+        const sealed_roots = try self.allocator.alloc(Type.TypeId, root_nodes.len);
+        errdefer self.allocator.free(sealed_roots);
+        for (root_nodes, sealed_roots) |node, *ty| {
+            ty.* = try sealer.sealNode(node);
+            try graph.assertTypeHasNoActiveSnapshots(ty.*);
+        }
         try body_draft.finishOwnerRuns();
         try self.resolveDeferredTemplateSpecs(body_draft, &sealer);
         var commit_map = try self.buildDraftCommitMap(
@@ -6689,6 +6950,7 @@ const Builder = struct {
         return .{
             .ids = returned_ids,
             .root_ty = sealed_root,
+            .root_tys = sealed_roots,
             .extra_ty = sealed_extra,
             .root_def = if (root_def) |draft_def| body_ids.def(draft_def) else null,
             .root_fn = if (root_fn) |draft_fn| switch (body_ids.fnSlot(draft_fn)) {
@@ -7018,9 +7280,9 @@ const Builder = struct {
         expr: Ast.ExprId,
         target: Ast.LocalId,
     ) Allocator.Error!bool {
-        var bound = std.AutoHashMap(Ast.LocalId, void).init(self.allocator);
+        var bound = collections.DenseMap(Ast.LocalId, void).init(self.allocator);
         defer bound.deinit();
-        var active_fns = std.AutoHashMap(Ast.FnId, void).init(self.allocator);
+        var active_fns = collections.DenseMap(Ast.FnId, void).init(self.allocator);
         defer active_fns.deinit();
         return try self.exprDependsOnFreeLocalInner(expr, target, &bound, &active_fns);
     }
@@ -7029,8 +7291,8 @@ const Builder = struct {
         self: *Builder,
         expr_id: Ast.ExprId,
         target: Ast.LocalId,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
-        active_fns: *std.AutoHashMap(Ast.FnId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
+        active_fns: *collections.DenseMap(Ast.FnId, void),
     ) Allocator.Error!bool {
         const expr = self.program.getExpr(expr_id);
         switch (expr.data) {
@@ -7222,7 +7484,7 @@ const Builder = struct {
         self: *Builder,
         local: Ast.LocalId,
         target: Ast.LocalId,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
     ) bool {
         if (!self.sameLocalIdentity(local, target)) return false;
         return !self.boundContainsLocalIdentity(bound, local);
@@ -7230,7 +7492,7 @@ const Builder = struct {
 
     fn boundContainsLocalIdentity(
         self: *Builder,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
         local: Ast.LocalId,
     ) bool {
         if (bound.contains(local)) return true;
@@ -7266,8 +7528,8 @@ const Builder = struct {
         self: *Builder,
         stmt_id: Ast.StmtId,
         target: Ast.LocalId,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
-        active_fns: *std.AutoHashMap(Ast.FnId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
+        active_fns: *collections.DenseMap(Ast.FnId, void),
         added: *std.ArrayList(Ast.LocalId),
     ) Allocator.Error!bool {
         const stmt = self.program.getStmt(stmt_id);
@@ -7299,8 +7561,8 @@ const Builder = struct {
         self: *Builder,
         fn_id: Ast.FnId,
         target: Ast.LocalId,
-        caller_bound: *std.AutoHashMap(Ast.LocalId, void),
-        active_fns: *std.AutoHashMap(Ast.FnId, void),
+        caller_bound: *collections.DenseMap(Ast.LocalId, void),
+        active_fns: *collections.DenseMap(Ast.FnId, void),
     ) Allocator.Error!bool {
         if (active_fns.contains(fn_id)) return false;
         try active_fns.put(fn_id, {});
@@ -7322,8 +7584,8 @@ const Builder = struct {
         args: Ast.Span(Ast.TypedLocal),
         body: Ast.FnBody,
         target: Ast.LocalId,
-        caller_bound: *std.AutoHashMap(Ast.LocalId, void),
-        active_fns: *std.AutoHashMap(Ast.FnId, void),
+        caller_bound: *collections.DenseMap(Ast.LocalId, void),
+        active_fns: *collections.DenseMap(Ast.FnId, void),
     ) Allocator.Error!bool {
         var bound = try caller_bound.clone();
         defer bound.deinit();
@@ -7339,7 +7601,7 @@ const Builder = struct {
     fn bindTypedLocalLocals(
         self: *Builder,
         span: Ast.Span(Ast.TypedLocal),
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
         added: *std.ArrayList(Ast.LocalId),
     ) Allocator.Error!void {
         for (self.program.typedLocalSpan(span)) |local| {
@@ -7351,7 +7613,7 @@ const Builder = struct {
     fn bindPatLocals(
         self: *Builder,
         pat_id: Ast.PatId,
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
         added: *std.ArrayList(Ast.LocalId),
     ) Allocator.Error!void {
         const pat = self.program.getPat(pat_id);
@@ -7397,7 +7659,7 @@ const Builder = struct {
     }
 
     fn removeBoundLocals(
-        bound: *std.AutoHashMap(Ast.LocalId, void),
+        bound: *collections.DenseMap(Ast.LocalId, void),
         locals: []const Ast.LocalId,
     ) void {
         var index = locals.len;
@@ -7564,7 +7826,7 @@ const Builder = struct {
             } },
         );
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
+        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
         return sealed.ids.expr(expr);
     }
@@ -7690,7 +7952,7 @@ const Builder = struct {
         parser_expr = try self.wrapConstSourceCaptureLets(&fn_ctx, source_captures.items, parser_expr, ty);
 
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
+        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
         return sealed.ids.expr(parser_expr);
     }
@@ -7833,7 +8095,7 @@ const Builder = struct {
         encoder_expr = try self.wrapConstSourceCaptureLets(&fn_ctx, source_captures.items, encoder_expr, ty);
 
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
+        const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, &.{}, null, null, null);
         defer sealed.deinit(self.allocator);
         return sealed.ids.expr(encoder_expr);
     }
@@ -8177,6 +8439,7 @@ const Builder = struct {
             .count,
             null,
             null,
+            null,
         );
 
         const args = [_]Ast.ExprId{value};
@@ -8230,7 +8493,7 @@ const Builder = struct {
 
     fn typeIsProvenUninhabited(self: *Builder, ty: Type.TypeId) Allocator.Error!bool {
         if (self.uninhabited_type_cache.get(ty)) |cached| return cached;
-        var visiting = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var visiting = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer visiting.deinit();
         const result = try self.typeIsProvenUninhabitedInner(ty, &visiting);
         try self.uninhabited_type_cache.put(ty, result);
@@ -8240,7 +8503,7 @@ const Builder = struct {
     fn typeIsProvenUninhabitedInner(
         self: *Builder,
         ty: Type.TypeId,
-        visiting: *std.AutoHashMap(Type.TypeId, void),
+        visiting: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!bool {
         const entry = try visiting.getOrPut(ty);
         if (entry.found_existing) return false;
@@ -9538,7 +9801,7 @@ fn registerTemplateSpecInterfaceLookups(
     request_fn_node: NodeId,
     raw_spec: u32,
 ) Allocator.Error!void {
-    var indexed_nodes = std.AutoHashMap(NodeId, void).init(allocator);
+    var indexed_nodes = collections.DenseMap(NodeId, void).init(allocator);
     defer indexed_nodes.deinit();
     var spec_interface = try graph.functionInterfaceIterator(request_fn_node);
     while (spec_interface.next()) |interface_node| {
@@ -9585,7 +9848,7 @@ fn registerNestedSpecInterfaceLookups(
     request_fn_node: NodeId,
     raw_spec: u32,
 ) Allocator.Error!void {
-    var indexed_nodes = std.AutoHashMap(NodeId, void).init(allocator);
+    var indexed_nodes = collections.DenseMap(NodeId, void).init(allocator);
     defer indexed_nodes.deinit();
     var spec_interface = try graph.functionInterfaceIterator(request_fn_node);
     while (spec_interface.next()) |interface_node| {
@@ -10379,6 +10642,17 @@ const DraftOwnerRun = struct {
     ends: DraftCoreLengths,
 };
 
+const CheckedStringLiteralAddress = struct {
+    module_bytes: [32]u8,
+    literal: checked.CheckedStringLiteralId,
+    owner: DraftOwner,
+};
+
+const StaticDataCandidateAddress = struct {
+    static_data: Common.StaticDataId,
+    owner: DraftOwner,
+};
+
 const BodyDraftStore = struct {
     allocator: Allocator,
     fns: std.ArrayList(DraftFn),
@@ -10386,7 +10660,7 @@ const BodyDraftStore = struct {
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
     template_specs: std.ArrayList(DraftTemplateSpec),
-    template_spec_by_fn: std.AutoHashMap(DraftFnId, u32),
+    template_spec_by_fn: collections.DenseMap(DraftFnId, u32),
     template_spec_lookup: std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)),
     /// Exact checked identities bypass the general graph/digest lookup after
     /// the first closed direct call in this draft.
@@ -10434,6 +10708,9 @@ const BodyDraftStore = struct {
     if_branches: std.ArrayList(DraftIfBranch),
     string_literals: std.ArrayList(DraftStringLiteral),
     string_bytes: std.ArrayList(u8),
+    /// Checked literal identities are immutable and shared by lowering
+    /// contexts that write content owned by the same retained body.
+    checked_string_literals: std.AutoHashMap(CheckedStringLiteralAddress, DraftStringLiteralId),
     proc_debug_names: std.ArrayList(Ast.ProcDebugName),
     roots: std.ArrayList(DraftRoot),
     layout_requests: std.ArrayList(DraftLayoutRequest),
@@ -10451,9 +10728,9 @@ const BodyDraftStore = struct {
     current_owner: DraftOwner,
     owner_starts: DraftCoreLengths,
     owner_runs: std.ArrayList(DraftOwnerRun),
-    /// Closed static-data candidates are shared by every child lowering
-    /// context writing into this specialization draft.
-    static_data_candidate_exprs: std.AutoHashMap(Common.StaticDataId, DraftExprId),
+    /// Closed static-data candidates are shared by child lowering contexts
+    /// only within the body that owns their explicit runtime expression.
+    static_data_candidate_exprs: std.AutoHashMap(StaticDataCandidateAddress, DraftExprId),
 
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
@@ -10463,7 +10740,7 @@ const BodyDraftStore = struct {
             .def_owners = .empty,
             .nested_defs = .empty,
             .template_specs = .empty,
-            .template_spec_by_fn = std.AutoHashMap(DraftFnId, u32).init(allocator),
+            .template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(allocator),
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
             .closed_direct_specializations = std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization).init(allocator),
             .active_callable_eval_bindings = .empty,
@@ -10509,6 +10786,7 @@ const BodyDraftStore = struct {
             .if_branches = .empty,
             .string_literals = .empty,
             .string_bytes = .empty,
+            .checked_string_literals = std.AutoHashMap(CheckedStringLiteralAddress, DraftStringLiteralId).init(allocator),
             .proc_debug_names = .empty,
             .roots = .empty,
             .layout_requests = .empty,
@@ -10526,7 +10804,7 @@ const BodyDraftStore = struct {
             .current_owner = .root,
             .owner_starts = @splat(0),
             .owner_runs = .empty,
-            .static_data_candidate_exprs = std.AutoHashMap(Common.StaticDataId, DraftExprId).init(allocator),
+            .static_data_candidate_exprs = std.AutoHashMap(StaticDataCandidateAddress, DraftExprId).init(allocator),
         };
     }
 
@@ -10606,6 +10884,7 @@ const BodyDraftStore = struct {
         self.materialized_const_nodes.deinit(self.allocator);
         self.materialized_const_node_indices.deinit();
         self.active_const_bindings.deinit(self.allocator);
+        self.checked_string_literals.deinit();
         self.string_bytes.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -10970,6 +11249,23 @@ const BodyDraftStore = struct {
         return try self.addStringView(text, 0, @intCast(text.len));
     }
 
+    fn addCheckedStringLiteral(
+        self: *BodyDraftStore,
+        checked_module_bytes: [32]u8,
+        literal: checked.CheckedStringLiteralId,
+        text: []const u8,
+    ) Allocator.Error!DraftStringLiteralId {
+        const address: CheckedStringLiteralAddress = .{
+            .module_bytes = checked_module_bytes,
+            .literal = literal,
+            .owner = self.current_owner,
+        };
+        if (self.checked_string_literals.get(address)) |existing| return existing;
+        const lowered = try self.addStringLiteral(text);
+        try self.checked_string_literals.put(address, lowered);
+        return lowered;
+    }
+
     fn addStringView(self: *BodyDraftStore, backing: []const u8, offset: u32, len: u32) Allocator.Error!DraftStringLiteralId {
         const offset_usize: usize = offset;
         const len_usize: usize = len;
@@ -11201,7 +11497,7 @@ const BodyDraftStore = struct {
         // This commit is one Monotype materialization. Checked capture
         // identities identify aliases within it, while separate commits get
         // separate durable ids even when they instantiate the same binder.
-        var durable_capture_ids = std.AutoHashMap(checked.CaptureId, checked.CaptureId).init(program.allocator);
+        var durable_capture_ids = collections.DenseMap(checked.CaptureId, checked.CaptureId).init(program.allocator);
         defer durable_capture_ids.deinit();
         for (self.locals.items, 0..) |local, index| {
             if (!ids.retained(.locals, index)) continue;
@@ -12145,6 +12441,40 @@ const InterfaceReplayState = struct {
     }
 };
 
+const InstantiationScopeId = enum(u64) { _ };
+
+/// The complete mutable state for one checked-type instantiation scope. Body
+/// lowering state remains on `BodyContext`; operations that only need a fresh
+/// type instantiation can swap this small state without constructing another
+/// body context.
+const TypeInstantiationContext = struct {
+    allocator: Allocator,
+    id: InstantiationScopeId,
+    module_bytes: [32]u8,
+    node_map: collections.DenseMap(checked.CheckedTypeId, NodeId),
+    /// Innermost-last stack of nominal-instance instantiation scopes; see
+    /// instNominalBackingNode.
+    decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, NodeId)) = .empty,
+
+    fn init(
+        allocator: Allocator,
+        id: InstantiationScopeId,
+        module_bytes: [32]u8,
+    ) TypeInstantiationContext {
+        return .{
+            .allocator = allocator,
+            .id = id,
+            .module_bytes = module_bytes,
+            .node_map = collections.DenseMap(checked.CheckedTypeId, NodeId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *TypeInstantiationContext) void {
+        self.decl_scopes.deinit(self.allocator);
+        self.node_map.deinit();
+    }
+};
+
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
@@ -12176,14 +12506,10 @@ const BodyContext = struct {
     inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
     /// Draft body output owned by this specialization graph.
     draft: *BodyDraftStore,
-    /// Instantiation cache: checked types this context already cloned into the
-    /// graph. Separate per context so re-instantiating a generic signature at
-    /// another call site creates fresh nodes.
-    node_map: std.AutoHashMap(CheckedTypeAddress, NodeId),
-    /// Innermost-last stack of nominal-instance instantiation scopes; see
-    /// instNominalBackingNode.
-    decl_scopes: std.ArrayList(*std.AutoHashMap(CheckedTypeAddress, NodeId)) = .empty,
-    string_literals: []?DraftStringLiteralId,
+    /// Checked-type cache and declaration-scope stack for this exact
+    /// instantiation identity. Separate contexts give every checked graph a
+    /// fresh relation-production identity.
+    instantiation: TypeInstantiationContext,
     loop_contexts: std.ArrayList(LoopContext),
     /// Literal sub-patterns on non-builtin number types collected while
     /// lowering a match branch's pattern; each becomes an equality condition
@@ -12213,11 +12539,11 @@ const BodyContext = struct {
     /// Structural equality types currently being expanded in this context.
     /// Seeing the same type again is a real recursive edge, which lowers to a
     /// reserved generated equality helper instead of recursively expanding AST.
-    equality_expansion_stack: std.AutoHashMap(Type.TypeId, void),
+    equality_expansion_stack: collections.DenseMap(Type.TypeId, void),
     /// Structural hash types currently being expanded in this context.
     /// Seeing the same type again is a real recursive edge, which lowers to a
     /// reserved generated hash helper instead of recursively expanding AST.
-    hash_expansion_stack: std.AutoHashMap(Type.TypeId, void),
+    hash_expansion_stack: collections.DenseMap(Type.TypeId, void),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
@@ -12226,10 +12552,10 @@ const BodyContext = struct {
     /// Frozen Phase-B lookup from each sealed equality component with an exact
     /// method to the procedure slot reserved while relations were still being
     /// produced.
-    frozen_equality_method_calls: ?*const std.AutoHashMap(Type.TypeId, DraftFnSlot) = null,
+    frozen_equality_method_calls: ?*const collections.DenseMap(Type.TypeId, DraftFnSlot) = null,
     /// Frozen Phase-B lookup from a sealed inspected nominal type to the
     /// attached `to_inspect` slot reserved while relations were still open.
-    frozen_inspect_method_calls: ?*const std.AutoHashMap(Type.TypeId, DraftFnSlot) = null,
+    frozen_inspect_method_calls: ?*const collections.DenseMap(Type.TypeId, DraftFnSlot) = null,
     /// Exact custom parser/encoder callees prepared before the graph froze.
     /// Phase-B structural serialization may consume these sealed requests but
     /// may not instantiate or lower another checked callable.
@@ -12346,14 +12672,14 @@ const BodyContext = struct {
     const SerializationPlanInputs = struct {
         locals: std.ArrayList(DraftLocalId) = .empty,
         record_keys: std.AutoHashMap(names.TypeDigest, void),
-        seen_types: std.AutoHashMap(Type.TypeId, void),
-        seen_locals: std.AutoHashMap(DraftLocalId, void),
+        seen_types: collections.DenseMap(Type.TypeId, void),
+        seen_locals: collections.DenseMap(DraftLocalId, void),
 
         fn init(allocator: Allocator) SerializationPlanInputs {
             return .{
                 .record_keys = std.AutoHashMap(names.TypeDigest, void).init(allocator),
-                .seen_types = std.AutoHashMap(Type.TypeId, void).init(allocator),
-                .seen_locals = std.AutoHashMap(DraftLocalId, void).init(allocator),
+                .seen_types = collections.DenseMap(Type.TypeId, void).init(allocator),
+                .seen_locals = collections.DenseMap(DraftLocalId, void).init(allocator),
             };
         }
 
@@ -12511,9 +12837,9 @@ const BodyContext = struct {
         errdefer helper.deinit(self.allocator);
         helper.plan.next_capture_id = source.next_capture_id;
 
-        var local_map = std.AutoHashMap(DraftLocalId, DraftLocalId).init(self.allocator);
+        var local_map = collections.DenseMap(DraftLocalId, DraftLocalId).init(self.allocator);
         defer local_map.deinit();
-        var expr_map = std.AutoHashMap(DraftLocalId, DraftExprId).init(self.allocator);
+        var expr_map = collections.DenseMap(DraftLocalId, DraftExprId).init(self.allocator);
         defer expr_map.deinit();
         for (inputs.locals.items, 0..) |source_local, index| {
             const helper_local = try self.addLocal(self.builder.symbols.fresh(), str_ty);
@@ -12733,20 +13059,17 @@ const BodyContext = struct {
         graph: *InstGraph,
         draft: *BodyDraftStore,
     ) Allocator.Error!BodyContext {
-        var ctx = try initTypeOnly(allocator, builder, view, owner_template, graph, draft);
+        var ctx = try initBodyState(allocator, builder, view, owner_template, graph, draft);
         errdefer ctx.deinit();
         ctx.method_scope = method_scope;
         ctx.source_file_id = try draft.sourceFileIdFor(view.module_identity.module_idx, view.module_env.module_name);
-        const string_literals = try allocator.alloc(?DraftStringLiteralId, view.bodies.stringLiteralCount());
-        @memset(string_literals, null);
-        ctx.string_literals = string_literals;
         return ctx;
     }
 
-    /// Context for instantiating checked types into `graph` without lowering
-    /// any expressions: the module's string-literal table is never touched,
-    /// so it is not materialized. Expression lowering must use `init`.
-    fn initTypeOnly(
+    /// Construct the operational state for a body-lowering context. Dense
+    /// binder state remains lazy, and fresh type-only work uses
+    /// `TypeInstantiationContext` directly.
+    fn initBodyState(
         allocator: Allocator,
         builder: *Builder,
         view: ModuleView,
@@ -12776,12 +13099,11 @@ const BodyContext = struct {
             .draft = draft,
             .evidence = rootEvidence(owner_template, &.{}),
             .restore_evidence = rootEvidence(owner_template, &.{}),
-            .node_map = std.AutoHashMap(CheckedTypeAddress, NodeId).init(allocator),
-            .string_literals = &[_]?DraftStringLiteralId{},
+            .instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), view.key.bytes),
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
-            .equality_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
-            .hash_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
+            .equality_expansion_stack = collections.DenseMap(Type.TypeId, void).init(allocator),
+            .hash_expansion_stack = collections.DenseMap(Type.TypeId, void).init(allocator),
             .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
             .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
@@ -12806,10 +13128,8 @@ const BodyContext = struct {
         self.equality_expansion_stack.deinit();
         self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
-        self.allocator.free(self.string_literals);
-        self.decl_scopes.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
-        self.node_map.deinit();
+        self.instantiation.deinit();
         self.local_proc_contexts.deinit();
         self.typed_binders.deinit();
         self.binders.deinit();
@@ -13695,7 +14015,7 @@ const BodyContext = struct {
         self: *BodyContext,
         node: NodeId,
         str_ty: Type.TypeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const entry = try seen.getOrPut(node);
         if (entry.found_existing) return false;
@@ -14049,9 +14369,9 @@ const BodyContext = struct {
         }
 
         if (copy_type_cells) {
-            var node_iter = self.node_map.iterator();
+            var node_iter = self.instantiation.node_map.iterator();
             while (node_iter.next()) |entry| {
-                try child.node_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                try child.instantiation.node_map.put(entry.key_ptr.*, entry.value_ptr.*);
             }
         }
 
@@ -14518,7 +14838,7 @@ const BodyContext = struct {
         expr: DraftExprId,
         target: DraftLocalId,
     ) Allocator.Error!bool {
-        var bound = std.AutoHashMap(DraftLocalId, void).init(self.allocator);
+        var bound = collections.DenseMap(DraftLocalId, void).init(self.allocator);
         defer bound.deinit();
         return try self.exprDependsOnFreeLocalInner(expr, target, &bound);
     }
@@ -14527,7 +14847,7 @@ const BodyContext = struct {
         self: *BodyContext,
         expr_id: DraftExprId,
         target: DraftLocalId,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
     ) Allocator.Error!bool {
         const expr = self.draft.exprs.items[@intFromEnum(expr_id)];
         switch (expr.data) {
@@ -14716,7 +15036,7 @@ const BodyContext = struct {
         self: *BodyContext,
         local: DraftLocalId,
         target: DraftLocalId,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
     ) Allocator.Error!bool {
         if (!try self.sameLocalIdentity(local, target)) return false;
         return !try self.boundContainsLocalIdentity(bound, local);
@@ -14724,7 +15044,7 @@ const BodyContext = struct {
 
     fn boundContainsLocalIdentity(
         self: *BodyContext,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
         local: DraftLocalId,
     ) Allocator.Error!bool {
         if (bound.contains(local)) return true;
@@ -14751,7 +15071,7 @@ const BodyContext = struct {
         self: *BodyContext,
         stmt_id: DraftStmtId,
         target: DraftLocalId,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
         added: *std.ArrayList(DraftLocalId),
     ) Allocator.Error!bool {
         const stmt = self.draft.stmts.items[@intFromEnum(stmt_id)];
@@ -14782,7 +15102,7 @@ const BodyContext = struct {
     fn bindTypedLocalLocals(
         self: *BodyContext,
         span: DraftSpan(DraftTypedLocal),
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
         added: *std.ArrayList(DraftLocalId),
     ) Allocator.Error!void {
         for (self.typedLocalSpan(span)) |local| {
@@ -14794,7 +15114,7 @@ const BodyContext = struct {
     fn bindPatLocals(
         self: *BodyContext,
         pat_id: DraftPatId,
-        bound: *std.AutoHashMap(DraftLocalId, void),
+        bound: *collections.DenseMap(DraftLocalId, void),
         added: *std.ArrayList(DraftLocalId),
     ) Allocator.Error!void {
         const pat = self.draft.pats.items[@intFromEnum(pat_id)];
@@ -14839,7 +15159,7 @@ const BodyContext = struct {
         }
     }
 
-    fn removeBoundLocals(bound: *std.AutoHashMap(DraftLocalId, void), locals: []const DraftLocalId) void {
+    fn removeBoundLocals(bound: *collections.DenseMap(DraftLocalId, void), locals: []const DraftLocalId) void {
         var index = locals.len;
         while (index > 0) {
             index -= 1;
@@ -14937,8 +15257,11 @@ const BodyContext = struct {
         try self.constrainTypeToMono(checked_ty, mono_ty);
     }
 
-    fn typeAddress(self: *BodyContext, checked_ty: checked.CheckedTypeId) CheckedTypeAddress {
-        return checkedTypeAddress(self.view, checked_ty);
+    fn scopedCheckedType(self: *BodyContext, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+        if (!moduleBytesEqual(self.instantiation.module_bytes, self.view.key.bytes)) {
+            Common.invariant("checked type lookup used an instantiation context owned by another module");
+        }
+        return checked_ty;
     }
 
     fn lowerTypeNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
@@ -14948,7 +15271,7 @@ const BodyContext = struct {
     }
 
     fn checkedTypeContainsError(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
-        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
         return try self.checkedTypeContainsErrorInner(checked_ty, &visited);
     }
@@ -14956,7 +15279,7 @@ const BodyContext = struct {
     fn checkedTypeContainsErrorInner(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         if (visited.contains(checked_ty)) return false;
         try visited.put(checked_ty, {});
@@ -14993,7 +15316,7 @@ const BodyContext = struct {
     fn checkedTypeSpanContainsError(
         self: *BodyContext,
         checked_tys: []const checked.CheckedTypeId,
-        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         for (checked_tys) |ty| {
             if (try self.checkedTypeContainsErrorInner(ty, visited)) return true;
@@ -15004,7 +15327,7 @@ const BodyContext = struct {
     fn checkedRecordFieldsContainError(
         self: *BodyContext,
         fields: []const checked.CheckedRecordField,
-        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         for (fields) |field| {
             if (try self.checkedTypeContainsErrorInner(field.ty, visited)) return true;
@@ -15015,7 +15338,7 @@ const BodyContext = struct {
     fn checkedTagsContainError(
         self: *BodyContext,
         tags: []const checked.CheckedTag,
-        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
     ) Allocator.Error!bool {
         for (tags) |tag| {
             if (try self.checkedTypeSpanContainsError(tag.argsSlice(self.view.types), visited)) return true;
@@ -15107,14 +15430,14 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
         self.builder.countBodyDiagnostic("checked_node_requests");
-        const address = self.typeAddress(checked_ty);
-        if (self.scopedNode(address)) |existing| {
+        const scoped_ty = self.scopedCheckedType(checked_ty);
+        if (self.scopedNode(scoped_ty)) |existing| {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
             return existing;
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        try self.putScopedNode(address, placeholder);
+        try self.putScopedNode(scoped_ty, placeholder);
         const built = try self.instNodeContent(checked_ty);
         try self.graph.unify(placeholder, built);
         return placeholder;
@@ -15124,35 +15447,31 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
         self.builder.countBodyDiagnostic("fresh_checked_node_requests");
-        var fresh = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self.builder,
-            self.view,
-            self.method_scope,
-            self.owner_template,
-            self.graph,
-            self.draft,
-        );
-        defer fresh.deinit();
-        return try fresh.instNode(checked_ty);
+        const previous = self.instantiation;
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous;
+        }
+        return try self.instNode(checked_ty);
     }
 
-    fn scopedNode(self: *BodyContext, address: CheckedTypeAddress) ?NodeId {
-        var index = self.decl_scopes.items.len;
+    fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?NodeId {
+        var index = self.instantiation.decl_scopes.items.len;
         while (index > 0) {
             index -= 1;
-            if (self.decl_scopes.items[index].get(address)) |existing| return existing;
+            if (self.instantiation.decl_scopes.items[index].get(checked_ty)) |existing| return existing;
         }
-        if (self.decl_scopes.items.len != 0) return null;
-        return self.node_map.get(address);
+        if (self.instantiation.decl_scopes.items.len != 0) return null;
+        return self.instantiation.node_map.get(checked_ty);
     }
 
-    fn putScopedNode(self: *BodyContext, address: CheckedTypeAddress, node: NodeId) Allocator.Error!void {
-        if (self.decl_scopes.items.len != 0) {
-            try self.decl_scopes.items[self.decl_scopes.items.len - 1].put(address, node);
+    fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
+        if (self.instantiation.decl_scopes.items.len != 0) {
+            try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(checked_ty, node);
             return;
         }
-        try self.node_map.put(address, node);
+        try self.instantiation.node_map.put(checked_ty, node);
     }
 
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
@@ -15347,12 +15666,16 @@ const BodyContext = struct {
         const backing = if (moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) backing: {
             break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
         } else backing: {
-            var source_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, source.view, self.method_scope, self.owner_template, self.graph, self.draft);
-            source_ctx.evidence = self.evidence;
-            defer source_ctx.deinit();
-            source_ctx.owner_context_fn_key = self.owner_context_fn_key;
-            source_ctx.current_fn_key = self.current_fn_key;
-            break :backing try source_ctx.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
+            const previous_view = self.view;
+            const previous_instantiation = self.instantiation;
+            self.view = source.view;
+            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), source.view.key.bytes);
+            defer {
+                self.instantiation.deinit();
+                self.instantiation = previous_instantiation;
+                self.view = previous_view;
+            }
+            break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
         };
         try self.graph.unify(placeholder, backing);
         return placeholder;
@@ -15367,13 +15690,13 @@ const BodyContext = struct {
         if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
-        var scope = std.AutoHashMap(CheckedTypeAddress, NodeId).init(self.allocator);
+        var scope = collections.DenseMap(checked.CheckedTypeId, NodeId).init(self.allocator);
         defer scope.deinit();
         for (formal_args, args) |formal, arg| {
-            try scope.put(self.typeAddress(formal), arg);
+            try scope.put(self.scopedCheckedType(formal), arg);
         }
-        try self.decl_scopes.append(self.allocator, &scope);
-        defer _ = self.decl_scopes.pop();
+        try self.instantiation.decl_scopes.append(self.allocator, &scope);
+        defer _ = self.instantiation.decl_scopes.pop();
         return try self.instNode(declaration.backing);
     }
 
@@ -15502,7 +15825,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var replay_state = InterfaceReplayState.init(self.allocator);
         defer replay_state.deinit(self.allocator);
-        var active_local_scopes = std.AutoHashMap(checked.DispatchScopeId, NodeId).init(self.allocator);
+        var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);
         defer active_local_scopes.deinit();
         try self.applyCheckedTemplateInterfaceScopeRelations(
             template,
@@ -15519,7 +15842,7 @@ const BodyContext = struct {
         template: checked.CheckedProcedureTemplate,
         scope_id: ?checked.DispatchScopeId,
         scope_root_node: NodeId,
-        active_local_scopes: *std.AutoHashMap(checked.DispatchScopeId, NodeId),
+        active_local_scopes: *collections.DenseMap(checked.DispatchScopeId, NodeId),
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!void {
         const PendingDependency = struct {
@@ -15764,7 +16087,7 @@ const BodyContext = struct {
         }
         try callee_ctx.instantiateTemplateDispatchRelations(template, null);
 
-        var active_local_scopes = std.AutoHashMap(checked.DispatchScopeId, NodeId).init(self.allocator);
+        var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);
         defer active_local_scopes.deinit();
         try callee_ctx.applyCheckedTemplateInterfaceScopeRelations(
             template,
@@ -17807,10 +18130,11 @@ const BodyContext = struct {
         if (index >= self.view.bodies.stringLiteralCount()) {
             Common.invariant("checked string literal id outside checked body string store");
         }
-        if (self.string_literals[index]) |existing| return existing;
-        const lowered = try self.addStringLiteral(self.view.bodies.stringLiteral(@enumFromInt(index)));
-        self.string_literals[index] = lowered;
-        return lowered;
+        return try self.draft.addCheckedStringLiteral(
+            self.view.key.bytes,
+            id,
+            self.view.bodies.stringLiteral(@enumFromInt(index)),
+        );
     }
 
     fn lowerCallExpr(
@@ -21072,7 +21396,7 @@ const BodyContext = struct {
     ) Allocator.Error![]Type.TypeId {
         var shapes = std.ArrayList(Type.TypeId).empty;
         errdefer shapes.deinit(self.allocator);
-        var seen = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer seen.deinit();
 
         try self.appendParserPrecomputedRecordShapes(plan, &shapes, &seen, union_ty);
@@ -21083,7 +21407,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: ?*const ParserPrecomputedPlan,
         shapes: *std.ArrayList(Type.TypeId),
-        seen: *std.AutoHashMap(Type.TypeId, void),
+        seen: *collections.DenseMap(Type.TypeId, void),
         shape_ty: Type.TypeId,
     ) Allocator.Error!void {
         if (self.tryNullInfo(shape_ty)) |info| {
@@ -24692,7 +25016,7 @@ const BodyContext = struct {
             // payload is converter-fed and never parsed from source text, so
             // the impossible parse lowers to the failure mapping instead of
             // generating helpers over unparsable internals.
-            var required_visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+            var required_visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
             defer required_visited.deinit();
             if (try self.parserShapeNeedsRequiredFieldError(payload_ty, &required_visited) and
                 self.monoTagByTextOptional(ret_info.err_ty, "MissingRequiredField") == null)
@@ -26283,7 +26607,7 @@ const BodyContext = struct {
         self: *BodyContext,
         context: LocalProcContext,
     ) Allocator.Error![]LocalProcCaptureBinding {
-        var seen = std.AutoHashMap(checked.CaptureId, void).init(self.allocator);
+        var seen = collections.DenseMap(checked.CaptureId, void).init(self.allocator);
         defer seen.deinit();
         var bindings = std.ArrayList(LocalProcCaptureBinding).empty;
         errdefer bindings.deinit(self.allocator);
@@ -27528,14 +27852,18 @@ const BodyContext = struct {
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
             const id = try self.builder.staticDataValue(const_locator, node, checked_type, DraftTypeCell.fromSealed(ty));
-            if (self.draft.static_data_candidate_exprs.get(id)) |existing| return existing;
+            const address: StaticDataCandidateAddress = .{
+                .static_data = id,
+                .owner = self.draft.current_owner,
+            };
+            if (self.draft.static_data_candidate_exprs.get(address)) |existing| return existing;
 
             const runtime_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, const_locator);
             const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
                 .static_data = id,
                 .runtime_expr = runtime_expr,
             } } });
-            try self.draft.static_data_candidate_exprs.put(id, candidate_expr);
+            try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
             return candidate_expr;
         }
         return try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, const_locator);
@@ -27992,7 +28320,7 @@ const BodyContext = struct {
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
     ) Allocator.Error!Type.TypeId {
-        var map = std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId).init(self.allocator);
+        var map = collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId).init(self.allocator);
         defer map.deinit();
         return try self.lowerConstCaptureTypeInner(store_view, ty, &map);
     }
@@ -28001,7 +28329,7 @@ const BodyContext = struct {
         self: *BodyContext,
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
-        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
+        map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
     ) Allocator.Error!Type.TypeId {
         if (map.get(ty)) |existing| return existing;
         const context = ConstTypeLowerContext{
@@ -28020,7 +28348,7 @@ const BodyContext = struct {
         body: *BodyContext,
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
-        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
+        map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
 
         fn fill(self: ConstTypeLowerContext, reserved: Type.TypeId) Allocator.Error!Type.Content {
             try self.map.put(self.ty, reserved);
@@ -28032,7 +28360,7 @@ const BodyContext = struct {
         self: *BodyContext,
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
-        map: *std.AutoHashMap(check.ConstStore.ConstTypeId, Type.TypeId),
+        map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
     ) Allocator.Error!Type.Content {
         const type_store = &store_view.const_store.type_store;
         return switch (type_store.get(ty)) {
@@ -34356,7 +34684,7 @@ const BodyContext = struct {
             .encoder_for => .encoder,
             .value, .equality, .hash, .map, .map_effectful => Common.invariant("non-codec result mode reached structural serialization deferral"),
         };
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         _ = try self.prepareCustomCodecCallsAtNode(expr, kind, shape_node, callable_node, &seen);
         return expr;
@@ -36995,14 +37323,14 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         var added_relation = false;
         if (kind == .parser) {
-            var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+            var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer required_error_seen.deinit();
             if (try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen)) {
                 added_relation = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
             }
             const runtime = try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret);
             const outer_result = try self.graphParserResultNodes(runtime.ret);
-            var invalid_value_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+            var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer invalid_value_seen.deinit();
             if (try self.graphParserShapeNeedsInvalidValue(shape_node, outer_result.err, &invalid_value_seen)) {
                 added_relation = try self.prepareParserInvalidValueCodecCall(
@@ -37012,7 +37340,7 @@ const BodyContext = struct {
                 ) or added_relation;
             }
         }
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         return try self.prepareCustomCodecCallsAtNode(
             boundary_expr,
@@ -37037,11 +37365,11 @@ const BodyContext = struct {
         var added_relation = false;
         var missing_required_field_ready = false;
 
-        var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer required_error_seen.deinit();
-        var invalid_value_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer invalid_value_seen.deinit();
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
 
         for ((try self.graph.tagRowNodes(union_node)).tags) |tag| {
@@ -37336,7 +37664,7 @@ const BodyContext = struct {
         self: *BodyContext,
         raw_node: NodeId,
         shapes: *std.ArrayList(NodeId),
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!void {
         const node = raw_node;
         const seen_entry = try seen.getOrPut(node);
@@ -37381,7 +37709,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         var record_shapes = std.ArrayList(NodeId).empty;
         defer record_shapes.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         try self.appendGraphParserRecordShapes(union_node, &record_shapes, &seen);
 
@@ -38007,7 +38335,7 @@ const BodyContext = struct {
         kind: CodecKind,
         key_node: NodeId,
         boundary_callable_node: NodeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         switch (kind) {
             .parser => {
@@ -38480,7 +38808,7 @@ const BodyContext = struct {
     fn graphParserShapeNeedsRequiredFieldError(
         self: *BodyContext,
         raw_node: NodeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const node = raw_node;
         const entry = try seen.getOrPut(node);
@@ -38552,7 +38880,7 @@ const BodyContext = struct {
         self: *BodyContext,
         raw_node: NodeId,
         err_node: NodeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const node = raw_node;
         const entry = try seen.getOrPut(node);
@@ -38714,7 +39042,7 @@ const BodyContext = struct {
         kind: CodecKind,
         raw_shape_node: NodeId,
         boundary_callable_node: NodeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const shape_node = raw_shape_node;
         const seen_entry = try seen.getOrPut(shape_node);
@@ -39135,7 +39463,7 @@ const BodyContext = struct {
     fn parserShapeNeedsRequiredFieldError(
         self: *BodyContext,
         ty: Type.TypeId,
-        visited: *std.AutoHashMap(Type.TypeId, void),
+        visited: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!bool {
         if (visited.contains(ty)) return false;
         try visited.put(ty, {});
@@ -39479,7 +39807,7 @@ const BodyContext = struct {
         mode: DraftStructuralDerivationMode,
         raw_node: NodeId,
         result_ty: Type.TypeId,
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
         added_method_call: *bool,
     ) Allocator.Error!void {
         const entry = try seen.getOrPut(raw_node);
@@ -41581,7 +41909,7 @@ const BodyContext = struct {
     ) Allocator.Error![]const NodeId {
         var guards = std.ArrayList(NodeId).empty;
         defer guards.deinit(self.allocator);
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         var active = std.AutoHashMap(PatternNodeVisit, void).init(self.allocator);
         defer active.deinit();
@@ -41594,7 +41922,7 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
         guards: *std.ArrayList(NodeId),
-        seen: *std.AutoHashMap(NodeId, void),
+        seen: *collections.DenseMap(NodeId, void),
         active: *std.AutoHashMap(PatternNodeVisit, void),
     ) Allocator.Error!void {
         const key: PatternNodeVisit = .{ .pattern = pattern_id, .node = node };
@@ -46249,7 +46577,7 @@ const EqDeriver = struct {
     /// earlier `if` bodies, matching source field/element order.
     const forward = false;
 
-    fn expansionStack(self: *BodyContext) *std.AutoHashMap(Type.TypeId, void) {
+    fn expansionStack(self: *BodyContext) *collections.DenseMap(Type.TypeId, void) {
         return &self.equality_expansion_stack;
     }
 
@@ -46478,7 +46806,7 @@ const HashDeriver = struct {
     /// the previous one.
     const forward = true;
 
-    fn expansionStack(self: *BodyContext) *std.AutoHashMap(Type.TypeId, void) {
+    fn expansionStack(self: *BodyContext) *collections.DenseMap(Type.TypeId, void) {
         return &self.hash_expansion_stack;
     }
 
@@ -48407,6 +48735,68 @@ test "record parser presence words cover fields wider than one u64" {
     try std.testing.expectEqual(@as(u64, 2), BodyContext.recordPresenceMask(65));
     try std.testing.expectEqual(@as(u64, 1) << 63, BodyContext.recordPresenceMask(127));
     try std.testing.expectEqual(@as(u64, 1), BodyContext.recordPresenceMask(128));
+}
+
+test "binder map materializes dense storage only on first binding" {
+    var binders = try BinderMap.init(std.testing.allocator, 4);
+    defer binders.deinit();
+
+    const binder: checked.PatternBinderId = @enumFromInt(2);
+    const local: DraftLocalId = @enumFromInt(7);
+    try std.testing.expect(binders.locals == null);
+    try std.testing.expectEqual(@as(?DraftLocalId, null), binders.get(binder));
+    try std.testing.expect(!binders.remove(binder));
+    try std.testing.expect(binders.locals == null);
+
+    try binders.put(binder, local);
+    try std.testing.expect(binders.locals != null);
+    try std.testing.expectEqual(@as(?DraftLocalId, local), binders.get(binder));
+    try std.testing.expectEqual(@as(usize, 1), binders.count());
+}
+
+test "checked string literal cache is shared only within one draft owner" {
+    var draft = BodyDraftStore.init(std.testing.allocator);
+    defer draft.deinit();
+
+    const literal: checked.CheckedStringLiteralId = @enumFromInt(3);
+    const first_module = [_]u8{1} ** 32;
+    const other_module = [_]u8{2} ** 32;
+
+    const first = try draft.addCheckedStringLiteral(first_module, literal, "same");
+    const reused = try draft.addCheckedStringLiteral(first_module, literal, "same");
+    const other_module_literal = try draft.addCheckedStringLiteral(other_module, literal, "same");
+
+    const owner_scope = try draft.enterOwner(.{ .draft_fn = @enumFromInt(7) });
+    defer owner_scope.leave();
+    const other_owner = try draft.addCheckedStringLiteral(first_module, literal, "same");
+    const other_owner_reused = try draft.addCheckedStringLiteral(first_module, literal, "same");
+
+    try std.testing.expectEqual(first, reused);
+    try std.testing.expect(first != other_module_literal);
+    try std.testing.expect(first != other_owner);
+    try std.testing.expectEqual(other_owner, other_owner_reused);
+    try std.testing.expectEqual(@as(usize, 3), draft.string_literals.items.len);
+}
+
+test "checked type instantiation scopes have exact isolated identities" {
+    var diagnostics: Diagnostics = .{};
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.diagnostics = &diagnostics;
+
+    const module_bytes = [_]u8{7} ** 32;
+    var first = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope(), module_bytes);
+    defer first.deinit();
+    var second = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope(), module_bytes);
+    defer second.deinit();
+
+    try std.testing.expect(first.id != second.id);
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(11);
+    const node: NodeId = @enumFromInt(13);
+    try first.node_map.put(checked_ty, node);
+    try std.testing.expectEqual(@as(?NodeId, node), first.node_map.get(checked_ty));
+    try std.testing.expectEqual(@as(?NodeId, null), second.node_map.get(checked_ty));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
 }
 
 test "function context identity excludes draft local allocation ids" {

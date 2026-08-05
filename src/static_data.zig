@@ -4,6 +4,7 @@
 //! initializer procedures using target-width symbolic memory.
 
 const std = @import("std");
+const collections = @import("collections");
 
 const builtins = @import("builtins");
 const check = @import("check");
@@ -911,7 +912,7 @@ const StaticDataBuilder = struct {
     word_size: u32,
     nodes: std.ArrayList(StaticDataExport),
     initializer_machine: StaticInitializerMachine,
-    frozen_allocations: std.AutoHashMap(SymbolicAllocationId, PointerTarget),
+    frozen_allocations: collections.DenseMap(SymbolicAllocationId, PointerTarget),
     local_symbol_ordinal: u32,
     include_provided_exports: bool,
     include_requested_exports: bool,
@@ -932,7 +933,7 @@ const StaticDataBuilder = struct {
             .word_size = target_usize.size(),
             .nodes = .empty,
             .initializer_machine = try StaticInitializerMachine.init(allocator, lowered, target_usize),
-            .frozen_allocations = std.AutoHashMap(SymbolicAllocationId, PointerTarget).init(allocator),
+            .frozen_allocations = collections.DenseMap(SymbolicAllocationId, PointerTarget).init(allocator),
             .local_symbol_ordinal = 0,
             .include_provided_exports = options.include_provided_exports,
             .include_requested_exports = options.include_requested_exports,

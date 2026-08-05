@@ -10916,6 +10916,10 @@ fn lowerCheckedSourceToLir(
                 .test_plan => |plan| plan.metadata,
                 else => &.{},
             },
+            .procedure_template_root_grouping = switch (roots) {
+                .test_plan => .shared_adjacent,
+                else => .isolated,
+            },
         },
         .{
             .target_usize = target_usize,
@@ -11470,6 +11474,7 @@ fn runCompiledTestRoots(
     root_runs: []const CliTestRootRun,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
 ) Allocator.Error!void {
     var bool_roots = try ctx.gpa.alloc(eval.test_helpers.BoolRoot, root_runs.len);
     defer ctx.gpa.free(bool_roots);
@@ -11484,12 +11489,13 @@ fn runCompiledTestRoots(
     }
 
     const eval_results = switch (mode) {
-        .dev => eval.test_helpers.devEvalBoolRoots(
+        .dev => eval.test_helpers.devEvalBoolRootsWithTiming(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
+            dev_timing,
         ),
         .llvm_size => eval.test_helpers.llvmEvalBoolRoots(
             ctx.gpa,
@@ -11530,6 +11536,7 @@ fn lowerPlannedTestModule(
     plan_entries: []const CliTestPlanEntry,
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
+    timing: ?*lir.CheckedPipeline.Timing,
 ) Allocator.Error!CliLoweredTestModule {
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, planned.artifact);
     defer ctx.gpa.free(imported_artifacts);
@@ -11569,7 +11576,7 @@ fn lowerPlannedTestModule(
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
-        null,
+        timing,
     );
     errdefer lowered.deinit();
 
@@ -11592,10 +11599,12 @@ fn runCheckedArtifactTests(
     specialization_strategy: base.SpecializationStrategy,
     cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
+    timing: ?*lir.CheckedPipeline.Timing,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
 ) (Allocator.Error || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
-    var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt, specialization_strategy);
+    var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt, specialization_strategy, timing);
     defer lowered_module.deinit(ctx.gpa);
 
     var results = std.ArrayList(CliTestResultItem).empty;
@@ -11608,7 +11617,7 @@ fn runCheckedArtifactTests(
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .interpreter => try runInterpreterTestRoots(ctx, &lowered_module.lowered, lowered_module.root_runs, &results, &summary),
-        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary),
+        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing),
         .llvm_size, .llvm_speed => unreachable,
     }
     summary.modules_with_tests = 1;
@@ -11792,6 +11801,7 @@ fn runOptimizedTestPlan(
     module_results: *std.ArrayList(CliModuleTestResult),
     total: *CliTestRunSummary,
     live_output: ?*CliOptimizedLiveTestOutput,
+    timing: ?*lir.CheckedPipeline.Timing,
 ) (ReportRenderError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
@@ -11838,7 +11848,7 @@ fn runOptimizedTestPlan(
 
         try lowered_modules.append(
             ctx.gpa,
-            try lowerPlannedTestModule(ctx, build_env, planned_index, planned, test_plan.entries, opt, specialization_strategy),
+            try lowerPlannedTestModule(ctx, build_env, planned_index, planned, test_plan.entries, opt, specialization_strategy, timing),
         );
     }
 
@@ -12734,6 +12744,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             try argv.append(ctx.gpa, "test");
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--opt={s}", .{@tagName(args.opt)});
             if (args.main) |main_path| try appendOwnedArg(ctx.gpa, &argv, &owned, "--main={s}", .{main_path});
+            if (args.timings) try argv.append(ctx.gpa, "--timings");
             if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
@@ -12936,6 +12947,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
+    var reporter = makeReporter(ctx, "roc test", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+    errdefer reporter.fail();
+
+    reporter.begin("Type Checking");
+
     // --- Normal compilation path ---
 
     var build_env = try initCliBuildEnv(ctx, .{
@@ -12984,6 +13002,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     const modules = try build_env.getCompiledModules(ctx.gpa);
     defer ctx.gpa.free(modules);
 
+    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
+
+    reporter.begin("Test Planning");
+
     const report_config = testReportingConfig(ctx);
 
     var module_results = std.ArrayList(CliModuleTestResult).empty;
@@ -13011,6 +13033,11 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             planned.cached_summary = cached.summary;
         }
     }
+    reporter.end();
+
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
+    var dev_timing = eval.test_helpers.DevBoolRootTiming.init(ctx.io.std_io);
 
     var total = CliTestRunSummary{};
     const test_mode = cliTestExecutionMode(args.opt);
@@ -13045,6 +13072,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         live_output = try CliOptimizedLiveTestOutput.init(ctx, &live_coordinator.?, test_plan.entries.len);
     }
 
+    // This wall-time phase includes lowering, backend code generation, and
+    // execution. The completed timing rows recorded below split out the
+    // expensive subsets without pretending their durations are extra work.
+    reporter.begin("Compile + Run Tests (wall)");
     switch (test_mode) {
         .llvm_size, .llvm_speed => try runOptimizedTestPlan(
             ctx,
@@ -13057,6 +13088,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             &module_results,
             &total,
             if (live_output) |*output| output else null,
+            &spec_timing,
         ),
         .interpreter, .dev => {
             for (test_plan.modules) |*planned| {
@@ -13073,6 +13105,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     specialization_strategy,
                     build_env.cache_manager,
                     &module_results,
+                    &spec_timing,
+                    &dev_timing,
                 );
                 total.passed += summary.passed;
                 total.failed += summary.failed;
@@ -13082,6 +13116,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             }
         },
     }
+    reporter.end();
+    recordPostCheckLowering(&reporter, &spec_timing);
+    if (test_mode == .dev) recordDevTestExecution(&reporter, &dev_timing);
+    reporter.finish();
 
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
@@ -14376,6 +14414,57 @@ fn finishPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.Chec
     reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
 }
 
+fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
+    return timing.monotype_ns +|
+        timing.lift_ns +|
+        timing.spec_constr_ns +|
+        timing.lambda_solve_ns +|
+        timing.inline_plan_ns +|
+        timing.lir_gen_ns +|
+        timing.lir_passes_ns +|
+        timing.arc_ns;
+}
+
+fn recordPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.CheckedPipeline.Timing) void {
+    const snapshot = timing.snapshot();
+    reporter.recordCompletedWithBreakdown(
+        post_check_lowering_phase_name,
+        postCheckLoweringTotalNs(snapshot),
+        .{},
+        &postCheckLoweringBreakdown(snapshot),
+    );
+    reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+}
+
+fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot) [6]progress.SubTiming {
+    return .{
+        .{ .name = "Static Strings", .ns = timing.static_strings_ns },
+        .{ .name = "Codegen Setup", .ns = timing.codegen_setup_ns },
+        .{ .name = "Procedure Codegen", .ns = timing.procedure_codegen_ns },
+        .{ .name = "Entrypoint Codegen", .ns = timing.entrypoint_codegen_ns },
+        .{ .name = "Executable Memory", .ns = timing.executable_memory_ns },
+        .{ .name = "Root Execution", .ns = timing.root_execution_ns },
+    };
+}
+
+fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test_helpers.DevBoolRootTiming) void {
+    const snapshot = timing.snapshot();
+    const total_ns = snapshot.static_strings_ns +|
+        snapshot.codegen_setup_ns +|
+        snapshot.procedure_codegen_ns +|
+        snapshot.entrypoint_codegen_ns +|
+        snapshot.executable_memory_ns +|
+        snapshot.root_execution_ns;
+    reporter.recordCompletedWithBreakdown(
+        "Dev Codegen + Execution",
+        total_ns,
+        .{},
+        &devTestExecutionBreakdown(snapshot),
+    );
+}
+
 fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [17]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
@@ -14399,7 +14488,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [18]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -14417,22 +14506,31 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [18]
         .{ .name = "Monotype import hits", .count = graph.mono_import_hits },
         .{ .name = "Monotype import misses", .count = graph.mono_import_misses },
         .{ .name = "Generated-private scans", .count = graph.generated_private_scans },
+        .{ .name = "Generated-private cache hits", .count = graph.generated_private_cache_hits },
         .{ .name = "Generated-private nodes visited", .count = graph.generated_private_nodes_visited },
         .{ .name = "Finished-Monotype scans", .count = graph.finished_mono_scans },
         .{ .name = "Finished-Monotype nodes visited", .count = graph.finished_mono_nodes_visited },
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [13]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
+        .{ .name = "Type instantiation scopes", .count = body.instantiation_scopes_created },
         .{ .name = "Checked node requests", .count = body.checked_node_requests },
         .{ .name = "Checked node cache hits", .count = body.checked_node_cache_hits },
         .{ .name = "Checked node cache misses", .count = body.checked_node_cache_misses },
         .{ .name = "Fresh checked node requests", .count = body.fresh_checked_node_requests },
         .{ .name = "Call expressions", .count = body.call_expressions },
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
+        .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
+        .{ .name = "Cross-root template reuses", .count = body.cross_root_template_reuses },
+        .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
+        .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
+        .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
+        .{ .name = "Lowered template bodies discarded", .count = body.lowered_template_bodies_discarded },
+        .{ .name = "Lowered nested bodies discarded", .count = body.lowered_nested_bodies_discarded },
         .{ .name = "Expression relations", .count = body.expr_relation_requests },
         .{ .name = "Argument spans prepared", .count = body.argument_spans_prepared },
         .{ .name = "Arguments prepared", .count = body.arguments_prepared },
@@ -14501,7 +14599,10 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.specialization.nested_misses = 102;
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.generated_private_nodes_visited = 202;
+    diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
+    diagnostics.body.deferred_template_reuses = 305;
+    diagnostics.body.cross_root_template_reuses = 306;
     diagnostics.body.nested_closures_prepared = 302;
 
     const specialization = monotypeSpecializationCounters(diagnostics);
@@ -14513,14 +14614,20 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     const graph = monotypeGraphCounters(diagnostics);
     try std.testing.expectEqualStrings("Nodes created", graph[1].name);
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
-    try std.testing.expectEqualStrings("Generated-private nodes visited", graph[15].name);
-    try std.testing.expectEqual(@as(u64, 202), graph[15].count);
+    try std.testing.expectEqualStrings("Generated-private nodes visited", graph[16].name);
+    try std.testing.expectEqual(@as(u64, 202), graph[16].count);
 
     const body = monotypeBodyCounters(diagnostics);
-    try std.testing.expectEqualStrings("Checked node cache hits", body[2].name);
-    try std.testing.expectEqual(@as(u64, 301), body[2].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[12].name);
-    try std.testing.expectEqual(@as(u64, 302), body[12].count);
+    try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);
+    try std.testing.expectEqual(@as(u64, 303), body[1].count);
+    try std.testing.expectEqualStrings("Checked node cache hits", body[3].name);
+    try std.testing.expectEqual(@as(u64, 301), body[3].count);
+    try std.testing.expectEqualStrings("Cross-root template reuses", body[9].name);
+    try std.testing.expectEqual(@as(u64, 306), body[9].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[11].name);
+    try std.testing.expectEqual(@as(u64, 305), body[11].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[20].name);
+    try std.testing.expectEqual(@as(u64, 302), body[20].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

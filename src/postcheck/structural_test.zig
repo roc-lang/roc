@@ -878,8 +878,25 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "const BinderMap = struct",
         "const TypedBinder = struct",
     );
-    try expectContains(binder_map, "locals: []?DraftLocalId");
+    try expectContains(binder_map, "locals: ?[]?DraftLocalId = null");
+    try expectContains(binder_map, "if (self.locals == null)");
     try expectNotContains(binder_map, "AutoHashMap");
+
+    const inst_node = sourceSliceBetween(
+        lower_source,
+        "fn instNode(self: *BodyContext",
+        "fn freshInstNode(self: *BodyContext",
+    );
+    try expectNotContains(inst_node, "self.builder.lowerType(self.view, checked_ty)");
+    try expectNotContains(inst_node, "self.graph.importMono(closed_ty)");
+
+    const fresh_inst_node = sourceSliceBetween(
+        lower_source,
+        "fn freshInstNode(self: *BodyContext",
+        "fn scopedNode(self: *BodyContext",
+    );
+    try expectContains(fresh_inst_node, "TypeInstantiationContext.init");
+    try expectNotContains(fresh_inst_node, "BodyContext.initWithMethodScope");
 
     const source_mapping = sourceSliceBetween(
         lower_source,

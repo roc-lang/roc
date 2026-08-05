@@ -1611,7 +1611,7 @@ fn checkedTypeIsConcreteCompileTimeRoot(
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    var active = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer active.deinit();
     return try checkedTypeIsConcreteCompileTimeRootInner(.value_graph, checked_types, root, &active);
 }
@@ -1620,7 +1620,7 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     if (active.contains(root)) return true;
     try active.put(root, {});
@@ -1687,7 +1687,7 @@ fn checkedTypeSpanIsConcreteCompileTimeRoot(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     items: []const CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (items) |item| {
         if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, item, active)) return false;
@@ -1699,7 +1699,7 @@ fn checkedFieldTypesAreConcreteCompileTimeRoots(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     fields: []const CheckedRecordField,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (fields) |field| {
         if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, field.ty, active)) return false;
@@ -1711,7 +1711,7 @@ fn checkedTagsAreConcreteCompileTimeRoots(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     tags: []const CheckedTag,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (tags) |tag| {
         if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, tag.argsSlice(checked_types), active)) return false;
@@ -3210,7 +3210,7 @@ pub const CheckedTypeStoreView = struct {
         allocator: Allocator,
         root: CheckedTypeId,
     ) Allocator.Error!bool {
-        var active = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+        var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
         defer active.deinit();
         return try checkedTypeViewIsConcreteConstProducerSchemeInner(self, root, &active);
     }
@@ -3383,7 +3383,7 @@ fn checkedTypeViewResolvedPayload(
 fn checkedTypeViewIsConcreteConstProducerSchemeInner(
     checked_types: CheckedTypeStoreView,
     root: CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     if (active.contains(root)) return true;
     try active.put(root, {});
@@ -3423,7 +3423,7 @@ fn checkedTypeViewIsConcreteConstProducerSchemeInner(
 fn checkedTypeViewSpanIsConcreteConstProducerScheme(
     checked_types: CheckedTypeStoreView,
     items: []const CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (items) |item| {
         if (!try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, item, active)) return false;
@@ -3434,7 +3434,7 @@ fn checkedTypeViewSpanIsConcreteConstProducerScheme(
 fn checkedTypeViewRecordFieldsAreConcreteConstProducerScheme(
     checked_types: CheckedTypeStoreView,
     fields: []const CheckedRecordField,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (fields) |field| {
         if (!try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, field.ty, active)) return false;
@@ -3445,7 +3445,7 @@ fn checkedTypeViewRecordFieldsAreConcreteConstProducerScheme(
 fn checkedTypeViewTagsAreConcreteConstProducerScheme(
     checked_types: CheckedTypeStoreView,
     tags: []const CheckedTag,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (tags) |tag| {
         if (!try checkedTypeViewSpanIsConcreteConstProducerScheme(checked_types, tag.argsSlice(checked_types), active)) return false;
@@ -4428,7 +4428,7 @@ pub const CheckedTypeStore = struct {
         }
         if (checkedTypeIdSliceEql(formal_args, actual_args)) return declaration.backing;
 
-        var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+        var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
         defer active.deinit();
 
         // formalArgs and nominal args alias type_id_pool, which cloning may grow/reallocate; copy.
@@ -4480,7 +4480,7 @@ pub const CheckedTypeStore = struct {
         const actuals_copy = try allocator.dupe(CheckedTypeId, actual_args);
         defer allocator.free(actuals_copy);
 
-        var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+        var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
         defer active.deinit();
         for (padding_copy, 0..) |padding_ty, i| {
             out[i] = try self.cloneCheckedTypeRootSubstituting(
@@ -4577,7 +4577,7 @@ pub const CheckedTypeStore = struct {
         source: CheckedTypeId,
         formals: []const CheckedTypeId,
         actuals: []const CheckedTypeId,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error!CheckedTypeId {
         if (formals.len != actuals.len) {
             checkedArtifactInvariant("checked type substitution arity mismatch", .{});
@@ -4707,7 +4707,7 @@ pub const CheckedTypeStore = struct {
         build_payload: CheckedTypePayloadBuild,
         formals: []const CheckedTypeId,
         actuals: []const CheckedTypeId,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error!CheckedTypePayloadBuild {
         return switch (build_payload) {
             .pending => checkedArtifactInvariant("checked type substitution reached pending payload", .{}),
@@ -4772,7 +4772,7 @@ pub const CheckedTypeStore = struct {
         ids: []const CheckedTypeId,
         formals: []const CheckedTypeId,
         actuals: []const CheckedTypeId,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error![]const CheckedTypeId {
         if (ids.len == 0) return &.{};
         const out = try allocator.alloc(CheckedTypeId, ids.len);
@@ -4790,7 +4790,7 @@ pub const CheckedTypeStore = struct {
         fields: []const CheckedRecordField,
         formals: []const CheckedTypeId,
         actuals: []const CheckedTypeId,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error![]const CheckedRecordField {
         if (fields.len == 0) return &.{};
         const out = try allocator.alloc(CheckedRecordField, fields.len);
@@ -4811,7 +4811,7 @@ pub const CheckedTypeStore = struct {
         tags: []const CheckedTagBuild,
         formals: []const CheckedTypeId,
         actuals: []const CheckedTypeId,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error![]const CheckedTagBuild {
         if (tags.len == 0) return &.{};
         const out = try allocator.alloc(CheckedTagBuild, tags.len);
@@ -4836,7 +4836,7 @@ pub const CheckedTypeStore = struct {
         constraints: []const CheckedStaticDispatchConstraint,
         formals: []const CheckedTypeId,
         actuals: []const CheckedTypeId,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error![]const CheckedStaticDispatchConstraint {
         if (constraints.len == 0) return &.{};
         const out = try allocator.alloc(CheckedStaticDispatchConstraint, constraints.len);
@@ -4858,7 +4858,7 @@ pub const CheckedTypeStore = struct {
         function: CheckedFunctionType,
         formals: []const CheckedTypeId,
         actuals: []const CheckedTypeId,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error!CheckedTypePayloadBuild {
         const args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, function.args, formals, actuals, active);
         errdefer allocator.free(args);
@@ -5458,7 +5458,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             const formals = try allocator.dupe(CheckedTypeId, alias.args);
             defer allocator.free(formals);
 
-            var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+            var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
             defer active.deinit();
             const backing = try store.cloneCheckedTypeRootSubstituting(
                 allocator,
@@ -5490,7 +5490,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             const formals = try allocator.dupe(CheckedTypeId, nominal.args);
             defer allocator.free(formals);
 
-            var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+            var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
             defer active.deinit();
             const padding_field_types = try store.cloneCheckedTypeIdSliceSubstituting(
                 allocator,
@@ -6441,8 +6441,8 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     formals: []const CheckedTypeId,
     actuals: []const CheckedTypeId,
     hasher: std.crypto.hash.sha2.Sha256,
-    active: std.AutoHashMap(CheckedTypeId, u32),
-    identity_variables: std.AutoHashMap(CheckedTypeId, u32),
+    active: collections.DenseMap(CheckedTypeId, u32),
+    identity_variables: collections.DenseMap(CheckedTypeId, u32),
 
     const RecordFieldForKey = struct {
         name: canonical.RecordFieldLabelId,
@@ -6468,8 +6468,8 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             .formals = formals,
             .actuals = actuals,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
-            .active = std.AutoHashMap(CheckedTypeId, u32).init(allocator),
-            .identity_variables = std.AutoHashMap(CheckedTypeId, u32).init(allocator),
+            .active = collections.DenseMap(CheckedTypeId, u32).init(allocator),
+            .identity_variables = collections.DenseMap(CheckedTypeId, u32).init(allocator),
         };
     }
 
@@ -6638,7 +6638,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         try self.appendRecordFieldsForKey(&fields, head);
 
         var tail = if (ext) |tail_id| self.substitutedRoot(tail_id) else null;
-        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
         while (tail) |tail_id| {
             if (self.active.contains(tail_id)) break;
@@ -6691,7 +6691,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         try self.appendRecordFieldsForKey(&fields, head);
 
         var tail: ?CheckedTypeId = self.substitutedRoot(ext);
-        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
         while (tail) |tail_id| {
             if (self.active.contains(tail_id)) break;
@@ -6774,7 +6774,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         try tags.appendSlice(self.allocator, head);
 
         var tail: ?CheckedTypeId = self.substitutedRoot(ext);
-        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
         while (tail) |tail_id| {
             if (self.active.contains(tail_id)) break;
@@ -14973,7 +14973,7 @@ fn sealCheckedProcedureTemplateRefs(
             .intrinsic_wrapper => {},
         }
 
-        var seen_local_uses = std.AutoHashMap(ResolvedValueRefId, void).init(allocator);
+        var seen_local_uses = collections.DenseMap(ResolvedValueRefId, void).init(allocator);
         defer seen_local_uses.deinit();
         for (collector.value_refs.items, collector.value_ref_scopes.items) |ref_id, use_scope| {
             const seen = try seen_local_uses.getOrPut(ref_id);
@@ -15088,7 +15088,7 @@ fn sealCheckedProcedureTemplateRefs(
 /// scope table rather than by evidence count.
 fn publishLocalProcedureDispatchScopes(
     resolved_value_refs: *ResolvedValueRefTable,
-    scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
+    scope_by_checked_expr: *const collections.DenseMap(CheckedExprId, DispatchScopeId),
 ) void {
     for (resolved_value_refs.records) |*record| {
         const local = switch (record.ref) {
@@ -15102,7 +15102,7 @@ fn publishLocalProcedureDispatchScopes(
 
 fn publishLocalMethodDispatchScopes(
     method_registry: *static_dispatch.MethodRegistry,
-    scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
+    scope_by_checked_expr: *const collections.DenseMap(CheckedExprId, DispatchScopeId),
 ) void {
     for (method_registry.entries) |*entry| {
         const local = switch (entry.target.kind) {
@@ -15180,7 +15180,7 @@ const EvidencePass = struct {
     enum_scratch: dispatch_evidence.Scratch,
     /// Canonical evidence params per collected local-function scope,
     /// enumerated on demand (slices owned by the pass).
-    scope_params: std.AutoHashMap(DispatchScopeId, []EvidenceParam),
+    scope_params: collections.DenseMap(DispatchScopeId, []EvidenceParam),
     /// Scratch backing for the chain currently being resolved against.
     chain_scratch: std.ArrayList([]const EvidenceParam),
     /// Per-plan / per-iterator-plan visited flags: a plan reachable from two
@@ -15255,7 +15255,7 @@ const EvidencePass = struct {
             .evidence_params_pool = .empty,
             .evidence_param_paths = .empty,
             .enum_scratch = .{},
-            .scope_params = std.AutoHashMap(DispatchScopeId, []EvidenceParam).init(allocator),
+            .scope_params = collections.DenseMap(DispatchScopeId, []EvidenceParam).init(allocator),
             .chain_scratch = .empty,
         };
     }
@@ -16894,11 +16894,11 @@ const CheckedTemplateRefCollector = struct {
     template_root_expr: ?CheckedExprId = null,
     /// Pooled across templates (ids are global); the stack resets per template.
     scopes: std.ArrayList(DispatchRefScope),
-    scope_by_checked_expr: std.AutoHashMap(CheckedExprId, DispatchScopeId),
+    scope_by_checked_expr: collections.DenseMap(CheckedExprId, DispatchScopeId),
     scope_stack: std.ArrayList(DispatchScopeId),
-    visited_exprs: std.AutoHashMap(CheckedExprId, void),
-    visited_patterns: std.AutoHashMap(CheckedPatternId, void),
-    visited_statements: std.AutoHashMap(CheckedStatementId, void),
+    visited_exprs: collections.DenseMap(CheckedExprId, void),
+    visited_patterns: collections.DenseMap(CheckedPatternId, void),
+    visited_statements: collections.DenseMap(CheckedStatementId, void),
 
     fn init(
         allocator: Allocator,
@@ -16929,11 +16929,11 @@ const CheckedTemplateRefCollector = struct {
             .specialization_relations = .empty,
             .specialization_types = .empty,
             .scopes = .empty,
-            .scope_by_checked_expr = std.AutoHashMap(CheckedExprId, DispatchScopeId).init(allocator),
+            .scope_by_checked_expr = collections.DenseMap(CheckedExprId, DispatchScopeId).init(allocator),
             .scope_stack = .empty,
-            .visited_exprs = std.AutoHashMap(CheckedExprId, void).init(allocator),
-            .visited_patterns = std.AutoHashMap(CheckedPatternId, void).init(allocator),
-            .visited_statements = std.AutoHashMap(CheckedStatementId, void).init(allocator),
+            .visited_exprs = collections.DenseMap(CheckedExprId, void).init(allocator),
+            .visited_patterns = collections.DenseMap(CheckedPatternId, void).init(allocator),
+            .visited_statements = collections.DenseMap(CheckedStatementId, void).init(allocator),
         };
     }
 
@@ -18007,8 +18007,8 @@ pub const CheckedProcedureTemplateTableView = struct {
 fn nestedProcScopeMap(
     allocator: Allocator,
     scopes: []const DispatchRefScope,
-) Allocator.Error!std.AutoHashMap(CheckedExprId, DispatchScopeId) {
-    var by_checked_expr = std.AutoHashMap(CheckedExprId, DispatchScopeId).init(allocator);
+) Allocator.Error!collections.DenseMap(CheckedExprId, DispatchScopeId) {
+    var by_checked_expr = collections.DenseMap(CheckedExprId, DispatchScopeId).init(allocator);
     errdefer by_checked_expr.deinit();
     try by_checked_expr.ensureTotalCapacity(@intCast(scopes.len));
     for (scopes, 0..) |scope, raw_scope| {
@@ -18024,7 +18024,7 @@ fn nestedProcScopeMap(
 fn nestedProcLexicalScope(
     current: DispatchScope,
     expr: CheckedExprId,
-    by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
+    by_checked_expr: *const collections.DenseMap(CheckedExprId, DispatchScopeId),
     scopes: []const DispatchRefScope,
 ) DispatchScope {
     const scope_id = by_checked_expr.get(expr) orelse return current;
@@ -18048,7 +18048,7 @@ const NestedProcSiteBuilder = struct {
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     method_registry: *const static_dispatch.MethodRegistry,
     dispatch_scopes: []const DispatchRefScope,
-    scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
+    scope_by_checked_expr: *const collections.DenseMap(CheckedExprId, DispatchScopeId),
     current_scope: DispatchScope,
     sites: std.ArrayList(NestedProcSite),
     template_refs: std.ArrayList(canonical.NestedProcSiteId),
@@ -18062,7 +18062,7 @@ const NestedProcSiteBuilder = struct {
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
         method_registry: *const static_dispatch.MethodRegistry,
         dispatch_scopes: []const DispatchRefScope,
-        scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
+        scope_by_checked_expr: *const collections.DenseMap(CheckedExprId, DispatchScopeId),
     ) NestedProcSiteBuilder {
         return .{
             .allocator = allocator,
@@ -19036,7 +19036,7 @@ const PlatformRelationTypeSubstitutions = struct {
         root: CheckedTypeId,
     ) Allocator.Error!CheckedTypeId {
         if (self.formals.len == 0) return root;
-        var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+        var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
         defer active.deinit();
         return try store.cloneCheckedTypeRootSubstituting(
             allocator,
@@ -20031,7 +20031,7 @@ fn instantiateResolvedDispatchTargetCallable(
     defer target_actuals.deinit(allocator);
     var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(allocator);
     defer active.deinit();
-    var target_conflicts = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var target_conflicts = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer target_conflicts.deinit();
 
     for (target_args, plan_args) |target_arg, plan_arg| {
@@ -20048,7 +20048,7 @@ fn instantiateResolvedDispatchTargetCallable(
         );
     }
 
-    var clone_active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    var clone_active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
     defer clone_active.deinit();
     const instantiated_target = try store.cloneCheckedTypeRootSubstituting(
         allocator,
@@ -20133,7 +20133,7 @@ fn collectResolvedDispatchTargetSubstitutions(
     formals: *std.ArrayList(CheckedTypeId),
     actuals: *std.ArrayList(CheckedTypeId),
     active: *std.AutoHashMap(PlatformRequirementTypePair, void),
-    conflicts: *std.AutoHashMap(CheckedTypeId, void),
+    conflicts: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!void {
     if (target == plan) return;
 
@@ -20322,7 +20322,7 @@ fn collectResolvedDispatchRecordSubstitutions(
     formals: *std.ArrayList(CheckedTypeId),
     actuals: *std.ArrayList(CheckedTypeId),
     active: *std.AutoHashMap(PlatformRequirementTypePair, void),
-    conflicts: *std.AutoHashMap(CheckedTypeId, void),
+    conflicts: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!void {
     const target_parts = recordParts(target_payload) orelse return;
     const plan_parts = recordParts(plan_payload) orelse return;
@@ -20372,7 +20372,7 @@ fn collectResolvedDispatchTagSubstitutions(
     formals: *std.ArrayList(CheckedTypeId),
     actuals: *std.ArrayList(CheckedTypeId),
     active: *std.AutoHashMap(PlatformRequirementTypePair, void),
-    conflicts: *std.AutoHashMap(CheckedTypeId, void),
+    conflicts: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!void {
     const target_union = tagUnionParts(target_payload) orelse return;
     const plan_union = tagUnionParts(plan_payload) orelse return;
@@ -20712,7 +20712,7 @@ fn collectDispatchPlanTagIdentitySubstitutions(
 fn appendConsistentDispatchTargetSubstitution(
     formals: *std.ArrayList(CheckedTypeId),
     actuals: *std.ArrayList(CheckedTypeId),
-    conflicts: *std.AutoHashMap(CheckedTypeId, void),
+    conflicts: *collections.DenseMap(CheckedTypeId, void),
     allocator: Allocator,
     formal: CheckedTypeId,
     actual: CheckedTypeId,
@@ -21089,7 +21089,7 @@ fn flattenPlatformRequirementRecordRow(
     errdefer fields.deinit(allocator);
     try fields.appendSlice(allocator, head);
     var tail = ext;
-    var seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var seen = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer seen.deinit();
     while (tail) |tail_id| {
         if (seen.contains(tail_id)) {
@@ -21137,7 +21137,7 @@ fn flattenPlatformRequirementTagRow(
     errdefer tags.deinit(allocator);
     try tags.appendSlice(allocator, head);
     var tail = ext;
-    var seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var seen = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer seen.deinit();
     while (tail) |tail_id| {
         if (seen.contains(tail_id)) {
@@ -21787,7 +21787,7 @@ fn checkedTypeHasNoReachableCallableSlots(
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    var active = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer active.deinit();
     return try checkedTypeHasNoReachableCallableSlotsInner(checked_types, root, &active);
 }
@@ -21795,7 +21795,7 @@ fn checkedTypeHasNoReachableCallableSlots(
 fn checkedTypeHasNoReachableCallableSlotsInner(
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     const index: usize = @intFromEnum(root);
     if (index >= checked_types.payloads.items.len) {
@@ -21895,7 +21895,7 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
 fn checkedRecordHasNoReachableCallableSlots(
     checked_types: *const CheckedTypeStore,
     fields: []const CheckedRecordField,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (fields) |field| {
         if (!try checkedTypeHasNoReachableCallableSlotsInner(checked_types, field.ty, active)) return false;
@@ -21906,7 +21906,7 @@ fn checkedRecordHasNoReachableCallableSlots(
 fn checkedTypeSpanHasNoReachableCallableSlots(
     checked_types: *const CheckedTypeStore,
     items: []const CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (items) |item| {
         if (!try checkedTypeHasNoReachableCallableSlotsInner(checked_types, item, active)) return false;
@@ -21917,7 +21917,7 @@ fn checkedTypeSpanHasNoReachableCallableSlots(
 fn checkedTagsHaveNoReachableCallableSlots(
     checked_types: *const CheckedTypeStore,
     tags: []const CheckedTag,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (tags) |tag| {
         if (!try checkedTypeSpanHasNoReachableCallableSlots(checked_types, tag.argsSlice(checked_types), active)) return false;
@@ -24313,7 +24313,7 @@ fn collectPublicApiDependencies(
     var type_owner_keys = ArtifactKeyAccumulator.empty;
     defer type_owner_keys.deinit(allocator);
 
-    var active_types = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var active_types = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer active_types.deinit();
 
     for (exported_defs) |def_idx| {
@@ -24432,7 +24432,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
     checked_types: *const CheckedTypeStore,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    active_types: *std.AutoHashMap(CheckedTypeId, void),
+    active_types: *collections.DenseMap(CheckedTypeId, void),
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
@@ -24484,7 +24484,7 @@ fn appendPlatformRequiredDeclarationPublicApiDependencies(
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    active_types: *std.AutoHashMap(CheckedTypeId, void),
+    active_types: *collections.DenseMap(CheckedTypeId, void),
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
@@ -24513,7 +24513,7 @@ fn appendPublicApiTypeDependencies(
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     keys: *ArtifactKeyAccumulator,
@@ -24616,7 +24616,7 @@ fn appendPublicApiConstraintDependencies(
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     constraints: []const CheckedStaticDispatchConstraint,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     keys: *ArtifactKeyAccumulator,
@@ -24634,7 +24634,7 @@ fn appendPublicApiTypeDependencyRange(
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     roots: []const CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
+    active: *collections.DenseMap(CheckedTypeId, void),
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     keys: *ArtifactKeyAccumulator,
@@ -28759,7 +28759,7 @@ pub const CheckedTypeProjector = struct {
         source_names: ?*const canonical.CanonicalNameStore,
         ty: CheckedTypeId,
     ) Allocator.Error!CheckedTypeId {
-        var projected = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(self.allocator);
+        var projected = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(self.allocator);
         defer projected.deinit();
         return try self.projectCheckedTypeViewRootInner(source, source_names, ty, &projected);
     }
@@ -28781,7 +28781,7 @@ pub const CheckedTypeProjector = struct {
         source: CheckedTypeStoreView,
         source_names: ?*const canonical.CanonicalNameStore,
         ty: CheckedTypeId,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error!CheckedTypeId {
         const index: usize = @intFromEnum(ty);
         if (index >= source.roots.len or index >= source.payloads.len) {
@@ -28812,7 +28812,7 @@ pub const CheckedTypeProjector = struct {
         source: CheckedTypeStoreView,
         source_names: ?*const canonical.CanonicalNameStore,
         payload: CheckedTypePayload,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error!CheckedTypePayloadBuild {
         return switch (payload) {
             .pending => checkedArtifactInvariant("checked type view projection reached pending payload", .{}),
@@ -28866,7 +28866,7 @@ pub const CheckedTypeProjector = struct {
         source: CheckedTypeStoreView,
         source_names: ?*const canonical.CanonicalNameStore,
         variable: CheckedTypeVariable,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error!CheckedTypeVariable {
         const name = if (variable.name) |name_text|
             try self.allocator.dupe(u8, name_text)
@@ -28890,7 +28890,7 @@ pub const CheckedTypeProjector = struct {
         source: CheckedTypeStoreView,
         source_names: ?*const canonical.CanonicalNameStore,
         constraints: []const CheckedStaticDispatchConstraint,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error![]const CheckedStaticDispatchConstraint {
         if (constraints.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedStaticDispatchConstraint, constraints.len);
@@ -28910,7 +28910,7 @@ pub const CheckedTypeProjector = struct {
         source: CheckedTypeStoreView,
         source_names: ?*const canonical.CanonicalNameStore,
         ids: []const CheckedTypeId,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error![]const CheckedTypeId {
         if (ids.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedTypeId, ids.len);
@@ -28926,7 +28926,7 @@ pub const CheckedTypeProjector = struct {
         source: CheckedTypeStoreView,
         source_names: ?*const canonical.CanonicalNameStore,
         fields: []const CheckedRecordField,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error![]const CheckedRecordField {
         if (fields.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedRecordField, fields.len);
@@ -28962,7 +28962,7 @@ pub const CheckedTypeProjector = struct {
         source: CheckedTypeStoreView,
         source_names: ?*const canonical.CanonicalNameStore,
         tags: []const CheckedTag,
-        active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     ) Allocator.Error![]const CheckedTagBuild {
         if (tags.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedTagBuild, tags.len);
@@ -29418,8 +29418,8 @@ const CheckedTypeStoreImportProjector = struct {
     target_names: *canonical.CanonicalNameStore,
     imported: ImportedModuleView,
     preserve_source_instance: bool,
-    active: std.AutoHashMap(CheckedTypeId, CheckedTypeId),
-    projected: std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+    active: collections.DenseMap(CheckedTypeId, CheckedTypeId),
+    projected: collections.DenseMap(CheckedTypeId, CheckedTypeId),
 
     fn init(
         allocator: Allocator,
@@ -29433,8 +29433,8 @@ const CheckedTypeStoreImportProjector = struct {
             .target_names = target_names,
             .imported = imported,
             .preserve_source_instance = false,
-            .active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator),
-            .projected = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator),
+            .active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
+            .projected = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
         };
     }
 
@@ -31510,7 +31510,7 @@ test "checked type substitution reuses a closed source root without cloning" {
     try store.fillSyntheticTypeRoot(allocator, formal, .{ .flex = .{} });
     const actual = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_tag_union);
 
-    var active = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
     defer active.deinit();
     const root_count_before = store.roots.items.len;
     const substituted = try store.cloneCheckedTypeRootSubstituting(

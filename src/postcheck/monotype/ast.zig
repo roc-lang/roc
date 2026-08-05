@@ -1970,7 +1970,7 @@ pub const ProgramBuilder = struct {
     /// materialization. Body drafts seal their own identity equivalence classes
     /// when committed; this final sweep handles direct generated definitions.
     pub fn sealRemainingCaptureIdentities(self: *ProgramBuilder) std.mem.Allocator.Error!void {
-        var durable_by_checked = std.AutoHashMap(checked.CaptureId, checked.CaptureId).init(self.allocator);
+        var durable_by_checked = collections.DenseMap(checked.CaptureId, checked.CaptureId).init(self.allocator);
         defer durable_by_checked.deinit();
         for (0..self.locals.len()) |index| {
             const local = self.locals.getPtrImmediate(index);

@@ -269,7 +269,7 @@ my @postcheck_jargon_forbidden = (
     [qr/\bRepresentationRepair\b/, "banned mismatch-patching term; use explicit operations or invariant failure"],
     [qr/\bcanonical(?:_[A-Za-z0-9_]+)?\b/i, "banned post-check term outside Canonicalization; use the exact identity, ordering, or digest term"],
     [qr/\bCanonical(?!ization\b)[A-Za-z0-9_]*\b/, "banned post-check term outside Canonicalization; use the exact identity, ordering, or digest term"],
-    [qr/\b[A-Z][A-Za-z0-9_]*(?:Key|Ref)(?:[A-Z0-9_][A-Za-z0-9_]*)?\b/, "banned type-name suffix; use Id, Digest, or a concrete domain noun"],
+    [qr/\b[A-Z][A-Za-z0-9_]*Ref(?:[A-Z0-9_][A-Za-z0-9_]*)?\b/, "banned type-name suffix; use Id, Digest, Key for structural identity, or a concrete domain noun"],
     [qr/\bruntime[- ]image\b/i, "banned LIR image term; use LirImage"],
     [qr/\bRuntimeImage\b/, "banned LIR image term; use LirImage"],
     [qr/\bruntime_image\b/, "banned LIR image term; use LirImage"],

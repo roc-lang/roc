@@ -5,6 +5,7 @@
 //! also live in this file.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const eval = @import("eval");
 const layout = @import("layout");
@@ -498,7 +499,7 @@ fn buildRepeatProc(
 fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirProcSpecId) TrmcLirTestError!bool {
     var work = std.ArrayList(CFStmtId).empty;
     defer work.deinit(allocator);
-    var visited = std.AutoHashMap(CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     const body = store.getProcSpec(proc_id).body orelse return false;

@@ -9,6 +9,7 @@
 //! prove rewrite soundness, and the frame-local deduplication helpers.
 
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -190,7 +191,7 @@ pub fn countReachableReads(store: *LirStore, body: CFStmtId) Allocator.Error!Rea
 
     var work = std.ArrayList(CFStmtId).empty;
     defer work.deinit(store.allocator);
-    var visited = std.AutoHashMap(CFStmtId, void).init(store.allocator);
+    var visited = collections.DenseMap(CFStmtId, void).init(store.allocator);
     defer visited.deinit();
 
     try work.append(store.allocator, body);
@@ -401,7 +402,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         rewriter: Rewriter,
         /// Old-local index to cloned-local, `null` until first mapped.
         local_map: []?LocalId,
-        stmt_map: std.AutoHashMap(CFStmtId, CFStmtId),
+        stmt_map: collections.DenseMap(CFStmtId, CFStmtId),
         /// Every local created by this clone, in creation order.
         new_locals: std.ArrayList(LocalId),
 
@@ -413,7 +414,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .store = store,
                 .rewriter = rewriter,
                 .local_map = local_map,
-                .stmt_map = std.AutoHashMap(CFStmtId, CFStmtId).init(store.allocator),
+                .stmt_map = collections.DenseMap(CFStmtId, CFStmtId).init(store.allocator),
                 .new_locals = .empty,
             };
         }

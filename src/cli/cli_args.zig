@@ -243,6 +243,7 @@ pub const TestArgs = struct {
     specialization_strategy: ?SpecializationStrategy = null, // explicit --specialize override, if provided
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
+    timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable compilation caching, force re-run all tests
     watch: bool = false, // rerun tests when source inputs change
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
@@ -863,6 +864,7 @@ fn parseTest(args: []const []const u8) CliArgs {
     var specialization_strategy: ?SpecializationStrategy = null;
     var main: ?[]const u8 = null;
     var verbose: bool = false;
+    var timings: bool = false;
     var no_cache: bool = false;
     var watch: bool = false;
     var watch_inputs_file: ?[]const u8 = null;
@@ -883,6 +885,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\      --specialize=<yes|no>           Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
             \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose                       Enable verbose output showing individual test results
+            \\      --timings                       Show how long each compilation and test phase took
             \\      --no-cache                      Disable compilation caching, force re-run all tests
             \\      --watch                         Re-run when source inputs change
             \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
@@ -918,6 +921,8 @@ fn parseTest(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.eql(u8, arg, "--timings")) {
+            timings = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--watch")) {
@@ -954,7 +959,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .main = main, .verbose = verbose, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .main = main, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
@@ -1936,6 +1941,7 @@ test "roc test" {
         try testing.expectEqualStrings("main.roc", result.test_cmd.path);
         try testing.expectEqual(null, result.test_cmd.main);
         try testing.expectEqual(.dev, result.test_cmd.opt);
+        try testing.expect(!result.test_cmd.timings);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "foo.roc" });
@@ -1947,6 +1953,11 @@ test "roc test" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.test_cmd.path);
         try testing.expectEqual(.speed, result.test_cmd.opt);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "--timings", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expect(result.test_cmd.timings);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "--watch", "foo.roc" });

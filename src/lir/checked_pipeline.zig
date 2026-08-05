@@ -50,6 +50,9 @@ pub const RootRequestSet = struct {
     /// Restore eligible stored constants as internal readonly static values.
     include_internal_static_data: bool = false,
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
+    /// Explicitly select whether adjacent procedure-template roots share one
+    /// Monotype instantiation graph.
+    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
@@ -695,6 +698,7 @@ fn rootRequests(
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
         .test_plan_metadata = roots.test_plan_metadata,
+        .procedure_template_root_grouping = roots.procedure_template_root_grouping,
     };
 }
 
