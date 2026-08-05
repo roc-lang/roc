@@ -15082,7 +15082,7 @@ const BodyContext = struct {
             return existing;
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
-        if (self.checkedTypeIsClosed(checked_ty)) {
+        if (self.checkedTypeCanReuseClosedImport(checked_ty)) {
             const closed_ty = try self.builder.lowerType(self.view, checked_ty);
             const imported = try self.graph.importMono(closed_ty);
             try self.putScopedNode(address, imported);
@@ -26893,6 +26893,18 @@ const BodyContext = struct {
             Common.invariant("checked type closure query referenced a missing root");
         }
         return !self.view.types.roots[raw].contains_identity_variables;
+    }
+
+    fn checkedTypeCanReuseClosedImport(self: *const BodyContext, ty: checked.CheckedTypeId) bool {
+        if (!self.checkedTypeIsClosed(ty)) return false;
+        // A function root is the explicit interface identity for one request.
+        // Keep that root scope-local even when all of its components are closed;
+        // instNodeContent will independently reuse the closed arguments and
+        // result beneath it.
+        return switch (checkedPayload(self.view, ty)) {
+            .function => false,
+            else => true,
+        };
     }
 
     fn lowerLookupExprAtNode(

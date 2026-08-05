@@ -3610,6 +3610,10 @@ and the graph's exact `TypeId` import memo may reuse it across scope identities.
 When the bit is true, reuse across scope identities is forbidden and each scope
 instantiates fresh graph cells. This gate consumes checker-produced closure data
 and never attempts to infer closure from Monotype shape or runtime layout.
+Function roots remain scope-local request-interface identities even when all of
+their components are closed. Their argument and result roots independently use
+the checker-produced closure gate, so closed component structure is reused
+without merging the relation identity of distinct callable requests.
 
 This distinction matters most for lambdas and closures. Expression-position
 functions are checked templates. Lowering a lambda or closure at an expected
