@@ -3969,6 +3969,12 @@ must join capture slots and operands only by that explicit post-check identity;
 they never recover identity from binder, symbol, type, source text, or runtime
 representation.
 
+`CaptureId`'s raw bits reserve disjoint canonical, check-generated, and
+lift-generated namespaces; the raw integer is therefore not itself a dense
+array offset. ID-keyed columns use the explicit `(index, namespace)` dense
+ordinal supplied by `CaptureId`, which interleaves the three namespaces without
+hashing or allocating across their reserved high-bit gaps.
+
 Draft body ownership is equally strict. A copied lexical binder map may expose
 an enclosing value to a nested function, but a source binding pattern always
 materializes its runtime local under the current specialization owner. It may

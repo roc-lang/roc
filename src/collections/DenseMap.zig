@@ -1,9 +1,12 @@
 //! Direct-indexed maps for dense compiler identifiers.
 //!
 //! Compiler IDs name rows in owning stores and are therefore array indices, not
-//! hash keys. `DenseMap` keeps one optional value column indexed by that ID. It
-//! intentionally mirrors the small managed `AutoHashMap` surface used by compiler
-//! passes so callers do not need to trade constant-time indexing for convenience.
+//! hash keys. `DenseMap` keeps a paged optional-value column indexed by that ID.
+//! Paging avoids materializing the untouched prefix of a store-global ID domain
+//! for a short-lived local scope. A compact occupied-index column makes clearing
+//! and iteration proportional to live entries instead of the largest ID seen.
+//! The type intentionally mirrors the small managed `AutoHashMap` surface used by
+//! compiler passes so callers do not need to trade direct indexing for convenience.
 
 const std = @import("std");
 
@@ -16,10 +19,21 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
     return struct {
         const Self = @This();
 
+        const chunk_shift = 8;
+        const chunk_len = 1 << chunk_shift;
+        const chunk_mask = chunk_len - 1;
+
+        const Occupied = struct {
+            value: V,
+            active_position: u32,
+        };
+
         const Slot = union(enum) {
             empty,
-            value: V,
+            value: Occupied,
         };
+
+        const Chunk = [chunk_len]Slot;
 
         /// Entry returned by map iterators.
         pub const Entry = struct {
@@ -40,24 +54,26 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         };
 
         allocator: Allocator,
-        slots: std.ArrayList(Slot) = .empty,
-        occupied_count: usize = 0,
+        chunks: std.ArrayList(?*Chunk) = .empty,
+        active_indices: std.ArrayList(usize) = .empty,
 
         pub fn init(allocator: Allocator) Self {
             return .{ .allocator = allocator };
         }
 
         pub fn deinit(self: *Self) void {
-            self.slots.deinit(self.allocator);
+            self.freeChunks();
+            self.chunks.deinit(self.allocator);
+            self.active_indices.deinit(self.allocator);
             self.* = undefined;
         }
 
         pub fn count(self: *const Self) usize {
-            return self.occupied_count;
+            return self.active_indices.items.len;
         }
 
         pub fn capacity(self: *const Self) usize {
-            return self.slots.capacity;
+            return self.active_indices.capacity;
         }
 
         pub fn contains(self: *const Self, key: K) bool {
@@ -71,19 +87,19 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         pub fn getPtr(self: *Self, key: K) ?*V {
             const index = keyIndex(key);
-            if (index >= self.slots.items.len) return null;
-            return switch (self.slots.items[index]) {
+            const slot = self.slotPtr(index) orelse return null;
+            return switch (slot.*) {
                 .empty => null,
-                .value => |*value| value,
+                .value => |*occupied| &occupied.value,
             };
         }
 
         pub fn getPtrConst(self: *const Self, key: K) ?*const V {
             const index = keyIndex(key);
-            if (index >= self.slots.items.len) return null;
-            return switch (self.slots.items[index]) {
+            const slot = self.slotPtrConst(index) orelse return null;
+            return switch (slot.*) {
                 .empty => null,
-                .value => |*value| value,
+                .value => |*occupied| &occupied.value,
             };
         }
 
@@ -104,19 +120,23 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         pub fn getOrPut(self: *Self, key: K) Allocator.Error!GetOrPutResult {
             const index = keyIndex(key);
-            try self.ensureIndex(index);
+            const slot = try self.ensureSlot(index);
 
-            return switch (self.slots.items[index]) {
+            return switch (slot.*) {
                 .empty => blk: {
-                    self.slots.items[index] = .{ .value = undefined };
-                    self.occupied_count += 1;
+                    const active_position: u32 = @intCast(self.active_indices.items.len);
+                    try self.active_indices.append(self.allocator, index);
+                    slot.* = .{ .value = .{
+                        .value = undefined,
+                        .active_position = active_position,
+                    } };
                     break :blk .{
-                        .value_ptr = &self.slots.items[index].value,
+                        .value_ptr = &slot.value.value,
                         .found_existing = false,
                     };
                 },
-                .value => |*value| .{
-                    .value_ptr = value,
+                .value => |*occupied| .{
+                    .value_ptr = &occupied.value,
                     .found_existing = true,
                 },
             };
@@ -134,13 +154,12 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         pub fn remove(self: *Self, key: K) bool {
             const index = keyIndex(key);
-            if (index >= self.slots.items.len) return false;
+            const slot = self.slotPtr(index) orelse return false;
 
-            return switch (self.slots.items[index]) {
+            return switch (slot.*) {
                 .empty => false,
-                .value => blk: {
-                    self.slots.items[index] = .empty;
-                    self.occupied_count -= 1;
+                .value => |occupied| blk: {
+                    self.removeActive(slot, occupied.active_position);
                     break :blk true;
                 },
             };
@@ -148,66 +167,61 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         pub fn fetchRemove(self: *Self, key: K) ?KV {
             const index = keyIndex(key);
-            if (index >= self.slots.items.len) return null;
+            const slot = self.slotPtr(index) orelse return null;
 
-            return switch (self.slots.items[index]) {
+            return switch (slot.*) {
                 .empty => null,
-                .value => |value| blk: {
-                    self.slots.items[index] = .empty;
-                    self.occupied_count -= 1;
+                .value => |occupied| blk: {
+                    const value = occupied.value;
+                    self.removeActive(slot, occupied.active_position);
                     break :blk .{ .key = key, .value = value };
                 },
             };
         }
 
         pub fn ensureTotalCapacity(self: *Self, expected_count: usize) Allocator.Error!void {
-            try self.slots.ensureTotalCapacity(self.allocator, expected_count);
+            try self.active_indices.ensureTotalCapacity(self.allocator, expected_count);
         }
 
         pub fn ensureUnusedCapacity(self: *Self, additional_count: usize) Allocator.Error!void {
-            try self.slots.ensureUnusedCapacity(self.allocator, additional_count);
+            try self.active_indices.ensureUnusedCapacity(self.allocator, additional_count);
         }
 
         pub fn clearRetainingCapacity(self: *Self) void {
-            for (self.slots.items) |*slot| slot.* = .empty;
-            self.occupied_count = 0;
+            for (self.active_indices.items) |index| self.slotPtr(index).?.* = .empty;
+            self.active_indices.clearRetainingCapacity();
         }
 
         pub fn clearAndFree(self: *Self) void {
-            self.slots.clearAndFree(self.allocator);
-            self.occupied_count = 0;
+            self.freeChunks();
+            self.chunks.clearAndFree(self.allocator);
+            self.active_indices.clearAndFree(self.allocator);
         }
 
         pub fn iterator(self: *Self) Iterator {
-            return .{ .slots = self.slots.items };
+            return .{ .map = self };
         }
 
         pub fn keyIterator(self: *Self) KeyIterator {
-            return .{ .inner = .{ .slots = self.slots.items } };
+            return .{ .inner = .{ .map = self } };
         }
 
         pub fn valueIterator(self: *Self) ValueIterator {
-            return .{ .slots = self.slots.items };
+            return .{ .map = self };
         }
 
         pub const Iterator = struct {
-            slots: []Slot,
-            index: usize = 0,
+            map: *Self,
+            position: usize = 0,
             key: K = undefined,
 
             pub fn next(self: *Iterator) ?Entry {
-                while (self.index < self.slots.len) {
-                    const index = self.index;
-                    self.index += 1;
-                    switch (self.slots[index]) {
-                        .empty => {},
-                        .value => |*value| {
-                            self.key = keyFromIndex(K, index);
-                            return .{ .key_ptr = &self.key, .value_ptr = value };
-                        },
-                    }
-                }
-                return null;
+                if (self.position >= self.map.active_indices.items.len) return null;
+                const index = self.map.active_indices.items[self.position];
+                self.position += 1;
+                const occupied = &self.map.slotPtr(index).?.value;
+                self.key = keyFromIndex(K, index);
+                return .{ .key_ptr = &self.key, .value_ptr = &occupied.value };
             }
         };
 
@@ -221,28 +235,62 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         };
 
         pub const ValueIterator = struct {
-            slots: []Slot,
-            index: usize = 0,
+            map: *Self,
+            position: usize = 0,
 
             pub fn next(self: *ValueIterator) ?*V {
-                while (self.index < self.slots.len) {
-                    const index = self.index;
-                    self.index += 1;
-                    switch (self.slots[index]) {
-                        .empty => {},
-                        .value => |*value| return value,
-                    }
-                }
-                return null;
+                if (self.position >= self.map.active_indices.items.len) return null;
+                const index = self.map.active_indices.items[self.position];
+                self.position += 1;
+                return &self.map.slotPtr(index).?.value.value;
             }
         };
 
-        fn ensureIndex(self: *Self, index: usize) Allocator.Error!void {
-            if (index < self.slots.items.len) return;
+        fn ensureSlot(self: *Self, index: usize) Allocator.Error!*Slot {
+            const chunk_index = index >> chunk_shift;
+            if (chunk_index >= self.chunks.items.len) {
+                const old_len = self.chunks.items.len;
+                try self.chunks.resize(self.allocator, chunk_index + 1);
+                @memset(self.chunks.items[old_len..], null);
+            }
 
-            const old_len = self.slots.items.len;
-            try self.slots.resize(self.allocator, index + 1);
-            for (self.slots.items[old_len..]) |*slot| slot.* = .empty;
+            if (self.chunks.items[chunk_index] == null) {
+                const chunk = try self.allocator.create(Chunk);
+                @memset(chunk, .empty);
+                self.chunks.items[chunk_index] = chunk;
+            }
+
+            return &self.chunks.items[chunk_index].?[index & chunk_mask];
+        }
+
+        fn slotPtr(self: *Self, index: usize) ?*Slot {
+            const chunk_index = index >> chunk_shift;
+            if (chunk_index >= self.chunks.items.len) return null;
+            const chunk = self.chunks.items[chunk_index] orelse return null;
+            return &chunk[index & chunk_mask];
+        }
+
+        fn slotPtrConst(self: *const Self, index: usize) ?*const Slot {
+            const chunk_index = index >> chunk_shift;
+            if (chunk_index >= self.chunks.items.len) return null;
+            const chunk = self.chunks.items[chunk_index] orelse return null;
+            return &chunk[index & chunk_mask];
+        }
+
+        fn removeActive(self: *Self, slot: *Slot, active_position: u32) void {
+            const position: usize = active_position;
+            const last_index = self.active_indices.pop().?;
+            if (position < self.active_indices.items.len) {
+                self.active_indices.items[position] = last_index;
+                self.slotPtr(last_index).?.value.active_position = @intCast(position);
+            }
+            slot.* = .empty;
+        }
+
+        fn freeChunks(self: *Self) void {
+            for (self.chunks.items) |maybe_chunk| {
+                if (maybe_chunk) |chunk| self.allocator.destroy(chunk);
+            }
         }
     };
 }
@@ -255,7 +303,9 @@ fn assertDenseKey(comptime K: type) void {
 }
 
 fn keyIndex(key: anytype) usize {
-    return switch (@typeInfo(@TypeOf(key))) {
+    const K = @TypeOf(key);
+    if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "denseIndex")) return key.denseIndex();
+    return switch (@typeInfo(K)) {
         .int => @intCast(key),
         .@"enum" => @intCast(@intFromEnum(key)),
         else => unreachable,
@@ -263,6 +313,7 @@ fn keyIndex(key: anytype) usize {
 }
 
 fn keyFromIndex(comptime K: type, index: usize) K {
+    if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "fromDenseIndex")) return K.fromDenseIndex(index);
     return switch (@typeInfo(K)) {
         .int => @intCast(index),
         .@"enum" => @enumFromInt(index),
@@ -291,11 +342,22 @@ test "DenseMap directly indexes integer and enum IDs" {
     var iterator = map.iterator();
     const first = iterator.next().?;
     try std.testing.expectEqual(TestId, @TypeOf(first.key_ptr.*));
-    try std.testing.expectEqual(@as(u32, 11), first.value_ptr.*);
+    try std.testing.expectEqual(@as(u32, 43), first.value_ptr.*);
     const second = iterator.next().?;
-    try std.testing.expectEqual(@as(u32, 43), second.value_ptr.*);
+    try std.testing.expectEqual(@as(u32, 11), second.value_ptr.*);
     try std.testing.expect(iterator.next() == null);
 
     try std.testing.expectEqual(@as(u32, 43), map.fetchRemove(@enumFromInt(7)).?.value);
     try std.testing.expect(!map.contains(@enumFromInt(7)));
+
+    var integer_map = DenseMap(u32, bool).init(std.testing.allocator);
+    defer integer_map.deinit();
+    try integer_map.put(3, true);
+    try std.testing.expectEqual(true, integer_map.get(3));
+
+    var sparse_map = DenseMap(u32, u8).init(std.testing.allocator);
+    defer sparse_map.deinit();
+    try sparse_map.put(1_000_000, 9);
+    try std.testing.expectEqual(@as(?u8, 9), sparse_map.get(1_000_000));
+    try std.testing.expect(sparse_map.chunks.items.len < 4_000);
 }
