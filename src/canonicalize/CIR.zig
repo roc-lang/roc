@@ -865,7 +865,6 @@ pub const Import = struct {
 
         /// Get or create an Import.Idx for the given module name in a fresh CommonEnv.
         /// New imports are initially unresolved.
-        /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8) Allocator.Error!Import.Idx {
             return self.getOrPutWithIdent(allocator, common, module_name, null);
         }
