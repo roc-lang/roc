@@ -1779,6 +1779,22 @@ pub const InstGraph = struct {
             else => {},
         }
 
+        // Aliases are not runtime representation boundaries. Preserve the
+        // exact produced root while applying the request through either
+        // side's checker-authored transparent backing.
+        if (public_content == .named and public_content.named.kind == .alias) {
+            const backing = public_content.named.backing orelse
+                Common.invariant("produced-type substitution found an alias request without backing");
+            try self.relateOpaqueChild(backing.node, private_node, pending);
+            return;
+        }
+        if (private_content == .named and private_content.named.kind == .alias) {
+            const backing = private_content.named.backing orelse
+                Common.invariant("produced-type substitution found an exact alias without backing");
+            try self.relateOpaqueChild(public_node, backing.node, pending);
+            return;
+        }
+
         switch (public_content) {
             .redirect => unreachable,
             .unresolved => {
