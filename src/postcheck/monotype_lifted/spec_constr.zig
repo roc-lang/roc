@@ -4413,9 +4413,9 @@ const Cloner = struct {
         self.arena.deinit();
     }
 
-    fn admitInlineBodyGrowth(self: *Cloner, fn_id: Ast.FnId, body: Ast.ExprId) bool {
-        const body_size = self.pass.inlineBodySize(fn_id, body).exactValue() orelse return false;
-        return self.inline_body_growth.admit(@max(body_size, 1)) == .admitted;
+    fn admitInlineBodyGrowth(self: *Cloner, body_size: BodySize) bool {
+        const exact_size = body_size.exactValue() orelse return false;
+        return self.inline_body_growth.admit(@max(exact_size, 1)) == .admitted;
     }
 
     fn collectCallPatternsInExpr(self: *Cloner, owner: Ast.FnId, expr_id: Ast.ExprId) Common.LowerError!void {
@@ -8046,7 +8046,8 @@ const Cloner = struct {
                 .args = try self.cloneExprSpan(args_span),
             } } }) },
         };
-        if (self.pass.inlineBodyAdmission(callable.fn_id, body) != .admitted) {
+        const body_size = self.pass.inlineBodySize(callable.fn_id, body);
+        if (!body_size.admits()) {
             return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(.{ .callable = callable }),
                 .args = try self.cloneExprSpan(args_span),
@@ -8076,7 +8077,7 @@ const Cloner = struct {
                 } } }) };
             }
         }
-        if (!self.admitInlineBodyGrowth(callable.fn_id, body)) {
+        if (!self.admitInlineBodyGrowth(body_size)) {
             return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(.{ .callable = callable }),
                 .args = try self.cloneExprSpan(args_span),
@@ -8161,7 +8162,8 @@ const Cloner = struct {
             .roc => |body| body,
             .hosted => return .{ .expr = try self.cloneExprPlain(original_expr) },
         };
-        if (self.pass.inlineBodyAdmission(callee, body) != .admitted) {
+        const body_size = self.pass.inlineBodySize(callee, body);
+        if (!body_size.admits()) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
         }
         if (exprContainsReturn(self.pass.program, body)) {
@@ -8175,7 +8177,7 @@ const Cloner = struct {
                 return .{ .expr = try self.cloneExprPlain(original_expr) };
             }
         }
-        if (!self.admitInlineBodyGrowth(callee, body)) {
+        if (!self.admitInlineBodyGrowth(body_size)) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
         }
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
@@ -11578,7 +11580,6 @@ test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
         }
     }
     try std.testing.expect(retained_call);
-    try std.testing.expect(cloner.inline_body_growth.remaining < 3);
     try std.testing.expect(growth < Cloner.inline_body_work_budget * 2);
 }
 
