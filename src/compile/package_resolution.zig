@@ -31,6 +31,13 @@
 //! Roc headers. Sidecars record only immutable facts about a bundle - never
 //! resolution outcomes, which are global and recomputed every build.
 //!
+//! The cache is shared with every other process on the machine, so bundles are
+//! extracted into a private staging directory and moved into their final
+//! hash-named directory with a rename. A directory named after a hash means
+//! the package under it is complete, never that some other process started
+//! downloading it. Staging directories orphaned by a killed process are
+//! swept once they are a day old.
+//!
 //! As a defense against decompression bombs, each package bundle's expanded
 //! size is limited (platforms are exempt, since an app declares exactly one
 //! platform on purpose), and the combined content size attributable to any
@@ -1665,24 +1672,7 @@ pub const CtxFetcher = struct {
         var expanded_bytes: ?u64 = null;
 
         if (!self.fs.fileExists(root_file)) {
-            if (!self.fs.fileExists(package_dir)) {
-                self.fs.makePath(cache_dir) catch return error.DownloadFailed;
-                self.fs.createDir(package_dir) catch |err| switch (err) {
-                    // Possibly a concurrent process created it; extraction
-                    // below will sort out whether it is usable.
-                    error.IoError => {},
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => return error.DownloadFailed,
-                };
-                expanded_bytes = self.fs.fetchUrl(self.gpa, url, package_dir, max_expanded_bytes) catch |err| {
-                    self.fs.deleteTree(package_dir) catch {};
-                    return switch (err) {
-                        error.OutOfMemory => error.OutOfMemory,
-                        error.ExpandedSizeLimitExceeded => error.ExpandedSizeLimitExceeded,
-                        else => error.DownloadFailed,
-                    };
-                };
-            }
+            expanded_bytes = try self.downloadAndPublish(allocator, url, cache_dir, package_dir, root_file, max_expanded_bytes);
             if (!self.fs.fileExists(root_file)) {
                 // Bundles must have a main.roc entry point.
                 return error.FileNotFound;
@@ -1707,6 +1697,126 @@ pub const CtxFetcher = struct {
         };
 
         return scanned;
+    }
+
+    /// Download `url` into a staging directory of our own and move it into
+    /// `package_dir` once it is complete.
+    ///
+    /// Extracting straight into `package_dir` would publish the package the
+    /// moment the download started rather than when it finished, and every
+    /// other process reads this cache while we write it. A concurrent `roc`
+    /// would find the directory, take it for a finished download, and either
+    /// miss `main.roc` and report the package as broken or read a module that
+    /// has not been written yet. Renaming a finished directory into place is
+    /// atomic, so `package_dir` never exists in a half-built state.
+    ///
+    /// Returns the expanded size of the bundle, or null when the package was
+    /// already in place, in which case the tar stream size is unknown and the
+    /// caller derives the size from the extracted content instead.
+    fn downloadAndPublish(
+        self: *CtxFetcher,
+        allocator: Allocator,
+        url: []const u8,
+        cache_dir: []const u8,
+        package_dir: []const u8,
+        root_file: []const u8,
+        max_expanded_bytes: ?u64,
+    ) FetchError!?u64 {
+        self.fs.makePath(cache_dir) catch return error.DownloadFailed;
+        self.sweepStaleStaging(allocator, cache_dir);
+
+        const staging_dir = try self.stagingDirPath(allocator, package_dir);
+        self.fs.createDir(staging_dir) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.DownloadFailed,
+        };
+
+        const expanded_bytes = self.fs.fetchUrl(self.gpa, url, staging_dir, max_expanded_bytes) catch |err| {
+            self.fs.deleteTree(staging_dir) catch {};
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                error.ExpandedSizeLimitExceeded => error.ExpandedSizeLimitExceeded,
+                else => error.DownloadFailed,
+            };
+        };
+
+        const published = try self.publish(allocator, staging_dir, package_dir, root_file);
+        return if (published) expanded_bytes else null;
+    }
+
+    /// Move a finished staging directory into its final slot in the cache.
+    /// Returns false when the package turned out to be there already, in
+    /// which case the staging copy has been discarded.
+    fn publish(self: *CtxFetcher, allocator: Allocator, staging_dir: []const u8, package_dir: []const u8, root_file: []const u8) FetchError!bool {
+        self.fs.rename(staging_dir, package_dir) catch {
+            // Losing this rename means another process published the same
+            // hash first, which costs nothing: bundles are content-addressed
+            // and the hash is verified while extracting, so their bytes are
+            // our bytes.
+            if (self.fs.fileExists(root_file)) {
+                self.fs.deleteTree(staging_dir) catch {};
+                return false;
+            }
+
+            // Otherwise the slot holds a directory with no entry point in it,
+            // left by an interrupted extraction or by a compiler old enough
+            // to have extracted in place. Nothing can ever resolve against
+            // it, so replace it rather than leave the cache poisoned until
+            // someone deletes it by hand.
+            //
+            // Replace it by moving it aside, not by deleting it in place. A
+            // concurrent process may publish a good copy between the check
+            // above and here, and deleting that copy would tear it out from
+            // under whoever is already reading it, file by file. With two
+            // renames the slot is only ever empty for the instant between
+            // them.
+            const trash_dir = try self.stagingDirPath(allocator, package_dir);
+            self.fs.rename(package_dir, trash_dir) catch {};
+            defer self.fs.deleteTree(trash_dir) catch {};
+            self.fs.rename(staging_dir, package_dir) catch {
+                self.fs.deleteTree(staging_dir) catch {};
+                // Someone published in the gap between that move and this
+                // retry. Their copy is as good as ours.
+                if (self.fs.fileExists(root_file)) return false;
+                return error.DownloadFailed;
+            };
+        };
+        return true;
+    }
+
+    /// How old a staging directory must be before a sweep may delete it.
+    /// Far longer than any download lives, so age alone proves abandonment.
+    const stale_staging_ns: i128 = 24 * std.time.ns_per_hour;
+
+    /// Delete staging directories left behind by processes that died before
+    /// publishing or cleaning up. Nothing ever reads them again, they only
+    /// cost disk. Only directories older than `stale_staging_ns` go, since a
+    /// younger one may belong to a download still in flight. Best effort:
+    /// a sweep that fails costs nothing but the disk it would have freed.
+    fn sweepStaleStaging(self: *CtxFetcher, allocator: Allocator, cache_dir: []const u8) void {
+        // Staging directories only ever sit directly under the cache
+        // directory, so the sweep never needs to walk into the cached
+        // packages themselves.
+        const entries = self.fs.listDirTop(cache_dir, allocator) catch return;
+        const now = self.fs.timestampNow();
+        for (entries) |entry| {
+            if (entry.kind != .directory) continue;
+            if (!std.mem.endsWith(u8, entry.path, ".tmp")) continue;
+            const info = self.fs.stat(entry.path) catch continue;
+            const mtime = info.mtime_ns orelse continue;
+            if (now - mtime <= stale_staging_ns) continue;
+            self.fs.deleteTree(entry.path) catch {};
+        }
+    }
+
+    /// A staging path next to the final one, so publishing is a rename within
+    /// a single directory rather than a copy across filesystems. The random
+    /// component keeps concurrent downloads of the same package out of each
+    /// other's way.
+    fn stagingDirPath(self: *CtxFetcher, allocator: Allocator, package_dir: []const u8) Allocator.Error![]u8 {
+        var suffix: [8]u8 = undefined;
+        self.fs.std_io.random(&suffix);
+        return std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ package_dir, std.fmt.bytesToHex(suffix, .lower) });
     }
 
     fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage {
@@ -3058,4 +3168,290 @@ test "the reserved 0.0.0 version is rejected" {
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqualStrings("Invalid Package Version", resolver.diagnostics.items[0].title);
+}
+
+/// Stands in for a real download in the `CtxFetcher` cache tests: writes a
+/// package bundle's worth of files into whatever directory it is handed.
+///
+/// The knobs are globals because `fetchUrl` is a bare function pointer in the
+/// `CoreCtx` vtable, with nowhere to hang per-test state. The tests using them
+/// run in one thread, one after another.
+const StubDownload = struct {
+    const main_roc = "package [Thing] {}\n";
+
+    /// Number of downloads that have been attempted.
+    var attempts: usize = 0;
+    /// Whether the download should fail instead of extracting anything.
+    var fails: bool = false;
+    /// A directory to fill in before extracting, standing in for a second
+    /// process that finishes its download while ours is still running.
+    var published_by_another: ?[]const u8 = null;
+    /// A path to look for mid-download, standing in for what a second process
+    /// would see while ours is still running, and what that look found.
+    var watched: ?[]const u8 = null;
+    var watched_existed: bool = false;
+
+    fn reset() void {
+        attempts = 0;
+        fails = false;
+        published_by_another = null;
+        watched = null;
+        watched_existed = false;
+    }
+
+    fn fetchUrl(
+        _: ?*anyopaque,
+        io: std.Io,
+        allocator: Allocator,
+        _: []const u8,
+        dest_path: []const u8,
+        _: ?u64,
+    ) CoreCtx.FetchUrlError!u64 {
+        const fs = CoreCtx.default(allocator, allocator, io);
+
+        attempts += 1;
+        if (watched) |path| {
+            watched_existed = fs.fileExists(path);
+        }
+        if (fails) return error.DownloadFailed;
+
+        if (published_by_another) |dir| {
+            fs.makePath(dir) catch return error.DownloadFailed;
+            extractInto(fs, allocator, dir) catch return error.DownloadFailed;
+        }
+
+        extractInto(fs, allocator, dest_path) catch return error.DownloadFailed;
+        return main_roc.len;
+    }
+
+    fn extractInto(fs: CoreCtx, allocator: Allocator, dir: []const u8) (Allocator.Error || CoreCtx.WriteError)!void {
+        const path = try std.fs.path.join(allocator, &.{ dir, "main.roc" });
+        defer allocator.free(path);
+        try fs.writeFile(path, main_roc);
+    }
+};
+
+/// A fake clock for the cache tests, so a test can make a staging directory
+/// look abandoned without waiting a day. Starts at the real current time and
+/// only moves when a test pushes it.
+const StubClock = struct {
+    var now: i128 = 0;
+
+    fn timestampNow(_: ?*anyopaque, _: std.Io) i128 {
+        return now;
+    }
+};
+
+/// A `CtxFetcher` over a real temp directory, with downloads stubbed out.
+const CacheTestHarness = struct {
+    tmp: std.testing.TmpDir,
+    cache_dir: []const u8,
+    fetcher: CtxFetcher,
+    gpa: Allocator,
+
+    const hash = "1234567890abcdefghijkLMNOPQRSTUVWXYZ23456789";
+    const url = "https://example.com/thing/1.0.0/" ++ hash ++ ".tar.zst";
+
+    /// `gpa` must be an arena: paths here outlive the calls that make them,
+    /// and none of them are freed individually.
+    fn init(gpa: Allocator) std.Io.Dir.RealPathFileAllocError!CacheTestHarness {
+        StubDownload.reset();
+
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        const cache_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+        var fs = CoreCtx.default(gpa, gpa, std.testing.io);
+        StubClock.now = fs.timestampNow();
+        fs.vtable.fetchUrl = &StubDownload.fetchUrl;
+        fs.vtable.timestampNow = &StubClock.timestampNow;
+
+        return .{
+            .tmp = tmp,
+            .cache_dir = cache_dir,
+            .fetcher = .{ .fs = fs, .gpa = gpa, .cache_packages_dir = cache_dir },
+            .gpa = gpa,
+        };
+    }
+
+    fn deinit(self: *CacheTestHarness) void {
+        self.tmp.cleanup();
+    }
+
+    fn fetch(self: *CacheTestHarness, allocator: Allocator) FetchError!FetchedPackage {
+        return CtxFetcher.fetchUrlImpl(&self.fetcher, allocator, url, hash, null);
+    }
+
+    fn packageDir(self: *CacheTestHarness, allocator: Allocator) Allocator.Error![]u8 {
+        return std.fs.path.join(allocator, &.{ self.cache_dir, hash });
+    }
+
+    /// Names of the cache directory's immediate children, so a test can assert
+    /// on what a fetch left behind rather than only on what it returned.
+    fn entryNames(self: *CacheTestHarness, allocator: Allocator) (Allocator.Error || CoreCtx.ListError)![][]const u8 {
+        const entries = try self.fetcher.fs.listDirTop(self.cache_dir, allocator);
+        var names: std.ArrayList([]const u8) = .empty;
+        for (entries) |entry| {
+            try names.append(allocator, std.fs.path.basename(entry.path));
+        }
+        return names.toOwnedSlice(allocator);
+    }
+
+    fn hasEntry(self: *CacheTestHarness, allocator: Allocator, name: []const u8) (Allocator.Error || CoreCtx.ListError)!bool {
+        for (try self.entryNames(allocator)) |entry| {
+            if (std.mem.eql(u8, entry, name)) return true;
+        }
+        return false;
+    }
+};
+
+test "a downloaded package is published under its hash" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+
+    const fetched = try harness.fetch(gpa);
+
+    try std.testing.expectEqual(HeaderKind.package, fetched.kind);
+    try std.testing.expect(try harness.hasEntry(gpa, CacheTestHarness.hash));
+
+    // The staging directory is an implementation detail that must not outlive
+    // the download, so nothing beyond the package and its sidecar is left.
+    const names = try harness.entryNames(gpa);
+    try std.testing.expectEqual(@as(usize, 2), names.len);
+    try std.testing.expect(try harness.hasEntry(gpa, CacheTestHarness.hash ++ ".deps.json"));
+}
+
+test "a package directory does not appear until the download is complete" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+
+    // Look for the package's own directory from inside the download, which is
+    // what a second `roc` racing this one would see.
+    StubDownload.watched = try harness.packageDir(gpa);
+
+    _ = try harness.fetch(gpa);
+
+    // A directory under the hash is the only signal other processes have that
+    // this package is cached and usable. It appearing while the bundle is
+    // still being written is what makes them read a package that is missing
+    // its entry point, or missing modules that arrive later in the stream.
+    try std.testing.expect(!StubDownload.watched_existed);
+}
+
+test "a failed download leaves no package directory behind" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+
+    StubDownload.fails = true;
+
+    try std.testing.expectError(error.DownloadFailed, harness.fetch(gpa));
+
+    // A directory named after the hash means "this package is cached and
+    // complete" to every other process on the machine, so a download that
+    // never produced one must not leave it, nor its staging directory.
+    const names = try harness.entryNames(gpa);
+    try std.testing.expectEqual(@as(usize, 0), names.len);
+}
+
+test "a package another process published first is used as-is" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+
+    // Publish the package while our own download is in flight, which is what
+    // a second `roc` racing us on a cold cache does.
+    StubDownload.published_by_another = try harness.packageDir(gpa);
+
+    const fetched = try harness.fetch(gpa);
+
+    try std.testing.expectEqual(HeaderKind.package, fetched.kind);
+
+    // Losing that race is not an error, and it leaves no staging directory.
+    const names = try harness.entryNames(gpa);
+    try std.testing.expectEqual(@as(usize, 2), names.len);
+    try std.testing.expect(try harness.hasEntry(gpa, CacheTestHarness.hash));
+}
+
+test "a package directory with no entry point is replaced" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+
+    // What killing a compiler partway through an extraction used to leave:
+    // a directory under the package's hash with no `main.roc` in it. It can
+    // never resolve, so a later build has to replace it instead of trusting
+    // the name.
+    try harness.tmp.dir.createDir(std.testing.io, CacheTestHarness.hash, .default_dir);
+    try harness.tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = CacheTestHarness.hash ++ "/Partial.roc",
+        .data = "module []\n",
+    });
+
+    const fetched = try harness.fetch(gpa);
+
+    try std.testing.expectEqual(HeaderKind.package, fetched.kind);
+    try std.testing.expectEqual(@as(usize, 1), StubDownload.attempts);
+
+    // Replaced rather than merged: the half-extracted file is gone.
+    const package_dir = try harness.packageDir(gpa);
+    try std.testing.expect(harness.fetcher.fs.fileExists(try std.fs.path.join(gpa, &.{ package_dir, "main.roc" })));
+    try std.testing.expect(!harness.fetcher.fs.fileExists(try std.fs.path.join(gpa, &.{ package_dir, "Partial.roc" })));
+}
+
+test "a staging directory abandoned by a dead process is swept after a day" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+
+    // What a download whose process was killed leaves behind: a staging
+    // directory that nothing will ever publish or delete.
+    const orphan = CacheTestHarness.hash ++ ".orphanorphanorph.tmp";
+    try harness.tmp.dir.createDir(std.testing.io, orphan, .default_dir);
+
+    StubClock.now += 25 * std.time.ns_per_hour;
+
+    _ = try harness.fetch(gpa);
+
+    try std.testing.expect(!try harness.hasEntry(gpa, orphan));
+    try std.testing.expect(try harness.hasEntry(gpa, CacheTestHarness.hash));
+}
+
+test "a staging directory younger than a day is not swept" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+
+    // The same orphan, but young enough to be a download still in flight in
+    // another process. Sweeping it would break that download, so it stays.
+    const orphan = CacheTestHarness.hash ++ ".orphanorphanorph.tmp";
+    try harness.tmp.dir.createDir(std.testing.io, orphan, .default_dir);
+
+    _ = try harness.fetch(gpa);
+
+    try std.testing.expect(try harness.hasEntry(gpa, orphan));
+    try std.testing.expect(try harness.hasEntry(gpa, CacheTestHarness.hash));
 }

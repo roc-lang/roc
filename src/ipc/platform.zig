@@ -173,7 +173,19 @@ pub fn getSystemPageSize() PageSizeError!usize {
             break :blk @intCast(system_info.dwPageSize);
         },
         .linux => blk: {
-            const result = std.os.linux.getauxval(std.elf.AT_PAGESZ);
+            // Not `std.os.linux.getauxval`: with libc linked that reads
+            // `std.os.linux.elf_aux_maybe`, which only Zig's own `_start`
+            // assigns, so in the `roc` binary (link_libc = true, libc owns
+            // `_start`) it answers 0 and this silently settles for the 4096
+            // below on every host -- including the 16K- and 64K-page aarch64
+            // kernels where that is the wrong answer. libc read the auxiliary
+            // vector during its own startup, so ask it instead. The fallback
+            // stays for the libc-free shim children, which have no auxiliary
+            // vector of their own to read; see `FdInfo.page_size`.
+            const result: usize = if (comptime builtin.link_libc)
+                @intCast(std.c.getauxval(std.elf.AT_PAGESZ))
+            else
+                std.os.linux.getauxval(std.elf.AT_PAGESZ);
             break :blk if (result != 0) result else 4096;
         },
         .macos, .ios, .tvos, .watchos => blk: {

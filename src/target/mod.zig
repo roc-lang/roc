@@ -120,6 +120,55 @@ pub const CpuLevel = enum {
     default,
 };
 
+/// The single CPU contract shared by code generation and native platform
+/// selection. `instruction_features` contains only requirements above the
+/// architecture baseline; their transitive dependencies are derived here.
+const CpuContract = struct {
+    codegen_model: std.Target.Query.CpuModel = .determined_by_arch_os,
+    architecture_baseline_features: ?std.Target.Cpu.Feature.Set = null,
+    instruction_features: std.Target.Cpu.Feature.Set = .empty,
+
+    fn requiredRuntimeFeatures(self: CpuContract, arch: std.Target.Cpu.Arch) std.Target.Cpu.Feature.Set {
+        var required = self.instruction_features;
+        required.populateDependencies(arch.allFeaturesList());
+        return required;
+    }
+
+    /// The complete feature set code generation may use when this contract
+    /// names both its scheduling model and architecture baseline.
+    fn constrainedCodegenFeatures(self: CpuContract, arch: std.Target.Cpu.Arch) ?std.Target.Cpu.Feature.Set {
+        var allowed = self.architecture_baseline_features orelse return null;
+        allowed.addFeatureSet(self.instruction_features);
+        allowed.populateDependencies(arch.allFeaturesList());
+        return allowed;
+    }
+
+    fn applyToQuery(self: CpuContract, arch: std.Target.Cpu.Arch, query: *std.Target.Query) void {
+        query.cpu_model = self.codegen_model;
+        query.cpu_features_add.addFeatureSet(self.instruction_features);
+
+        const allowed = self.constrainedCodegenFeatures(arch) orelse return;
+        const codegen_model = switch (self.codegen_model) {
+            .explicit => |model| model,
+            .native, .baseline, .determined_by_arch_os => unreachable,
+        };
+
+        const model_features = codegen_model.toCpu(arch).features;
+
+        // Preserve baseline features the scheduling model does not name.
+        var missing_allowed_features = allowed;
+        missing_allowed_features.removeFeatureSet(model_features);
+        query.cpu_features_add.addFeatureSet(missing_allowed_features);
+
+        // A named model also carries tuning and instruction features that are
+        // not necessarily part of Roc's floor. Keep the name for scheduling,
+        // but explicitly disable every model feature outside the contract.
+        var undeclared_model_features = model_features;
+        undeclared_model_features.removeFeatureSet(allowed);
+        query.cpu_features_sub.addFeatureSet(undeclared_model_features);
+    }
+};
+
 /// Roc's simplified target representation.
 /// Maps to specific OS/arch/ABI combinations for cross-compilation.
 ///
@@ -392,6 +441,115 @@ pub const RocTarget = enum {
         };
     }
 
+    /// The CPU model and instruction floor used by both code generation and
+    /// runtime host compatibility. Adding an instruction here changes both.
+    fn cpuContract(self: RocTarget) CpuContract {
+        const arch = self.toCpuArch();
+        const level = self.cpuLevel();
+
+        var contract: CpuContract = switch (arch) {
+            .x86_64 => switch (level) {
+                .default => .{
+                    .codegen_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 },
+                    .architecture_baseline_features = .empty,
+                },
+                .v1 => .{
+                    .codegen_model = .{ .explicit = &std.Target.x86.cpu.x86_64 },
+                    .architecture_baseline_features = .empty,
+                },
+            },
+            .aarch64, .aarch64_be => if (self.toOsTag() == .macos)
+                .{}
+            else switch (level) {
+                .default, .v1 => .{
+                    .codegen_model = .{ .explicit = &std.Target.aarch64.cpu.generic },
+                    .architecture_baseline_features = .empty,
+                },
+            },
+            .wasm32 => if (level == .v1)
+                .{
+                    .codegen_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
+                    .architecture_baseline_features = .empty,
+                }
+            else
+                .{},
+            else => .{},
+        };
+
+        if (contract.architecture_baseline_features) |initial| {
+            var baseline = initial;
+            switch (arch) {
+                .x86_64 => {
+                    // The x86-64 psABI v1 instruction set. Do not import the
+                    // `x86_64` model's unrelated tuning flags.
+                    inline for ([_]std.Target.x86.Feature{
+                        .@"64bit",
+                        .cmov,
+                        .cx8,
+                        .fxsr,
+                        .mmx,
+                        .nopl,
+                        .sse2,
+                        .x87,
+                    }) |feature| {
+                        baseline.addFeature(@intFromEnum(feature));
+                    }
+                },
+                // Advanced SIMD and floating point are mandatory in the
+                // application profile Roc targets at Armv8.0-A.
+                .aarch64, .aarch64_be => baseline.addFeature(@intFromEnum(std.Target.aarch64.Feature.neon)),
+                .wasm32 => {},
+                else => unreachable,
+            }
+            baseline.populateDependencies(arch.allFeaturesList());
+            contract.architecture_baseline_features = baseline;
+        }
+
+        if (level == .v1) return contract;
+
+        switch (arch) {
+            .x86_64 => {
+                // The complete x86-64-v3 ISA contract plus the two extensions
+                // Roc adds to the named psABI level.
+                inline for ([_]std.Target.x86.Feature{
+                    .cx16,
+                    .sahf,
+                    .sse4_2,
+                    .popcnt,
+                    .avx2,
+                    .bmi,
+                    .bmi2,
+                    .f16c,
+                    .fma,
+                    .lzcnt,
+                    .movbe,
+                    .xsave,
+                    .aes,
+                    .pclmul,
+                }) |feature| {
+                    contract.instruction_features.addFeature(@intFromEnum(feature));
+                }
+            },
+            .aarch64, .aarch64_be => {
+                // Every Apple Silicon CPU implements the macOS target floor.
+                if (self.toOsTag() != .macos) {
+                    contract.instruction_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.aes));
+                    contract.instruction_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.dotprod));
+                }
+            },
+            .wasm32 => contract.instruction_features.addFeature(@intFromEnum(std.Target.wasm.Feature.simd128)),
+            else => {},
+        }
+
+        return contract;
+    }
+
+    /// Instruction features above the architecture baseline that codegen may
+    /// emit and runtime host detection must confirm.
+    pub fn requiredRuntimeCpuFeatures(self: RocTarget) std.Target.Cpu.Feature.Set {
+        return self.cpuContract().requiredRuntimeFeatures(self.toCpuArch());
+    }
+
     /// Build the single target query used for every LLVM compilation of Roc
     /// program code, including linked applications, host shims, eval, and
     /// optimized `roc test` roots.
@@ -410,48 +568,7 @@ pub const RocTarget = enum {
             query.os_version_min = macos_deployment.query_os_version;
         }
 
-        const level = self.cpuLevel();
-        switch (self.toCpuArch()) {
-            .x86_64 => switch (level) {
-                .default => {
-                    // x86-64-v3 covers AVX2/SSSE3/BMI2/POPCNT/FMA. The named
-                    // level omits AES and PCLMULQDQ, so enable both explicitly.
-                    query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
-                    query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.aes));
-                    query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.pclmul));
-                },
-                // The `x86_64` model is the psABI's x86-64-v1: SSE2 and no more.
-                .v1 => query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64 },
-            },
-            .aarch64, .aarch64_be => switch (level) {
-                .default => {
-                    // NEON is mandatory in Armv8.0-A, so Roc's 128-bit integer
-                    // SIMD needs no extension to be native on aarch64. Name the
-                    // two extensions the SIMD builtins do lower to instead of
-                    // pinning a CPU model: a model drags in unrelated revisions
-                    // of the architecture, and each one it raises the floor by
-                    // is hardware that can no longer run the result.
-                    if (self.toOsTag() != .macos) {
-                        query.cpu_model = .{ .explicit = &std.Target.aarch64.cpu.generic };
-                        // AES supplies PMULL64, which carryless multiply lowers
-                        // to directly.
-                        query.cpu_features_add.addFeature(@intFromEnum(std.Target.aarch64.Feature.aes));
-                        // DotProd supplies SDOT/UDOT, which LLVM selects for
-                        // the widening multiply-accumulate `dot_pairs` emits.
-                        query.cpu_features_add.addFeature(@intFromEnum(std.Target.aarch64.Feature.dotprod));
-                    }
-                },
-                // Armv8.0-A exactly. macOS is excluded from `v1` targets
-                // because every Apple Silicon Mac is well above this floor.
-                .v1 => query.cpu_model = .{ .explicit = &std.Target.aarch64.cpu.generic },
-            },
-            .wasm32 => switch (level) {
-                .default => query.cpu_features_add.addFeature(@intFromEnum(std.Target.wasm.Feature.simd128)),
-                // The WebAssembly 1.0 core instruction set.
-                .v1 => query.cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
-            },
-            else => {},
-        }
+        self.cpuContract().applyToQuery(self.toCpuArch(), &query);
 
         return query;
     }
@@ -541,6 +658,27 @@ pub const RocTarget = enum {
     pub fn matchesHostOsAndArch(self: RocTarget) bool {
         return self.toOsTag() == builtin.target.os.tag and
             self.toCpuArch() == builtin.target.cpu.arch;
+    }
+
+    /// The complete LLVM target feature set, including scheduling and tuning
+    /// flags that do not represent instruction-set requirements.
+    fn llvmTargetFeatures(self: RocTarget) std.Target.Cpu.Feature.Set {
+        const query = self.llvmTargetQuery();
+        const arch = self.toCpuArch();
+        const os = self.toOsTag().defaultVersionRange(arch, query.abi.?);
+        var cpu = switch (query.cpu_model) {
+            .explicit => |model| model.toCpu(arch),
+            .baseline, .determined_by_arch_os => std.Target.Cpu.baseline(arch, os),
+            // Roc target queries are static contracts and never inherit the
+            // compiler process's CPU model.
+            .native => unreachable,
+        };
+
+        cpu.features.removeFeatureSet(query.cpu_features_sub);
+        cpu.features.addFeatureSet(query.cpu_features_add);
+        cpu.features.populateDependencies(arch.allFeaturesList());
+        cpu.features.removeFeatureSet(query.cpu_features_sub);
+        return cpu.features;
     }
 
     /// Check if this target can be built on the current host.
@@ -754,6 +892,26 @@ test "v1 targets ask LLVM for the architecture baseline" {
     }
 }
 
+test "CPU contracts exactly constrain LLVM target features" {
+    for (std.enums.values(RocTarget)) |target| {
+        const expected = target.cpuContract().constrainedCodegenFeatures(target.toCpuArch()) orelse continue;
+        std.testing.expect(target.llvmTargetFeatures().eql(expected)) catch |err| {
+            std.debug.print("{s} LLVM features differ from its CPU contract\n", .{target.toName()});
+            return err;
+        };
+    }
+}
+
+test "x86 scheduling model cannot silently raise the instruction floor" {
+    const query = RocTarget.x64musl.llvmTargetQuery();
+    try std.testing.expectEqual(&std.Target.x86.cpu.x86_64_v3, query.cpu_model.explicit);
+
+    const tuning_feature = @intFromEnum(std.Target.x86.Feature.false_deps_lzcnt_tzcnt);
+    try std.testing.expect(query.cpu_features_sub.isEnabled(tuning_feature));
+    try std.testing.expect(!RocTarget.x64musl.llvmTargetFeatures().isEnabled(tuning_feature));
+    try std.testing.expect(RocTarget.x64musl.llvmTargetFeatures().isEnabled(@intFromEnum(std.Target.x86.Feature.avx2)));
+}
+
 test "arm64 keeps its floor at Armv8.0 plus the SIMD builtins' extensions" {
     // Raspberry Pi 3 and 4 are Cortex-A53/A72, i.e. Armv8.0-A. A CPU model
     // above that floor makes arm64musl binaries fault on them.
@@ -771,6 +929,11 @@ test "arm64 keeps its floor at Armv8.0 plus the SIMD builtins' extensions" {
     expected.addFeature(aes);
     expected.addFeature(dotprod);
     try std.testing.expect(query.cpu_features_add.eql(expected));
+
+    // Zig's generic model currently names ETE, but it is not part of Armv8.0-A.
+    const ete = @intFromEnum(std.Target.aarch64.Feature.ete);
+    try std.testing.expect(query.cpu_features_sub.isEnabled(ete));
+    try std.testing.expect(!RocTarget.arm64musl.llvmTargetFeatures().isEnabled(ete));
 }
 
 test "arm32 and macOS arm64 have no v1 twin because Roc names no floor for them" {

@@ -124,6 +124,13 @@ fn testPlatformRequiresSectionDceHost(platform_dir: []const u8) bool {
     return std.mem.eql(u8, platform_dir, "dylib") or std.mem.eql(u8, platform_dir, "archive");
 }
 
+/// The v1 twin that needs its own test-platform host build.
+fn muslBaselineTestTargetName(target_name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, target_name, "x64musl")) return "x64v1musl";
+    if (std.mem.eql(u8, target_name, "arm64musl")) return "arm64v1musl";
+    return null;
+}
+
 fn testHostNeedsLibc(options: TestHostOptions, target: ResolvedTarget) bool {
     if (!options.uses_stack_handler) return false;
 
@@ -2170,6 +2177,18 @@ fn buildAndCopyTestPlatformHostLib(
         omit_frame_pointer,
         options,
     );
+    const baseline_target_name = muslBaselineTestTargetName(target_name);
+    const baseline_lib = if (baseline_target_name) |name| createTestPlatformHostLib(
+        b,
+        b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, name }),
+        b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" }),
+        b.resolveTargetQuery(roc_target.RocTarget.fromString(name).?.llvmTargetQuery()),
+        host_optimize,
+        roc_modules,
+        strip,
+        omit_frame_pointer,
+        options,
+    ) else null;
 
     // The dylib platform produces a Windows DLL, and a DLL only exposes symbols
     // that carry dllexport storage. Unlike ELF/Mach-O shared objects (which
@@ -2184,9 +2203,23 @@ fn buildAndCopyTestPlatformHostLib(
     // Use correct filename for target platform
     const host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     const archive_path = b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, host_filename });
+    const baseline_archive_path = if (baseline_target_name) |name|
+        b.pathJoin(&.{ "test", platform_dir, "platform/targets", name, host_filename })
+    else
+        null;
 
     const copy_step = b.addUpdateSourceFiles();
     copy_step.addCopyFileToSource(lib.getEmittedBin(), archive_path);
+    if (baseline_archive_path) |path| {
+        copy_step.addCopyFileToSource(baseline_lib.?.getEmittedBin(), path);
+
+        inline for (.{ "crt1.o", "libc.a" }) |runtime_filename| {
+            copy_step.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", target_name, runtime_filename })),
+                b.pathJoin(&.{ "test", platform_dir, "platform/targets", baseline_target_name.?, runtime_filename }),
+            );
+        }
+    }
 
     // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
     // Zig's archive generator doesn't add the required padding byte after odd-sized
@@ -2195,6 +2228,14 @@ fn buildAndCopyTestPlatformHostLib(
     if (target.result.os.tag != .windows) {
         const fix_step = FixArchivePaddingStep.create(b, archive_path);
         fix_step.step.dependOn(&copy_step.step);
+
+        if (baseline_archive_path) |path| {
+            const fix_baseline_step = FixArchivePaddingStep.create(b, path);
+            fix_baseline_step.step.dependOn(&copy_step.step);
+            fix_baseline_step.step.dependOn(&fix_step.step);
+            return &fix_baseline_step.step;
+        }
+
         return &fix_step.step;
     }
 
@@ -5969,28 +6010,16 @@ pub fn build(b: *std.Build) void {
         };
 
         if (http_host_target_dir) |target_dir| {
-            const http_header_decoder_host_lib = createTestPlatformHostLib(
+            const final_http_host_step = buildAndCopyTestPlatformHostLib(
                 b,
-                "test_http_header_decoder_host",
-                "test/http-headers/platform/host.zig",
+                "http-headers",
                 http_host_target,
+                target_dir,
                 .ReleaseFast,
                 roc_modules,
                 strip,
                 omit_frame_pointer,
-                .{},
             );
-
-            const copy_http_host = b.addUpdateSourceFiles();
-            const http_host_filename = if (http_host_target.result.os.tag == .windows) "host.lib" else "libhost.a";
-            const http_host_path = b.pathJoin(&.{ "test/http-headers/platform/targets", target_dir, http_host_filename });
-            copy_http_host.addCopyFileToSource(http_header_decoder_host_lib.getEmittedBin(), http_host_path);
-
-            const final_http_host_step: *Step = if (http_host_target.result.os.tag != .windows) blk: {
-                const fix_http_host = FixArchivePaddingStep.create(b, http_host_path);
-                fix_http_host.step.dependOn(&copy_http_host.step);
-                break :blk &fix_http_host.step;
-            } else &copy_http_host.step;
             b.getInstallStep().dependOn(final_http_host_step);
 
             const http_app_exe_name = if (http_host_target.result.os.tag == .windows)
@@ -6041,28 +6070,16 @@ pub fn build(b: *std.Build) void {
                 },
             });
 
-            const json_decoder_host_lib = createTestPlatformHostLib(
+            const final_json_host_step = buildAndCopyTestPlatformHostLib(
                 b,
-                "test_json_decoder_host",
-                "test/json-decoder/platform/host.zig",
+                "json-decoder",
                 http_host_target,
+                target_dir,
                 .ReleaseFast,
                 roc_modules,
                 strip,
                 omit_frame_pointer,
-                .{},
             );
-
-            const copy_json_host = b.addUpdateSourceFiles();
-            const json_host_filename = if (http_host_target.result.os.tag == .windows) "host.lib" else "libhost.a";
-            const json_host_path = b.pathJoin(&.{ "test/json-decoder/platform/targets", target_dir, json_host_filename });
-            copy_json_host.addCopyFileToSource(json_decoder_host_lib.getEmittedBin(), json_host_path);
-
-            const final_json_host_step: *Step = if (http_host_target.result.os.tag != .windows) blk: {
-                const fix_json_host = FixArchivePaddingStep.create(b, json_host_path);
-                fix_json_host.step.dependOn(&copy_json_host.step);
-                break :blk &fix_json_host.step;
-            } else &copy_json_host.step;
             b.getInstallStep().dependOn(final_json_host_step);
 
             const json_exe_ext = if (http_host_target.result.os.tag == .windows) ".exe" else "";
@@ -6524,6 +6541,12 @@ fn addMainExe(
     // SetUnhandledExceptionFilter stack-overflow handler before the interpreter
     // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
     exe.stack_size = 64 * 1024 * 1024;
+    // Keep functions and data in independent sections. Besides allowing the
+    // final linker to discard unused compiler code, this is required on ARM32:
+    // LLD cannot place range-extension thunks inside the monolithic .text
+    // section Zig otherwise emits for Roc's large debug executable.
+    exe.link_function_sections = true;
+    exe.link_data_sections = true;
     configureBackend(exe, target);
     exe.root_module.addImport("llvm_codegen", llvm_codegen_module);
     linkWatchPlatformLibs(exe, target);

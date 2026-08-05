@@ -54,20 +54,23 @@ pub fn intBits(layout_idx: layout.Idx) u16 {
     };
 }
 
-/// Returns the lowest representable value for a signed integer layout.
+/// Returns the lowest representable value for a signed numeric layout.
 pub fn signedLowestValue(layout_idx: layout.Idx) ?i128 {
     return switch (layout_idx) {
         .i8 => std.math.minInt(i8),
         .i16 => std.math.minInt(i16),
         .i32 => std.math.minInt(i32),
         .i64 => std.math.minInt(i64),
-        .i128 => std.math.minInt(i128),
+        .i128, .dec => std.math.minInt(i128),
         else => null,
     };
 }
 
-/// Returns the checked LIR operation for a plain integer arithmetic operation.
+/// Returns the checked LIR operation required by a plain numeric operation.
 pub fn checkedOp(op: LIR.LowLevel, layout_idx: layout.Idx) ?LIR.LowLevel {
+    if (layout_idx == .dec) {
+        return if (op == .num_abs) .num_abs_checked else null;
+    }
     if (!isIntegerLayout(layout_idx)) return null;
     return switch (op) {
         .num_plus => .num_plus_checked,
@@ -122,6 +125,14 @@ pub fn overflowMessage(op: LIR.LowLevel) ?[]const u8 {
         => "Integer division overflowed",
         else => null,
     };
+}
+
+/// Returns the overflow message for a checked operation and operand layout.
+pub fn overflowMessageForLayout(op: LIR.LowLevel, layout_idx: layout.Idx) ?[]const u8 {
+    if (op == .num_abs_checked and layout_idx == .dec) {
+        return "Decimal absolute value overflow!";
+    }
+    return overflowMessage(op);
 }
 
 /// Returns the canonical crash message for a checked zero-denominator operation.
@@ -184,7 +195,7 @@ fn moduloByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
     };
 }
 
-test "checkedOp maps every integer arithmetic operation and skips non-integers" {
+test "checkedOp maps integer arithmetic and checked Dec absolute value" {
     try std.testing.expectEqual(LIR.LowLevel.num_plus_checked, checkedOp(.num_plus, .u8).?);
     try std.testing.expectEqual(LIR.LowLevel.num_minus_checked, checkedOp(.num_minus, .i16).?);
     try std.testing.expectEqual(LIR.LowLevel.num_times_checked, checkedOp(.num_times, .u32).?);
@@ -194,10 +205,12 @@ test "checkedOp maps every integer arithmetic operation and skips non-integers" 
     try std.testing.expectEqual(LIR.LowLevel.num_mod_by_checked, checkedOp(.num_mod_by, .i128).?);
     try std.testing.expectEqual(LIR.LowLevel.num_negate_checked, checkedOp(.num_negate, .i32).?);
     try std.testing.expectEqual(LIR.LowLevel.num_abs_checked, checkedOp(.num_abs, .i64).?);
+    try std.testing.expectEqual(LIR.LowLevel.num_abs_checked, checkedOp(.num_abs, .dec).?);
 
     try std.testing.expectEqual(@as(?LIR.LowLevel, null), checkedOp(.num_plus, .f64));
     try std.testing.expectEqual(@as(?LIR.LowLevel, null), checkedOp(.num_abs, .u64));
     try std.testing.expectEqual(@as(?LIR.LowLevel, null), checkedOp(.num_negate, .u128));
+    try std.testing.expectEqual(@as(?LIR.LowLevel, null), checkedOp(.num_plus, .dec));
 }
 
 test "lowerOp preserves explicit wrapping arithmetic" {
@@ -206,6 +219,7 @@ test "lowerOp preserves explicit wrapping arithmetic" {
     try std.testing.expectEqual(LIR.LowLevel.num_times, lowerOp(.num_times_wrap, .u128));
     try std.testing.expectEqual(LIR.LowLevel.num_plus_checked, lowerOp(.num_plus, .u8));
     try std.testing.expectEqual(LIR.LowLevel.num_plus, lowerOp(.num_plus, .f64));
+    try std.testing.expectEqual(LIR.LowLevel.num_abs_checked, lowerOp(.num_abs, .dec));
 }
 
 test "checkedOp round trips through uncheckedOp" {
@@ -235,6 +249,7 @@ test "checked arithmetic messages are canonical and operation specific" {
     try std.testing.expectEqualStrings("Integer absolute value overflowed", overflowMessage(.num_abs_checked).?);
     try std.testing.expectEqualStrings("Integer division overflowed", overflowMessage(.num_div_by_checked).?);
     try std.testing.expectEqualStrings("Integer division overflowed", overflowMessage(.num_div_trunc_by_checked).?);
+    try std.testing.expectEqualStrings("Decimal absolute value overflow!", overflowMessageForLayout(.num_abs_checked, .dec).?);
 
     const cases = [_]struct {
         layout_idx: layout.Idx,
