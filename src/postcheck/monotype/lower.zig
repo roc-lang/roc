@@ -46011,8 +46011,18 @@ const BodyContext = struct {
             defer self.closeRequestEdge();
             break :callee try self.methodTargetCalleeAtNode(lookup, callable_node, try self.evidenceForIteratorCall(plan));
         };
+        // The call's return IS the loop's expected iterator — the invariant
+        // above states them same-class — so the cell aliases the expected and
+        // consumers read the producer's answer at its own cell rather than
+        // through this request's node (reunify.md 13.2e: generated content
+        // transfers at the seal; the request flow is aliasing, not
+        // computation).
+        const ret_cell = if (expected_ret_ty) |expected| blk: {
+            census.bump("iterator_ret_cell_aliased");
+            break :blk expected;
+        } else DraftTypeCell.fromGraphNode(fn_nodes.ret);
         return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(fn_nodes.ret),
+            ret_cell,
             .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(callee),
                 .args = try self.addExprSpan(args),

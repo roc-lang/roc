@@ -1150,6 +1150,7 @@ pub const Census = struct {
     rehearsal_rule_stored_erased_nominal_arg: Counter = Counter.init(0),
     request_born_final_blocked_erased: Counter = Counter.init(0),
     numeral_ret_directed_route: Counter = Counter.init(0),
+    iterator_ret_cell_aliased: Counter = Counter.init(0),
     numeral_ret_node_route: Counter = Counter.init(0),
     deferred_representation_directed_agrees: Counter = Counter.init(0),
     deferred_representation_directed_differs: Counter = Counter.init(0),
