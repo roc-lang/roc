@@ -293,7 +293,20 @@ fn switchFallsThrough(
             if (steps > limit) return false;
             switch (store.getCFStmt(cursor)) {
                 inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
-                else => return false,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => return false,
             }
         }
     }
@@ -343,13 +356,36 @@ fn remainderRejoins(store: *const LirStore, first: LIR.CFStmtId, join_id: LIR.Jo
                                 if (branch_stmt.target != join_id) return false;
                                 break :branch;
                             },
-                            else => return false,
+                            .expect_err,
+                            .runtime_error,
+                            .comptime_exhaustiveness_failed,
+                            .switch_stmt,
+                            .switch_initialized_payload,
+                            .str_match,
+                            .str_match_set,
+                            .loop_continue,
+                            .loop_break,
+                            .join,
+                            .ret,
+                            .crash,
+                            => return false,
                         }
                     }
                 }
                 return true;
             },
-            else => return false,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .ret,
+            .crash,
+            => return false,
         }
     }
 }
@@ -707,7 +743,32 @@ pub fn compute(
         const spine_start: LIR.CFStmtId = if (candidate.def_count == 1)
             switch (store.getCFStmt(candidate.def_stmt)) {
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
-                else => continue :candidates,
+                .init_uninitialized,
+                .assign_ref,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => continue :candidates,
             }
         else if (candidate.def_count == 0)
             ((param_bodies.get(local) orelse continue :candidates) orelse continue :candidates)

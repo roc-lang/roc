@@ -216,10 +216,19 @@ pub const Content = union(enum(u8)) {
                     .record => |record| {
                         return record;
                     },
-                    else => return null,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -231,10 +240,19 @@ pub const Content = union(enum(u8)) {
                     .tag_union => |tag_union| {
                         return tag_union;
                     },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -246,10 +264,19 @@ pub const Content = union(enum(u8)) {
                     .nominal_type => |nominal_type| {
                         return nominal_type;
                     },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -261,10 +288,17 @@ pub const Content = union(enum(u8)) {
                     .fn_pure => |func| return func,
                     .fn_effectful => |func| return func,
                     .fn_unbound => |func| return func,
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -276,10 +310,17 @@ pub const Content = union(enum(u8)) {
                     .fn_pure => |func| return .{ .func = func, .ext = .pure },
                     .fn_effectful => |func| return .{ .func = func, .ext = .effectful },
                     .fn_unbound => |func| return .{ .func = func, .ext = .unbound },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 };
@@ -1088,7 +1129,7 @@ pub const StaticDispatchConstraint = struct {
                     .quote => null,
                     .interpolation => null,
                 },
-                else => null,
+                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
             };
         }
 
@@ -1096,7 +1137,7 @@ pub const StaticDispatchConstraint = struct {
         pub fn literalKind(self: Origin) ?LiteralKind {
             return switch (self) {
                 .from_literal => |lit| lit,
-                else => null,
+                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
             };
         }
 
@@ -1105,7 +1146,7 @@ pub const StaticDispatchConstraint = struct {
         pub fn binopNegated(self: Origin) bool {
             return switch (self) {
                 .desugared_binop => |binop| binop.negated,
-                else => false,
+                .desugared_unaryop, .method_call, .where_clause, .from_literal => false,
             };
         }
     };

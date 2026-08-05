@@ -305,36 +305,33 @@ pub fn exportPow(
             exp: T,
             roc_ops: *RocOps,
         ) callconv(.c) T {
-            switch (@typeInfo(T)) {
+            if (@typeInfo(T) == .int) {
                 // std.math.pow can handle ints via powi, but it turns any errors to unreachable
                 // we want to catch overflow and report a proper error to the user
-                .int => {
-                    if (T == i128 or T == u128) {
-                        // Use custom powi that avoids compiler_rt calls
-                        if (powi128(T, base, exp)) |value| {
-                            return value;
-                        } else |err| switch (err) {
-                            error.Overflow => {
-                                roc_ops.crash("Integer exponentiation overflowed");
-                            },
-                            error.Underflow => return 0,
-                        }
-                    } else {
-                        if (std.math.powi(T, base, exp)) |value| {
-                            return value;
-                        } else |err| switch (err) {
-                            error.Overflow => {
-                                roc_ops.crash("Integer exponentiation overflowed");
-                            },
-                            error.Underflow => return 0,
-                        }
+                if (T == i128 or T == u128) {
+                    // Use custom powi that avoids compiler_rt calls
+                    if (powi128(T, base, exp)) |value| {
+                        return value;
+                    } else |err| switch (err) {
+                        error.Overflow => {
+                            roc_ops.crash("Integer exponentiation overflowed");
+                        },
+                        error.Underflow => return 0,
                     }
-                },
-                else => {
-                    if (T == f32) return float_math_f32.pow(base, exp);
-                    if (T == f64) return float_math_f64.pow(base, exp);
-                    @compileError("floating-point power supports only F32 and F64");
-                },
+                } else {
+                    if (std.math.powi(T, base, exp)) |value| {
+                        return value;
+                    } else |err| switch (err) {
+                        error.Overflow => {
+                            roc_ops.crash("Integer exponentiation overflowed");
+                        },
+                        error.Underflow => return 0,
+                    }
+                }
+            } else {
+                if (T == f32) return float_math_f32.pow(base, exp);
+                if (T == f64) return float_math_f64.pow(base, exp);
+                @compileError("floating-point power supports only F32 and F64");
             }
         }
     }.func;
@@ -743,16 +740,13 @@ pub fn exportIsMultipleOf(comptime T: type, comptime name: []const u8) void {
 
 /// Adds two numbers, returning result and overflow flag.
 pub fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
-    switch (@typeInfo(T)) {
-        .int => {
-            const answer = @addWithOverflow(self, other);
-            return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
-        },
-        else => {
-            const answer = self + other;
-            const overflowed = !std.math.isFinite(answer);
-            return .{ .value = answer, .has_overflowed = overflowed };
-        },
+    if (@typeInfo(T) == .int) {
+        const answer = @addWithOverflow(self, other);
+        return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
+    } else {
+        const answer = self + other;
+        const overflowed = !std.math.isFinite(answer);
+        return .{ .value = answer, .has_overflowed = overflowed };
     }
 }
 
@@ -820,16 +814,13 @@ pub fn exportAddOrPanic(
 
 /// Subtracts two numbers, returning result and overflow flag.
 pub fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
-    switch (@typeInfo(T)) {
-        .int => {
-            const answer = @subWithOverflow(self, other);
-            return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
-        },
-        else => {
-            const answer = self - other;
-            const overflowed = !std.math.isFinite(answer);
-            return .{ .value = answer, .has_overflowed = overflowed };
-        },
+    if (@typeInfo(T) == .int) {
+        const answer = @subWithOverflow(self, other);
+        return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
+    } else {
+        const answer = self - other;
+        const overflowed = !std.math.isFinite(answer);
+        return .{ .value = answer, .has_overflowed = overflowed };
     }
 }
 
@@ -898,73 +889,70 @@ pub fn exportSubOrPanic(
 
 /// Multiplies two numbers, returning result and overflow flag.
 pub fn mulWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
-    switch (@typeInfo(T)) {
-        .int => {
-            if (T == i128) {
-                const is_answer_negative = (self < 0) != (other < 0);
-                const max = std.math.maxInt(i128);
-                const min = std.math.minInt(i128);
+    if (@typeInfo(T) == .int) {
+        if (T == i128) {
+            const is_answer_negative = (self < 0) != (other < 0);
+            const max = std.math.maxInt(i128);
+            const min = std.math.minInt(i128);
 
-                const self_u128 = @abs(self);
-                if (self_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
-                    if (other == 0) {
-                        return .{ .value = 0, .has_overflowed = false };
-                    } else if (other == 1) {
-                        return .{ .value = self, .has_overflowed = false };
-                    } else if (is_answer_negative) {
-                        return .{ .value = min, .has_overflowed = true };
-                    } else {
-                        return .{ .value = max, .has_overflowed = true };
-                    }
-                }
-
-                const other_u128 = @abs(other);
-                if (other_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
-                    if (self == 0) {
-                        return .{ .value = 0, .has_overflowed = false };
-                    } else if (self == 1) {
-                        return .{ .value = other, .has_overflowed = false };
-                    } else if (is_answer_negative) {
-                        return .{ .value = min, .has_overflowed = true };
-                    } else {
-                        return .{ .value = max, .has_overflowed = true };
-                    }
-                }
-
-                const answer256: U256 = mul_u128(self_u128, other_u128);
-
-                if (is_answer_negative) {
-                    if (answer256.hi != 0 or answer256.lo > (1 << 127)) {
-                        return .{ .value = min, .has_overflowed = true };
-                    } else if (answer256.lo == (1 << 127)) {
-                        return .{ .value = min, .has_overflowed = false };
-                    } else {
-                        return .{ .value = -@as(i128, @intCast(answer256.lo)), .has_overflowed = false };
-                    }
+            const self_u128 = @abs(self);
+            if (self_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
+                if (other == 0) {
+                    return .{ .value = 0, .has_overflowed = false };
+                } else if (other == 1) {
+                    return .{ .value = self, .has_overflowed = false };
+                } else if (is_answer_negative) {
+                    return .{ .value = min, .has_overflowed = true };
                 } else {
-                    if (answer256.hi != 0 or answer256.lo > @as(u128, @intCast(max))) {
-                        return .{ .value = max, .has_overflowed = true };
-                    } else {
-                        return .{ .value = @as(i128, @intCast(answer256.lo)), .has_overflowed = false };
-                    }
+                    return .{ .value = max, .has_overflowed = true };
                 }
-            } else if (T == u128) {
-                const answer256: U256 = mul_u128(self, other);
-                if (answer256.hi != 0) {
-                    return .{ .value = std.math.maxInt(u128), .has_overflowed = true };
+            }
+
+            const other_u128 = @abs(other);
+            if (other_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
+                if (self == 0) {
+                    return .{ .value = 0, .has_overflowed = false };
+                } else if (self == 1) {
+                    return .{ .value = other, .has_overflowed = false };
+                } else if (is_answer_negative) {
+                    return .{ .value = min, .has_overflowed = true };
                 } else {
-                    return .{ .value = answer256.lo, .has_overflowed = false };
+                    return .{ .value = max, .has_overflowed = true };
+                }
+            }
+
+            const answer256: U256 = mul_u128(self_u128, other_u128);
+
+            if (is_answer_negative) {
+                if (answer256.hi != 0 or answer256.lo > (1 << 127)) {
+                    return .{ .value = min, .has_overflowed = true };
+                } else if (answer256.lo == (1 << 127)) {
+                    return .{ .value = min, .has_overflowed = false };
+                } else {
+                    return .{ .value = -@as(i128, @intCast(answer256.lo)), .has_overflowed = false };
                 }
             } else {
-                const answer = @mulWithOverflow(self, other);
-                return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
+                if (answer256.hi != 0 or answer256.lo > @as(u128, @intCast(max))) {
+                    return .{ .value = max, .has_overflowed = true };
+                } else {
+                    return .{ .value = @as(i128, @intCast(answer256.lo)), .has_overflowed = false };
+                }
             }
-        },
-        else => {
-            const answer = self * other;
-            const overflowed = !std.math.isFinite(answer);
-            return .{ .value = answer, .has_overflowed = overflowed };
-        },
+        } else if (T == u128) {
+            const answer256: U256 = mul_u128(self, other);
+            if (answer256.hi != 0) {
+                return .{ .value = std.math.maxInt(u128), .has_overflowed = true };
+            } else {
+                return .{ .value = answer256.lo, .has_overflowed = false };
+            }
+        } else {
+            const answer = @mulWithOverflow(self, other);
+            return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
+        }
+    } else {
+        const answer = self * other;
+        const overflowed = !std.math.isFinite(answer);
+        return .{ .value = answer, .has_overflowed = overflowed };
     }
 }
 
@@ -1195,69 +1183,57 @@ pub fn i128FromBits(bits: u128) callconv(.c) i128 {
 }
 
 fn signedMinText(comptime T: type) []const u8 {
-    return switch (T) {
-        i8 => "-128",
-        i16 => "-32768",
-        i32 => "-2147483648",
-        i64 => "-9223372036854775808",
-        i128 => "-170141183460469231731687303715884105728",
-        else => @compileError("unsupported signed integer type"),
-    };
+    if (T == i8) return "-128";
+    if (T == i16) return "-32768";
+    if (T == i32) return "-2147483648";
+    if (T == i64) return "-9223372036854775808";
+    if (T == i128) return "-170141183460469231731687303715884105728";
+    @compileError("unsupported signed integer type");
 }
 
 fn signedMaxText(comptime T: type) []const u8 {
-    return switch (T) {
-        i8 => "127",
-        i16 => "32767",
-        i32 => "2147483647",
-        i64 => "9223372036854775807",
-        i128 => "170141183460469231731687303715884105727",
-        else => @compileError("unsupported signed integer type"),
-    };
+    if (T == i8) return "127";
+    if (T == i16) return "32767";
+    if (T == i32) return "2147483647";
+    if (T == i64) return "9223372036854775807";
+    if (T == i128) return "170141183460469231731687303715884105727";
+    @compileError("unsupported signed integer type");
 }
 
 fn signedMaxPlusOneText(comptime T: type) []const u8 {
-    return switch (T) {
-        i8 => "128",
-        i16 => "32768",
-        i32 => "2147483648",
-        i64 => "9223372036854775808",
-        i128 => "170141183460469231731687303715884105728",
-        else => @compileError("unsupported signed integer type"),
-    };
+    if (T == i8) return "128";
+    if (T == i16) return "32768";
+    if (T == i32) return "2147483648";
+    if (T == i64) return "9223372036854775808";
+    if (T == i128) return "170141183460469231731687303715884105728";
+    @compileError("unsupported signed integer type");
 }
 
 fn signedMinMinusOneText(comptime T: type) []const u8 {
-    return switch (T) {
-        i8 => "-129",
-        i16 => "-32769",
-        i32 => "-2147483649",
-        i64 => "-9223372036854775809",
-        i128 => "-170141183460469231731687303715884105729",
-        else => @compileError("unsupported signed integer type"),
-    };
+    if (T == i8) return "-129";
+    if (T == i16) return "-32769";
+    if (T == i32) return "-2147483649";
+    if (T == i64) return "-9223372036854775809";
+    if (T == i128) return "-170141183460469231731687303715884105729";
+    @compileError("unsupported signed integer type");
 }
 
 fn unsignedMaxText(comptime T: type) []const u8 {
-    return switch (T) {
-        u8 => "255",
-        u16 => "65535",
-        u32 => "4294967295",
-        u64 => "18446744073709551615",
-        u128 => "340282366920938463463374607431768211455",
-        else => @compileError("unsupported unsigned integer type"),
-    };
+    if (T == u8) return "255";
+    if (T == u16) return "65535";
+    if (T == u32) return "4294967295";
+    if (T == u64) return "18446744073709551615";
+    if (T == u128) return "340282366920938463463374607431768211455";
+    @compileError("unsupported unsigned integer type");
 }
 
 fn unsignedMaxPlusOneText(comptime T: type) []const u8 {
-    return switch (T) {
-        u8 => "256",
-        u16 => "65536",
-        u32 => "4294967296",
-        u64 => "18446744073709551616",
-        u128 => "340282366920938463463374607431768211456",
-        else => @compileError("unsupported unsigned integer type"),
-    };
+    if (T == u8) return "256";
+    if (T == u16) return "65536";
+    if (T == u32) return "4294967296";
+    if (T == u64) return "18446744073709551616";
+    if (T == u128) return "340282366920938463463374607431768211456";
+    @compileError("unsupported unsigned integer type");
 }
 
 const NumTestHelperError = error{

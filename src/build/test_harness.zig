@@ -576,7 +576,18 @@ pub fn writeRunnerStatsJson(
     if (std.fs.path.dirname(path)) |dir| {
         std.Io.Dir.cwd().access(io, dir, .{}) catch |err| switch (err) {
             error.FileNotFound => try std.Io.Dir.cwd().createDirPath(io, dir),
-            else => return err,
+            error.PermissionDenied,
+            error.SystemResources,
+            error.Unexpected,
+            error.InputOutput,
+            error.AccessDenied,
+            error.FileBusy,
+            error.Canceled,
+            error.SymLinkLoop,
+            error.ReadOnlyFileSystem,
+            error.NameTooLong,
+            error.BadPathName,
+            => return err,
         };
     }
 
@@ -1598,7 +1609,6 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             while (off < out.len) {
                 const n = file.readStreaming(io, &.{out[off..]}) catch |err| switch (err) {
                     error.EndOfStream => return error.UnexpectedEof,
-                    else => return err,
                 };
                 if (n == 0) return error.UnexpectedEof;
                 off += n;
@@ -1714,10 +1724,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             defer buf.deinit(gpa);
             var read_buf: [4096]u8 = undefined;
             while (true) {
-                const n = child.stdout.?.readStreaming(io, &.{&read_buf}) catch |err| switch (err) {
-                    error.EndOfStream => break,
-                    else => break,
-                };
+                const n = child.stdout.?.readStreaming(io, &.{&read_buf}) catch break;
                 if (n == 0) break;
                 buf.appendSlice(gpa, read_buf[0..n]) catch break;
             }
@@ -1737,7 +1744,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     const r = cfg.deserialize(buf.items, gpa) orelse break :blk SingleWorkerOutcome{ .crashed = {} };
                     break :blk SingleWorkerOutcome{ .ok = r };
                 } else .crashed,
-                else => .crashed,
+                .signal, .stopped, .unknown => .crashed,
             };
         }
     };

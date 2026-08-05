@@ -37,7 +37,26 @@ fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
     return switch (module.getStatement(stmt_idx)) {
         .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
         .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
-        else => @panic("type dispatch owner statement was not a type-var alias or type alias"),
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_runtime_error,
+        => @panic("type dispatch owner statement was not a type-var alias or type alias"),
     };
 }
 
@@ -56,9 +75,18 @@ fn checkedFieldBackingAccess(module: TypedCIR.Module, receiver: CIR.Expr.Idx) Ch
                     nominal,
                     module.moduleEnvConst().selfModuleIdentity(),
                 ),
-                else => .inspectable,
+                .record,
+                .record_unbound,
+                .tuple,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => .inspectable,
             },
-            else => return .inspectable,
+            .flex, .rigid, .err => return .inspectable,
         }
     }
     checkedArtifactInvariant("field access receiver alias chain contained a cycle", .{});
@@ -1552,9 +1580,9 @@ const CompileTimeRequestScheduler = struct {
                     dependent_def,
                     dependency_def,
                 ),
-                else => true,
+                .expr, .statement, .required_binding, .hoisted => true,
             },
-            else => true,
+            .expr, .statement, .required_binding, .hoisted => true,
         };
     }
 
@@ -1667,7 +1695,11 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
                     => {},
                 },
                 .opaque_without_backing => break :blk true,
-                else => {},
+                .local_declaration,
+                .imported_declaration,
+                .local_box_payload_capability,
+                .imported_box_payload_capability,
+                => {},
             }
             const backing = checked_types.nominalBackingTemplateForPayload(nominal) orelse break :blk true;
             // Declaration formals stand for the args checked above, so they
@@ -1839,10 +1871,8 @@ fn compileTimeCallableRootIsProcedureReference(
     root: CompileTimeRoot,
 ) bool {
     if (root.kind != .callable_binding) return false;
-    switch (checked_bodies.expr(root.expr).data) {
-        .lookup_local, .lookup_external, .lookup_required => {},
-        else => return false,
-    }
+    const root_expr = checked_bodies.expr(root.expr).data;
+    if (root_expr != .lookup_local and root_expr != .lookup_external and root_expr != .lookup_required) return false;
     const ref_id = resolved_value_refs.lookupIdByCheckedExpr(root.expr) orelse
         checkedArtifactInvariant("checked callable lookup root had no resolved value reference", .{});
     const raw = @intFromEnum(ref_id);
@@ -2440,10 +2470,7 @@ fn entryWrapperForRoot(
 }
 
 fn topLevelExprIsAlreadyProcedure(expr: CIR.Expr) bool {
-    return switch (expr) {
-        .e_lambda, .e_closure, .e_anno_only, .e_hosted_lambda => true,
-        else => false,
-    };
+    return expr == .e_lambda or expr == .e_closure or expr == .e_anno_only or expr == .e_hosted_lambda;
 }
 
 fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
@@ -2451,10 +2478,7 @@ fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
 }
 
 fn isHostedProcedureExpr(expr: CIR.Expr) bool {
-    return switch (expr) {
-        .e_hosted_lambda => true,
-        else => false,
-    };
+    return expr == .e_hosted_lambda;
 }
 
 fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IntrinsicId {
@@ -2474,10 +2498,7 @@ fn runtimeResultProvenanceForProcedureDef(
     def_idx: CIR.Def.Idx,
 ) ?RuntimeResultProvenance {
     const op = module.moduleEnvConst().providedLowLevelForDef(def_idx) orelse return null;
-    return switch (op) {
-        .list_get_unsafe => .list_element_read,
-        else => null,
-    };
+    return if (op == .list_get_unsafe) .list_element_read else null;
 }
 
 pub const CheckedBodyId = checked_ids.CheckedBodyId;
@@ -3299,7 +3320,18 @@ pub fn checkedTypeRecordFieldChild(
                 }
                 return null;
             },
-            else => return null,
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .alias,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return null,
         }
     }
 }
@@ -3327,7 +3359,19 @@ pub fn checkedTypeTagPayloadChild(
                 }
                 current = tag_union.ext;
             },
-            else => return null,
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .alias,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            .empty_tag_union,
+            => return null,
         }
     }
 }
@@ -3347,11 +3391,22 @@ fn checkedTypeViewResolvedPayload(
         if (index >= view.payloadCount()) {
             checkedArtifactInvariant("checked type source child lookup referenced a missing root", .{});
         }
-        switch (view.payload(@enumFromInt(index))) {
+        const payload = view.payload(@enumFromInt(index));
+        switch (payload) {
             .alias => |alias| current = alias.backing,
             .nominal => |nominal| current = view.nominalBackingTemplateForPayload(nominal) orelse return null,
             .pending => checkedArtifactInvariant("checked type source child lookup reached a pending payload", .{}),
-            else => |payload| return .{
+            .err,
+            .flex,
+            .rigid,
+            .record,
+            .record_unbound,
+            .tuple,
+            .function,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return .{
                 .root = current,
                 .payload = payload,
             },
@@ -3767,10 +3822,10 @@ pub const CheckedTypeStore = struct {
         if (index >= self.payloads.items.len) {
             checkedArtifactInvariant("nominal representation publication referenced a missing payload", .{});
         }
-        switch (self.payloads.items[index]) {
-            .nominal => |*nominal| nominal.representation = representation,
-            else => checkedArtifactInvariant("nominal representation publication source payload was not nominal", .{}),
+        if (self.payloads.items[index] != .nominal) {
+            checkedArtifactInvariant("nominal representation publication source payload was not nominal", .{});
         }
+        self.payloads.items[index].nominal.representation = representation;
     }
 
     pub fn fromModule(
@@ -3807,11 +3862,11 @@ pub const CheckedTypeStore = struct {
             if (source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.exprType(expr_idx));
-                switch (module.expr(expr_idx).data) {
-                    .e_call => |call| if (call.constraint_fn_var) |constraint_fn_var| {
+                const expr = module.expr(expr_idx).data;
+                if (expr == .e_call) {
+                    if (expr.e_call.constraint_fn_var) |constraint_fn_var| {
                         _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, constraint_fn_var);
-                    },
-                    else => {},
+                    }
                 }
             } else if (source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const pattern_source_var = checkedPatternSourceTypeVar(module, &top_level_defs, @enumFromInt(node_idx));
@@ -3845,7 +3900,26 @@ pub const CheckedTypeStore = struct {
                     nominal.anno,
                     nominal.is_opaque,
                 ),
-                else => {},
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => {},
             }
         }
 
@@ -3870,10 +3944,10 @@ pub const CheckedTypeStore = struct {
             const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
             for (aliases) |alias| {
                 const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
-                const alias_anno = switch (alias_statement) {
-                    .s_alias_decl => |decl| decl.anno,
-                    else => checkedArtifactInvariant("platform for-clause alias metadata referenced a non-alias statement", .{}),
-                };
+                if (alias_statement != .s_alias_decl) {
+                    checkedArtifactInvariant("platform for-clause alias metadata referenced a non-alias statement", .{});
+                }
+                const alias_anno = alias_statement.s_alias_decl.anno;
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, ModuleEnv.varFrom(alias.alias_stmt_idx));
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, ModuleEnv.varFrom(alias_anno));
             }
@@ -4182,9 +4256,8 @@ pub const CheckedTypeStore = struct {
         if (index >= self.payloads.items.len) {
             checkedArtifactInvariant("synthetic checked type fill referenced a missing root", .{});
         }
-        switch (self.payloads.items[index]) {
-            .pending => {},
-            else => checkedArtifactInvariant("synthetic checked type fill referenced an already-filled root", .{}),
+        if (self.payloads.items[index] != .pending) {
+            checkedArtifactInvariant("synthetic checked type fill referenced an already-filled root", .{});
         }
 
         var owned_payload = build_payload;
@@ -4825,7 +4898,26 @@ const LocalTypeDeclarationIndex = struct {
             const header_idx, const anno_idx = switch (statement) {
                 .s_alias_decl => |alias| .{ alias.header, alias.anno },
                 .s_nominal_decl => |nominal| .{ nominal.header, nominal.anno },
-                else => continue,
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => continue,
             };
             if (anno_idx == .placeholder) continue;
 
@@ -4858,7 +4950,26 @@ const LocalTypeDeclarationIndex = struct {
         const header_idx, const anno_idx = switch (statement) {
             .s_alias_decl => |alias| .{ alias.header, alias.anno },
             .s_nominal_decl => |nominal| .{ nominal.header, nominal.anno },
-            else => checkedArtifactInvariant("checked declaration template lookup referenced a non-type declaration", .{}),
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => checkedArtifactInvariant("checked declaration template lookup referenced a non-type declaration", .{}),
         };
         if (anno_idx != .placeholder) return statement_idx;
 
@@ -4902,13 +5013,14 @@ fn appendCheckedNominalDeclarationFromStatement(
         checkedArtifactInvariant("nominal declaration referenced a missing checked type root", .{});
     }
 
-    const statement_nominal = switch (store.payloads.items[statement_root_index]) {
-        .nominal => |nominal| nominal,
-        else => checkedArtifactInvariant(
+    const statement_payload = store.payloads.items[statement_root_index];
+    if (statement_payload != .nominal) {
+        checkedArtifactInvariant(
             "nominal declaration statement root was not a nominal checked type (source content {s})",
             .{@tagName(module.typeStoreConst().resolveVar(ModuleEnv.varFrom(statement_idx)).desc.content)},
-        ),
-    };
+        );
+    }
+    const statement_nominal = statement_payload.nominal;
 
     const module_env = module.moduleEnvConst();
     const header = module_env.store.getTypeHeader(header_idx);
@@ -4941,7 +5053,18 @@ fn appendCheckedNominalDeclarationFromStatement(
             out[i] = .{
                 .name = switch (arg) {
                     .rigid_var => |rigid| rigid.name,
-                    else => checkedArtifactInvariant("nominal declaration header argument was not a rigid type variable", .{}),
+                    .apply,
+                    .rigid_var_lookup,
+                    .underscore,
+                    .lookup,
+                    .tag_union,
+                    .tag,
+                    .tuple,
+                    .record,
+                    .@"fn",
+                    .parens,
+                    .malformed,
+                    => checkedArtifactInvariant("nominal declaration header argument was not a rigid type variable", .{}),
                 },
                 .root = formal_arg,
             };
@@ -5199,7 +5322,26 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                         .s_nominal_decl => if (finalized != local.decl_idx) {
                             checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
                         },
-                        else => checkedArtifactInvariant("checked declaration template generic application referenced a non-type declaration", .{}),
+                        .s_decl,
+                        .s_var,
+                        .s_var_uninitialized,
+                        .s_reassign,
+                        .s_crash,
+                        .s_dbg,
+                        .s_expr,
+                        .s_expect,
+                        .s_for,
+                        .s_while,
+                        .s_infinite_loop,
+                        .s_breakable_loop,
+                        .s_break,
+                        .s_return,
+                        .s_import,
+                        .s_where_alias_decl,
+                        .s_type_anno,
+                        .s_type_var_alias,
+                        .s_runtime_error,
+                        => checkedArtifactInvariant("checked declaration template generic application referenced a non-type declaration", .{}),
                     }
                 },
                 .builtin,
@@ -5248,7 +5390,18 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             const source = module_env.store.getTypeAnno(lookup.ref);
             switch (source) {
                 .rigid_var => |rigid| if (declarationFormalRoot(declaration_formals, rigid.name)) |formal| break :blk formal,
-                else => {},
+                .apply,
+                .rigid_var_lookup,
+                .underscore,
+                .lookup,
+                .tag_union,
+                .tag,
+                .tuple,
+                .record,
+                .@"fn",
+                .parens,
+                .malformed,
+                => {},
             }
             break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(lookup.ref));
         },
@@ -5334,7 +5487,18 @@ fn appendInstantiatedNamedApplicationFromTemplate(
                 .padding_field_types = padding_field_types,
             } });
         },
-        else => checkedArtifactInvariant("checked declaration template application did not resolve to a named type", .{}),
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .record,
+        .record_unbound,
+        .tuple,
+        .function,
+        .empty_record,
+        .tag_union,
+        .empty_tag_union,
+        => checkedArtifactInvariant("checked declaration template application did not resolve to a named type", .{}),
     };
 }
 
@@ -5352,7 +5516,27 @@ fn appendInstantiatedAliasDeclarationApplication(
     const statement = module.getStatement(statement_idx);
     const alias = switch (statement) {
         .s_alias_decl => |alias| alias,
-        else => checkedArtifactInvariant("checked declaration template alias application resolved to a non-alias declaration", .{}),
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => checkedArtifactInvariant("checked declaration template alias application resolved to a non-alias declaration", .{}),
     };
     if (alias.anno == .placeholder) {
         checkedArtifactInvariant("checked declaration template alias application resolved to an unfinalized alias declaration", .{});
@@ -5373,7 +5557,18 @@ fn appendInstantiatedAliasDeclarationApplication(
             out[i] = .{
                 .name = switch (arg) {
                     .rigid_var => |rigid| rigid.name,
-                    else => checkedArtifactInvariant("alias declaration header argument was not a rigid type variable", .{}),
+                    .apply,
+                    .rigid_var_lookup,
+                    .underscore,
+                    .lookup,
+                    .tag_union,
+                    .tag,
+                    .tuple,
+                    .record,
+                    .@"fn",
+                    .parens,
+                    .malformed,
+                    => checkedArtifactInvariant("alias declaration header argument was not a rigid type variable", .{}),
                 },
                 .root = actual_arg,
             };
@@ -5392,10 +5587,10 @@ fn appendInstantiatedAliasDeclarationApplication(
         ModuleEnv.varFrom(statement_idx),
     );
     const generic_payload = store.payload(generic_root);
-    const generic_alias = switch (generic_payload) {
-        .alias => |payload| payload,
-        else => checkedArtifactInvariant("checked declaration template alias application root was not an alias", .{}),
-    };
+    if (generic_payload != .alias) {
+        checkedArtifactInvariant("checked declaration template alias application root was not an alias", .{});
+    }
+    const generic_alias = generic_payload.alias;
     const alias_name = generic_alias.name;
     const origin_module = generic_alias.origin_module;
     const owner_module = generic_alias.owner_module;
@@ -5506,7 +5701,17 @@ fn declaredRecordFieldsFromDeclarationAnno(
         switch (module.moduleEnvConst().store.getTypeAnno(record_anno)) {
             .parens => |parens| record_anno = parens.anno,
             .record => |record| break record,
-            else => return &.{},
+            .apply,
+            .rigid_var,
+            .rigid_var_lookup,
+            .underscore,
+            .lookup,
+            .tag_union,
+            .tag,
+            .tuple,
+            .@"fn",
+            .malformed,
+            => return &.{},
         }
     };
     const fields = module.moduleEnvConst().store.sliceAnnoRecordFields(record.fields);
@@ -5572,7 +5777,18 @@ fn checkedTagsFromDeclarationAnnoSpan(
         const anno = module.moduleEnvConst().store.getTypeAnno(anno_idx);
         const tag = switch (anno) {
             .tag => |tag| tag,
-            else => checkedArtifactInvariant("nominal declaration tag union contained a non-tag annotation", .{}),
+            .apply,
+            .rigid_var,
+            .rigid_var_lookup,
+            .underscore,
+            .lookup,
+            .tag_union,
+            .tuple,
+            .record,
+            .@"fn",
+            .parens,
+            .malformed,
+            => checkedArtifactInvariant("nominal declaration tag union contained a non-tag annotation", .{}),
         };
         out[i] = .{
             .name = try names.internTagIdent(module.identStoreConst(), tag.name),
@@ -5681,10 +5897,10 @@ fn appendNominalDeclarationRootPayload(
     var payload_owned = true;
     errdefer if (payload_owned) deinitCheckedTypePayloadBuild(allocator, &owned_payload);
 
-    const nominal = switch (owned_payload) {
-        .nominal => |nominal_payload| nominal_payload,
-        else => checkedArtifactInvariant("nominal declaration root payload was not nominal", .{}),
-    };
+    if (owned_payload != .nominal) {
+        checkedArtifactInvariant("nominal declaration root payload was not nominal", .{});
+    }
+    const nominal = owned_payload.nominal;
 
     const key_info = try checkedTypePayloadKeyBuild(allocator, names, store, owned_payload);
     if (store.rootForKey(key_info.key)) |existing| {
@@ -5692,10 +5908,10 @@ fn appendNominalDeclarationRootPayload(
         if (index >= store.payloads.items.len) {
             checkedArtifactInvariant("nominal declaration root key referenced a missing payload", .{});
         }
-        const existing_nominal = switch (store.payloads.items[index]) {
-            .nominal => |existing_payload| existing_payload,
-            else => checkedArtifactInvariant("nominal declaration key collided with a non-nominal payload", .{}),
-        };
+        if (store.payloads.items[index] != .nominal) {
+            checkedArtifactInvariant("nominal declaration key collided with a non-nominal payload", .{});
+        }
+        const existing_nominal = store.payloads.items[index].nominal;
         // The canonical key already includes the semantic formal-arg shapes.
         // The checked root ids can differ when the same nominal declaration is
         // reached through a declaration root and a use-site root.
@@ -5762,10 +5978,11 @@ fn appendCheckedNominalDeclarationFromPayload(
     if (index >= store.payloads.items.len) {
         checkedArtifactInvariant("nominal declaration referenced a missing checked type root", .{});
     }
-    const nominal = switch (store.payload(root)) {
-        .nominal => |nominal| nominal,
-        else => checkedArtifactInvariant("nominal declaration root was not a nominal checked type", .{}),
-    };
+    const root_payload = store.payload(root);
+    if (root_payload != .nominal) {
+        checkedArtifactInvariant("nominal declaration root was not a nominal checked type", .{});
+    }
+    const nominal = root_payload.nominal;
 
     const nominal_key = canonical.NominalTypeKey{
         .module = nominal.origin_module,
@@ -5944,30 +6161,34 @@ fn checkedTypePayloadBuildEqlStored(
             "identity-bearing payload reached the closed structural interner",
             .{},
         ),
-        .alias => |left| switch (stored) {
-            .alias => |right| left.name == right.name and
+        .alias => |left| blk: {
+            if (stored != .alias) break :blk false;
+            const right = stored.alias;
+            break :blk left.name == right.name and
                 left.origin_module == right.origin_module and
                 checkedArtifactKeyEql(left.owner_module, right.owner_module) and
                 left.source_decl == right.source_decl and
                 left.builtin_origin == right.builtin_origin and
                 left.backing == right.backing and
-                checkedTypeIdSliceEql(left.args, right.args),
-            else => false,
+                checkedTypeIdSliceEql(left.args, right.args);
         },
-        .record => |left| switch (stored) {
-            .record => |right| left.ext == right.ext and checkedRecordFieldSliceEql(left.fields, right.fields),
-            else => false,
+        .record => |left| blk: {
+            if (stored != .record) break :blk false;
+            const right = stored.record;
+            break :blk left.ext == right.ext and checkedRecordFieldSliceEql(left.fields, right.fields);
         },
-        .record_unbound => |left| switch (stored) {
-            .record_unbound => |right| checkedRecordFieldSliceEql(left, right),
-            else => false,
+        .record_unbound => |left| blk: {
+            if (stored != .record_unbound) break :blk false;
+            break :blk checkedRecordFieldSliceEql(left, stored.record_unbound);
         },
-        .tuple => |left| switch (stored) {
-            .tuple => |right| checkedTypeIdSliceEql(left, right),
-            else => false,
+        .tuple => |left| blk: {
+            if (stored != .tuple) break :blk false;
+            break :blk checkedTypeIdSliceEql(left, stored.tuple);
         },
-        .nominal => |left| switch (stored) {
-            .nominal => |right| left.name == right.name and
+        .nominal => |left| blk: {
+            if (stored != .nominal) break :blk false;
+            const right = stored.nominal;
+            break :blk left.name == right.name and
                 left.origin_module == right.origin_module and
                 checkedArtifactKeyEql(left.owner_module, right.owner_module) and
                 left.source_decl == right.source_decl and
@@ -5975,19 +6196,20 @@ fn checkedTypePayloadBuildEqlStored(
                 left.is_opaque == right.is_opaque and
                 std.meta.eql(left.representation, right.representation) and
                 checkedTypeIdSliceEql(left.args, right.args) and
-                checkedTypeIdSliceEql(left.padding_field_types, right.padding_field_types),
-            else => false,
+                checkedTypeIdSliceEql(left.padding_field_types, right.padding_field_types);
         },
-        .function => |left| switch (stored) {
-            .function => |right| finalizedFunctionKind(left.kind) == finalizedFunctionKind(right.kind) and
+        .function => |left| blk: {
+            if (stored != .function) break :blk false;
+            const right = stored.function;
+            break :blk finalizedFunctionKind(left.kind) == finalizedFunctionKind(right.kind) and
                 left.ret == right.ret and
-                checkedTypeIdSliceEql(left.args, right.args),
-            else => false,
+                checkedTypeIdSliceEql(left.args, right.args);
         },
-        .tag_union => |left| switch (stored) {
-            .tag_union => |right| left.ext == right.ext and
-                checkedTagBuildSliceEqlStored(left.tags, right.tags, store),
-            else => false,
+        .tag_union => |left| blk: {
+            if (stored != .tag_union) break :blk false;
+            const right = stored.tag_union;
+            break :blk left.ext == right.ext and
+                checkedTagBuildSliceEqlStored(left.tags, right.tags, store);
         },
     };
 }
@@ -6119,10 +6341,15 @@ fn embedReachableImportedNominalDecls(
     while (i < store.payloads.items.len) : (i += 1) {
         // Read only scalar identity fields: the payload's slice fields alias
         // pools that projection below can reallocate.
-        const origin_module, const owner_module, const type_name, const source_decl, const builtin_nominal, const representation = switch (store.payloads.items[i]) {
-            .nominal => |nominal| .{ nominal.origin_module, nominal.owner_module, nominal.name, nominal.source_decl, nominal.builtin, nominal.representation },
-            else => continue,
-        };
+        const payload = store.payloads.items[i];
+        if (payload != .nominal) continue;
+        const nominal = payload.nominal;
+        const origin_module = nominal.origin_module;
+        const owner_module = nominal.owner_module;
+        const type_name = nominal.name;
+        const source_decl = nominal.source_decl;
+        const builtin_nominal = nominal.builtin;
+        const representation = nominal.representation;
 
         const key = canonical.NominalTypeKey{
             .module = origin_module,
@@ -6247,7 +6474,18 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         switch (self.store.payload(@enumFromInt(raw))) {
             .flex => |flex| return try self.writeIdentityVariable(id, "flex", flex.name, flex.constraints),
             .rigid => |rigid| return try self.writeIdentityVariable(id, "rigid", rigid.name, rigid.constraints),
-            else => {},
+            .pending,
+            .err,
+            .alias,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => {},
         }
 
         if (self.active.get(id)) |slot| {
@@ -6412,7 +6650,17 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                     try self.appendRecordFieldsForKey(&fields, record_fields);
                     tail = null;
                 },
-                else => break,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .tuple,
+                .nominal,
+                .function,
+                .tag_union,
+                .empty_tag_union,
+                => break,
             }
         }
 
@@ -6465,7 +6713,17 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                     try self.appendRecordFieldsForKey(&fields, record_fields);
                     tail = null;
                 },
-                else => break,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .tuple,
+                .nominal,
+                .function,
+                .tag_union,
+                .empty_tag_union,
+                => break,
             }
         }
 
@@ -6544,7 +6802,18 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                     try self.appendTagsForKey(&tags, tag_union.tags);
                     tail = self.substitutedRoot(tag_union.ext);
                 },
-                else => break,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                => break,
             }
         }
 
@@ -6730,14 +6999,10 @@ fn appendStaticDispatchTypeRoots(
     var node_idx: u32 = 0;
     while (node_idx < module.nodeCount()) : (node_idx += 1) {
         const tag = module.nodeTag(@enumFromInt(node_idx));
-        switch (tag) {
-            .expr_dispatch_call,
-            .expr_interpolation,
-            .expr_type_dispatch_call,
-            .expr_method_eq,
-            => {},
-            else => continue,
-        }
+        if (tag != .expr_dispatch_call and
+            tag != .expr_interpolation and
+            tag != .expr_type_dispatch_call and
+            tag != .expr_method_eq) continue;
 
         const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
         if (!source_nodes.hasExpr(expr_idx)) continue;
@@ -6785,7 +7050,62 @@ fn appendStaticDispatchTypeRoots(
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.exprType(eq.lhs));
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, eq.constraint_fn_var);
             },
-            else => unreachable,
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_match,
+            .e_if,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_tag,
+            .e_nominal,
+            .e_nominal_external,
+            .e_zero_argument_tag,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_unary_not,
+            .e_field_access,
+            .e_method_call,
+            .e_structural_eq,
+            .e_structural_hash,
+            .e_type_method_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_dbg,
+            .e_expect_err,
+            .e_expect,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_return,
+            .e_break,
+            .e_for,
+            .e_hosted_lambda,
+            .e_run_low_level,
+            => unreachable,
         }
     }
 
@@ -7170,7 +7490,17 @@ fn applyCheckedTypeRowDefault(
         .pending => {},
         .flex => |*variable| setStoredTypeVariableRowDefault(variable, default),
         .rigid => |*variable| setStoredTypeVariableRowDefault(variable, default),
-        else => {},
+        .err,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        .tag_union,
+        .empty_tag_union,
+        => {},
     }
 }
 
@@ -7332,14 +7662,14 @@ fn copyCheckedFlatType(
 fn checkedRecordExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
     return switch (module.typeStoreConst().resolveVar(ext).desc.content) {
         .structure => |flat| flat == .empty_record,
-        else => false,
+        .flex, .rigid, .alias, .err => false,
     };
 }
 
 fn checkedTagUnionExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
     return switch (module.typeStoreConst().resolveVar(ext).desc.content) {
         .structure => |flat| flat == .empty_tag_union,
-        else => false,
+        .flex, .rigid, .alias, .err => false,
     };
 }
 
@@ -7571,16 +7901,16 @@ fn checkedBuiltinNominalForSourceDecl(module_env: *const ModuleEnv, source_decl:
 fn sourceDeclTypeIdent(module_env: *const ModuleEnv, source_decl: u32) ?base.Ident.Idx {
     if (source_decl >= module_env.store.nodes.len()) return null;
     const node: CIR.Node.Idx = @enumFromInt(source_decl);
-    switch (module_env.store.nodes.get(node).tag) {
-        .statement_alias_decl, .statement_nominal_decl => {},
-        else => return null,
-    }
+    const node_tag = module_env.store.nodes.get(node).tag;
+    if (node_tag != .statement_alias_decl and node_tag != .statement_nominal_decl) return null;
     const statement_idx: CIR.Statement.Idx = @enumFromInt(source_decl);
-    const header_idx = switch (module_env.store.getStatement(statement_idx)) {
-        .s_nominal_decl => |nominal| nominal.header,
-        .s_alias_decl => |alias| alias.header,
-        else => return null,
-    };
+    const statement = module_env.store.getStatement(statement_idx);
+    const header_idx = if (statement == .s_nominal_decl)
+        statement.s_nominal_decl.header
+    else if (statement == .s_alias_decl)
+        statement.s_alias_decl.header
+    else
+        return null;
     return module_env.store.getTypeHeader(header_idx).name;
 }
 
@@ -7696,15 +8026,34 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     const nominal_stmt = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
         switch (module_env.store.getStatement(statement_idx)) {
             .s_nominal_decl => break statement_idx,
-            else => {},
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_alias_decl,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
         }
     } else return error.ExpectedNominalStatement;
 
     const nominal_root = publication.rootForSourceVar(module, ModuleEnv.varFrom(nominal_stmt)) orelse return error.ExpectedNominalRoot;
-    const nominal = switch (publication.store.payload(nominal_root)) {
-        .nominal => |payload| payload,
-        else => return error.ExpectedNominalPayload,
-    };
+    const nominal_payload = publication.store.payload(nominal_root);
+    if (nominal_payload != .nominal) return error.ExpectedNominalPayload;
+    const nominal = nominal_payload.nominal;
     const backing = publication.store.nominalBackingTemplateForPayload(nominal) orelse return error.ExpectedNominalBacking;
     try testing.expectEqual(expected, publication.store.payload(backing));
 }
@@ -7765,10 +8114,9 @@ test "checked output preserves shared defaulted empty-tag identity" {
             const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, identity);
             const second = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, alias);
             try std.testing.expectEqual(first, second);
-            const variable = switch (store.payload(first)) {
-                .flex => |flex| flex,
-                else => return error.ExpectedFlexIdentity,
-            };
+            const first_payload = store.payload(first);
+            if (first_payload != .flex) return error.ExpectedFlexIdentity;
+            const variable = first_payload.flex;
             try std.testing.expectEqual(RowDefault.empty_tag_union, variable.row_default.?);
         }
     }.inspect);
@@ -7786,10 +8134,9 @@ test "checked output preserves distinct defaulted empty-tag identities" {
             const second = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, second_identity);
             try std.testing.expect(first != second);
             for ([_]CheckedTypeId{ first, second }) |root| {
-                const variable = switch (store.payload(root)) {
-                    .flex => |flex| flex,
-                    else => return error.ExpectedFlexIdentity,
-                };
+                const payload = store.payload(root);
+                if (payload != .flex) return error.ExpectedFlexIdentity;
+                const variable = payload.flex;
                 try std.testing.expectEqual(RowDefault.empty_tag_union, variable.row_default.?);
             }
         }
@@ -7858,13 +8205,9 @@ test "checker marks exhaustiveness-defaulted empty payload provenance" {
     if (defs.len == 0) return error.TestUnexpectedResult;
     const x_var = ModuleEnv.varFrom(defs[0]);
 
-    const nominal = switch (test_env.module_env.types.resolveVar(x_var).desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |value| value,
-            else => return error.TestUnexpectedResult,
-        },
-        else => return error.TestUnexpectedResult,
-    };
+    const x_content = test_env.module_env.types.resolveVar(x_var).desc.content;
+    if (x_content != .structure or x_content.structure != .nominal_type) return error.TestUnexpectedResult;
+    const nominal = x_content.structure.nominal_type;
     const args = test_env.module_env.types.sliceVars(nominal.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
     const err_desc = test_env.module_env.types.resolveVar(args[1]).desc;
@@ -7881,16 +8224,14 @@ test "checked output retains defaulted identity inside parent function digest" {
             const function_content = try type_store.mkFuncPure(&.{identity}, identity);
             const function_var = try type_store.freshFromContent(function_content);
             const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, function_var);
-            const function = switch (store.payload(root)) {
-                .function => |payload| payload,
-                else => return error.ExpectedFunctionPayload,
-            };
+            const root_payload = store.payload(root);
+            if (root_payload != .function) return error.ExpectedFunctionPayload;
+            const function = root_payload.function;
             try std.testing.expectEqual(@as(usize, 1), function.args.len);
             try std.testing.expectEqual(function.args[0], function.ret);
-            const variable = switch (store.payload(function.ret)) {
-                .flex => |flex| flex,
-                else => return error.ExpectedFlexIdentity,
-            };
+            const return_payload = store.payload(function.ret);
+            if (return_payload != .flex) return error.ExpectedFlexIdentity;
+            const variable = return_payload.flex;
             try std.testing.expectEqual(RowDefault.empty_tag_union, variable.row_default.?);
         }
     }.inspect);
@@ -8100,10 +8441,9 @@ fn localNominalDeclarationIdForStatement(
     var next_id: u32 = 0;
     const module_env = module.moduleEnvConst();
     for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
-        const nominal = switch (module.getStatement(candidate)) {
-            .s_nominal_decl => |nominal| nominal,
-            else => continue,
-        };
+        const statement = module.getStatement(candidate);
+        if (statement != .s_nominal_decl) continue;
+        const nominal = statement.s_nominal_decl;
         if (nominal.anno == .placeholder) continue;
         if (!localNominalDeclarationIsValid(module, candidate)) continue;
         const id: CheckedNominalDeclarationId = @enumFromInt(next_id);
@@ -9933,30 +10273,30 @@ pub const CheckedBodyStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const checked_expr = source_node_map.exprAtRawNode(node_idx) orelse continue;
             const source_expr: CIR.Expr.Idx = @enumFromInt(node_idx);
-            dispatch_operands[@intFromEnum(checked_expr)] = switch (module.expr(source_expr).data) {
-                .e_dispatch_call => |call| blk: {
-                    const source_args = module.sliceExpr(call.args);
-                    const operands = try allocator.alloc(CheckedExprId, source_args.len + 1);
-                    operands[0] = source_node_map.expr(call.receiver) orelse checkedArtifactInvariant("checked dispatch receiver was not recorded in the source node map", .{});
-                    for (source_args, 0..) |arg, index| {
-                        operands[index + 1] = source_node_map.expr(arg) orelse checkedArtifactInvariant("checked dispatch argument was not recorded in the source node map", .{});
-                    }
-                    break :blk operands;
-                },
-                .e_method_eq => |eq| try allocator.dupe(CheckedExprId, &.{
-                    source_node_map.expr(eq.lhs) orelse checkedArtifactInvariant("checked method equality lhs was not recorded in the source node map", .{}),
-                    source_node_map.expr(eq.rhs) orelse checkedArtifactInvariant("checked method equality rhs was not recorded in the source node map", .{}),
-                }),
-                .e_type_dispatch_call => |call| blk: {
-                    const source_args = module.sliceExpr(call.args);
-                    const operands = try allocator.alloc(CheckedExprId, source_args.len);
-                    for (source_args, 0..) |arg, index| {
-                        operands[index] = source_node_map.expr(arg) orelse checkedArtifactInvariant("checked type-dispatch argument was not recorded in the source node map", .{});
-                    }
-                    break :blk operands;
-                },
-                else => &.{},
-            };
+            const source_data = module.expr(source_expr).data;
+            dispatch_operands[@intFromEnum(checked_expr)] = if (source_data == .e_dispatch_call) blk: {
+                const call = source_data.e_dispatch_call;
+                const source_args = module.sliceExpr(call.args);
+                const operands = try allocator.alloc(CheckedExprId, source_args.len + 1);
+                operands[0] = source_node_map.expr(call.receiver) orelse checkedArtifactInvariant("checked dispatch receiver was not recorded in the source node map", .{});
+                for (source_args, 0..) |arg, index| {
+                    operands[index + 1] = source_node_map.expr(arg) orelse checkedArtifactInvariant("checked dispatch argument was not recorded in the source node map", .{});
+                }
+                break :blk operands;
+            } else if (source_data == .e_method_eq)
+                try allocator.dupe(CheckedExprId, &.{
+                    source_node_map.expr(source_data.e_method_eq.lhs) orelse checkedArtifactInvariant("checked method equality lhs was not recorded in the source node map", .{}),
+                    source_node_map.expr(source_data.e_method_eq.rhs) orelse checkedArtifactInvariant("checked method equality rhs was not recorded in the source node map", .{}),
+                })
+            else if (source_data == .e_type_dispatch_call) blk: {
+                const call = source_data.e_type_dispatch_call;
+                const source_args = module.sliceExpr(call.args);
+                const operands = try allocator.alloc(CheckedExprId, source_args.len);
+                for (source_args, 0..) |arg, index| {
+                    operands[index] = source_node_map.expr(arg) orelse checkedArtifactInvariant("checked type-dispatch argument was not recorded in the source node map", .{});
+                }
+                break :blk operands;
+            } else &.{};
         }
 
         // Allocated after the copy pass because copying literal patterns may
@@ -10529,20 +10869,22 @@ pub const CheckedBodyStore = struct {
                 unreachable;
             };
             const data = &self.stored_exprs.items[@intFromEnum(checked_expr)].data;
-            switch (data.*) {
-                .dispatch_call => data.* = .{ .dispatch_call = plan_id },
-                .interpolation => |*interpolation| interpolation.plan = plan_id,
-                .method_eq => data.* = .{ .method_eq = plan_id },
-                .type_dispatch_call => data.* = .{ .type_dispatch_call = plan_id },
-                else => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "checked artifact invariant violated: static dispatch plan {d} points at non-dispatch checked expression {d}",
-                            .{ @intFromEnum(plan_id), @intFromEnum(checked_expr) },
-                        );
-                    }
-                    unreachable;
-                },
+            if (data.* == .dispatch_call) {
+                data.* = .{ .dispatch_call = plan_id };
+            } else if (data.* == .interpolation) {
+                data.interpolation.plan = plan_id;
+            } else if (data.* == .method_eq) {
+                data.* = .{ .method_eq = plan_id };
+            } else if (data.* == .type_dispatch_call) {
+                data.* = .{ .type_dispatch_call = plan_id };
+            } else {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: static dispatch plan {d} points at non-dispatch checked expression {d}",
+                        .{ @intFromEnum(plan_id), @intFromEnum(checked_expr) },
+                    );
+                }
+                unreachable;
             }
         }
     }
@@ -10557,25 +10899,25 @@ pub const CheckedBodyStore = struct {
 
             if (self.source_node_map.exprAtRawNode(raw_node)) |checked_expr| {
                 const data = &self.stored_exprs.items[@intFromEnum(checked_expr)].data;
-                switch (data.*) {
-                    .for_ => |*for_| for_.plan = plan_val,
-                    else => checkedArtifactInvariant(
+                if (data.* != .for_) {
+                    checkedArtifactInvariant(
                         "iterator-for plan {d} points at non-for checked expression {d}",
                         .{ @intFromEnum(plan_val), @intFromEnum(checked_expr) },
-                    ),
+                    );
                 }
+                data.for_.plan = plan_val;
                 continue;
             }
 
             if (self.source_node_map.statementAtRawNode(raw_node)) |checked_statement| {
                 const data = &self.stored_statements.items[@intFromEnum(checked_statement)].data;
-                switch (data.*) {
-                    .for_ => |*for_| for_.plan = plan_val,
-                    else => checkedArtifactInvariant(
+                if (data.* != .for_) {
+                    checkedArtifactInvariant(
                         "iterator-for plan {d} points at non-for checked statement {d}",
                         .{ @intFromEnum(plan_val), @intFromEnum(checked_statement) },
-                    ),
+                    );
                 }
+                data.for_.plan = plan_val;
                 continue;
             }
 
@@ -10602,13 +10944,13 @@ pub const CheckedBodyStore = struct {
                     );
                 };
             const data = &self.stored_exprs.items[@intFromEnum(checked_expr)].data;
-            switch (data.*) {
-                .numeral => |*numeral| numeral.plan = plan_id,
-                else => checkedArtifactInvariant(
+            if (data.* != .numeral) {
+                checkedArtifactInvariant(
                     "from_numeral plan {d} points at non-numeral checked expression {d}",
                     .{ @intFromEnum(plan_id), @intFromEnum(checked_expr) },
-                ),
+                );
             }
+            data.numeral.plan = plan_id;
         }
     }
 
@@ -10628,19 +10970,22 @@ pub const CheckedBodyStore = struct {
                     );
                 };
             const data = &self.stored_exprs.items[@intFromEnum(checked_expr)].data;
-            switch (data.*) {
-                .str_from_quote => |quote| data.* = .{ .str_from_quote = .{
+            if (data.* == .str_from_quote) {
+                const quote = data.str_from_quote;
+                data.* = .{ .str_from_quote = .{
                     .plan = plan_id,
                     .literal = quote.literal,
-                } },
-                .str, .str_segment => checkedArtifactInvariant(
+                } };
+            } else if (data.* == .str or data.* == .str_segment) {
+                checkedArtifactInvariant(
                     "from_quote plan {d} points at a direct string checked expression {d}",
                     .{ @intFromEnum(plan_id), @intFromEnum(checked_expr) },
-                ),
-                else => checkedArtifactInvariant(
+                );
+            } else {
+                checkedArtifactInvariant(
                     "from_quote plan {d} points at non-string checked expression {d}",
                     .{ @intFromEnum(plan_id), @intFromEnum(checked_expr) },
-                ),
+                );
             }
         }
     }
@@ -10667,39 +11012,38 @@ pub const CheckedBodyStore = struct {
             };
             std.debug.assert(ref_id == indexed);
             const data = &self.stored_exprs.items[@intFromEnum(record.expr)].data;
-            switch (data.*) {
-                .lookup_local => |lookup| data.* = .{ .lookup_local = .{
+            if (data.* == .lookup_local) {
+                const lookup = data.lookup_local;
+                data.* = .{ .lookup_local = .{
                     .pattern = lookup.pattern,
                     .resolved = ref_id,
-                } },
-                .lookup_external => data.* = .{ .lookup_external = ref_id },
-                .lookup_required => data.* = .{ .lookup_required = ref_id },
-                else => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "checked artifact invariant violated: resolved value ref {d} points at non-lookup checked expression {d}",
-                            .{ i, @intFromEnum(record.expr) },
-                        );
-                    }
-                    unreachable;
-                },
+                } };
+            } else if (data.* == .lookup_external) {
+                data.* = .{ .lookup_external = ref_id };
+            } else if (data.* == .lookup_required) {
+                data.* = .{ .lookup_required = ref_id };
+            } else {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: resolved value ref {d} points at non-lookup checked expression {d}",
+                        .{ i, @intFromEnum(record.expr) },
+                    );
+                }
+                unreachable;
             }
         }
 
         for (self.stored_exprs.items) |*checked_expr| {
-            switch (checked_expr.data) {
-                .call => |*call| {
-                    call.direct_target = directProcedureTargetForCall(
-                        refs,
-                        call.func,
-                        local_module,
-                        local_procedure_bindings,
-                        imports,
-                        available_modules,
-                        relation_modules,
-                    );
-                },
-                else => {},
+            if (checked_expr.data == .call) {
+                checked_expr.data.call.direct_target = directProcedureTargetForCall(
+                    refs,
+                    checked_expr.data.call.func,
+                    local_module,
+                    local_procedure_bindings,
+                    imports,
+                    available_modules,
+                    relation_modules,
+                );
             }
         }
     }
@@ -10916,26 +11260,29 @@ fn checkedExprEvaluationMayBeElidedForInspect(
         .fresh => {},
     }
     states[index] = .active;
-    const result = switch (exprs[index].data) {
-        .lambda,
-        .closure,
-        .lookup_local,
-        .lookup_external,
-        .lookup_required,
-        => true,
-        .field_access => |access| blk: {
+    const data = exprs[index].data;
+    const result = blk: {
+        if (data == .lambda or
+            data == .closure or
+            data == .lookup_local or
+            data == .lookup_external or
+            data == .lookup_required)
+        {
+            break :blk true;
+        }
+        if (data == .field_access) {
+            const access = data.field_access;
             const receiver_index = @intFromEnum(access.receiver);
             if (receiver_index >= exprs.len) checkedArtifactInvariant("checked inspect-elision field access referenced a missing receiver", .{});
-            const record = switch (exprs[receiver_index].data) {
-                .record => |record| record,
-                else => break :blk false,
-            };
+            const receiver_data = exprs[receiver_index].data;
+            if (receiver_data != .record) break :blk false;
+            const record = receiver_data.record;
             if (record.ext != null or record.fields.len != 1) break :blk false;
             const field = record.fields[0];
             if (field.label != access.field_name) break :blk false;
             break :blk checkedExprEvaluationMayBeElidedForInspect(exprs, may_be_elided, field.value, states);
-        },
-        else => false,
+        }
+        break :blk false;
     };
     may_be_elided[index] = result;
     states[index] = .done;
@@ -12130,18 +12477,19 @@ const CheckedBodyPayloadCopier = struct {
     fn internQuoteBytes(self: *@This(), span: CIR.Expr.Span) Allocator.Error!CheckedStringLiteralId {
         const segments = self.module.sliceExpr(span);
         if (segments.len == 1) {
-            switch (self.module.expr(segments[0]).data) {
-                .e_str_segment => |seg| return try self.string_builder.intern(seg.literal),
-                else => {},
+            const segment = self.module.expr(segments[0]).data;
+            if (segment == .e_str_segment) {
+                return try self.string_builder.intern(segment.e_str_segment.literal);
             }
         }
         var bytes = std.ArrayList(u8).empty;
         defer bytes.deinit(self.allocator);
         for (segments) |seg_idx| {
-            switch (self.module.expr(seg_idx).data) {
-                .e_str_segment => |seg| try bytes.appendSlice(self.allocator, self.module.getString(seg.literal)),
-                else => checkedArtifactInvariant("from_quote literal contained an interpolation segment", .{}),
+            const segment = self.module.expr(seg_idx).data;
+            if (segment != .e_str_segment) {
+                checkedArtifactInvariant("from_quote literal contained an interpolation segment", .{});
             }
+            try bytes.appendSlice(self.allocator, self.module.getString(segment.e_str_segment.literal));
         }
         return try self.string_builder.internBytes(bytes.items);
     }
@@ -12798,11 +13146,10 @@ const CheckedBodyPayloadCopier = struct {
     }
 
     fn sourcePatternBinderIsReassignable(self: *const @This(), pattern: CIR.Pattern.Idx) bool {
-        return switch (self.module.pattern(pattern).data) {
-            .assign => |assign| assign.ident.attributes.reassignable,
-            .as => |as| as.ident.attributes.reassignable,
-            else => checkedArtifactInvariant("checked artifact invariant violated: non-binder pattern requested a pattern binder", .{}),
-        };
+        const pattern_data = self.module.pattern(pattern).data;
+        if (pattern_data == .assign) return pattern_data.assign.ident.attributes.reassignable;
+        if (pattern_data == .as) return pattern_data.as.ident.attributes.reassignable;
+        return checkedArtifactInvariant("checked artifact invariant violated: non-binder pattern requested a pattern binder", .{});
     }
 
     fn checkedStatement(self: *const @This(), statement: CIR.Statement.Idx) CheckedStatementId {
@@ -12830,7 +13177,15 @@ fn checkedConcreteBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: Chec
             .nominal => |nominal| return nominal.builtin,
             .flex, .rigid => return null,
             .pending => checkedArtifactInvariant("checked builtin lookup reached a pending type payload", .{}),
-            else => return null,
+            .err,
+            .record,
+            .record_unbound,
+            .tuple,
+            .function,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return null,
         }
     }
 }
@@ -12926,38 +13281,73 @@ fn deinitCheckedPatternData(allocator: Allocator, data: *CheckedPatternData) voi
 fn deinitCheckedStatementData(allocator: Allocator, data: *CheckedStatementData) void {
     switch (data.*) {
         .reassign => |reassign| allocator.free(reassign.reassigned_binders),
-        else => {},
+        .pending,
+        .decl,
+        .var_,
+        .var_uninitialized,
+        .crash,
+        .dbg,
+        .expr,
+        .expect,
+        .for_,
+        .while_,
+        .infinite_loop,
+        .breakable_loop,
+        .break_,
+        .return_,
+        .import_,
+        .alias_decl,
+        .where_alias_decl,
+        .nominal_decl,
+        .type_anno,
+        .type_var_alias,
+        .runtime_error,
+        => {},
     }
     data.* = .pending;
 }
 
 fn verifyCheckedExprDataComplete(data: StoredCheckedExprData) void {
-    switch (data) {
-        .pending => std.debug.panic("checked artifact invariant violated: checked expression payload was not filled", .{}),
-        .lookup_local => |lookup| std.debug.assert(lookup.resolved != null),
-        .lookup_external => |ref| std.debug.assert(ref != null),
-        .lookup_required => |ref| std.debug.assert(ref != null),
-        .dispatch_call => |plan| std.debug.assert(plan != null),
-        .interpolation => |interpolation| std.debug.assert(interpolation.plan != null),
-        .method_eq => |plan| std.debug.assert(plan != null),
-        .type_dispatch_call => |plan| std.debug.assert(plan != null),
-        .for_ => |for_| std.debug.assert(for_.plan != null),
-        else => {},
-    }
+    if (data == .pending) std.debug.panic("checked artifact invariant violated: checked expression payload was not filled", .{});
+    if (data == .lookup_local) std.debug.assert(data.lookup_local.resolved != null);
+    if (data == .lookup_external) std.debug.assert(data.lookup_external != null);
+    if (data == .lookup_required) std.debug.assert(data.lookup_required != null);
+    if (data == .dispatch_call) std.debug.assert(data.dispatch_call != null);
+    if (data == .interpolation) std.debug.assert(data.interpolation.plan != null);
+    if (data == .method_eq) std.debug.assert(data.method_eq != null);
+    if (data == .type_dispatch_call) std.debug.assert(data.type_dispatch_call != null);
+    if (data == .for_) std.debug.assert(data.for_.plan != null);
 }
 
 fn verifyCheckedPatternDataComplete(data: StoredCheckedPatternData) void {
-    switch (data) {
-        .pending => std.debug.panic("checked artifact invariant violated: checked pattern payload was not filled", .{}),
-        else => {},
-    }
+    if (data == .pending) std.debug.panic("checked artifact invariant violated: checked pattern payload was not filled", .{});
 }
 
 fn verifyCheckedStatementDataComplete(data: StoredCheckedStatementData) void {
     switch (data) {
         .pending => std.debug.panic("checked artifact invariant violated: checked statement payload was not filled", .{}),
         .for_ => |for_| std.debug.assert(for_.plan != null),
-        else => {},
+        .decl,
+        .var_,
+        .var_uninitialized,
+        .reassign,
+        .crash,
+        .dbg,
+        .expr,
+        .expect,
+        .while_,
+        .infinite_loop,
+        .breakable_loop,
+        .break_,
+        .return_,
+        .import_,
+        .alias_decl,
+        .where_alias_decl,
+        .nominal_decl,
+        .type_anno,
+        .type_var_alias,
+        .runtime_error,
+        => {},
     }
 }
 
@@ -13494,15 +13884,13 @@ pub const ResolvedValueRefTable = struct {
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const tag = module.nodeTag(@enumFromInt(node_idx));
-            switch (tag) {
-                .expr_var,
-                .expr_external_lookup,
-                .expr_associated_lookup_resolved,
-                .expr_required_lookup,
-                => {},
-                .expr_associated_lookup_local, .expr_associated_lookup => checkedArtifactInvariant("unresolved associated lookup reached resolved value publication", .{}),
-                else => continue,
+            if (tag == .expr_associated_lookup_local or tag == .expr_associated_lookup) {
+                checkedArtifactInvariant("unresolved associated lookup reached resolved value publication", .{});
             }
+            if (tag != .expr_var and
+                tag != .expr_external_lookup and
+                tag != .expr_associated_lookup_resolved and
+                tag != .expr_required_lookup) continue;
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
             const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
@@ -14311,56 +14699,43 @@ const LocalPatternRoleIndex = struct {
         var node_idx: u32 = 0;
         while (node_idx < node_count) : (node_idx += 1) {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
-            switch (module.nodeTag(node)) {
-                .statement_decl => {
-                    const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
-                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
-                    const decl = switch (module.getStatement(statement)) {
-                        .s_decl => |decl| decl,
-                        else => unreachable,
-                    };
-                    const role: LocalPatternStatementRole = if (isLocalProcExpr(module, decl.expr))
-                        .{ .local_proc = checked_bodies.exprIdForSource(decl.expr) orelse
-                            checkedArtifactInvariant("checked local procedure declaration has no checked expression", .{}) }
-                    else
-                        .local_value;
-                    putStatementRole(statement_roles, node_count, decl.pattern, role);
-                },
-                .statement_var => {
-                    const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
-                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
-                    const var_ = switch (module.getStatement(statement)) {
-                        .s_var => |var_| var_,
-                        else => unreachable,
-                    };
-                    putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
-                },
-                .statement_var_uninitialized => {
-                    const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
-                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
-                    const var_ = switch (module.getStatement(statement)) {
-                        .s_var_uninitialized => |var_| var_,
-                        else => unreachable,
-                    };
-                    putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
-                },
-                .expr_lambda => {
-                    const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-                    if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
-                    const expr = module.expr(@enumFromInt(node_idx));
-                    const lambda = switch (expr.data) {
-                        .e_lambda => |lambda| lambda,
-                        else => unreachable,
-                    };
-                    for (module.slicePatterns(lambda.args)) |arg| {
-                        const raw_pattern = @intFromEnum(arg);
-                        if (raw_pattern >= node_count) {
-                            checkedArtifactInvariant("checked artifact invariant violated: lambda argument pattern is out of range", .{});
-                        }
-                        lambda_args[raw_pattern] = true;
+            const node_tag = module.nodeTag(node);
+            if (node_tag == .statement_decl) {
+                const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                if (checked_bodies.source_node_map.statement(statement) == null) continue;
+                const statement_data = module.getStatement(statement);
+                if (statement_data != .s_decl) unreachable;
+                const decl = statement_data.s_decl;
+                const role: LocalPatternStatementRole = if (isLocalProcExpr(module, decl.expr))
+                    .{ .local_proc = checked_bodies.exprIdForSource(decl.expr) orelse
+                        checkedArtifactInvariant("checked local procedure declaration has no checked expression", .{}) }
+                else
+                    .local_value;
+                putStatementRole(statement_roles, node_count, decl.pattern, role);
+            } else if (node_tag == .statement_var) {
+                const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                if (checked_bodies.source_node_map.statement(statement) == null) continue;
+                const statement_data = module.getStatement(statement);
+                if (statement_data != .s_var) unreachable;
+                putStatementRole(statement_roles, node_count, statement_data.s_var.pattern_idx, .mutable_version);
+            } else if (node_tag == .statement_var_uninitialized) {
+                const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                if (checked_bodies.source_node_map.statement(statement) == null) continue;
+                const statement_data = module.getStatement(statement);
+                if (statement_data != .s_var_uninitialized) unreachable;
+                putStatementRole(statement_roles, node_count, statement_data.s_var_uninitialized.pattern_idx, .mutable_version);
+            } else if (node_tag == .expr_lambda) {
+                const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+                if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
+                const expr = module.expr(@enumFromInt(node_idx));
+                if (expr.data != .e_lambda) unreachable;
+                for (module.slicePatterns(expr.data.e_lambda.args)) |arg| {
+                    const raw_pattern = @intFromEnum(arg);
+                    if (raw_pattern >= node_count) {
+                        checkedArtifactInvariant("checked artifact invariant violated: lambda argument pattern is out of range", .{});
                     }
-                },
-                else => {},
+                    lambda_args[raw_pattern] = true;
+                }
             }
         }
 
@@ -14445,26 +14820,20 @@ fn patternIsBinder(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
     if (raw >= module.nodeCount()) {
         checkedArtifactInvariant("checked artifact invariant violated: binder lookup pattern is out of range", .{});
     }
-    return switch (module.nodeTag(@enumFromInt(raw))) {
-        .pattern_identifier,
-        .pattern_as,
-        .pattern_applied_tag,
-        .pattern_nominal,
-        .pattern_nominal_external,
-        .pattern_record_destructure,
-        .pattern_list,
-        .pattern_tuple,
-        => true,
-        else => false,
-    };
+    const tag = module.nodeTag(@enumFromInt(raw));
+    return tag == .pattern_identifier or
+        tag == .pattern_as or
+        tag == .pattern_applied_tag or
+        tag == .pattern_nominal or
+        tag == .pattern_nominal_external or
+        tag == .pattern_record_destructure or
+        tag == .pattern_list or
+        tag == .pattern_tuple;
 }
 
 fn isLocalProcExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
     const expr = module.expr(expr_idx);
-    return switch (expr.data) {
-        .e_lambda, .e_closure => true,
-        else => false,
-    };
+    return expr.data == .e_lambda or expr.data == .e_closure;
 }
 
 /// A generalized local function scope collected while walking template
@@ -14614,14 +14983,11 @@ fn sealCheckedProcedureTemplateRefs(
         while (raw_node < module.nodeCount()) : (raw_node += 1) {
             if (module.nodeTag(@enumFromInt(raw_node)) != .statement_decl) continue;
             const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
-            const decl = switch (module.getStatement(statement)) {
-                .s_decl => |decl| decl,
-                else => continue,
-            };
-            switch (module.expr(decl.expr).data) {
-                .e_lambda, .e_closure => {},
-                else => continue,
-            }
+            const statement_data = module.getStatement(statement);
+            if (statement_data != .s_decl) continue;
+            const decl = statement_data.s_decl;
+            const expr_data = module.expr(decl.expr).data;
+            if (expr_data != .e_lambda and expr_data != .e_closure) continue;
             const pattern_var = ModuleEnv.varFrom(decl.pattern);
             if (types_store.resolveVar(pattern_var).desc.rank != .generalized) continue;
             const checked_expr = checked_bodies.exprIdForSource(decl.expr) orelse continue;
@@ -14735,7 +15101,18 @@ fn sealCheckedProcedureTemplateRefs(
                     continue;
                 },
                 .local_proc => |local| local,
-                else => continue,
+                .selected_hoisted_const,
+                .top_level_const,
+                .imported_const,
+                .top_level_proc,
+                .imported_proc,
+                .hosted_proc,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                .platform_required_const,
+                .platform_required_proc,
+                .promoted_top_level_proc,
+                => continue,
             };
             if (collector.scope_by_checked_expr.get(local.expr) == null) {
                 try collector.specialization_relations.append(allocator, .{
@@ -14822,10 +15199,8 @@ fn publishLocalProcedureDispatchScopes(
     scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
 ) void {
     for (resolved_value_refs.records) |*record| {
-        const local = switch (record.ref) {
-            .local_proc => |*local| local,
-            else => continue,
-        };
+        if (record.ref != .local_proc) continue;
+        const local = &record.ref.local_proc;
 
         local.dispatch_scope = scope_by_checked_expr.get(local.expr);
     }
@@ -14836,10 +15211,8 @@ fn publishLocalMethodDispatchScopes(
     scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
 ) void {
     for (method_registry.entries) |*entry| {
-        const local = switch (entry.target.kind) {
-            .local_proc => |*local| local,
-            else => continue,
-        };
+        if (entry.target.kind != .local_proc) continue;
+        const local = &entry.target.kind.local_proc;
 
         local.dispatch_scope = scope_by_checked_expr.get(local.expr);
     }
@@ -15282,11 +15655,9 @@ const EvidencePass = struct {
             while (raw_node < self.module.nodeCount()) : (raw_node += 1) {
                 if (self.module.nodeTag(@enumFromInt(raw_node)) != .statement_decl) continue;
                 const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
-                const decl = switch (self.module.getStatement(statement)) {
-                    .s_decl => |decl| decl,
-                    else => continue,
-                };
-                try self.mapValueSchemeParams(decl.pattern, decl.expr, &scheme_params);
+                const statement_data = self.module.getStatement(statement);
+                if (statement_data != .s_decl) continue;
+                try self.mapValueSchemeParams(statement_data.s_decl.pattern, statement_data.s_decl.expr, &scheme_params);
             }
             // Top-level generalized VALUE defs (e.g. an `if` choosing between
             // closures) lower inline at their single use type exactly like
@@ -15341,7 +15712,15 @@ const EvidencePass = struct {
                 switch (path_step.stepKind()) {
                     .record_field => converted.data = @intFromEnum(try self.names.internRecordFieldIdent(idents, @bitCast(path_step.data))),
                     .tag_payload_tag => converted.data = @intFromEnum(try self.names.internTagIdent(idents, @bitCast(path_step.data))),
-                    else => {},
+                    .fn_arg,
+                    .fn_ret,
+                    .alias_arg,
+                    .alias_backing,
+                    .nominal_arg,
+                    .nominal_backing,
+                    .tuple_elem,
+                    .tag_payload_index,
+                    => {},
                 }
                 try self.evidence_param_paths.append(self.allocator, converted);
             }
@@ -15360,7 +15739,7 @@ const EvidencePass = struct {
         const constraints = switch (resolved.desc.content) {
             .flex => |flex| flex.constraints,
             .rigid => |rigid| rigid.constraints,
-            else => return null,
+            .alias, .structure, .err => return null,
         };
         return numericDefaultPhaseForConstraints(self.module, constraints);
     }
@@ -15417,10 +15796,8 @@ const EvidencePass = struct {
         expr: CIR.Expr.Idx,
         scheme_params: *std.ArrayListUnmanaged(EvidenceParam),
     ) Allocator.Error!void {
-        switch (self.module.expr(expr).data) {
-            .e_lambda, .e_closure => return,
-            else => {},
-        }
+        const expr_data = self.module.expr(expr).data;
+        if (expr_data == .e_lambda or expr_data == .e_closure) return;
         const pattern_var = ModuleEnv.varFrom(pattern);
         if (self.types.resolveVar(pattern_var).desc.rank != .generalized) return;
         scheme_params.clearRetainingCapacity();
@@ -15644,7 +16021,7 @@ const EvidencePass = struct {
         // unreachable and lowers to an explicit crash.
         if (structural_kind) |kind| switch (kind) {
             .map, .map_effectful => return .@"unreachable",
-            else => return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) },
+            .equality, .hash, .parser, .encoder => return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) },
         };
         return .@"unreachable";
     }
@@ -15721,9 +16098,18 @@ const EvidencePass = struct {
                             .source_decl = nominal.sourceDeclOptional(),
                         } };
                     },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 },
-                else => return null,
+                .flex, .rigid, .err => return null,
             }
         }
     }
@@ -15762,7 +16148,7 @@ const EvidencePass = struct {
     fn procedureEvidenceView(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceView {
         const procedure = switch (target.kind) {
             .procedure => |procedure| procedure,
-            else => checkedArtifactInvariant("procedure evidence view requested for a non-procedure target", .{}),
+            .local_proc, .structural => checkedArtifactInvariant("procedure evidence view requested for a non-procedure target", .{}),
         };
         const target_key = checkedArtifactKeyFromArtifactRef(procedure.template.artifact);
         const table: *const CheckedProcedureTemplateTable = imported: {
@@ -15832,7 +16218,7 @@ const EvidencePass = struct {
 
         const procedure_schema: ?ProcedureEvidenceSchema = switch (target.kind) {
             .procedure => self.procedureEvidenceSchema(target),
-            else => null,
+            .local_proc, .structural => null,
         };
         if (record_idx) |idx| {
             if (self.node_by_record.get(idx)) |memoized| return memoized;
@@ -16548,26 +16934,26 @@ const CheckedTemplateRefCollector = struct {
         }
 
         const expr = self.checked_bodies.expr(expr_id);
-        switch (expr.data) {
-            .lambda => |lambda| try self.appendProcedureRelation(
+        if (expr.data == .lambda) {
+            const lambda = expr.data.lambda;
+            try self.appendProcedureRelation(
                 expr_id,
                 expr.ty,
                 self.checked_bodies.expr(lambda.body).ty,
                 self.template_root_expr == expr_id or local_scheme != null,
-            ),
-            .closure => |closure| {
-                const lambda = switch (self.checked_bodies.expr(closure.lambda).data) {
-                    .lambda => |lambda| lambda,
-                    else => checkedArtifactInvariant("checked closure specialization relation did not reference a lambda", .{}),
-                };
-                try self.appendProcedureRelation(
-                    expr_id,
-                    expr.ty,
-                    self.checked_bodies.expr(lambda.body).ty,
-                    self.template_root_expr == expr_id or local_scheme != null,
-                );
-            },
-            else => {},
+            );
+        } else if (expr.data == .closure) {
+            const closure = expr.data.closure;
+            const lambda_data = self.checked_bodies.expr(closure.lambda).data;
+            if (lambda_data != .lambda) {
+                checkedArtifactInvariant("checked closure specialization relation did not reference a lambda", .{});
+            }
+            try self.appendProcedureRelation(
+                expr_id,
+                expr.ty,
+                self.checked_bodies.expr(lambda_data.lambda.body).ty,
+                self.template_root_expr == expr_id or local_scheme != null,
+            );
         }
         switch (expr.data) {
             .lookup_local => |lookup| {
@@ -16719,10 +17105,10 @@ const CheckedTemplateRefCollector = struct {
 
     fn collectGeneratedInterpolationIter(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
         const expr = self.checked_bodies.expr(expr_id);
-        const interpolation = switch (expr.data) {
-            .interpolation => |interpolation| interpolation,
-            else => checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{}),
-        };
+        if (expr.data != .interpolation) {
+            checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{});
+        }
+        const interpolation = expr.data.interpolation;
         for (interpolation.parts) |part| {
             try self.collectExpr(part.value);
             try self.collectExpr(part.following_segment);
@@ -17054,7 +17440,15 @@ fn checkedTypeIsClosedTagRow(
             .tag_union => |tag_union| current = tag_union.ext,
             .empty_tag_union => return true,
             .flex, .rigid => |variable| return variable.row_default == .empty_tag_union,
-            else => return false,
+            .pending,
+            .err,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            => return false,
         }
         if (remaining == 0) {
             checkedArtifactInvariant("hosted Try error row chain was cyclic", .{});
@@ -17130,7 +17524,18 @@ fn hostedTryAdapterCapabilityForRoot(
         switch (checked_types.payload(current)) {
             .alias => |alias| current = alias.backing,
             .function => |function| break function,
-            else => return null,
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return null,
         }
         if (remaining == 0) {
             checkedArtifactInvariant("hosted function type alias chain was cyclic", .{});
@@ -17143,7 +17548,18 @@ fn hostedTryAdapterCapabilityForRoot(
         switch (checked_types.payload(current)) {
             .alias => |alias| current = alias.backing,
             .nominal => |nominal| break nominal,
-            else => return null,
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .record,
+            .record_unbound,
+            .tuple,
+            .function,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return null,
         }
         if (remaining == 0) {
             checkedArtifactInvariant("hosted result type alias chain was cyclic", .{});
@@ -17781,10 +18197,10 @@ const NestedProcSiteBuilder = struct {
         owner: canonical.ProcedureTemplateRef,
     ) Allocator.Error!void {
         const expr = self.checked_bodies.expr(expr_id);
-        const interpolation = switch (expr.data) {
-            .interpolation => |interpolation| interpolation,
-            else => checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{}),
-        };
+        if (expr.data != .interpolation) {
+            checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{});
+        }
+        const interpolation = expr.data.interpolation;
         for (interpolation.parts) |part| {
             try self.scanExpr(part.value, owner, false);
             try self.scanExpr(part.following_segment, owner, false);
@@ -17913,7 +18329,7 @@ const NestedProcSiteBuilder = struct {
                     try self.scanExpr(local.expr, owner, false);
                 }
             },
-            else => {},
+            .procedure, .structural => {},
         };
     }
 };
@@ -17981,29 +18397,27 @@ pub const HostedProcTable = struct {
 
         for (hosted_defs) |def_idx| {
             const def = module.def(def_idx);
-            switch (def.expr.data) {
-                .e_hosted_lambda => |hosted| {
-                    const template_ref = templates.lookupByDef(def_idx) orelse {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic("checked artifact invariant violated: hosted procedure def has no checked template", .{});
-                        }
-                        unreachable;
-                    };
+            if (def.expr.data == .e_hosted_lambda) {
+                const hosted = def.expr.data.e_hosted_lambda;
+                const template_ref = templates.lookupByDef(def_idx) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("checked artifact invariant violated: hosted procedure def has no checked template", .{});
+                    }
+                    unreachable;
+                };
 
-                    try candidates.append(allocator, .{
-                        .module_idx = module.moduleIndex(),
-                        .def_idx = def_idx,
-                        .expr_idx = def.expr.idx,
-                        .external_symbol_name = try names.internExternalSymbolIdent(module.identStoreConst(), hosted.symbol_name),
-                        .proc = .{
-                            .artifact = template_ref.artifact,
-                            .proc_base = template_ref.proc_base,
-                        },
-                        .template = template_ref,
-                        .sort_key = try hostedProcSortKey(allocator, module, hosted.symbol_name),
-                    });
-                },
-                else => {},
+                try candidates.append(allocator, .{
+                    .module_idx = module.moduleIndex(),
+                    .def_idx = def_idx,
+                    .expr_idx = def.expr.idx,
+                    .external_symbol_name = try names.internExternalSymbolIdent(module.identStoreConst(), hosted.symbol_name),
+                    .proc = .{
+                        .artifact = template_ref.artifact,
+                        .proc_base = template_ref.proc_base,
+                    },
+                    .template = template_ref,
+                    .sort_key = try hostedProcSortKey(allocator, module, hosted.symbol_name),
+                });
             }
         }
 
@@ -18565,10 +18979,10 @@ fn appendForClauseAliasSubstitutions(
     const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
     for (aliases) |alias| {
         const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
-        const alias_anno = switch (alias_statement) {
-            .s_alias_decl => |decl| decl.anno,
-            else => checkedArtifactInvariant("platform/app relation alias substitution referenced a non-alias statement", .{}),
-        };
+        if (alias_statement != .s_alias_decl) {
+            checkedArtifactInvariant("platform/app relation alias substitution referenced a non-alias statement", .{});
+        }
+        const alias_anno = alias_statement.s_alias_decl.anno;
         const alias_anno_root = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias_anno)) orelse {
             checkedArtifactInvariant("platform/app relation alias substitution could not find alias backing checked root", .{});
         };
@@ -18578,9 +18992,9 @@ fn appendForClauseAliasSubstitutions(
             checkedArtifactInvariant("platform/app relation alias substitution could not find alias checked root", .{});
         };
         try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_root, resolved);
-        switch (checked_types.store.payload(alias_root)) {
-            .alias => |alias_payload| try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_payload.backing, resolved),
-            else => {},
+        const alias_payload = checked_types.store.payload(alias_root);
+        if (alias_payload == .alias) {
+            try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_payload.alias.backing, resolved);
         }
         try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_anno_root, resolved);
     }
@@ -19573,10 +19987,13 @@ fn checkedFunctionPayload(
     var current = root;
     var remaining = store.payloads.items.len;
     while (true) {
-        switch (store.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .function => |function| return function,
-            else => checkedArtifactInvariant(context ++ " was not a function", .{}),
+        const payload = store.payload(current);
+        if (payload == .alias) {
+            current = payload.alias.backing;
+        } else if (payload == .function) {
+            return payload.function;
+        } else {
+            checkedArtifactInvariant(context ++ " was not a function", .{});
         }
         if (remaining == 0) {
             checkedArtifactInvariant(context ++ " alias chain was cyclic", .{});
@@ -19615,40 +20032,50 @@ fn collectResolvedDispatchTargetSubstitutions(
     }
     if (checkedTypePayloadIsIdentity(plan_payload)) return;
 
-    switch (target_payload) {
-        .alias => |alias| return try collectResolvedDispatchTargetSubstitutions(
+    if (target_payload == .alias) {
+        return try collectResolvedDispatchTargetSubstitutions(
             allocator,
             names,
             store,
-            alias.backing,
+            target_payload.alias.backing,
             plan,
             formals,
             actuals,
             active,
             conflicts,
-        ),
-        else => {},
+        );
     }
-    switch (plan_payload) {
-        .alias => |alias| return try collectResolvedDispatchTargetSubstitutions(
+    if (plan_payload == .alias) {
+        return try collectResolvedDispatchTargetSubstitutions(
             allocator,
             names,
             store,
             target,
-            alias.backing,
+            plan_payload.alias.backing,
             formals,
             actuals,
             active,
             conflicts,
-        ),
-        else => {},
+        );
     }
 
     switch (target_payload) {
         .function => |target_fn| {
             const plan_fn = switch (plan_payload) {
                 .function => |function| function,
-                else => return,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return,
             };
             if (target_fn.args.len != plan_fn.args.len) return;
             for (target_fn.args, plan_fn.args) |target_arg, plan_arg| {
@@ -19668,7 +20095,19 @@ fn collectResolvedDispatchTargetSubstitutions(
         .nominal => |target_nominal| {
             const plan_nominal = switch (plan_payload) {
                 .nominal => |nominal| nominal,
-                else => {
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .record,
+                .record_unbound,
+                .tuple,
+                .function,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => {
                     if (!target_nominal.is_opaque) {
                         const target_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
                             allocator,
@@ -19726,7 +20165,19 @@ fn collectResolvedDispatchTargetSubstitutions(
         .tuple => |target_items| {
             const plan_items = switch (plan_payload) {
                 .tuple => |items| items,
-                else => return,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .record,
+                .record_unbound,
+                .nominal,
+                .function,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return,
             };
             if (target_items.len != plan_items.len) return;
             for (target_items, plan_items) |target_item, plan_item| {
@@ -19770,7 +20221,7 @@ fn collectResolvedDispatchTargetSubstitutions(
             active,
             conflicts,
         ),
-        else => {},
+        .pending, .err, .flex, .rigid, .alias => {},
     }
 }
 
@@ -19910,38 +20361,48 @@ fn collectDispatchPlanIdentitySubstitutions(
     }
     if (checkedTypePayloadIsIdentity(target_payload)) return;
 
-    switch (target_payload) {
-        .alias => |alias| return try collectDispatchPlanIdentitySubstitutions(
+    if (target_payload == .alias) {
+        return try collectDispatchPlanIdentitySubstitutions(
             allocator,
             names,
             store,
-            alias.backing,
+            target_payload.alias.backing,
             plan,
             formals,
             actuals,
             active,
-        ),
-        else => {},
+        );
     }
-    switch (plan_payload) {
-        .alias => |alias| return try collectDispatchPlanIdentitySubstitutions(
+    if (plan_payload == .alias) {
+        return try collectDispatchPlanIdentitySubstitutions(
             allocator,
             names,
             store,
             target,
-            alias.backing,
+            plan_payload.alias.backing,
             formals,
             actuals,
             active,
-        ),
-        else => {},
+        );
     }
 
     switch (target_payload) {
         .function => |target_fn| {
             const plan_fn = switch (plan_payload) {
                 .function => |function| function,
-                else => return,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return,
             };
             if (target_fn.args.len != plan_fn.args.len) return;
             for (target_fn.args, plan_fn.args) |target_arg, plan_arg| {
@@ -19970,7 +20431,19 @@ fn collectDispatchPlanIdentitySubstitutions(
         .nominal => |target_nominal| {
             const plan_nominal = switch (plan_payload) {
                 .nominal => |nominal| nominal,
-                else => {
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .record,
+                .record_unbound,
+                .tuple,
+                .function,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => {
                     if (!target_nominal.is_opaque) {
                         const target_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
                             allocator,
@@ -20026,7 +20499,19 @@ fn collectDispatchPlanIdentitySubstitutions(
         .tuple => |target_items| {
             const plan_items = switch (plan_payload) {
                 .tuple => |items| items,
-                else => return,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .record,
+                .record_unbound,
+                .nominal,
+                .function,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return,
             };
             if (target_items.len != plan_items.len) return;
             for (target_items, plan_items) |target_item, plan_item| {
@@ -20067,7 +20552,7 @@ fn collectDispatchPlanIdentitySubstitutions(
             actuals,
             active,
         ),
-        else => {},
+        .pending, .err, .flex, .rigid, .alias => {},
     }
 }
 
@@ -20573,7 +21058,16 @@ fn flattenPlatformRequirementRecordRow(
                 break;
             },
             .alias => |alias| tail = alias.backing,
-            else => break,
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .tuple,
+            .nominal,
+            .function,
+            .tag_union,
+            .empty_tag_union,
+            => break,
         }
     }
     return .{ .fields = try fields.toOwnedSlice(allocator), .tail = tail };
@@ -20616,7 +21110,17 @@ fn flattenPlatformRequirementTagRow(
                 tail = tag_union.ext;
             },
             .alias => |alias| tail = alias.backing,
-            else => break,
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            => break,
         }
     }
     return .{ .tags = try tags.toOwnedSlice(allocator), .tail = tail };
@@ -20639,7 +21143,18 @@ fn tagUnionParts(payload: CheckedTypePayload) ?RelationTagUnionParts {
     return switch (payload) {
         .tag_union => |tag_union| .{ .tags = tag_union.tags, .ext = tag_union.ext },
         .empty_tag_union => .{ .tags = &.{}, .ext = null },
-        else => null,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        => null,
     };
 }
 
@@ -20652,10 +21167,7 @@ const PlatformRequirementTypePair = struct {
 };
 
 fn checkedTypePayloadIsIdentity(payload: CheckedTypePayload) bool {
-    return switch (payload) {
-        .flex, .rigid => true,
-        else => false,
-    };
+    return payload == .flex or payload == .rigid;
 }
 
 const RelationRecordParts = struct {
@@ -20668,7 +21180,17 @@ fn recordParts(payload: CheckedTypePayload) ?RelationRecordParts {
         .record => |record| .{ .fields = record.fields, .ext = record.ext },
         .record_unbound => |fields| .{ .fields = fields, .ext = null },
         .empty_record => .{ .fields = &.{}, .ext = null },
-        else => null,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .tuple,
+        .nominal,
+        .function,
+        .tag_union,
+        .empty_tag_union,
+        => null,
     };
 }
 
@@ -20780,10 +21302,7 @@ fn topLevelDefSourceName(
 }
 
 fn topLevelDefSourceIdent(def: TypedCIR.Def) ?base.Ident.Idx {
-    return switch (def.pattern.data) {
-        .assign => |assign| assign.ident,
-        else => null,
-    };
+    return if (def.pattern.data == .assign) def.pattern.data.assign.ident else null;
 }
 
 fn publishProvidesMetadata(
@@ -20970,10 +21489,9 @@ pub const ModuleInterfaceCapabilities = struct {
         const published_payload_count = checked_types.payloads.items.len;
         var i: usize = 0;
         while (i < published_payload_count) : (i += 1) {
-            const nominal = switch (checked_types.payload(@enumFromInt(@as(u32, @intCast(i))))) {
-                .nominal => |nominal| nominal,
-                else => continue,
-            };
+            const payload = checked_types.payload(@enumFromInt(@as(u32, @intCast(i))));
+            if (payload != .nominal) continue;
+            const nominal = payload.nominal;
             if (nominal.builtin != null) continue;
             if (nominal.origin_module != current_module) continue;
             const source_key = checked_types.roots.items[i].key;
@@ -21551,15 +22069,13 @@ pub const CompileTimeRootTable = struct {
             const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
                 continue;
-            switch (checked_bodies.expr(checked_expr).data) {
-                .numeral => {},
-                else => continue,
-            }
+            if (checked_bodies.expr(checked_expr).data != .numeral) continue;
             const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var));
-            const try_ty = switch (checked_types.store.payload(fn_ty)) {
-                .function => |function| function.ret,
-                else => checkedArtifactInvariant("from_numeral dispatch plan type was not a function", .{}),
-            };
+            const fn_payload = checked_types.store.payload(fn_ty);
+            if (fn_payload != .function) {
+                checkedArtifactInvariant("from_numeral dispatch plan type was not a function", .{});
+            }
+            const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
@@ -21585,15 +22101,13 @@ pub const CompileTimeRootTable = struct {
             const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
                 continue;
-            switch (checked_bodies.expr(checked_expr).data) {
-                .str_from_quote => {},
-                else => continue,
-            }
+            if (checked_bodies.expr(checked_expr).data != .str_from_quote) continue;
             const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var));
-            const try_ty = switch (checked_types.store.payload(fn_ty)) {
-                .function => |function| function.ret,
-                else => checkedArtifactInvariant("from_quote dispatch plan type was not a function", .{}),
-            };
+            const fn_payload = checked_types.store.payload(fn_ty);
+            if (fn_payload != .function) {
+                checkedArtifactInvariant("from_quote dispatch plan type was not a function", .{});
+            }
+            const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
@@ -23905,7 +24419,26 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
         switch (module.getStatement(statement_idx)) {
             .s_alias_decl => {},
             .s_nominal_decl => if (!localNominalDeclarationIsValid(module, statement_idx)) continue,
-            else => continue,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => continue,
         }
 
         const root = checked_type_publication.rootForSourceVar(module, ModuleEnv.varFrom(statement_idx)) orelse {
@@ -25376,7 +25909,7 @@ const ImportedTemplateClosureBuilder = struct {
         };
         const top_level = switch (use.binding) {
             .top_level => |binding| binding,
-            else => return false,
+            .imported, .hosted, .platform_required => return false,
         };
         if (!std.meta.eql(top_level.artifact.bytes, self.artifact_key.bytes)) {
             checkedArtifactInvariant("top-level callable-eval closure dependency referenced a different artifact", .{});
@@ -26395,7 +26928,7 @@ pub const CheckedModuleArtifact = struct {
         return switch (root.kind) {
             .provided_export => self.providedEntrypointName(root),
             .platform_required_binding => self.requiredEntrypointName(root),
-            else => null,
+            .runtime_entrypoint, .hosted_export, .test_expect, .repl_expr, .dev_expr, .compile_time_constant, .compile_time_callable => null,
         };
     }
 
@@ -26800,7 +27333,19 @@ pub const CheckedModuleArtifact = struct {
         for (self.checked_types.payloads.items, 0..) |payload, i| {
             switch (payload) {
                 .pending => std.debug.panic("checked artifact invariant violated: checked type payload {d} was not filled before compile-time lowering", .{i}),
-                else => {},
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => {},
             }
         }
 
@@ -26833,7 +27378,7 @@ pub const CheckedModuleArtifact = struct {
                 const template = self.checked_procedure_templates.get(template_ref.template);
                 switch (template.target) {
                     .comptime_only => {},
-                    else => std.debug.panic("checked artifact invariant violated: compile-time root wrapper was not marked comptime_only", .{}),
+                    .roc, .hosted, .intrinsic, .entry => std.debug.panic("checked artifact invariant violated: compile-time root wrapper was not marked comptime_only", .{}),
                 }
             }
         }
@@ -26950,7 +27495,17 @@ pub const CheckedModuleArtifact = struct {
                     }
                     return null;
                 },
-                else => return null,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return null,
             }
         }
         return null;
@@ -26979,7 +27534,18 @@ pub const CheckedModuleArtifact = struct {
                     }
                     current = tag_union.ext;
                 },
-                else => return null,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                .empty_tag_union,
+                => return null,
             }
         }
         return null;
@@ -27002,45 +27568,37 @@ pub const CheckedModuleArtifact = struct {
             path_index += 1;
             const payload = checkedPayloadOrNull(view, ty) orelse return false;
             switch (kind) {
-                .fn_arg => switch (payload) {
-                    .function => |func| {
-                        if (path_step.data >= func.args.len) return false;
-                        ty = func.args[path_step.data];
-                    },
-                    else => return false,
+                .fn_arg => {
+                    if (payload != .function) return false;
+                    if (path_step.data >= payload.function.args.len) return false;
+                    ty = payload.function.args[path_step.data];
                 },
-                .fn_ret => switch (payload) {
-                    .function => |func| ty = func.ret,
-                    else => return false,
+                .fn_ret => {
+                    if (payload != .function) return false;
+                    ty = payload.function.ret;
                 },
-                .alias_arg => switch (payload) {
-                    .alias => |alias| {
-                        if (path_step.data >= alias.args.len) return false;
-                        ty = alias.args[path_step.data];
-                    },
-                    else => return false,
+                .alias_arg => {
+                    if (payload != .alias) return false;
+                    if (path_step.data >= payload.alias.args.len) return false;
+                    ty = payload.alias.args[path_step.data];
                 },
-                .alias_backing => switch (payload) {
-                    .alias => |alias| ty = alias.backing,
-                    else => return false,
+                .alias_backing => {
+                    if (payload != .alias) return false;
+                    ty = payload.alias.backing;
                 },
-                .nominal_arg => switch (payload) {
-                    .nominal => |nominal| {
-                        if (path_step.data >= nominal.args.len) return false;
-                        ty = nominal.args[path_step.data];
-                    },
-                    else => return false,
+                .nominal_arg => {
+                    if (payload != .nominal) return false;
+                    if (path_step.data >= payload.nominal.args.len) return false;
+                    ty = payload.nominal.args[path_step.data];
                 },
-                .nominal_backing => switch (payload) {
-                    .nominal => |nominal| ty = view.nominalBackingTemplateForPayload(nominal) orelse return false,
-                    else => return false,
+                .nominal_backing => {
+                    if (payload != .nominal) return false;
+                    ty = view.nominalBackingTemplateForPayload(payload.nominal) orelse return false;
                 },
-                .tuple_elem => switch (payload) {
-                    .tuple => |elems| {
-                        if (path_step.data >= elems.len) return false;
-                        ty = elems[path_step.data];
-                    },
-                    else => return false,
+                .tuple_elem => {
+                    if (payload != .tuple) return false;
+                    if (path_step.data >= payload.tuple.len) return false;
+                    ty = payload.tuple[path_step.data];
                 },
                 .record_field => {
                     if (path_step.data >= self.canonical_names.recordFieldLabelCount()) return false;
@@ -27085,22 +27643,30 @@ pub const CheckedModuleArtifact = struct {
         const table = &self.static_dispatch_plans;
 
         for (self.checked_bodies.stored_exprs.items) |expr| {
-            const expr_failure: ?DispatchEvidenceFailure = switch (expr.data) {
-                .dispatch_call, .type_dispatch_call, .method_eq => |maybe_plan| dispatchPlanFailure(table, maybe_plan, expr.id, true),
-                .interpolation => |interpolation| dispatchPlanFailure(table, interpolation.plan, expr.id, true),
-                .numeral => |numeral| dispatchPlanFailure(table, numeral.plan, expr.id, false),
-                .str_from_quote => |quote| dispatchPlanFailure(table, quote.plan, expr.id, false),
-                .for_ => |for_| iteratorPlanFailure(table, for_.plan, expr.id, null),
-                else => null,
-            };
+            const expr_failure: ?DispatchEvidenceFailure = if (expr.data == .dispatch_call)
+                dispatchPlanFailure(table, expr.data.dispatch_call, expr.id, true)
+            else if (expr.data == .type_dispatch_call)
+                dispatchPlanFailure(table, expr.data.type_dispatch_call, expr.id, true)
+            else if (expr.data == .method_eq)
+                dispatchPlanFailure(table, expr.data.method_eq, expr.id, true)
+            else if (expr.data == .interpolation)
+                dispatchPlanFailure(table, expr.data.interpolation.plan, expr.id, true)
+            else if (expr.data == .numeral)
+                dispatchPlanFailure(table, expr.data.numeral.plan, expr.id, false)
+            else if (expr.data == .str_from_quote)
+                dispatchPlanFailure(table, expr.data.str_from_quote.plan, expr.id, false)
+            else if (expr.data == .for_)
+                iteratorPlanFailure(table, expr.data.for_.plan, expr.id, null)
+            else
+                null;
             if (expr_failure) |failure| return failure;
         }
 
         for (self.checked_bodies.stored_statements.items, 0..) |statement, i| {
-            const statement_failure: ?DispatchEvidenceFailure = switch (statement.data) {
-                .for_ => |for_| iteratorPlanFailure(table, for_.plan, null, @intCast(i)),
-                else => null,
-            };
+            const statement_failure: ?DispatchEvidenceFailure = if (statement.data == .for_)
+                iteratorPlanFailure(table, statement.data.for_.plan, null, @intCast(i))
+            else
+                null;
             if (statement_failure) |failure| return failure;
         }
 
@@ -27310,7 +27876,17 @@ pub const CheckedModuleArtifact = struct {
                                     return .{ .kind = .specialization_relation_type_out_of_bounds, .index = @intCast(i) };
                                 }
                             },
-                            else => return .{ .kind = .specialization_relation_direct_target_invalid, .index = @intCast(i) },
+                            .local_param,
+                            .local_value,
+                            .local_mutable_version,
+                            .pattern_binder,
+                            .selected_hoisted_const,
+                            .top_level_const,
+                            .imported_const,
+                            .platform_required_declaration,
+                            .platform_required_checked_error,
+                            .platform_required_const,
+                            => return .{ .kind = .specialization_relation_direct_target_invalid, .index = @intCast(i) },
                         }
                     }
                 },
@@ -27325,7 +27901,22 @@ pub const CheckedModuleArtifact = struct {
                     }
                     const local = switch (record.ref) {
                         .local_proc => |local| local,
-                        else => return .{ .kind = .specialization_relation_local_proc_use_invalid, .index = @intCast(i) },
+                        .local_param,
+                        .local_value,
+                        .local_mutable_version,
+                        .pattern_binder,
+                        .selected_hoisted_const,
+                        .top_level_const,
+                        .imported_const,
+                        .top_level_proc,
+                        .imported_proc,
+                        .hosted_proc,
+                        .platform_required_declaration,
+                        .platform_required_checked_error,
+                        .platform_required_const,
+                        .platform_required_proc,
+                        .promoted_top_level_proc,
+                        => return .{ .kind = .specialization_relation_local_proc_use_invalid, .index = @intCast(i) },
                     };
                     const local_scope = local.dispatch_scope orelse {
                         return .{ .kind = .specialization_relation_local_proc_use_invalid, .index = @intCast(i) };
@@ -27516,7 +28107,7 @@ pub const CheckedModuleArtifact = struct {
             if (root.kind == .expect) {
                 switch (root.payload) {
                     .expect => {},
-                    else => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
+                    .pending, .const_node, .fn_value => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
                 }
                 continue;
             }
@@ -27527,7 +28118,7 @@ pub const CheckedModuleArtifact = struct {
                         std.debug.panic("checked artifact invariant violated: requested compile-time root has pending payload", .{});
                     }
                 },
-                else => {
+                .const_node, .fn_value, .expect => {
                     if (!has_request) {
                         std.debug.panic("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
                     }
@@ -27548,7 +28139,19 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(self.checked_types.payloads.items.len == self.checked_types.roots.items.len);
             switch (self.checked_types.payloads.items[i]) {
                 .pending => std.debug.panic("checked artifact invariant violated: checked type payload {d} was not filled", .{i}),
-                else => {},
+                .err,
+                .flex,
+                .rigid,
+                .alias,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => {},
             }
         }
 
@@ -28503,7 +29106,7 @@ pub const CheckedTypeProjector = struct {
         try self.target.checked_types.fillSyntheticTypeRoot(self.allocator, reserved, payload);
         switch (source_payload) {
             .nominal => |nominal| try self.ensureProjectedImportedNominalDeclaration(imported, nominal),
-            else => {},
+            _ => {},
         }
         return reserved;
     }
@@ -28905,9 +29508,8 @@ const CheckedTypeStoreImportProjector = struct {
         try self.target_store.fillSyntheticTypeRoot(self.allocator, reserved, payload);
         _ = self.active.remove(ty);
         try self.projected.put(ty, reserved);
-        switch (source_payload) {
-            .nominal => |nominal| try self.ensureProjectedNominalDeclaration(nominal),
-            else => {},
+        if (source_payload == .nominal) {
+            try self.ensureProjectedNominalDeclaration(source_payload.nominal);
         }
         return reserved;
     }
@@ -29330,14 +29932,77 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                     .e_type_method_call => |type_method_call| try visitor.method(type_method_call.method_name),
                     .e_type_dispatch_call => |type_dispatch_call| try visitor.method(type_dispatch_call.method_name),
                     .e_hosted_lambda => |hosted| try visitor.externalSymbol(hosted.symbol_name),
-                    else => {},
+                    .e_num,
+                    .e_frac_f32,
+                    .e_frac_f64,
+                    .e_dec,
+                    .e_dec_small,
+                    .e_num_from_numeral,
+                    .e_str_segment,
+                    .e_str,
+                    .e_bytes_literal,
+                    .e_lookup_local,
+                    .e_lookup_external,
+                    .e_lookup_associated_local,
+                    .e_lookup_associated,
+                    .e_lookup_associated_resolved,
+                    .e_lookup_required,
+                    .e_list,
+                    .e_empty_list,
+                    .e_tuple,
+                    .e_match,
+                    .e_if,
+                    .e_call,
+                    .e_record,
+                    .e_empty_record,
+                    .e_block,
+                    .e_nominal,
+                    .e_nominal_external,
+                    .e_lambda,
+                    .e_binop,
+                    .e_unary_minus,
+                    .e_unary_not,
+                    .e_interpolation,
+                    .e_structural_eq,
+                    .e_structural_hash,
+                    .e_tuple_access,
+                    .e_runtime_error,
+                    .e_crash,
+                    .e_dbg,
+                    .e_expect_err,
+                    .e_expect,
+                    .e_ellipsis,
+                    .e_anno_only,
+                    .e_derived_method,
+                    .e_return,
+                    .e_break,
+                    .e_for,
+                    .e_run_low_level,
+                    => {},
                 }
             },
             .pattern_applied_tag => {
                 const pattern = store.getPattern(@enumFromInt(raw_node_idx));
                 switch (pattern) {
                     .applied_tag => |tag_pattern| try visitor.tag(tag_pattern.name),
-                    else => {},
+                    .assign,
+                    .as,
+                    .nominal,
+                    .nominal_external,
+                    .record_destructure,
+                    .list,
+                    .tuple,
+                    .num_literal,
+                    .small_dec_literal,
+                    .dec_literal,
+                    .frac_f32_literal,
+                    .frac_f64_literal,
+                    .num_from_numeral_literal,
+                    .str_literal,
+                    .str_interpolation,
+                    .underscore,
+                    .runtime_error,
+                    => {},
                 }
             },
             .type_header => {
@@ -29354,7 +30019,16 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                     .apply => |apply| try visitor.typeName(apply.name),
                     .lookup => |lookup| try visitor.typeName(lookup.name),
                     .tag => |tag_anno| try visitor.tag(tag_anno.name),
-                    else => {},
+                    .rigid_var,
+                    .rigid_var_lookup,
+                    .underscore,
+                    .tag_union,
+                    .tuple,
+                    .record,
+                    .@"fn",
+                    .parens,
+                    .malformed,
+                    => {},
                 }
             },
             .ty_record_field => {
@@ -29362,6 +30036,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                 try visitor.recordField(field.name);
             },
             .where_method,
+            .where_method_effectful,
             .where_alias,
             => {
                 const where_clause = store.getWhereClause(@enumFromInt(raw_node_idx));
@@ -29378,7 +30053,203 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                 try visitor.exportName(item.name);
                 if (item.alias) |alias| try visitor.exportName(alias);
             },
-            else => {},
+            .statement_decl,
+            .statement_var,
+            .statement_var_uninitialized,
+            .statement_reassign,
+            .statement_crash,
+            .statement_dbg,
+            .statement_expr,
+            .statement_expect,
+            .statement_for,
+            .statement_while,
+            .statement_infinite_loop,
+            .statement_breakable_loop,
+            .statement_break,
+            .statement_return,
+            .statement_import,
+            .statement_alias_decl,
+            .statement_nominal_decl,
+            .statement_where_alias_decl,
+            .statement_type_anno,
+            .statement_type_var_alias,
+            .expr_var,
+            .expr_tuple,
+            .expr_tuple_access,
+            .expr_list,
+            .expr_empty_list,
+            .expr_call,
+            .expr_record,
+            .expr_empty_record,
+            .expr_interpolation,
+            .expr_structural_eq,
+            .expr_structural_hash,
+            .expr_static_dispatch,
+            .expr_external_lookup,
+            .expr_associated_lookup_local,
+            .expr_associated_lookup,
+            .expr_associated_lookup_resolved,
+            .expr_required_lookup,
+            .expr_apply,
+            .expr_string,
+            .expr_string_segment,
+            .expr_bytes_literal,
+            .expr_num,
+            .expr_frac_f32,
+            .expr_frac_f64,
+            .expr_dec,
+            .expr_dec_small,
+            .expr_num_from_numeral,
+            .expr_nominal,
+            .expr_nominal_external,
+            .expr_lambda,
+            .expr_record_update,
+            .expr_bin_op,
+            .expr_unary_minus,
+            .expr_unary_not,
+            .expr_suffix_single_question,
+            .expr_if_then_else,
+            .expr_match,
+            .expr_dbg,
+            .expr_crash,
+            .expr_expect_err,
+            .expr_block,
+            .expr_ellipsis,
+            .expr_anno_only,
+            .expr_derived_method,
+            .expr_low_level,
+            .expr_run_low_level,
+            .expr_expect,
+            .expr_for,
+            .expr_record_builder,
+            .expr_return,
+            .expr_break,
+            .match_branch,
+            .match_branch_pattern,
+            .annotation,
+            .ty_apply_external,
+            .ty_rigid_var,
+            .ty_rigid_var_lookup,
+            .ty_underscore,
+            .ty_tag_union,
+            .ty_tuple,
+            .ty_record,
+            .ty_fn,
+            .ty_parens,
+            .ty_lookup_external,
+            .ty_malformed,
+            .where_malformed,
+            .pattern_identifier,
+            .pattern_as,
+            .pattern_nominal,
+            .pattern_nominal_external,
+            .pattern_record_destructure,
+            .pattern_list,
+            .pattern_tuple,
+            .pattern_num_literal,
+            .pattern_dec_literal,
+            .pattern_num_from_numeral_literal,
+            .pattern_f32_literal,
+            .pattern_f64_literal,
+            .pattern_small_dec_literal,
+            .pattern_str_literal,
+            .pattern_str_interpolation,
+            .pattern_underscore,
+            .lambda_capture,
+            .def,
+            .if_branch,
+            .type_var_slot,
+            .malformed,
+            .diag_not_implemented,
+            .diag_invalid_num_literal,
+            .diag_empty_single_quote,
+            .diag_empty_tuple,
+            .diag_ident_already_in_scope,
+            .diag_ident_not_in_scope,
+            .diag_read_uninitialized_var,
+            .diag_self_referential_definition,
+            .diag_circular_value_definition,
+            .diag_local_reference_before_definition,
+            .diag_mutually_recursive_local_definitions,
+            .diag_erroneous_value_use,
+            .diag_erroneous_value_expr,
+            .diag_qualified_ident_does_not_exist,
+            .diag_invalid_top_level_statement,
+            .diag_expr_not_canonicalized,
+            .diag_invalid_string_interpolation,
+            .diag_unreachable_string_pattern_capture,
+            .diag_pattern_arg_invalid,
+            .diag_pattern_not_canonicalized,
+            .diag_can_lambda_not_implemented,
+            .diag_lambda_body_not_canonicalized,
+            .diag_if_condition_not_canonicalized,
+            .diag_if_then_not_canonicalized,
+            .diag_if_else_not_canonicalized,
+            .diag_malformed_type_annotation,
+            .diag_malformed_where_clause,
+            .diag_where_clause_not_allowed_in_type_decl,
+            .diag_where_alias_constraint_not_on_receiver,
+            .diag_open_ext_not_allowed_in_type_decl,
+            .diag_unnamed_field_not_allowed_in_structural_record,
+            .diag_type_module_missing_matching_type,
+            .diag_type_module_has_alias_not_nominal,
+            .diag_default_app_missing_main,
+            .diag_default_app_wrong_arity,
+            .diag_cannot_import_default_app,
+            .diag_execution_requires_app_or_default_app,
+            .diag_type_name_case_mismatch,
+            .diag_module_header_deprecated,
+            .diag_roc_version_mismatch,
+            .diag_redundant_expose_main_type,
+            .diag_invalid_main_type_rename_in_exposing,
+            .diag_var_across_function_boundary,
+            .diag_shadowing_warning,
+            .diag_type_redeclared,
+            .diag_undeclared_type,
+            .diag_undeclared_type_var,
+            .diag_type_alias_but_needed_nominal,
+            .diag_type_alias_redeclared,
+            .diag_tuple_elem_not_canonicalized,
+            .diag_file_import_not_found,
+            .diag_file_import_io_error,
+            .diag_file_import_absolute_path,
+            .diag_file_import_not_utf8,
+            .diag_module_not_found,
+            .diag_value_not_exposed,
+            .diag_type_not_exposed,
+            .diag_private_type_in_exposed_type,
+            .diag_private_type_in_exposed_field,
+            .diag_type_from_missing_module,
+            .diag_module_not_imported,
+            .diag_nested_type_not_found,
+            .diag_nested_value_not_found,
+            .diag_record_builder_map2_not_found,
+            .diag_too_many_exports,
+            .diag_nominal_type_redeclared,
+            .diag_type_shadowed_warning,
+            .diag_builtin_type_shadowed_warning,
+            .diag_type_parameter_conflict,
+            .diag_unused_variable,
+            .diag_used_underscore_variable,
+            .diag_duplicate_record_field,
+            .diag_duplicate_tag,
+            .diag_crash_expects_string,
+            .diag_f64_pattern_literal,
+            .diag_unused_type_var_name,
+            .diag_type_var_marked_unused,
+            .diag_type_var_starting_with_dollar,
+            .diag_underscore_in_type_declaration,
+            .diagnostic_exposed_but_not_implemented,
+            .diag_provided_value_is_required,
+            .diag_redundant_exposed,
+            .diag_if_expr_without_else,
+            .diag_break_outside_loop,
+            .diag_infinite_loop_never_exits,
+            .diag_return_outside_fn,
+            .diag_mutually_recursive_type_aliases,
+            .diag_deprecated_number_suffix,
+            .diag_range_op_chained,
+            => {},
         }
     }
 }
@@ -31012,16 +31883,14 @@ test "relation projection preserves anonymous row identity and provenance" {
     defer projector.deinit();
 
     const projected_union = try projector.project(source_union);
-    const projected = switch (target_store.payload(projected_union)) {
-        .tag_union => |tag_union| tag_union,
-        else => return error.TestUnexpectedResult,
-    };
+    const projected_payload = target_store.payload(projected_union);
+    if (projected_payload != .tag_union) return error.TestUnexpectedResult;
+    const projected = projected_payload.tag_union;
     try std.testing.expect(projected.ext != platform_tail);
     try std.testing.expectEqual(projected.ext, try projector.project(source_tail));
-    switch (target_store.payload(projected.ext)) {
-        .flex => |variable| try std.testing.expectEqual(RowDefault.empty_tag_union, variable.row_default.?),
-        else => return error.TestUnexpectedResult,
-    }
+    const projected_ext = target_store.payload(projected.ext);
+    if (projected_ext != .flex) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(RowDefault.empty_tag_union, projected_ext.flex.row_default.?);
 }
 
 test "source-instance projection does not coalesce a solved payload with an equal-key target root" {
@@ -31933,11 +32802,11 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, match_site_id), loaded.exhaustiveness_sites.lookupByMatchExpr(@enumFromInt(3)));
     switch (match_site.owner.?) {
         .root => |root| try std.testing.expectEqual(@as(ComptimeRootId, @enumFromInt(4)), root),
-        else => return error.TestExpectedEqual,
+        .procedure_template => return error.TestExpectedEqual,
     }
     switch (match_site.policy) {
         .compile_time_replaced_by_root => |root| try std.testing.expectEqual(@as(ComptimeRootId, @enumFromInt(4)), root),
-        else => return error.TestExpectedEqual,
+        .compile_time_only, .runtime_reachable, .not_pending => return error.TestExpectedEqual,
     }
 
     const destructure_site = loaded.exhaustiveness_sites.sites[1];
@@ -31948,10 +32817,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqual(@as(?CheckedPatternId, @enumFromInt(7)), destructure_site.checked_pattern);
     try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, destructure_site_id), loaded.exhaustiveness_sites.lookupByDestructurePattern(@enumFromInt(7)));
     try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteOwner, null), destructure_site.owner);
-    switch (destructure_site.policy) {
-        .compile_time_only => {},
-        else => return error.TestExpectedEqual,
-    }
+    if (destructure_site.policy != .compile_time_only) return error.TestExpectedEqual;
 }
 
 test "module source input hash uses explicit file dependency state" {

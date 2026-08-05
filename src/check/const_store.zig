@@ -666,10 +666,7 @@ pub const ConstStore = struct {
     /// pools; the caller retains ownership of the input slices and frees them.
     pub fn fill(self: *ConstStore, id: ConstNodeId, value: ConstValue) void {
         const slot = &self.values.items[@intFromEnum(id)];
-        switch (slot.*) {
-            .pending => {},
-            else => constStoreInvariant("const node filled more than once"),
-        }
+        if (slot.* != .pending) constStoreInvariant("const node filled more than once");
         slot.* = self.storeValue(value) catch constStoreInvariant("out of memory storing const value");
     }
 
@@ -885,10 +882,7 @@ pub const ConstStore = struct {
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
         if (@import("builtin").mode != .Debug) return;
         for (self.values.items) |value| {
-            switch (value) {
-                .pending => std.debug.panic("const store invariant violated: completed store contains a pending node", .{}),
-                else => {},
-            }
+            if (value == .pending) std.debug.panic("const store invariant violated: completed store contains a pending node", .{});
         }
         const value_state = try self.allocator.alloc(VisitState, self.values.items.len);
         defer self.allocator.free(value_state);

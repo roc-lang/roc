@@ -34,11 +34,12 @@ fn annotatedDecl(test_env: *TestEnv, block_idx: CIR.Expr.Idx) TestError!CIR.Anno
 
 fn lambdaBody(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) TestError!CIR.Expr.Idx {
     const expr = test_env.getCanonicalExpr(expr_idx);
-    const lambda_idx = switch (expr) {
-        .e_lambda => expr_idx,
-        .e_closure => |closure| closure.lambda_idx,
-        else => return error.ExpectedLambda,
-    };
+    const lambda_idx = if (expr == .e_lambda)
+        expr_idx
+    else if (expr == .e_closure)
+        expr.e_closure.lambda_idx
+    else
+        return error.ExpectedLambda;
     const lambda = test_env.getCanonicalExpr(lambda_idx);
     try testing.expectEqual(.e_lambda, std.meta.activeTag(lambda));
     return lambda.e_lambda.body;
@@ -69,10 +70,13 @@ test "canonical where ownership follows rigid declarations through signatures" {
         try testing.expectEqual(.rigid_var, std.meta.activeTag(test_env.module_env.store.getTypeAnno(owner_idx)));
         for (test_env.module_env.store.sliceWhereClausesForOwner(owner)) |where_idx| {
             const method = test_env.module_env.store.getWhereClause(where_idx).w_method;
-            switch (test_env.module_env.store.getTypeAnno(method.var_)) {
-                .rigid_var => try testing.expectEqual(owner_idx, method.var_),
-                .rigid_var_lookup => |lookup| try testing.expectEqual(owner_idx, lookup.ref),
-                else => return error.ExpectedRigidReceiver,
+            const anno = test_env.module_env.store.getTypeAnno(method.var_);
+            if (anno == .rigid_var) {
+                try testing.expectEqual(owner_idx, method.var_);
+            } else if (anno == .rigid_var_lookup) {
+                try testing.expectEqual(owner_idx, anno.rigid_var_lookup.ref);
+            } else {
+                return error.ExpectedRigidReceiver;
             }
         }
     }

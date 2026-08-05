@@ -352,7 +352,27 @@ const StaticInitializerMachine = struct {
                     }
                     return value;
                 },
-                else => staticDataInvariant("non-construction LIR reached static initializer materialization"),
+                .init_uninitialized,
+                .assign_call,
+                .assign_call_erased,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .crash,
+                => staticDataInvariant("non-construction LIR reached static initializer materialization"),
             }
         }
     }
@@ -676,7 +696,13 @@ const StaticInitializerMachine = struct {
                 const value = try self.newValue(target_layout);
                 break :blk .{ .outer = value, .base = value, .base_layout = target_layout };
             },
-            else => staticDataInvariant("static initializer aggregate target had non-aggregate layout"),
+            .scalar,
+            .list,
+            .list_of_zst,
+            .closure,
+            .erased_callable,
+            .ptr,
+            => staticDataInvariant("static initializer aggregate target had non-aggregate layout"),
         };
     }
 
@@ -720,7 +746,16 @@ const StaticInitializerMachine = struct {
         const tag_layout = switch (outer.tag) {
             .tag_union => outer,
             .box => self.layoutValue(self.layouts().builtinBoxAbi(union_layout).elem_layout_idx orelse .zst),
-            else => return .zst,
+            .scalar,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .ptr,
+            => return .zst,
         };
         if (tag_layout.tag != .tag_union) return .zst;
         const info = self.layouts().getTagUnionInfo(tag_layout);
@@ -764,27 +799,25 @@ const StaticInitializerMachine = struct {
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {
         const args = self.store().getLocalSpan(args_span);
-        return switch (op) {
-            .box_box => blk: {
-                if (args.len != 1) staticDataInvariant("static initializer box_box arity differed from one");
-                const target = self.layoutValue(target_layout);
-                if (target.tag == .box_of_zst) break :blk try self.newValue(target_layout);
-                if (target.tag != .box) staticDataInvariant("static initializer box_box had non-box target layout");
-                const abi = self.layouts().builtinBoxAbi(target_layout);
-                const elem_layout = abi.elem_layout_idx orelse .zst;
-                const allocation = try self.addAllocation(
-                    elem_layout,
-                    abi.elem_size,
-                    abi.elem_alignment,
-                    abi.contains_refcounted,
-                    null,
-                );
-                const arg = try self.cloneValueAs(local(locals, GuardedList.at(args, 0)), elem_layout);
-                try self.copyInto(allocation.payload, 0, arg, abi.elem_size);
-                break :blk try self.pointerValue(target_layout, allocation.id, 0);
-            },
-            else => staticDataInvariant("non-construction low-level operation reached static initializer materialization"),
-        };
+        if (op != .box_box) {
+            staticDataInvariant("non-construction low-level operation reached static initializer materialization");
+        }
+        if (args.len != 1) staticDataInvariant("static initializer box_box arity differed from one");
+        const target = self.layoutValue(target_layout);
+        if (target.tag == .box_of_zst) return self.newValue(target_layout);
+        if (target.tag != .box) staticDataInvariant("static initializer box_box had non-box target layout");
+        const abi = self.layouts().builtinBoxAbi(target_layout);
+        const elem_layout = abi.elem_layout_idx orelse .zst;
+        const allocation = try self.addAllocation(
+            elem_layout,
+            abi.elem_size,
+            abi.elem_alignment,
+            abi.contains_refcounted,
+            null,
+        );
+        const arg = try self.cloneValueAs(local(locals, GuardedList.at(args, 0)), elem_layout);
+        try self.copyInto(allocation.payload, 0, arg, abi.elem_size);
+        return self.pointerValue(target_layout, allocation.id, 0);
     }
 
     fn evalPackedErasedFn(

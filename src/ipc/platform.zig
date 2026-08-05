@@ -5,6 +5,56 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
+const PlatformOs = enum { windows, linux, macos, ios, tvos, watchos, freebsd, openbsd, netbsd, dragonfly, other };
+
+fn classifyPlatformOs(os: std.Target.Os.Tag) PlatformOs {
+    return switch (os) {
+        .windows => .windows,
+        .linux => .linux,
+        .macos => .macos,
+        .ios => .ios,
+        .tvos => .tvos,
+        .watchos => .watchos,
+        .freebsd => .freebsd,
+        .openbsd => .openbsd,
+        .netbsd => .netbsd,
+        .dragonfly => .dragonfly,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .driverkit,
+        .maccatalyst,
+        .visionos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .other,
+    };
+}
+
 /// Platform detection
 pub const is_windows = builtin.target.os.tag == .windows;
 
@@ -166,7 +216,7 @@ pub const PageSizeError = error{ PageSizeQueryFailed, UnsupportedPlatform };
 
 /// Get the system's page size at runtime
 pub fn getSystemPageSize() PageSizeError!usize {
-    const page_size: usize = switch (builtin.os.tag) {
+    const page_size: usize = switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => blk: {
             var system_info: windows.SYSTEM_INFO = undefined;
             windows.GetSystemInfo(&system_info);
@@ -202,7 +252,7 @@ pub fn getSystemPageSize() PageSizeError!usize {
             if (result <= 0) return error.PageSizeQueryFailed;
             break :blk @intCast(result);
         },
-        else => return error.UnsupportedPlatform,
+        .other => return error.UnsupportedPlatform,
     };
 
     // Ensure page_size is a power of 2 (required for alignForward)
@@ -211,7 +261,7 @@ pub fn getSystemPageSize() PageSizeError!usize {
 
 /// Create a new anonymous shared memory mapping
 pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => {
             // Handle sizes larger than 4GB properly
             const size_high: windows.DWORD = if (size > std.math.maxInt(u32))
@@ -261,15 +311,15 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
             return fd;
         },
         .macos, .freebsd, .openbsd, .netbsd => return createPosixShmMapping(io, size),
-        else => return error.UnsupportedPlatform,
+        .ios, .tvos, .watchos, .dragonfly, .other => return error.UnsupportedPlatform,
     }
 }
 
 /// Create shared memory whose pages can later be marked executable.
 pub fn createExecutableMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
-    return switch (builtin.os.tag) {
+    return switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .macos => createUnlinkedTempFileMapping(io, size),
-        else => createMapping(io, size),
+        .windows, .linux, .ios, .tvos, .watchos, .freebsd, .openbsd, .netbsd, .dragonfly, .other => createMapping(io, size),
     };
 }
 
@@ -336,7 +386,7 @@ fn createPosixShmMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
 
 /// Open an existing named shared memory mapping
 pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryError!Handle {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => {
             const wide_name = std.unicode.utf8ToUtf16LeAllocZ(allocator, name) catch {
                 return error.OutOfMemory;
@@ -378,7 +428,7 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
             // Use the coordination file approach instead
             return error.UnsupportedPlatform;
         },
-        else => return error.UnsupportedPlatform,
+        .ios, .tvos, .watchos, .dragonfly, .other => return error.UnsupportedPlatform,
     }
 }
 
@@ -398,7 +448,7 @@ fn mapMemoryWithLogging(
     base_addr: ?*anyopaque,
     log_failure: bool,
 ) SharedMemoryError!*anyopaque {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => {
             const ptr = if (base_addr) |addr|
                 windows.MapViewOfFileEx(
@@ -465,7 +515,7 @@ fn mapMemoryWithLogging(
             }
             return ptr;
         },
-        else => return error.UnsupportedPlatform,
+        .ios, .tvos, .watchos, .dragonfly, .other => return error.UnsupportedPlatform,
     }
 }
 
@@ -491,7 +541,7 @@ pub fn protectMappedMemory(
 ) MemoryProtectError!void {
     if (len == 0) return;
 
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .linux => {
             const prot: linux.PROT = switch (protection) {
                 .read_write => .{ .READ = true, .WRITE = true },
@@ -519,16 +569,16 @@ pub fn protectMappedMemory(
                 return error.VirtualProtectFailed;
             }
         },
-        else => return error.UnsupportedPlatform,
+        .dragonfly, .other => return error.UnsupportedPlatform,
     }
 }
 
 /// Unmap shared memory from the process address space
 pub fn unmapMemory(ptr: *anyopaque, size: usize) void {
-    switch (comptime builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => unmapWindowsMemory(ptr),
         .linux => unmapLinuxMemory(ptr, size),
-        else => unmapPosixMemory(ptr, size),
+        .macos, .ios, .tvos, .watchos, .freebsd, .openbsd, .netbsd, .dragonfly, .other => unmapPosixMemory(ptr, size),
     }
 }
 
@@ -561,10 +611,10 @@ fn unmapPosixMemory(ptr: *anyopaque, size: usize) void {
 /// On POSIX: closes the file descriptor
 /// Note: Child processes on Windows should NOT close inherited handles
 pub fn closeHandle(handle: Handle, is_owner: bool) void {
-    switch (comptime builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => closeWindowsHandle(handle, is_owner),
         .linux => closeLinuxHandle(handle),
-        else => closePosixHandle(handle),
+        .macos, .ios, .tvos, .watchos, .freebsd, .openbsd, .netbsd, .dragonfly, .other => closePosixHandle(handle),
     }
 }
 

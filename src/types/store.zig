@@ -1398,7 +1398,14 @@ pub const Store = struct {
                 .alias => |alias| current = self.getAliasBackingVar(alias),
                 .structure => |flat| return switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => true,
-                    else => false,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => false,
                 },
                 .err, .flex, .rigid => return false,
             }
@@ -1477,19 +1484,15 @@ pub const Store = struct {
         const b_data = self.resolveStorageRoot(b_var);
 
         var merged_desc = new_desc;
-        const merged_is_empty_tag_union = switch (merged_desc.content) {
-            .structure => |flat| flat == .empty_tag_union,
-            else => false,
-        };
+        const merged_is_empty_tag_union = merged_desc.content == .structure and
+            merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {
-            const a_is_explicit_empty = switch (a_data.desc.content) {
-                .structure => |flat| flat == .empty_tag_union and !a_data.desc.flags.empty_tag_union_is_default,
-                else => false,
-            };
-            const b_is_explicit_empty = switch (b_data.desc.content) {
-                .structure => |flat| flat == .empty_tag_union and !b_data.desc.flags.empty_tag_union_is_default,
-                else => false,
-            };
+            const a_is_explicit_empty = a_data.desc.content == .structure and
+                a_data.desc.content.structure == .empty_tag_union and
+                !a_data.desc.flags.empty_tag_union_is_default;
+            const b_is_explicit_empty = b_data.desc.content == .structure and
+                b_data.desc.content.structure == .empty_tag_union and
+                !b_data.desc.flags.empty_tag_union_is_default;
             merged_desc.flags.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
                 (a_data.desc.flags.empty_tag_union_is_default or b_data.desc.flags.empty_tag_union_is_default);
         } else {
@@ -2537,52 +2540,43 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqual(list_elem, deser_list_args[0]);
 
     const deser_func = deserialized.resolveVar(func_var);
-    switch (deser_func.desc.content.structure) {
-        .fn_pure => |func| {
-            const args = deserialized.sliceVars(func.args);
-            try std.testing.expectEqual(@as(usize, 2), args.len);
-            try std.testing.expectEqual(arg1, args[0]);
-            try std.testing.expectEqual(arg2, args[1]);
-            try std.testing.expectEqual(ret, func.ret);
-        },
-        else => unreachable,
-    }
+    try std.testing.expect(deser_func.desc.content.structure == .fn_pure);
+    const func = deser_func.desc.content.structure.fn_pure;
+    const args = deserialized.sliceVars(func.args);
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+    try std.testing.expectEqual(arg1, args[0]);
+    try std.testing.expectEqual(arg2, args[1]);
+    try std.testing.expectEqual(ret, func.ret);
 
     const deser_record = deserialized.resolveVar(record_var);
-    switch (deser_record.desc.content.structure) {
-        .record => |record| {
-            const fields_slice = deserialized.getRecordFieldsSlice(record.fields);
-            try std.testing.expectEqual(@as(usize, 2), fields_slice.len);
-            try std.testing.expectEqual(@as(u29, 100), fields_slice.items(.name)[0].idx);
-            try std.testing.expectEqual(@as(u29, 200), fields_slice.items(.name)[1].idx);
-            try std.testing.expectEqual(field1_var, fields_slice.items(.var_)[0]);
-            try std.testing.expectEqual(field2_var, fields_slice.items(.var_)[1]);
-            try std.testing.expectEqual(record_ext, record.ext);
-        },
-        else => unreachable,
-    }
+    try std.testing.expect(deser_record.desc.content.structure == .record);
+    const record = deser_record.desc.content.structure.record;
+    const fields_slice = deserialized.getRecordFieldsSlice(record.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields_slice.len);
+    try std.testing.expectEqual(@as(u29, 100), fields_slice.items(.name)[0].idx);
+    try std.testing.expectEqual(@as(u29, 200), fields_slice.items(.name)[1].idx);
+    try std.testing.expectEqual(field1_var, fields_slice.items(.var_)[0]);
+    try std.testing.expectEqual(field2_var, fields_slice.items(.var_)[1]);
+    try std.testing.expectEqual(record_ext, record.ext);
 
     const deser_tag_union = deserialized.resolveVar(tag_union_var);
-    switch (deser_tag_union.desc.content.structure) {
-        .tag_union => |tag_union| {
-            const tags_slice = deserialized.getTagsSlice(tag_union.tags);
-            try std.testing.expectEqual(@as(usize, 2), tags_slice.len);
-            try std.testing.expectEqual(@as(u29, 300), tags_slice.items(.name)[0].idx);
-            try std.testing.expectEqual(@as(u29, 400), tags_slice.items(.name)[1].idx);
+    try std.testing.expect(deser_tag_union.desc.content.structure == .tag_union);
+    const tag_union = deser_tag_union.desc.content.structure.tag_union;
+    const tags_slice = deserialized.getTagsSlice(tag_union.tags);
+    try std.testing.expectEqual(@as(usize, 2), tags_slice.len);
+    try std.testing.expectEqual(@as(u29, 300), tags_slice.items(.name)[0].idx);
+    try std.testing.expectEqual(@as(u29, 400), tags_slice.items(.name)[1].idx);
 
-            const tag1_args = deserialized.sliceVars(tags_slice.items(.args)[0]);
-            try std.testing.expectEqual(@as(usize, 1), tag1_args.len);
-            try std.testing.expectEqual(flex, tag1_args[0]);
+    const tag1_args = deserialized.sliceVars(tags_slice.items(.args)[0]);
+    try std.testing.expectEqual(@as(usize, 1), tag1_args.len);
+    try std.testing.expectEqual(flex, tag1_args[0]);
 
-            const tag2_args = deserialized.sliceVars(tags_slice.items(.args)[1]);
-            try std.testing.expectEqual(@as(usize, 2), tag2_args.len);
-            try std.testing.expectEqual(arg1, tag2_args[0]);
-            try std.testing.expectEqual(arg2, tag2_args[1]);
+    const tag2_args = deserialized.sliceVars(tags_slice.items(.args)[1]);
+    try std.testing.expectEqual(@as(usize, 2), tag2_args.len);
+    try std.testing.expectEqual(arg1, tag2_args[0]);
+    try std.testing.expectEqual(arg2, tag2_args[1]);
 
-            try std.testing.expectEqual(tag_union_ext, tag_union.ext);
-        },
-        else => unreachable,
-    }
+    try std.testing.expectEqual(tag_union_ext, tag_union.ext);
 }
 
 test "SlotStore.Serialized roundtrip" {

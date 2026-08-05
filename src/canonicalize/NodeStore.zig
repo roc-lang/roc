@@ -20,6 +20,251 @@ const Region = base.Region;
 const Ident = base.Ident;
 const NodeStore = @This();
 
+fn narrowNodeTag(comptime T: type, tag: Node.Tag) ?T {
+    return std.meta.stringToEnum(T, @tagName(tag));
+}
+
+const LiteralNodeTag = enum {
+    expr_num,
+    expr_frac_f32,
+    expr_frac_f64,
+    expr_dec,
+    expr_dec_small,
+    expr_num_from_numeral,
+    expr_typed_int,
+    expr_typed_frac,
+    expr_typed_num_from_numeral,
+    expr_string,
+    pattern_num_literal,
+    pattern_small_dec_literal,
+    pattern_dec_literal,
+    pattern_num_from_numeral_literal,
+    pattern_str_literal,
+};
+
+const StatementNodeTag = enum {
+    statement_decl,
+    statement_var,
+    statement_var_uninitialized,
+    statement_reassign,
+    statement_crash,
+    statement_dbg,
+    statement_expr,
+    statement_expect,
+    statement_for,
+    statement_while,
+    statement_infinite_loop,
+    statement_breakable_loop,
+    statement_break,
+    statement_return,
+    statement_import,
+    statement_alias_decl,
+    statement_nominal_decl,
+    statement_where_alias_decl,
+    statement_type_anno,
+    statement_type_var_alias,
+    malformed,
+};
+
+const ExprNodeTag = enum {
+    expr_var,
+    expr_external_lookup,
+    expr_associated_lookup_local,
+    expr_associated_lookup,
+    expr_associated_lookup_resolved,
+    expr_required_lookup,
+    expr_num,
+    expr_list,
+    expr_tuple,
+    expr_tuple_access,
+    expr_call,
+    expr_frac_f32,
+    expr_frac_f64,
+    expr_dec,
+    expr_dec_small,
+    expr_num_from_numeral,
+    expr_typed_int,
+    expr_typed_frac,
+    expr_typed_num_from_numeral,
+    expr_string_segment,
+    expr_bytes_literal,
+    expr_string,
+    expr_tag,
+    expr_nominal,
+    expr_nominal_external,
+    expr_bin_op,
+    expr_closure,
+    expr_lambda,
+    expr_block,
+    expr_empty_record,
+    expr_empty_list,
+    expr_record,
+    expr_match,
+    expr_zero_argument_tag,
+    expr_crash,
+    expr_dbg,
+    expr_expect_err,
+    expr_unary_minus,
+    expr_unary_not,
+    expr_static_dispatch,
+    expr_apply,
+    expr_record_update,
+    expr_suffix_single_question,
+    expr_record_builder,
+    expr_ellipsis,
+    expr_anno_only,
+    expr_derived_method,
+    expr_return,
+    expr_break,
+    expr_hosted_lambda,
+    expr_run_low_level,
+    expr_expect,
+    expr_for,
+    expr_if_then_else,
+    expr_field_access,
+    expr_method_call,
+    expr_dispatch_call,
+    expr_interpolation,
+    expr_structural_eq,
+    expr_structural_hash,
+    expr_method_eq,
+    expr_type_method_call,
+    expr_type_dispatch_call,
+    malformed,
+};
+
+const WhereNodeTag = enum { where_method, where_method_effectful, where_alias, where_malformed };
+
+const PatternNodeTag = enum {
+    pattern_identifier,
+    pattern_as,
+    pattern_applied_tag,
+    pattern_nominal,
+    pattern_nominal_external,
+    pattern_record_destructure,
+    pattern_list,
+    pattern_tuple,
+    pattern_num_literal,
+    pattern_f32_literal,
+    pattern_f64_literal,
+    pattern_num_from_numeral_literal,
+    pattern_dec_literal,
+    pattern_small_dec_literal,
+    pattern_str_literal,
+    pattern_str_interpolation,
+    pattern_underscore,
+    malformed,
+};
+
+const TypeAnnoNodeTag = enum {
+    ty_apply,
+    ty_rigid_var,
+    ty_rigid_var_lookup,
+    ty_underscore,
+    ty_lookup,
+    ty_tag_union,
+    ty_tag,
+    ty_tuple,
+    ty_record,
+    ty_fn,
+    ty_parens,
+    ty_malformed,
+    malformed,
+};
+
+const ExposedItemNodeTag = enum { exposed_item };
+
+const DiagnosticNodeTag = enum {
+    diag_not_implemented,
+    diag_invalid_num_literal,
+    diag_empty_tuple,
+    diag_ident_already_in_scope,
+    diagnostic_exposed_but_not_implemented,
+    diag_provided_value_is_required,
+    diag_redundant_exposed,
+    diag_ident_not_in_scope,
+    diag_read_uninitialized_var,
+    diag_self_referential_definition,
+    diag_circular_value_definition,
+    diag_local_reference_before_definition,
+    diag_mutually_recursive_local_definitions,
+    diag_erroneous_value_use,
+    diag_erroneous_value_expr,
+    diag_qualified_ident_does_not_exist,
+    diag_invalid_top_level_statement,
+    diag_expr_not_canonicalized,
+    diag_invalid_string_interpolation,
+    diag_unreachable_string_pattern_capture,
+    diag_pattern_arg_invalid,
+    diag_pattern_not_canonicalized,
+    diag_can_lambda_not_implemented,
+    diag_lambda_body_not_canonicalized,
+    diag_if_condition_not_canonicalized,
+    diag_if_then_not_canonicalized,
+    diag_if_else_not_canonicalized,
+    diag_if_expr_without_else,
+    diag_var_across_function_boundary,
+    diag_shadowing_warning,
+    diag_type_redeclared,
+    diag_undeclared_type,
+    diag_type_alias_but_needed_nominal,
+    diag_tuple_elem_not_canonicalized,
+    diag_file_import_not_found,
+    diag_file_import_io_error,
+    diag_file_import_absolute_path,
+    diag_file_import_not_utf8,
+    diag_module_not_found,
+    diag_value_not_exposed,
+    diag_type_not_exposed,
+    diag_private_type_in_exposed_type,
+    diag_private_type_in_exposed_field,
+    diag_type_from_missing_module,
+    diag_module_not_imported,
+    diag_nested_type_not_found,
+    diag_nested_value_not_found,
+    diag_record_builder_map2_not_found,
+    diag_too_many_exports,
+    diag_undeclared_type_var,
+    diag_malformed_type_annotation,
+    diag_malformed_where_clause,
+    diag_where_clause_not_allowed_in_type_decl,
+    diag_where_alias_constraint_not_on_receiver,
+    diag_open_ext_not_allowed_in_type_decl,
+    diag_unnamed_field_not_allowed_in_structural_record,
+    diag_type_module_missing_matching_type,
+    diag_type_module_has_alias_not_nominal,
+    diag_default_app_missing_main,
+    diag_default_app_wrong_arity,
+    diag_cannot_import_default_app,
+    diag_execution_requires_app_or_default_app,
+    diag_type_name_case_mismatch,
+    diag_module_header_deprecated,
+    diag_roc_version_mismatch,
+    diag_redundant_expose_main_type,
+    diag_invalid_main_type_rename_in_exposing,
+    diag_type_alias_redeclared,
+    diag_nominal_type_redeclared,
+    diag_type_shadowed_warning,
+    diag_builtin_type_shadowed_warning,
+    diag_type_parameter_conflict,
+    diag_unused_variable,
+    diag_used_underscore_variable,
+    diag_duplicate_record_field,
+    diag_duplicate_tag,
+    diag_crash_expects_string,
+    diag_f64_pattern_literal,
+    diag_unused_type_var_name,
+    diag_type_var_marked_unused,
+    diag_type_var_starting_with_dollar,
+    diag_underscore_in_type_declaration,
+    diag_break_outside_loop,
+    diag_infinite_loop_never_exits,
+    diag_return_outside_fn,
+    diag_mutually_recursive_type_aliases,
+    diag_deprecated_number_suffix,
+    diag_range_op_chained,
+};
+
 gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
@@ -539,7 +784,8 @@ pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
 }
 
 fn literalDispatchKindForTag(tag: Node.Tag) ?LiteralDispatchPlan.Kind {
-    return switch (tag) {
+    const literal_tag = narrowNodeTag(LiteralNodeTag, tag) orelse return null;
+    return switch (literal_tag) {
         .expr_num,
         .expr_frac_f32,
         .expr_frac_f64,
@@ -557,13 +803,13 @@ fn literalDispatchKindForTag(tag: Node.Tag) ?LiteralDispatchPlan.Kind {
         .expr_string,
         .pattern_str_literal,
         => .quote,
-        else => null,
     };
 }
 
 fn literalDispatchPlanPlusOne(node: Node) u32 {
     const payload = node.getPayload();
-    return switch (node.tag) {
+    const tag = narrowNodeTag(LiteralNodeTag, node.tag) orelse return 0;
+    return switch (tag) {
         .expr_num => payload.expr_num.literal_dispatch_plan_plus_one,
         .expr_frac_f32 => payload.expr_frac_f32.literal_dispatch_plan_plus_one,
         .expr_frac_f64 => payload.expr_frac_f64.literal_dispatch_plan_plus_one,
@@ -579,14 +825,15 @@ fn literalDispatchPlanPlusOne(node: Node) u32 {
         .pattern_dec_literal => payload.pattern_dec_literal.literal_dispatch_plan_plus_one,
         .pattern_num_from_numeral_literal => payload.pattern_num_from_numeral_literal.literal_dispatch_plan_plus_one,
         .pattern_str_literal => payload.pattern_str_literal.literal_dispatch_plan_plus_one,
-        else => 0,
     };
 }
 
 fn setLiteralDispatchPlanPlusOne(store: *NodeStore, node_idx: Node.Idx, plan_plus_one: u32) void {
     var node = store.nodes.get(node_idx);
     const payload = node.getPayload();
-    switch (node.tag) {
+    const tag = narrowNodeTag(LiteralNodeTag, node.tag) orelse
+        std.debug.panic("literal dispatch plan attached to non-literal node {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .expr_num => {
             var data = payload.expr_num;
             data.literal_dispatch_plan_plus_one = plan_plus_one;
@@ -662,7 +909,6 @@ fn setLiteralDispatchPlanPlusOne(store: *NodeStore, node_idx: Node.Idx, plan_plu
             data.literal_dispatch_plan_plus_one = plan_plus_one;
             node.setPayload(.{ .pattern_str_literal = data });
         },
-        else => std.debug.panic("literal dispatch plan attached to non-literal node {s}", .{@tagName(node.tag)}),
     }
     store.nodes.set(node_idx, node);
 }
@@ -873,7 +1119,9 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
-    switch (node.tag) {
+    const tag = narrowNodeTag(StatementNodeTag, node.tag) orelse
+        std.debug.panic("unreachable, node is not a statement tag: {}", .{node.tag});
+    switch (tag) {
         .statement_decl => {
             const p = payload.statement_decl;
             return CIR.Statement{ .s_decl = .{
@@ -1063,9 +1311,6 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .diagnostic = @enumFromInt(p.value),
             } };
         },
-        else => {
-            std.debug.panic("unreachable, node is not a statement tag: {}", .{node.tag});
-        },
     }
 }
 
@@ -1075,7 +1320,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
-    switch (node.tag) {
+    const tag = narrowNodeTag(ExprNodeTag, node.tag) orelse
+        std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
+    switch (tag) {
         .expr_var => {
             const p = payload.expr_var;
             return CIR.Expr{
@@ -1615,14 +1862,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .diagnostic = @enumFromInt(p.value),
             } };
         },
-
-        // NOTE: Diagnostic tags should NEVER appear in getExpr().
-        // If compilation errors occur, use pushMalformed() to create .malformed nodes
-        // that reference diagnostic indices. The .malformed case above handles
-        // converting these to runtime_error nodes in the ModuleEnv.
-        else => {
-            std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
-        },
     }
 }
 
@@ -1933,10 +2172,8 @@ pub fn updateLambdaBody(store: *NodeStore, lambda_idx: CIR.Expr.Idx, body_idx: C
 /// But for most exprs, this just returns the same expr idx provided.
 pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
     const expr = store.getExpr(expr_idx);
-    switch (expr) {
-        .e_block => |block| return block.final_expr,
-        else => return expr_idx,
-    }
+    if (expr == .e_block) return expr.e_block.final_expr;
+    return expr_idx;
 }
 
 /// Retrieves a 'when' branch from the store.
@@ -1987,7 +2224,9 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
-    switch (node.tag) {
+    const tag = narrowNodeTag(WhereNodeTag, node.tag) orelse
+        std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
+    switch (tag) {
         .where_method, .where_method_effectful => {
             const p = payload.where_clause;
             const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.var_idx));
@@ -2020,36 +2259,12 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
                 .diagnostic = diagnostic,
             } };
         },
-        else => {
-            std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
-        },
     }
 }
 
 /// Returns true if the given node tag represents a pattern node.
 fn isPatternTag(tag: Node.Tag) bool {
-    return switch (tag) {
-        .pattern_identifier,
-        .pattern_as,
-        .pattern_applied_tag,
-        .pattern_nominal,
-        .pattern_nominal_external,
-        .pattern_record_destructure,
-        .pattern_list,
-        .pattern_tuple,
-        .pattern_num_literal,
-        .pattern_num_from_numeral_literal,
-        .pattern_dec_literal,
-        .pattern_f32_literal,
-        .pattern_f64_literal,
-        .pattern_small_dec_literal,
-        .pattern_str_literal,
-        .pattern_str_interpolation,
-        .pattern_underscore,
-        .malformed, // Valid pattern tag for runtime_error patterns
-        => true,
-        else => false,
-    };
+    return narrowNodeTag(PatternNodeTag, tag) != null;
 }
 
 /// Retrieves a pattern from the store.
@@ -2067,7 +2282,9 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
     const payload = node.getPayload();
 
-    switch (node.tag) {
+    const tag = narrowNodeTag(PatternNodeTag, node.tag) orelse
+        std.debug.panic("unreachable, node is not a pattern tag: {}", .{node.tag});
+    switch (tag) {
         .pattern_identifier => {
             const p = payload.pattern_identifier;
             return CIR.Pattern{
@@ -2234,9 +2451,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .diagnostic = @enumFromInt(p.value),
             } };
         },
-        else => {
-            std.debug.panic("unreachable, node is not a pattern tag: {}", .{node.tag});
-        },
     }
 }
 
@@ -2246,7 +2460,9 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
-    switch (node.tag) {
+    const tag = narrowNodeTag(TypeAnnoNodeTag, node.tag) orelse
+        std.debug.panic("unreachable, node is not a type annotation tag: {}", .{node.tag});
+    switch (tag) {
         .ty_apply => {
             const p = payload.ty_apply;
             const apply_data = store.type_apply_data.items.items[p.type_apply_data_idx];
@@ -2361,9 +2577,6 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                 .diagnostic = @enumFromInt(p.value),
             } };
         },
-        else => {
-            std.debug.panic("unreachable, node is not a type annotation tag: {}", .{node.tag});
-        },
     }
 }
 
@@ -2431,7 +2644,9 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
-    switch (node.tag) {
+    const tag = narrowNodeTag(ExposedItemNodeTag, node.tag) orelse
+        std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)});
+    switch (tag) {
         .exposed_item => {
             const p = payload.exposed_item;
             return CIR.ExposedItem{
@@ -2440,7 +2655,6 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
                 .is_wildcard = p.is_wildcard != 0,
             };
         },
-        else => std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)}),
     }
 }
 
@@ -3187,10 +3401,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
     const node_idx = try store.nodes.append(store.gpa, node);
     // External lookups carry their source region explicitly.
-    const actual_region = switch (expr) {
-        .e_lookup_external => |e| e.region,
-        else => region,
-    };
+    const actual_region = if (expr == .e_lookup_external) expr.e_lookup_external.region else region;
     _ = try store.regions.append(store.gpa, actual_region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
@@ -4166,11 +4377,13 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
             .w_alias => |alias| alias.var_,
             .w_malformed => continue,
         };
-        const owner = switch (store.getTypeAnno(constrained_var)) {
-            .rigid_var => constrained_var,
-            .rigid_var_lookup => |lookup| lookup.ref,
-            else => continue,
-        };
+        const anno = store.getTypeAnno(constrained_var);
+        const owner = if (anno == .rigid_var)
+            constrained_var
+        else if (anno == .rigid_var_lookup)
+            anno.rigid_var_lookup.ref
+        else
+            continue;
         const gop = try grouped.getOrPut(store.gpa, owner);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(store.gpa, where_idx);
@@ -5137,7 +5350,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
     const node = store.nodes.get(node_idx);
     const payload = node.getPayload();
 
-    switch (node.tag) {
+    const tag = narrowNodeTag(DiagnosticNodeTag, node.tag) orelse
+        @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
+    switch (tag) {
         .diag_not_implemented => return CIR.Diagnostic{ .not_implemented = .{
             .feature = @enumFromInt(payload.diag_single_value.value),
             .region = store.getRegionAt(node_idx),
@@ -5602,9 +5817,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_range_op_chained => return CIR.Diagnostic{ .range_op_chained = .{
             .region = store.getRegionAt(node_idx),
         } },
-        else => {
-            @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
-        },
     }
 }
 

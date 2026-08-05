@@ -691,7 +691,16 @@ pub const Interpreter = struct {
                     const tu_data = layout_store.getTagUnionData(layout_val.getTagUnion().idx);
                     tag_variant_count += layout_store.getTagUnionVariants(tu_data).len;
                 },
-                else => {},
+                .scalar,
+                .box,
+                .box_of_zst,
+                .list,
+                .list_of_zst,
+                .closure,
+                .erased_callable,
+                .zst,
+                .ptr,
+                => {},
             }
         }
 
@@ -1588,7 +1597,28 @@ pub const Interpreter = struct {
                         self.layout_store.getLayout(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                else => debugPrint("  stmt {d}: {any}\n", .{ @intFromEnum(current), stmt }),
+                .init_uninitialized,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => debugPrint("  stmt {d}: {any}\n", .{ @intFromEnum(current), stmt }),
             }
             current = switch (stmt) {
                 .assign_ref => |assign| assign.next,
@@ -2632,7 +2662,17 @@ pub const Interpreter = struct {
                 const tu_info = self.layout_store.getTagUnionInfo(layout_val);
                 return tu_info.readDiscriminant(value.ptr);
             },
-            else => switch (self.helper.sizeOf(layout_idx)) {
+            .scalar,
+            .box,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .ptr,
+            => switch (self.helper.sizeOf(layout_idx)) {
                 0 => 0,
                 1 => value.read(u8),
                 2 => value.read(u16),
@@ -2753,7 +2793,17 @@ pub const Interpreter = struct {
                         );
                         break :blk try self.materializeLocalValue(payload_value, target_layout);
                     },
-                    else => {
+                    .scalar,
+                    .box,
+                    .box_of_zst,
+                    .list,
+                    .list_of_zst,
+                    .closure,
+                    .erased_callable,
+                    .zst,
+                    .tag_union,
+                    .ptr,
+                    => {
                         if (builtin.mode == .Debug and payload.payload_idx != 0) {
                             self.invariantFailed(
                                 "LIR/interpreter invariant violated: scalar tag payload access requested payload_idx {d} from non-struct payload layout {d}",
@@ -3271,7 +3321,16 @@ pub const Interpreter = struct {
                 .elem_alignment = 1,
                 .contains_rc = false,
             },
-            else => self.invariantFailed(
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => self.invariantFailed(
                 "LIR/interpreter invariant violated: expected box layout, got {s}",
                 .{@tagName(box_layout.tag)},
             ),
@@ -3319,7 +3378,14 @@ pub const Interpreter = struct {
                     .base_layout = struct_layout,
                 };
             },
-            else => self.invariantFailed(
+            .scalar,
+            .list,
+            .list_of_zst,
+            .closure,
+            .erased_callable,
+            .tag_union,
+            .ptr,
+            => self.invariantFailed(
                 "LIR/interpreter invariant violated: assign_struct target layout {d} is not a struct or boxed struct",
                 .{@intFromEnum(struct_layout)},
             ),
@@ -3996,7 +4062,17 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(layout_idx);
         return switch (layout_val.tag) {
             .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx),
-            else => .{ .op = op, .layout_idx = layout_idx },
+            .scalar,
+            .box,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => .{ .op = op, .layout_idx = layout_idx },
         };
     }
 
@@ -4076,7 +4152,16 @@ pub const Interpreter = struct {
         const runtime_elem_layout_idx: ?layout_mod.Idx = switch (list_layout.tag) {
             .list => self.layout_store.runtimeRepresentationLayoutIdx(list_layout.getIdx()),
             .list_of_zst => null,
-            else => unreachable,
+            .scalar,
+            .box,
+            .box_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => unreachable,
         };
         if (runtime_elem_layout_idx) |elem_idx| {
             const elem_layout = self.layout_store.getLayout(elem_idx);
@@ -4105,7 +4190,16 @@ pub const Interpreter = struct {
         const runtime_elem_layout_idx: ?layout_mod.Idx = switch (box_layout.tag) {
             .box => self.layout_store.runtimeRepresentationLayoutIdx(box_layout.getIdx()),
             .box_of_zst => null,
-            else => unreachable,
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => unreachable,
         };
         if (runtime_elem_layout_idx) |elem_idx| {
             const elem_layout = self.layout_store.getLayout(elem_idx);
@@ -4416,7 +4510,19 @@ pub const Interpreter = struct {
             },
             .list_decref => rc_conformance.allocationAt(valueToRocList(val).getAllocationDataPtr(&self.roc_ops)),
             .box_decref, .erased_callable_decref => rc_conformance.allocationAt(val.read(?[*]u8)),
-            else => null,
+            .noop,
+            .str_incref,
+            .str_free,
+            .list_incref,
+            .list_free,
+            .box_incref,
+            .box_free,
+            .erased_callable_incref,
+            .erased_callable_free,
+            .struct_,
+            .tag_union,
+            .closure,
+            => null,
         };
     }
 
@@ -4649,7 +4755,16 @@ pub const Interpreter = struct {
                 return boxed;
             },
             .box_of_zst => return try self.allocBoxOfZstValue(ret_layout),
-            else => {
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => {
                 const val = try self.alloc(ret_layout);
                 @memcpy(val.ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
                 return val;
@@ -5116,7 +5231,16 @@ pub const Interpreter = struct {
                                     inner_bad_utf8_disc = info.disc;
                                 }
                             },
-                            else => {},
+                            .scalar,
+                            .box,
+                            .box_of_zst,
+                            .list,
+                            .list_of_zst,
+                            .closure,
+                            .erased_callable,
+                            .zst,
+                            .ptr,
+                            => {},
                         }
                     }
                 }
@@ -5892,17 +6016,22 @@ pub const Interpreter = struct {
             .hasher_write_i64,
             => blk: {
                 const seed = args[0].read(u64);
-                const value: u64 = switch (ll.op) {
-                    .hasher_write_u8 => args[1].read(u8),
-                    .hasher_write_u16 => args[1].read(u16),
-                    .hasher_write_u32 => args[1].read(u32),
-                    .hasher_write_u64 => args[1].read(u64),
-                    .hasher_write_i8 => @as(u64, @as(u8, @bitCast(args[1].read(i8)))),
-                    .hasher_write_i16 => @as(u64, @as(u16, @bitCast(args[1].read(i16)))),
-                    .hasher_write_i32 => @as(u64, @as(u32, @bitCast(args[1].read(i32)))),
-                    .hasher_write_i64 => @bitCast(args[1].read(i64)),
-                    else => unreachable,
-                };
+                const value: u64 = if (ll.op == .hasher_write_u8)
+                    args[1].read(u8)
+                else if (ll.op == .hasher_write_u16)
+                    args[1].read(u16)
+                else if (ll.op == .hasher_write_u32)
+                    args[1].read(u32)
+                else if (ll.op == .hasher_write_u64)
+                    args[1].read(u64)
+                else if (ll.op == .hasher_write_i8)
+                    @as(u64, @as(u8, @bitCast(args[1].read(i8))))
+                else if (ll.op == .hasher_write_i16)
+                    @as(u64, @as(u16, @bitCast(args[1].read(i16))))
+                else if (ll.op == .hasher_write_i32)
+                    @as(u64, @as(u32, @bitCast(args[1].read(i32))))
+                else
+                    @bitCast(args[1].read(i64));
                 const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(lir.hasherDomain(ll.op)), value, lir.hasherU64Width(ll.op));
                 break :blk self.writeHasherValue(ll.ret_layout, next);
             },
@@ -5952,11 +6081,10 @@ pub const Interpreter = struct {
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const bytes = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
-                const result = switch (ll.op) {
-                    .crypto_sha256_hash_bytes => builtins.crypto.sha256HashBytes(bytes.ptr, bytes.len, &self.roc_ops),
-                    .crypto_blake3_hash_bytes => builtins.crypto.blake3HashBytes(bytes.ptr, bytes.len, &self.roc_ops),
-                    else => unreachable,
-                };
+                const result = if (ll.op == .crypto_sha256_hash_bytes)
+                    builtins.crypto.sha256HashBytes(bytes.ptr, bytes.len, &self.roc_ops)
+                else
+                    builtins.crypto.blake3HashBytes(bytes.ptr, bytes.len, &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .crypto_sha256_hasher_empty,
@@ -5966,11 +6094,10 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                const result = switch (ll.op) {
-                    .crypto_sha256_hasher_empty => builtins.crypto.sha256HasherEmpty(&self.roc_ops),
-                    .crypto_blake3_hasher_empty => builtins.crypto.blake3HasherEmpty(&self.roc_ops),
-                    else => unreachable,
-                };
+                const result = if (ll.op == .crypto_sha256_hasher_empty)
+                    builtins.crypto.sha256HasherEmpty(&self.roc_ops)
+                else
+                    builtins.crypto.blake3HasherEmpty(&self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .crypto_sha256_hasher_write,
@@ -5982,11 +6109,10 @@ pub const Interpreter = struct {
                 if (sj != 0) return error.Crash;
                 const state = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
                 const bytes = try self.byteListSlice(args[1], try self.lowLevelArgLayout(ll, 1));
-                const result = switch (ll.op) {
-                    .crypto_sha256_hasher_write => builtins.crypto.sha256HasherWrite(state.ptr, state.len, bytes.ptr, bytes.len, &self.roc_ops),
-                    .crypto_blake3_hasher_write => builtins.crypto.blake3HasherWrite(state.ptr, state.len, bytes.ptr, bytes.len, &self.roc_ops),
-                    else => unreachable,
-                };
+                const result = if (ll.op == .crypto_sha256_hasher_write)
+                    builtins.crypto.sha256HasherWrite(state.ptr, state.len, bytes.ptr, bytes.len, &self.roc_ops)
+                else
+                    builtins.crypto.blake3HasherWrite(state.ptr, state.len, bytes.ptr, bytes.len, &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .crypto_sha256_hasher_finish,
@@ -5997,11 +6123,10 @@ pub const Interpreter = struct {
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const state = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
-                const result = switch (ll.op) {
-                    .crypto_sha256_hasher_finish => builtins.crypto.sha256HasherFinish(state.ptr, state.len, &self.roc_ops),
-                    .crypto_blake3_hasher_finish => builtins.crypto.blake3HasherFinish(state.ptr, state.len, &self.roc_ops),
-                    else => unreachable,
-                };
+                const result = if (ll.op == .crypto_sha256_hasher_finish)
+                    builtins.crypto.sha256HasherFinish(state.ptr, state.len, &self.roc_ops)
+                else
+                    builtins.crypto.blake3HasherFinish(state.ptr, state.len, &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
 
@@ -6545,32 +6670,31 @@ pub const Interpreter = struct {
 
     /// Determine if a layout index represents an unsigned integer.
     fn isUnsigned(layout_idx: layout_mod.Idx) bool {
-        return switch (layout_idx) {
-            .u8, .u16, .u32, .u64, .u128 => true,
-            else => false,
-        };
+        return layout_idx == .u8 or
+            layout_idx == .u16 or
+            layout_idx == .u32 or
+            layout_idx == .u64 or
+            layout_idx == .u128;
     }
 
     fn numericOperandKind(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!NumericOperandKind {
-        return switch (layout_idx) {
-            .u8 => .{ .unsigned_int = 8 },
-            .u16 => .{ .unsigned_int = 16 },
-            .u32 => .{ .unsigned_int = 32 },
-            .u64 => .{ .unsigned_int = 64 },
-            .u128 => .{ .unsigned_int = 128 },
-            .i8 => .{ .signed_int = 8 },
-            .i16 => .{ .signed_int = 16 },
-            .i32 => .{ .signed_int = 32 },
-            .i64 => .{ .signed_int = 64 },
-            .i128 => .{ .signed_int = 128 },
-            .f32 => .{ .float = 32 },
-            .f64 => .{ .float = 64 },
-            .dec => .dec,
-            else => self.invariantFailedError(
-                "LIR/interpreter invariant violated: numeric low-level op used non-numeric layout {d} ({s})",
-                .{ @intFromEnum(layout_idx), @tagName(self.layout_store.getLayout(layout_idx).tag) },
-            ),
-        };
+        if (layout_idx == .u8) return .{ .unsigned_int = 8 };
+        if (layout_idx == .u16) return .{ .unsigned_int = 16 };
+        if (layout_idx == .u32) return .{ .unsigned_int = 32 };
+        if (layout_idx == .u64) return .{ .unsigned_int = 64 };
+        if (layout_idx == .u128) return .{ .unsigned_int = 128 };
+        if (layout_idx == .i8) return .{ .signed_int = 8 };
+        if (layout_idx == .i16) return .{ .signed_int = 16 };
+        if (layout_idx == .i32) return .{ .signed_int = 32 };
+        if (layout_idx == .i64) return .{ .signed_int = 64 };
+        if (layout_idx == .i128) return .{ .signed_int = 128 };
+        if (layout_idx == .f32) return .{ .float = 32 };
+        if (layout_idx == .f64) return .{ .float = 64 };
+        if (layout_idx == .dec) return .dec;
+        return self.invariantFailedError(
+            "LIR/interpreter invariant violated: numeric low-level op used non-numeric layout {d} ({s})",
+            .{ @intFromEnum(layout_idx), @tagName(self.layout_store.getLayout(layout_idx).tag) },
+        );
     }
 
     fn numBinOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp, checked_op: ?LIR.LowLevel) Error!Value {
@@ -6647,7 +6771,7 @@ pub const Interpreter = struct {
         if (op == .eq and switch (layout_val.tag) {
             .zst, .struct_, .list, .list_of_zst, .tag_union => true,
             .scalar => layout_val.getScalar().tag == .str,
-            else => false,
+            .box, .box_of_zst, .closure, .erased_callable, .ptr => false,
         }) {
             val.write(u8, if (try self.valuesEqual(a, b, arg_layout)) 1 else 0);
             return val;
@@ -7836,7 +7960,16 @@ pub const Interpreter = struct {
                 .value = struct_val,
                 .layout = struct_layout,
             },
-            else => self.invariantFailed(
+            .scalar,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => self.invariantFailed(
                 "LIR/interpreter invariant violated: field projection source layout {d} is not a struct or boxed struct",
                 .{@intFromEnum(struct_layout)},
             ),
@@ -7883,7 +8016,16 @@ pub const Interpreter = struct {
                 const variants = self.layout_store.getTagUnionVariants(tu_data);
                 break :blk if (discriminant < variants.len) variants.get(discriminant).payload_layout else .zst;
             },
-            else => .zst,
+            .scalar,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .ptr,
+            => .zst,
         };
     }
 
@@ -7907,7 +8049,16 @@ pub const Interpreter = struct {
                 }
             },
             .box_of_zst => if (expected_layout == .zst) return Value.zst,
-            else => {},
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => {},
         }
 
         return value;
@@ -8038,7 +8189,16 @@ pub const Interpreter = struct {
                 }
                 return boxed;
             },
-            else => return error.RuntimeError,
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => return error.RuntimeError,
         }
     }
 
@@ -8102,7 +8262,16 @@ pub const Interpreter = struct {
                 self.writeBoxedDataPointer(result, fresh);
                 return result;
             },
-            else => return error.RuntimeError,
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => return error.RuntimeError,
         }
     }
 

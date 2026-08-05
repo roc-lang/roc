@@ -6,6 +6,157 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// CPU architecture categories used by Roc's target-selection logic.
+pub const CpuArchClass = enum { x86_64, aarch64, aarch64_be, arm, wasm32, other };
+
+/// Classifies a Zig CPU architecture into the categories Roc distinguishes.
+pub fn classifyCpuArch(arch: std.Target.Cpu.Arch) CpuArchClass {
+    return switch (arch) {
+        .x86_64 => .x86_64,
+        .aarch64 => .aarch64,
+        .aarch64_be => .aarch64_be,
+        .arm => .arm,
+        .wasm32 => .wasm32,
+        .alpha,
+        .amdgcn,
+        .arc,
+        .arceb,
+        .armeb,
+        .avr,
+        .bpfeb,
+        .bpfel,
+        .csky,
+        .hexagon,
+        .hppa,
+        .hppa64,
+        .kalimba,
+        .kvx,
+        .lanai,
+        .loongarch32,
+        .loongarch64,
+        .m68k,
+        .microblaze,
+        .microblazeel,
+        .mips,
+        .mipsel,
+        .mips64,
+        .mips64el,
+        .msp430,
+        .nvptx,
+        .nvptx64,
+        .or1k,
+        .powerpc,
+        .powerpcle,
+        .powerpc64,
+        .powerpc64le,
+        .propeller,
+        .riscv32,
+        .riscv32be,
+        .riscv64,
+        .riscv64be,
+        .s390x,
+        .sh,
+        .sheb,
+        .sparc,
+        .sparc64,
+        .spirv32,
+        .spirv64,
+        .thumb,
+        .thumbeb,
+        .ve,
+        .wasm64,
+        .x86_16,
+        .x86,
+        .xcore,
+        .xtensa,
+        .xtensaeb,
+        => .other,
+    };
+}
+
+/// Operating-system categories used by Roc's target-selection logic.
+pub const OsClass = enum { macos, windows, linux, freebsd, openbsd, netbsd, other };
+
+/// Classifies a Zig OS tag into the categories Roc distinguishes.
+pub fn classifyOs(os: std.Target.Os.Tag) OsClass {
+    return switch (os) {
+        .macos => .macos,
+        .windows => .windows,
+        .linux => .linux,
+        .freebsd => .freebsd,
+        .openbsd => .openbsd,
+        .netbsd => .netbsd,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .other,
+    };
+}
+
+const AbiClass = enum { musl, gnu, gnu_x32, other };
+
+fn classifyAbi(abi: std.Target.Abi) AbiClass {
+    return switch (abi) {
+        .musl, .musleabi, .musleabihf => .musl,
+        .gnu, .gnueabi, .gnueabihf => .gnu,
+        .gnux32 => .gnu_x32,
+        .none,
+        .gnuabin32,
+        .gnuabi64,
+        .gnuf32,
+        .gnusf,
+        .eabi,
+        .eabihf,
+        .ilp32,
+        .android,
+        .androideabi,
+        .muslabin32,
+        .muslabi64,
+        .muslf32,
+        .muslsf,
+        .muslx32,
+        .msvc,
+        .itanium,
+        .simulator,
+        .ohos,
+        .ohoseabi,
+        => .other,
+    };
+}
+
 /// Roc's minimum supported macOS deployment target.
 ///
 /// Keep this in one place because LLVM triples, Mach-O linker metadata, Mach-O
@@ -41,10 +192,10 @@ pub const MachoArchError = error{
 /// as Mach-O, so an unexpected arch fails loudly instead of being silently
 /// linked as the wrong architecture.
 pub fn machoArchName(arch: std.Target.Cpu.Arch) MachoArchError![]const u8 {
-    return switch (arch) {
+    return switch (classifyCpuArch(arch)) {
         .aarch64 => "arm64",
         .x86_64 => "x86_64",
-        else => error.UnsupportedMachoArch,
+        .aarch64_be, .arm, .wasm32, .other => error.UnsupportedMachoArch,
     };
 }
 
@@ -80,11 +231,11 @@ pub const ld_so = struct {
 /// carries a resolved OS tag rather than a `RocTarget`; returns null for any OS
 /// whose loader is not addressed this way.
 pub fn bsdProgramInterpreter(os_tag: std.Target.Os.Tag) ?[]const u8 {
-    return switch (os_tag) {
+    return switch (classifyOs(os_tag)) {
         .freebsd => "/libexec/ld-elf.so.1",
         .openbsd => "/usr/libexec/ld.so",
         .netbsd => "/usr/libexec/ld.elf_so",
-        else => null,
+        .macos, .windows, .linux, .other => null,
     };
 }
 
@@ -169,6 +320,8 @@ const CpuContract = struct {
     }
 };
 
+const TargetFamily = enum { macos, windows, bsd, linux_dynamic, linux_static, elf, wasm };
+
 /// Roc's simplified target representation.
 /// Maps to specific OS/arch/ABI combinations for cross-compilation.
 ///
@@ -242,52 +395,52 @@ pub const RocTarget = enum {
         const arch = target.cpu.arch;
         const abi = target.abi;
 
-        switch (arch) {
+        switch (classifyCpuArch(arch)) {
             .x86_64 => {
-                switch (os) {
+                switch (classifyOs(os)) {
                     .macos => return .x64mac,
                     .windows => return .x64win,
                     .freebsd => return .x64freebsd,
                     .openbsd => return .x64openbsd,
                     .netbsd => return .x64netbsd,
                     .linux => {
-                        return switch (abi) {
-                            .musl, .musleabi, .musleabihf => .x64musl,
-                            .gnu, .gnueabi, .gnueabihf, .gnux32 => .x64glibc,
-                            else => .x64musl, // Default to musl for static linking
+                        return switch (classifyAbi(abi)) {
+                            .musl => .x64musl,
+                            .gnu, .gnu_x32 => .x64glibc,
+                            .other => .x64musl, // Default to musl for static linking
                         };
                     },
-                    else => return .x64elf, // Generic fallback
+                    .other => return .x64elf, // Generic fallback
                 }
             },
             .aarch64, .aarch64_be => {
-                switch (os) {
+                switch (classifyOs(os)) {
                     .macos => return .arm64mac,
                     .windows => return .arm64win,
                     .linux => {
-                        return switch (abi) {
-                            .musl, .musleabi, .musleabihf => .arm64musl,
-                            .gnu, .gnueabi, .gnueabihf => .arm64glibc,
-                            else => .arm64musl, // Default to musl for static linking
+                        return switch (classifyAbi(abi)) {
+                            .musl => .arm64musl,
+                            .gnu => .arm64glibc,
+                            .gnu_x32, .other => .arm64musl, // Default to musl for static linking
                         };
                     },
-                    else => return .arm64linux, // Generic ARM64 Linux
+                    .freebsd, .openbsd, .netbsd, .other => return .arm64linux, // Generic ARM64 Linux
                 }
             },
             .arm => {
-                switch (os) {
+                switch (classifyOs(os)) {
                     .linux => return .arm32musl, // Default to musl for static linking
-                    else => return .arm32linux, // Generic ARM32 Linux
+                    .macos, .windows, .freebsd, .openbsd, .netbsd, .other => return .arm32linux, // Generic ARM32 Linux
                 }
             },
             .wasm32 => return .wasm32,
-            else => {
+            .other => {
                 // Default fallback based on OS
-                switch (os) {
+                switch (classifyOs(os)) {
                     .macos => return .x64mac,
                     .windows => return .x64win,
                     .linux => return .x64musl, // Default to musl
-                    else => return .x64elf,
+                    .freebsd, .openbsd, .netbsd, .other => return .x64elf,
                 }
             },
         }
@@ -408,6 +561,38 @@ pub const RocTarget = enum {
         return if (self.defaultCpuTarget() == self) .default else .v1;
     }
 
+    fn family(self: RocTarget) TargetFamily {
+        return switch (self) {
+            .x64mac, .x64v1mac, .arm64mac => .macos,
+            .x64win, .x64v1win, .arm64win, .arm64v1win => .windows,
+            .x64freebsd,
+            .x64openbsd,
+            .x64netbsd,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            => .bsd,
+            .x64glibc,
+            .x64linux,
+            .x64v1glibc,
+            .x64v1linux,
+            .arm64glibc,
+            .arm64linux,
+            .arm64v1glibc,
+            .arm64v1linux,
+            .arm32linux,
+            => .linux_dynamic,
+            .x64musl,
+            .x64v1musl,
+            .arm64musl,
+            .arm64v1musl,
+            .arm32musl,
+            => .linux_static,
+            .x64elf, .x64v1elf => .elf,
+            .wasm32, .wasm32v1 => .wasm,
+        };
+    }
+
     /// Get the OS tag for this RocTarget
     pub fn toOsTag(self: RocTarget) std.Target.Os.Tag {
         return switch (self) {
@@ -447,7 +632,7 @@ pub const RocTarget = enum {
         const arch = self.toCpuArch();
         const level = self.cpuLevel();
 
-        var contract: CpuContract = switch (arch) {
+        var contract: CpuContract = switch (classifyCpuArch(arch)) {
             .x86_64 => switch (level) {
                 .default => .{
                     .codegen_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 },
@@ -473,12 +658,12 @@ pub const RocTarget = enum {
                 }
             else
                 .{},
-            else => .{},
+            .arm, .other => .{},
         };
 
         if (contract.architecture_baseline_features) |initial| {
             var baseline = initial;
-            switch (arch) {
+            switch (classifyCpuArch(arch)) {
                 .x86_64 => {
                     // The x86-64 psABI v1 instruction set. Do not import the
                     // `x86_64` model's unrelated tuning flags.
@@ -499,7 +684,7 @@ pub const RocTarget = enum {
                 // application profile Roc targets at Armv8.0-A.
                 .aarch64, .aarch64_be => baseline.addFeature(@intFromEnum(std.Target.aarch64.Feature.neon)),
                 .wasm32 => {},
-                else => unreachable,
+                .arm, .other => unreachable,
             }
             baseline.populateDependencies(arch.allFeaturesList());
             contract.architecture_baseline_features = baseline;
@@ -507,7 +692,7 @@ pub const RocTarget = enum {
 
         if (level == .v1) return contract;
 
-        switch (arch) {
+        switch (classifyCpuArch(arch)) {
             .x86_64 => {
                 // The complete x86-64-v3 ISA contract plus the two extensions
                 // Roc adds to the named psABI level.
@@ -538,7 +723,7 @@ pub const RocTarget = enum {
                 }
             },
             .wasm32 => contract.instruction_features.addFeature(@intFromEnum(std.Target.wasm.Feature.simd128)),
-            else => {},
+            .arm, .other => {},
         }
 
         return contract;
@@ -557,11 +742,11 @@ pub const RocTarget = enum {
         var query = std.Target.Query{
             .cpu_arch = self.toCpuArch(),
             .os_tag = self.toOsTag(),
-            .abi = switch (self.defaultCpuTarget()) {
-                .x64musl, .arm64musl, .arm32musl => .musl,
-                .x64glibc, .x64linux, .arm64glibc, .arm64linux, .arm32linux => .gnu,
-                .x64win, .arm64win => .msvc,
-                else => .none,
+            .abi = switch (self.family()) {
+                .linux_static => .musl,
+                .linux_dynamic => .gnu,
+                .windows => .msvc,
+                .macos, .bsd, .elf, .wasm => .none,
             },
         };
         if (self.toOsTag() == .macos) {
@@ -607,50 +792,36 @@ pub const RocTarget = enum {
 
     /// Check if target uses dynamic linking (glibc targets)
     pub fn isDynamic(self: RocTarget) bool {
-        return switch (self.defaultCpuTarget()) {
-            .x64glibc, .arm64glibc, .x64linux, .arm64linux, .arm32linux => true,
-            else => false,
-        };
+        return self.family() == .linux_dynamic;
     }
 
     /// Check if target uses static linking (musl targets)
     pub fn isStatic(self: RocTarget) bool {
-        return switch (self.defaultCpuTarget()) {
-            .x64musl, .arm64musl, .arm32musl => true,
-            else => false,
-        };
+        return self.family() == .linux_static;
     }
 
     /// Check if target is macOS
     pub fn isMacOS(self: RocTarget) bool {
-        return switch (self.defaultCpuTarget()) {
-            .x64mac, .arm64mac => true,
-            else => false,
-        };
+        return self.family() == .macos;
     }
 
     /// Check if target is Windows
     pub fn isWindows(self: RocTarget) bool {
-        return switch (self.defaultCpuTarget()) {
-            .x64win, .arm64win => true,
-            else => false,
-        };
+        return self.family() == .windows;
     }
 
     /// Check if target is Linux-based
     pub fn isLinux(self: RocTarget) bool {
-        return switch (self.defaultCpuTarget()) {
-            .x64musl, .x64glibc, .x64linux, .arm64musl, .arm64glibc, .arm64linux, .arm32musl, .arm32linux => true,
-            else => false,
-        };
+        const target_family = self.family();
+        return target_family == .linux_dynamic or target_family == .linux_static;
     }
 
     /// Get the pointer bit width for this target
     pub fn ptrBitWidth(self: RocTarget) u16 {
-        return switch (self.toCpuArch()) {
+        return switch (classifyCpuArch(self.toCpuArch())) {
             .x86_64, .aarch64, .aarch64_be => 64,
             .arm, .wasm32 => 32,
-            else => 64, // Default to 64-bit
+            .other => 64, // Default to 64-bit
         };
     }
 

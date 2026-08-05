@@ -200,7 +200,7 @@ pub fn crashState(self: *const RuntimeHostEnv) CrashState {
         const idx = self.events.items.len - 1 - i;
         switch (self.events.items[idx]) {
             .crashed => |msg| return .{ .crashed = msg },
-            else => {},
+            .dbg, .expect_failed => {},
         }
     }
     return .did_not_crash;
@@ -216,7 +216,7 @@ pub fn takeCrashMessage(self: *RuntimeHostEnv) ?[]u8 {
                 _ = self.events.orderedRemove(idx);
                 return msg;
             },
-            else => {},
+            .dbg, .expect_failed => {},
         }
     }
     return null;

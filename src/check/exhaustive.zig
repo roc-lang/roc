@@ -966,10 +966,18 @@ fn getUnionFromType(
                     const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse return .not_a_union;
                     return getUnionFromType(allocator, type_store, builtin_idents, backing_var);
                 },
-                else => return .not_a_union,
+                .record,
+                .record_unbound,
+                .tuple,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                .empty_tag_union,
+                => return .not_a_union,
             }
         },
-        else => {},
+        .err => {},
     }
 
     // Not a tag union
@@ -1055,7 +1063,15 @@ fn buildUnionFromTagUnion(
                         has_flex = false;
                         break;
                     },
-                    else => {
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    => {
                         // Other structure types = closed for our purposes
                         is_open = false;
                         has_flex = false;
@@ -1068,7 +1084,7 @@ fn buildUnionFromTagUnion(
                 current_ext = type_store.getAliasBackingVar(alias);
                 // Don't break - continue with the resolved alias
             },
-            else => {
+            .err => {
                 // Other content types = treat as closed
                 is_open = false;
                 has_flex = false;
@@ -1399,7 +1415,7 @@ fn isCtorPayloadTypeInhabitedHelp(
         .flex => |flex| return !isUnresolvedUnboundFlex(flex),
         .rigid => |rigid| return !isUnresolvedUnboundRigid(rigid),
         .err => return true,
-        else => {},
+        .alias, .structure => {},
     }
 
     const gop = try seen.getOrPut(type_store.gpa, resolved.var_);
@@ -1510,12 +1526,20 @@ fn isCtorPayloadTagUnionInhabited(
                     current_ext = ext_tag_union.ext;
                 },
                 .empty_tag_union => return false,
-                else => return false,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => return false,
             },
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            else => return false,
+            .err => return false,
         }
     }
 }
@@ -1556,7 +1580,7 @@ fn collectCtorPayloadBlockersHelp(
             return;
         },
         .err => return,
-        else => {},
+        .alias, .structure => {},
     }
 
     const gop = try seen.getOrPut(type_store.gpa, resolved.var_);
@@ -1680,12 +1704,20 @@ fn collectCtorPayloadTagUnionBlockers(
                     current_ext = ext_tag_union.ext;
                 },
                 .empty_tag_union => return,
-                else => return,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => return,
             },
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            else => return,
+            .err => return,
         }
     }
 }
@@ -1716,7 +1748,7 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
         .flex => return false,
         .rigid => |rigid| return !rigid.name.attributes.ignored,
         .err => return true,
-        else => {},
+        .alias, .structure => {},
     }
 
     const gop = try seen.getOrPut(type_store.gpa, resolved.var_);
@@ -1855,7 +1887,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
             return;
         },
         .err => return,
-        else => {},
+        .alias, .structure => {},
     }
 
     const gop = try seen.getOrPut(type_store.gpa, resolved.var_);
@@ -2027,13 +2059,21 @@ fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *
                     // Closed union - no more tags
                     break;
                 },
-                else => break,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => break,
             },
             .alias => |alias| {
                 // Follow alias
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            else => break,
+            .err => break,
         }
     }
 
@@ -2098,12 +2138,20 @@ fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) error{OutOfMemory}!bool
                     current_ext = ext_tu.ext;
                 },
                 .empty_tag_union => return false,
-                else => return false,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => return false,
             },
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            else => return false,
+            .err => return false,
         }
     }
 }
@@ -2226,17 +2274,22 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
             .empty_tag_union => false,
             // A tag union extension (nested tags) means more tags exist
             .tag_union => true,
-            else => false,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => false,
         },
         // Recursion vars, aliases - resolve further
         .alias => |alias| {
             const backing = type_store.getAliasBackingVar(alias);
             return isOpenExtension(type_store, backing);
         },
-        .recursion_var => |rec| {
-            return isOpenExtension(type_store, rec.structure);
-        },
-        else => false,
+        .err => false,
     };
 }
 
@@ -2379,12 +2432,21 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                         current_tags = ext_tu.tags;
                         current_ext = ext_tu.ext;
                     },
-                    else => break,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .empty_tag_union,
+                    => break,
                 },
                 .alias => |alias| {
                     current_ext = type_store.getAliasBackingVar(alias);
                 },
-                else => break,
+                .flex, .rigid, .err => break,
             }
         }
     }
@@ -2417,9 +2479,15 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                 // Unbound records also have field types
                 return .{ .record_fields = fields };
             },
-            else => {},
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => {},
         },
-        else => {},
+        .flex, .rigid, .err => {},
     }
 
     return .none;
@@ -2476,13 +2544,20 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                     return null;
                 },
                 .empty_record => return null,
-                else => return null,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .tag_union,
+                .empty_tag_union,
+                => return null,
             },
             .alias => |alias| {
                 current_type = type_store.getAliasBackingVar(alias);
                 continue;
             },
-            else => return null,
+            .flex, .rigid, .err => return null,
         }
     }
 }
@@ -2506,7 +2581,7 @@ fn getListElemType(type_store: *TypeStore, type_var: Var) ?Var {
             const backing_var = type_store.getAliasBackingVar(alias);
             return getListElemType(type_store, backing_var);
         },
-        else => {},
+        .flex, .rigid, .structure, .err => {},
     }
 
     return null;
@@ -2822,7 +2897,7 @@ fn collectCtorsSketched(
                             }
                         }
                     },
-                    else => {},
+                    .tag, .opaque_type, .tuple, .guard => {},
                 }
             },
             .list => {
@@ -2849,7 +2924,7 @@ fn collectCtorsSketched(
                 .known_ctor => |kc| {
                     try tag_set.put(kc.tag_id, {});
                 },
-                else => {},
+                .anything, .literal, .str_pattern, .list => {},
             }
         }
 
@@ -2930,7 +3005,7 @@ fn specializeByConstructorSketched(
     // For records, get the target field names we're specializing by
     const target_fields: ?[]const Ident.Idx = switch (union_info.render_as) {
         .record => |fields| fields,
-        else => null,
+        .tag, .opaque_type, .tuple, .guard => null,
     };
 
     for (matrix.rows) |row| {
@@ -2957,7 +3032,7 @@ fn specializeByConstructorSketched(
                         // Get this pattern's field names
                         const pat_fields: []const Ident.Idx = switch (kc.union_info.render_as) {
                             .record => |fields| fields,
-                            else => &[_]Ident.Idx{}, // Shouldn't happen for records
+                            .tag, .opaque_type, .tuple, .guard => &[_]Ident.Idx{}, // Shouldn't happen for records
                         };
 
                         // Build the new row with fields aligned to target order
@@ -2999,7 +3074,7 @@ fn specializeByConstructorSketched(
                 @memcpy(new_row[arity..], rest);
                 try new_rows.append(allocator, new_row);
             },
-            else => {},
+            .literal, .str_pattern, .list => {},
         }
     }
 
@@ -3070,7 +3145,7 @@ fn specializeByListAritySketched(
                 @memcpy(new_row[target_len..], rest);
                 try new_rows.append(allocator, new_row);
             },
-            else => {},
+            .literal, .str_pattern, .ctor, .known_ctor => {},
         }
     }
 
@@ -3098,12 +3173,20 @@ fn collectFlexExtVars(
             .structure => |ft| switch (ft) {
                 .tag_union => |ext_tu| current_ext = ext_tu.ext,
                 .empty_tag_union => break,
-                else => break,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => break,
             },
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            else => break,
+            .rigid, .err => break,
         }
     }
 }
@@ -3142,7 +3225,7 @@ fn recurseIntoAllCtors(
         const specialized_types = switch (union_info.render_as) {
             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
             .guard => try column_types.specializeByGuard(allocator),
-            else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+            .tag, .opaque_type, .tuple => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
         };
         const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types, ext_vars_to_close, ext_vars_to_keep_open, payload_vars_to_close, false);
 
@@ -3331,7 +3414,7 @@ pub fn checkExhaustiveSketched(
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
                             .guard => try column_types.specializeByGuard(allocator),
-                            else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                            .tag, .opaque_type, .tuple => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
                         const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types, ext_vars_to_close, ext_vars_to_keep_open, payload_vars_to_close, false);
 
@@ -3527,10 +3610,10 @@ pub fn isUsefulSketched(
                                             }
                                         }
                                     },
-                                    else => {},
+                                    .tag, .opaque_type, .tuple, .guard => {},
                                 }
                             },
-                            else => {},
+                            .anything, .literal, .str_pattern, .ctor, .list => {},
                         }
                     }
 
@@ -3547,7 +3630,7 @@ pub fn isUsefulSketched(
                         merged_union_info.alternatives = new_alts;
                     }
                 },
-                else => {},
+                .tag, .opaque_type, .tuple, .guard => {},
             }
 
             const arity = if (merged_union_info.alternatives.len > 0)
@@ -3567,7 +3650,7 @@ pub fn isUsefulSketched(
             const specialized_types = switch (merged_union_info.render_as) {
                 .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
                 .guard => try column_types.specializeByGuard(allocator),
-                else => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
+                .tag, .opaque_type, .tuple => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
             };
 
             // Expand current pattern's args to match merged field set
@@ -3576,7 +3659,7 @@ pub fn isUsefulSketched(
                     const row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
                     const current_fields = switch (kc.union_info.render_as) {
                         .record => |f| f,
-                        else => &[_]Ident.Idx{},
+                        .tag, .opaque_type, .tuple, .guard => &[_]Ident.Idx{},
                     };
 
                     // Map current pattern's args to merged field positions
@@ -3596,7 +3679,7 @@ pub fn isUsefulSketched(
                     @memcpy(row[arity..], rest);
                     break :blk row;
                 },
-                else => blk: {
+                .tag, .opaque_type, .tuple, .guard => blk: {
                     const row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
                     @memcpy(row[0..kc.args.len], kc.args);
                     @memcpy(row[kc.args.len..], rest);
@@ -3695,7 +3778,7 @@ pub fn isUsefulSketched(
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
                             .guard => try column_types.specializeByGuard(allocator),
-                            else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                            .tag, .opaque_type, .tuple => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
 
                         const extended = try allocator.alloc(UnresolvedPattern, alt.arity + rest.len);
@@ -3764,7 +3847,7 @@ pub fn isUsefulSketched(
                 const matches = switch (row_first) {
                     .literal => |l| Literal.eql(l, lit),
                     .anything => true,
-                    else => false,
+                    .str_pattern, .ctor, .known_ctor, .list => false,
                 };
 
                 if (matches) {

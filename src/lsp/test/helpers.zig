@@ -56,7 +56,12 @@ pub fn collectResponsesWithIo(allocator: std.mem.Allocator, std_io: std.Io, byte
     while (true) {
         const message = transport.readMessage() catch |err| switch (err) {
             error.EndOfStream => break,
-            else => return err,
+            error.HeaderTooLong,
+            error.InvalidHeader,
+            error.MissingContentLength,
+            error.OutOfMemory,
+            error.PayloadTooLarge,
+            => return err,
         };
         try responses.append(allocator, message);
     }

@@ -145,7 +145,41 @@ pub fn aarch64Target(os: std.Target.Os.Tag) Target {
     return switch (os) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => .aarch64_macho,
         .windows => .aarch64_windows,
-        else => .aarch64,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .uefi,
+        .linux,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .aarch64,
     };
 }
 
@@ -248,7 +282,7 @@ fn isCAbiAggregate(store: *const Store, idx: Idx) bool {
             }
             break :blk true;
         },
-        else => false,
+        .box, .box_of_zst, .list, .list_of_zst, .zst, .ptr => false,
     };
 }
 
@@ -263,7 +297,7 @@ fn isCAbiI128Scalar(store: *const Store, idx: Idx) bool {
             }
             break :blk false;
         },
-        else => false,
+        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => false,
     };
 }
 
@@ -281,7 +315,7 @@ fn cAbiI128VectorKind(store: *const Store, idx: Idx) ?layout.Vector {
             }
             break :blk null;
         },
-        else => null,
+        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => null,
     };
 }
 
@@ -568,7 +602,7 @@ fn placementAarch64(
                 std.debug.assert(info.variants.len == 1 and info.data.discriminant_size == 0);
                 return placementAarch64(arena, store, target, info.variants.get(0).payload_layout, ctx);
             },
-            else => unreachable,
+            .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst => unreachable,
         },
     }
 }
@@ -601,7 +635,7 @@ fn placementSysV(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: C
             },
             // x87/win_i128 do not occur for Roc types under System V; a bare
             // SSEUP is invalid after the classifier's cleanup.
-            else => return .indirect,
+            .sseup, .x87, .x87up, .none, .memory, .win_i128 => return .indirect,
         }
     }
     return .{ .registers = .{
@@ -633,7 +667,7 @@ fn placementWin64(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: 
             };
             return .{ .registers = .{ .pieces = pieces } };
         } else return .indirect,
-        else => return .indirect,
+        .sseup, .x87, .x87up, .none, .float, .float_combine => return .indirect,
     }
 }
 
@@ -682,7 +716,7 @@ fn findVectorKind(store: *const Store, idx: Idx) ?layout.Vector {
             }
             break :blk null;
         },
-        else => null,
+        .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .zst, .ptr => null,
     };
 }
 

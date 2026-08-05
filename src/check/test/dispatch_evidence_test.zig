@@ -19,13 +19,11 @@ fn defVar(env: *const ModuleEnv, name: []const u8) error{TestUnexpectedResult}!V
     const defs_slice = env.store.sliceDefs(env.all_defs);
     for (defs_slice) |def_idx| {
         const def = env.store.getDef(def_idx);
-        switch (env.store.getPattern(def.pattern)) {
-            .assign => |assign| {
-                if (std.mem.eql(u8, name, idents.getText(assign.ident))) {
-                    return ModuleEnv.varFrom(def_idx);
-                }
-            },
-            else => {},
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            if (std.mem.eql(u8, name, idents.getText(pattern.assign.ident))) {
+                return ModuleEnv.varFrom(def_idx);
+            }
         }
     }
     return error.TestUnexpectedResult;

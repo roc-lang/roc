@@ -31,13 +31,11 @@ pub const CliArgs = union(enum) {
     problem: ArgProblem,
 
     pub fn deinit(self: CliArgs, alloc: mem.Allocator) void {
-        switch (self) {
-            .fmt => |fmt| alloc.free(fmt.paths),
-            .run => |run| alloc.free(run.app_args),
-            .bundle => |bundle| alloc.free(bundle.paths),
-            .unbundle => |unbundle| alloc.free(unbundle.paths),
-            else => return,
-        }
+        const tag = std.meta.activeTag(self);
+        if (tag == .fmt) alloc.free(self.fmt.paths);
+        if (tag == .run) alloc.free(self.run.app_args);
+        if (tag == .bundle) alloc.free(self.bundle.paths);
+        if (tag == .unbundle) alloc.free(self.unbundle.paths);
     }
 };
 
@@ -127,6 +125,12 @@ fn parseResolveLimitFlag(arg: []const u8, limits: *ResolveLimitArgs) ResolveLimi
         }
     }
     return .not_matched;
+}
+
+fn parseResolveLimitProblem(arg: []const u8, limits: *ResolveLimitArgs) ?ArgProblem {
+    const result = parseResolveLimitFlag(arg, limits);
+    if (std.meta.activeTag(result) == .problem) return result.problem;
+    return null;
 }
 
 const resolve_limit_help =
@@ -461,10 +465,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
                 \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -558,10 +559,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--target")) {
             if (getFlagValue(arg)) |value| {
                 target = value;
@@ -845,10 +843,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -1113,10 +1108,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -1183,10 +1175,7 @@ fn parseBump(args: []const []const u8) CliArgs {
             i += 1;
             expect = args[i];
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
@@ -1332,10 +1321,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) 
                 .run_subcommand => run_help,
             } };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.eql(u8, arg, "-v") or mem.eql(u8, arg, "--version")) {
             // We need to free the paths here because we aren't returning the .format variant
             app_args.deinit();
@@ -1417,10 +1403,7 @@ fn parseInstall(args: []const []const u8) CliArgs {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = install_help_with_limits };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--jobs")) {
             if (getFlagValue(arg)) |value| {
                 max_threads = std.fmt.parseInt(usize, value, 10) catch {

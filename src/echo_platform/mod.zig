@@ -218,7 +218,22 @@ fn handleStdoutError(err: std.Io.File.Writer.Error) noreturn {
     } else {
         switch (err) {
             error.BrokenPipe => std.process.exit(0),
-            else => {
+            error.AccessDenied,
+            error.Canceled,
+            error.DeviceBusy,
+            error.DiskQuota,
+            error.FileBusy,
+            error.FileTooBig,
+            error.InputOutput,
+            error.LockViolation,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotOpenForWriting,
+            error.PermissionDenied,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => {
                 std.debug.print("echo!: stdout write failed: {}\n", .{err});
                 std.process.exit(1);
             },

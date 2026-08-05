@@ -35,9 +35,9 @@ test "check - repro - issue 10365 - erroneous captured lambda poisons closure ow
         if (!std.mem.startsWith(u8, @tagName(node.tag), "expr_")) continue;
 
         const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
-        switch (test_env.checker.cir.store.getExpr(expr_idx)) {
-            .e_closure => |closure| try std.testing.expect(test_env.checker.cir.store.getExpr(closure.lambda_idx) == .e_lambda),
-            else => {},
+        const expr = test_env.checker.cir.store.getExpr(expr_idx);
+        if (expr == .e_closure) {
+            try std.testing.expect(test_env.checker.cir.store.getExpr(expr.e_closure.lambda_idx) == .e_lambda);
         }
     }
 }

@@ -203,8 +203,18 @@ fn createWithMinSizeKind(
             return shm;
         } else |err| {
             const size_related = switch (err) {
+                error.CreateFileMappingFailed,
+                error.InvalidHandle,
+                error.MapViewOfFileFailed,
+                error.MemfdCreateFailed,
+                error.OpenFileMappingFailed,
+                error.ShmOpenFailed,
+                error.ShmUnlinkFailed,
+                error.TempFileOpenFailed,
+                error.TempFileUnlinkFailed,
+                error.UnsupportedPlatform,
+                => false,
                 error.MmapFailed, error.FtruncateFailed, error.OutOfMemory => true,
-                else => false,
             };
             if (!size_related or current_size <= aligned_min) return err;
 

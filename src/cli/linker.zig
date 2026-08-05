@@ -202,7 +202,7 @@ fn appendForceUndefinedSymbol(
     target_os: std.Target.Os.Tag,
     symbol: []const u8,
 ) LinkError!void {
-    switch (target_os) {
+    switch (roc_target.classifyOs(target_os)) {
         .macos => {
             try args.append("-u");
             const prefixed = std.fmt.allocPrint(ctx.arena, "_{s}", .{symbol}) catch return LinkError.OutOfMemory;
@@ -212,7 +212,7 @@ fn appendForceUndefinedSymbol(
             const include_arg = std.fmt.allocPrint(ctx.arena, "/include:{s}", .{symbol}) catch return LinkError.OutOfMemory;
             try args.append(include_arg);
         },
-        else => {
+        .linux, .freebsd, .openbsd, .netbsd, .other => {
             const undefined_arg = std.fmt.allocPrint(ctx.arena, "--undefined={s}", .{symbol}) catch return LinkError.OutOfMemory;
             try args.append(undefined_arg);
         },
@@ -230,7 +230,7 @@ fn appendExportSymbol(
     target_os: std.Target.Os.Tag,
     symbol: []const u8,
 ) LinkError!void {
-    switch (target_os) {
+    switch (roc_target.classifyOs(target_os)) {
         .macos => {
             const prefixed = std.fmt.allocPrint(ctx.arena, "_{s}", .{symbol}) catch return LinkError.OutOfMemory;
             try args.append("-exported_symbol");
@@ -244,7 +244,7 @@ fn appendExportSymbol(
             const export_arg = std.fmt.allocPrint(ctx.arena, "/export:{s}", .{symbol}) catch return LinkError.OutOfMemory;
             try args.append(export_arg);
         },
-        else => {
+        .linux, .freebsd, .openbsd, .netbsd, .other => {
             const export_arg = std.fmt.allocPrint(ctx.arena, "--export-dynamic-symbol={s}", .{symbol}) catch return LinkError.OutOfMemory;
             const undefined_arg = std.fmt.allocPrint(ctx.arena, "--undefined={s}", .{symbol}) catch return LinkError.OutOfMemory;
             try args.append(export_arg);
@@ -323,7 +323,42 @@ fn selfExePath(std_io: std.Io, buf: []u8) SelfExePathError![]const u8 {
             const written = std.unicode.wtf16LeToWtf8(buf, wide);
             return buf[0..written];
         },
-        else => return error.UnsupportedOs,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .maccatalyst,
+        .uefi,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => return error.UnsupportedOs,
     }
 }
 
@@ -599,12 +634,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                             // Fallback to hardcoded path based on architecture
                             std.log.warn("Failed to detect libc: {}, using fallback", .{err});
                             try args.append("-dynamic-linker");
-                            const fallback_ld = switch (builtin.target.cpu.arch) {
-                                .x86_64 => "/lib64/ld-linux-x86-64.so.2",
-                                .aarch64 => "/lib/ld-linux-aarch64.so.1",
-                                .x86 => "/lib/ld-linux.so.2",
-                                else => "/lib/ld-linux.so.2",
-                            };
+                            const fallback_ld = if (builtin.target.cpu.arch == .x86_64)
+                                "/lib64/ld-linux-x86-64.so.2"
+                            else if (builtin.target.cpu.arch == .aarch64)
+                                "/lib/ld-linux-aarch64.so.1"
+                            else
+                                "/lib/ld-linux.so.2";
                             try args.append(fallback_ld);
                         }
                     }
@@ -668,11 +703,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("/debug:dwarf");
 
             // Add machine type based on target architecture
-            switch (target_arch) {
-                .x86_64 => try args.append("/machine:x64"),
-                .x86 => try args.append("/machine:x86"),
-                .aarch64 => try args.append("/machine:arm64"),
-                else => try args.append("/machine:x64"), // default to x64
+            if (target_arch == .x86) {
+                try args.append("/machine:x86");
+            } else if (target_arch == .aarch64) {
+                try args.append("/machine:arm64");
+            } else {
+                try args.append("/machine:x64");
             }
 
             // Set stack size to 64 MiB. Windows default is 1 MiB. Zig 0.16 codegen
@@ -802,7 +838,42 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append(export_arg);
             }
         },
-        else => {
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => {
             // Generic ELF linker
             try args.append("ld.lld");
 
@@ -992,7 +1063,38 @@ fn optimizeWasmOutput(ctx: *CliCtx, config: LinkConfig) LinkError!void {
 
     const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, config.output_path, ctx.gpa, .limited(std.math.maxInt(u32))) catch |err| switch (err) {
         error.OutOfMemory => return LinkError.OutOfMemory,
-        else => return LinkError.LinkFailed,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return LinkError.LinkFailed,
     };
     defer ctx.gpa.free(bytes);
 
@@ -1076,17 +1178,15 @@ fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) ResignMachoError!void {
     while (i < header.ncmds) : (i += 1) {
         if (offset + @sizeOf(macho.load_command) > cmds_buf.len) return error.UnexpectedEof;
         const lc: *align(8) macho.load_command = @ptrCast(@alignCast(cmds_buf.ptr + offset));
-        switch (lc.cmd) {
-            .CODE_SIGNATURE => cs_cmd = @ptrCast(lc),
-            .SEGMENT_64 => {
-                const seg: *align(8) macho.segment_command_64 = @ptrCast(lc);
-                if (std.mem.eql(u8, seg.segName(), "__TEXT")) {
-                    text_seg = seg;
-                } else if (std.mem.eql(u8, seg.segName(), "__LINKEDIT")) {
-                    linkedit_seg = seg;
-                }
-            },
-            else => {},
+        if (lc.cmd == .CODE_SIGNATURE) {
+            cs_cmd = @ptrCast(lc);
+        } else if (lc.cmd == .SEGMENT_64) {
+            const seg: *align(8) macho.segment_command_64 = @ptrCast(lc);
+            if (std.mem.eql(u8, seg.segName(), "__TEXT")) {
+                text_seg = seg;
+            } else if (std.mem.eql(u8, seg.segName(), "__LINKEDIT")) {
+                linkedit_seg = seg;
+            }
         }
         offset += lc.cmdsize;
     }

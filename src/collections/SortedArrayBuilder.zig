@@ -34,7 +34,27 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             void;
         const KeyHasOrder = switch (@typeInfo(K)) {
             .@"struct", .@"enum", .@"union", .@"opaque" => @hasDecl(K, "order"),
-            else => false,
+            .type,
+            .void,
+            .bool,
+            .noreturn,
+            .int,
+            .float,
+            .pointer,
+            .array,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .optional,
+            .error_union,
+            .error_set,
+            .@"fn",
+            .frame,
+            .@"anyframe",
+            .vector,
+            .enum_literal,
+            => false,
         };
 
         pub const Entry = struct {

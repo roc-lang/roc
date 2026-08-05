@@ -90,10 +90,9 @@ const StrAppendPass = struct {
     }
 
     fn rewriteAt(self: *StrAppendPass, proc_body: CFStmtId, call_stmt_id: CFStmtId) ResourceError!bool {
-        const call_stmt = switch (self.store.getCFStmt(call_stmt_id)) {
-            .assign_call => |s| s,
-            else => return false,
-        };
+        const call_stmt_node = self.store.getCFStmt(call_stmt_id);
+        if (call_stmt_node != .assign_call) return false;
+        const call_stmt = call_stmt_node.assign_call;
 
         if (!isStrLayout(self.store.getLocal(call_stmt.target).layout_idx)) return false;
 
@@ -105,10 +104,9 @@ const StrAppendPass = struct {
         defer chain.deinit(self.store.allocator);
         const forwarded = try body_clone.forwardLocalAliasChainInto(self.store, self.store.allocator, call_stmt.target, call_stmt.next, &chain);
         const concat_stmt_id = forwarded.next;
-        const concat_stmt = switch (self.store.getCFStmt(concat_stmt_id)) {
-            .assign_low_level => |s| s,
-            else => return false,
-        };
+        const concat_stmt_node = self.store.getCFStmt(concat_stmt_id);
+        if (concat_stmt_node != .assign_low_level) return false;
+        const concat_stmt = concat_stmt_node.assign_low_level;
         if (concat_stmt.op != .str_concat) return false;
         const concat_args = self.store.getLocalSpan(concat_stmt.args);
         if (concat_args.len != 2) return false;
@@ -236,15 +234,13 @@ const AppendRewriter = struct {
     }
 
     pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, stmt: LIR.CFStmt) ResourceError!?CFStmtId {
-        switch (stmt) {
-            .assign_low_level => |s| {
-                if (s.op == .str_concat and cloner.directReturnOf(s.next, s.target)) {
-                    return try self.cloneConcatReturn(cloner, s);
-                }
-                return null;
-            },
-            else => return null,
+        if (stmt == .assign_low_level) {
+            const s = stmt.assign_low_level;
+            if (s.op == .str_concat and cloner.directReturnOf(s.next, s.target)) {
+                return try self.cloneConcatReturn(cloner, s);
+            }
         }
+        return null;
     }
 
     fn cloneConcatReturn(self: *AppendRewriter, cloner: anytype, s: anytype) ResourceError!CFStmtId {

@@ -648,19 +648,70 @@ fn osMapFilePrivate(_: ?*anyopaque, std_io: std.Io, path: []const u8) ?MappedFil
 
 fn osReadFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(std_io, path, allocator, .limited(max_file_size)) catch |err| return switch (err) {
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => error.IoError,
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         error.OutOfMemory => error.OutOfMemory,
         error.StreamTooLong => error.StreamTooLong,
-        else => error.IoError,
     };
 }
 
 fn osReadFileInto(_: ?*anyopaque, std_io: std.Io, path: []const u8, buffer: []u8) ReadError!usize {
     const file = std.Io.Dir.cwd().openFile(std_io, path, .{}) catch |err| return switch (err) {
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.IsDir,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => error.IoError,
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
     defer file.close(std_io);
     return file.readPositionalAll(std_io, buffer, 0) catch return error.IoError;
@@ -668,8 +719,37 @@ fn osReadFileInto(_: ?*anyopaque, std_io: std.Io, path: []const u8, buffer: []u8
 
 fn osWriteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, data: []const u8) WriteError!void {
     std.Io.Dir.cwd().writeFile(std_io, .{ .sub_path = path, .data = data }) catch |err| return switch (err) {
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BrokenPipe,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForWriting,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => error.IoError,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
 }
 
@@ -680,16 +760,36 @@ fn osFileExists(_: ?*anyopaque, std_io: std.Io, path: []const u8) bool {
 
 fn osStat(_: ?*anyopaque, std_io: std.Io, path: []const u8) StatError!FileInfo {
     const s = std.Io.Dir.cwd().statFile(std_io, path, .{}) catch |err| return switch (err) {
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.IsDir,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => error.IoError,
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
     return FileInfo{
-        .kind = switch (s.kind) {
-            .file => .file,
-            .directory => .directory,
-            else => .other,
-        },
+        .kind = if (s.kind == .file) .file else if (s.kind == .directory) .directory else .other,
         .size = s.size,
         .mtime_ns = @intCast(s.mtime.nanoseconds),
     };
@@ -697,9 +797,21 @@ fn osStat(_: ?*anyopaque, std_io: std.Io, path: []const u8) StatError!FileInfo {
 
 fn osListDir(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ListError![]FileEntry {
     var dir = std.Io.Dir.cwd().openDir(std_io, path, .{ .iterate = true }) catch |err| return switch (err) {
+        error.BadPathName,
+        error.Canceled,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ProcessFdQuotaExceeded,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        => error.IoError,
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
     defer dir.close(std_io);
 
@@ -716,15 +828,24 @@ fn osListDir(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Alloca
 
     while (true) {
         const next = walker.next(std_io) catch |err| switch (err) {
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.FileNotFound,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NotDir,
+            error.PermissionDenied,
+            error.ProcessFdQuotaExceeded,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            => return error.IoError,
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.IoError,
         };
         const entry = next orelse break;
-        const kind: FileKind = switch (entry.kind) {
-            .file => .file,
-            .directory => .directory,
-            else => .other,
-        };
+        const kind: FileKind = if (entry.kind == .file) .file else if (entry.kind == .directory) .directory else .other;
         const owned_path = std.fs.path.join(allocator, &.{ path, entry.path }) catch return error.OutOfMemory;
         entries.append(allocator, .{ .path = owned_path, .kind = kind }) catch {
             allocator.free(owned_path);
@@ -753,11 +874,12 @@ fn osListDirTop(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: All
     while (true) {
         const next = it.next(std_io) catch return error.IoError;
         const entry = next orelse break;
-        const kind: FileKind = switch (entry.kind) {
-            .file => .file,
-            .directory => .directory,
-            else => .other,
-        };
+        const kind: FileKind = if (entry.kind == .file)
+            .file
+        else if (entry.kind == .directory)
+            .directory
+        else
+            .other;
         const owned_path = std.fs.path.join(allocator, &.{ path, entry.name }) catch return error.OutOfMemory;
         entries.append(allocator, .{ .path = owned_path, .kind = kind }) catch {
             allocator.free(owned_path);
@@ -789,7 +911,6 @@ fn osCanonicalize(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: A
     const len = std.Io.Dir.cwd().realPathFile(std_io, path, &buffer) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
     return allocator.dupe(u8, buffer[0..len]) catch error.OutOfMemory;
 }
@@ -810,27 +931,74 @@ fn osCanonicalizeLibc(path: []const u8, allocator: Allocator) CanonicalizeError!
             return allocator.dupe(u8, resolved_buffer[0..len]) catch error.OutOfMemory;
         }
 
-        switch (@as(std.posix.E, @enumFromInt(std.c._errno().*))) {
-            .INTR => continue,
-            .NOENT, .NOTDIR => return error.FileNotFound,
-            .ACCES => return error.AccessDenied,
-            else => return error.IoError,
-        }
+        const err = @as(std.posix.E, @enumFromInt(std.c._errno().*));
+        if (err == .INTR) continue;
+        if (err == .NOENT or err == .NOTDIR) return error.FileNotFound;
+        if (err == .ACCES) return error.AccessDenied;
+        return error.IoError;
     }
 }
 
 fn osMakePath(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!void {
     std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| return switch (err) {
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => error.IoError,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
 }
 
 fn osRename(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []const u8) RenameError!void {
     std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, std_io) catch |err| return switch (err) {
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.CrossDevice,
+        error.DirNotEmpty,
+        error.DiskQuota,
+        error.FileBusy,
+        error.HardwareFailure,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemResources,
+        error.Unexpected,
+        => error.IoError,
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
 }
 
@@ -868,15 +1036,45 @@ fn osFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const
 
 fn osWriteStdout(_: ?*anyopaque, std_io: std.Io, data: []const u8) StdioError!void {
     std.Io.File.stdout().writeStreamingAll(std_io, data) catch |err| return switch (err) {
+        error.AccessDenied,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileTooBig,
+        error.InputOutput,
+        error.LockViolation,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotOpenForWriting,
+        error.PermissionDenied,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => error.IoError,
         error.BrokenPipe => error.BrokenPipe,
-        else => error.IoError,
     };
 }
 
 fn osWriteStderr(_: ?*anyopaque, std_io: std.Io, data: []const u8) StdioError!void {
     std.Io.File.stderr().writeStreamingAll(std_io, data) catch |err| return switch (err) {
+        error.AccessDenied,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileTooBig,
+        error.InputOutput,
+        error.LockViolation,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotOpenForWriting,
+        error.PermissionDenied,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => error.IoError,
         error.BrokenPipe => error.BrokenPipe,
-        else => error.IoError,
     };
 }
 
@@ -892,7 +1090,46 @@ fn osTerminalWidth(_: ?*anyopaque, std_io: std.Io) ?u16 {
     return switch (builtin.os.tag) {
         .windows => winTerminalWidth(std_io),
         .wasi, .freestanding => null,
-        else => posixTerminalWidth(),
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .driverkit,
+        .ios,
+        .linux,
+        .macos,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => posixTerminalWidth(),
     };
 }
 
@@ -907,50 +1144,143 @@ fn posixTerminalWidth() ?u16 {
 /// Windows: query the console screen buffer for the visible window width.
 fn winTerminalWidth(std_io: std.Io) ?u16 {
     var info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
-    switch (info.operate(std_io, std.Io.File.stderr()) catch return null) {
-        .SUCCESS => {
-            const cols = info.Data.dwWindowSize.X;
-            return if (cols > 0) @intCast(cols) else null;
-        },
-        else => return null,
-    }
+    const result = info.operate(std_io, std.Io.File.stderr()) catch return null;
+    if (result != .SUCCESS) return null;
+    const cols = info.Data.dwWindowSize.X;
+    return if (cols > 0) @intCast(cols) else null;
 }
 
 fn osDeleteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8) DeleteError!void {
     std.Io.Dir.cwd().deleteFile(std_io, path) catch |err| return switch (err) {
+        error.BadPathName,
+        error.Canceled,
+        error.FileBusy,
+        error.FileSystem,
+        error.IsDir,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemResources,
+        error.Unexpected,
+        => error.IoError,
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
 }
 
 fn osDeleteDir(_: ?*anyopaque, std_io: std.Io, path: []const u8) DeleteError!void {
     std.Io.Dir.cwd().deleteDir(std_io, path) catch |err| return switch (err) {
+        error.BadPathName,
+        error.Canceled,
+        error.DirNotEmpty,
+        error.FileBusy,
+        error.FileSystem,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemResources,
+        error.Unexpected,
+        => error.IoError,
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
 }
 
 fn osDeleteTree(_: ?*anyopaque, std_io: std.Io, path: []const u8) DeleteError!void {
     std.Io.Dir.cwd().deleteTree(std_io, path) catch |err| return switch (err) {
+        error.BadPathName,
+        error.Canceled,
+        error.FileBusy,
+        error.FileSystem,
+        error.FileTooBig,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        => error.IoError,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
 }
 
 fn osCreateDir(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!void {
     std.Io.Dir.cwd().createDir(std_io, path, .default_dir) catch |err| return switch (err) {
+        error.BadPathName,
+        error.Canceled,
+        error.DiskQuota,
+        error.FileNotFound,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemResources,
+        error.Unexpected,
+        => error.IoError,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
 }
 
 fn osCopyFile(_: ?*anyopaque, std_io: std.Io, src_path: []const u8, dst_path: []const u8) CopyError!void {
     std.Io.Dir.cwd().copyFile(src_path, std.Io.Dir.cwd(), dst_path, std_io, .{}) catch |err| return switch (err) {
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BrokenPipe,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.CrossDevice,
+        error.DeviceBusy,
+        error.DirNotEmpty,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.HardwareFailure,
+        error.InputOutput,
+        error.InvalidFileName,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OperationUnsupported,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => error.IoError,
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
     };
 }
 

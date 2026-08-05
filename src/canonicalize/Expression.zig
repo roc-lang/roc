@@ -1189,15 +1189,12 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const stmt = ir.store.getStatement(nominal_expr.nominal_type_decl);
-                switch (stmt) {
-                    .s_nominal_decl => |decl| {
-                        const header = ir.store.getTypeHeader(decl.header);
-                        try tree.pushStringPair("nominal", ir.getIdent(header.name));
-                    },
-                    else => {
-                        // Handle malformed nominal type declaration by pushing error info
-                        try tree.pushStringPair("nominal", "<malformed>");
-                    },
+                if (stmt == .s_nominal_decl) {
+                    const header = ir.store.getTypeHeader(stmt.s_nominal_decl.header);
+                    try tree.pushStringPair("nominal", ir.getIdent(header.name));
+                } else {
+                    // Handle malformed nominal type declaration by pushing error info
+                    try tree.pushStringPair("nominal", "<malformed>");
                 }
 
                 const attrs = tree.beginNode();

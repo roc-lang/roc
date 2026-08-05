@@ -296,80 +296,64 @@ fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Alloca
         return;
     }
 
-    switch (ctx.tokenTag()) {
-        .UpperIdent,
-        .DotUpperIdent,
-        .NoSpaceDotUpperIdent,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Names that start with uppercase letters are used for tags, type names, and module names in Roc.");
-        },
-        .LowerIdent,
-        .DotLowerIdent,
-        .NoSpaceDotLowerIdent,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.");
-        },
-        .KwApp,
-        .KwAs,
-        .KwCrash,
-        .KwDbg,
-        .KwElse,
-        .KwExpect,
-        .KwExposes,
-        .KwExposing,
-        .KwFor,
-        .KwGenerates,
-        .KwHas,
-        .KwHosted,
-        .KwIf,
-        .KwImplements,
-        .KwImport,
-        .KwImports,
-        .KwIn,
-        .KwInterface,
-        .KwMatch,
-        .KwModule,
-        .KwPackage,
-        .KwPackages,
-        .KwPlatform,
-        .KwProvides,
-        .KwRequires,
-        .KwReturn,
-        .KwTargets,
-        .KwVar,
-        .KwWhere,
-        .KwWhile,
-        .KwWith,
-        .KwBreak,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("That word is reserved by Roc, so it cannot be used as a name in this position.");
-        },
-        .Comma => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("A comma separates items, but there must be a valid item on both sides of it.");
-        },
-        .CloseCurly,
-        .CloseRound,
-        .CloseSquare,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("This closes the current construct, so the parser was looking for the missing item before it.");
-        },
-        .MalformedUnicodeIdent,
-        .MalformedDotUnicodeIdent,
-        .MalformedNoSpaceDotUnicodeIdent,
-        .MalformedNamedUnderscoreUnicode,
-        .MalformedOpaqueNameUnicode,
-        .MalformedOpaqueNameWithoutName,
-        .MalformedUnknownToken,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("This token is malformed, so it cannot be used as ordinary Roc syntax.");
-        },
-        else => {},
+    const token_tag = ctx.tokenTag();
+    if (token_tag == .UpperIdent or token_tag == .DotUpperIdent or token_tag == .NoSpaceDotUpperIdent) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Names that start with uppercase letters are used for tags, type names, and module names in Roc.");
+    } else if (token_tag == .LowerIdent or token_tag == .DotLowerIdent or token_tag == .NoSpaceDotLowerIdent) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.");
+    } else if (token_tag == .KwApp or
+        token_tag == .KwAs or
+        token_tag == .KwCrash or
+        token_tag == .KwDbg or
+        token_tag == .KwElse or
+        token_tag == .KwExpect or
+        token_tag == .KwExposes or
+        token_tag == .KwExposing or
+        token_tag == .KwFor or
+        token_tag == .KwGenerates or
+        token_tag == .KwHas or
+        token_tag == .KwHosted or
+        token_tag == .KwIf or
+        token_tag == .KwImplements or
+        token_tag == .KwImport or
+        token_tag == .KwImports or
+        token_tag == .KwIn or
+        token_tag == .KwInterface or
+        token_tag == .KwMatch or
+        token_tag == .KwModule or
+        token_tag == .KwPackage or
+        token_tag == .KwPackages or
+        token_tag == .KwPlatform or
+        token_tag == .KwProvides or
+        token_tag == .KwRequires or
+        token_tag == .KwReturn or
+        token_tag == .KwTargets or
+        token_tag == .KwVar or
+        token_tag == .KwWhere or
+        token_tag == .KwWhile or
+        token_tag == .KwWith or
+        token_tag == .KwBreak)
+    {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("That word is reserved by Roc, so it cannot be used as a name in this position.");
+    } else if (token_tag == .Comma) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("A comma separates items, but there must be a valid item on both sides of it.");
+    } else if (token_tag == .CloseCurly or token_tag == .CloseRound or token_tag == .CloseSquare) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This closes the current construct, so the parser was looking for the missing item before it.");
+    } else if (token_tag == .MalformedUnicodeIdent or
+        token_tag == .MalformedDotUnicodeIdent or
+        token_tag == .MalformedNoSpaceDotUnicodeIdent or
+        token_tag == .MalformedNamedUnderscoreUnicode or
+        token_tag == .MalformedOpaqueNameUnicode or
+        token_tag == .MalformedOpaqueNameWithoutName or
+        token_tag == .MalformedUnknownToken)
+    {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This token is malformed, so it cannot be used as ordinary Roc syntax.");
     }
 
     if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
@@ -2943,10 +2927,8 @@ pub const Expr = union(enum) {
     pub const Span = struct { span: base.DataSpan };
 
     pub fn as_string_part_region(self: @This()) Allocator.Error!TokenizedRegion {
-        switch (self) {
-            .string_part => |part| return part.region,
-            else => return error.ExpectedStringPartRegion,
-        }
+        if (self != .string_part) return error.ExpectedStringPartRegion;
+        return self.string_part.region;
     }
 
     /// Extract the region from any Expr variant

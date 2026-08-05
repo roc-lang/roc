@@ -58,18 +58,17 @@ fn forwardLocalAliasChainImpl(
     var value = source;
     var current = first_stmt;
     while (true) {
-        const stmt = switch (store.getCFStmt(current)) {
-            .assign_ref => |s| s,
-            else => return .{ .value = value, .next = current },
-        };
-        switch (stmt.op) {
-            .local => |local| if (local == value and store.getLocal(stmt.target).layout_idx == store.getLocal(value).layout_idx) {
+        const stmt_node = store.getCFStmt(current);
+        if (stmt_node != .assign_ref) return .{ .value = value, .next = current };
+        const stmt = stmt_node.assign_ref;
+        if (stmt.op == .local) {
+            const local = stmt.op.local;
+            if (local == value and store.getLocal(stmt.target).layout_idx == store.getLocal(value).layout_idx) {
                 if (chain) |list| try list.append(allocator, stmt.target);
                 value = stmt.target;
                 current = stmt.next;
                 continue;
-            },
-            else => {},
+            }
         }
         return .{ .value = value, .next = current };
     }
@@ -539,10 +538,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// True when `next` is a `ret` of exactly `value`, marking a direct
         /// constructor/concat return the rewriter may fuse into its tail.
         pub fn directReturnOf(self: *const Self, next: CFStmtId, value: LocalId) bool {
-            return switch (self.store.getCFStmt(next)) {
-                .ret => |ret_stmt| ret_stmt.value == value,
-                else => false,
-            };
+            const stmt = self.store.getCFStmt(next);
+            return stmt == .ret and stmt.ret.value == value;
         }
 
         fn cloneSwitch(self: *Self, s: anytype) Allocator.Error!CFStmtId {

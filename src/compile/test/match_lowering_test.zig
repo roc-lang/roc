@@ -47,11 +47,9 @@ fn countShapes(store: *const lir.LirStore, _: *const layout.Store) harness.Lower
     counted_multiway_switches = 0;
     counted_total_stmts = store.cf_stmts.len();
     for (0..store.cf_stmts.len()) |i| {
-        switch (store.cf_stmts.get(i)) {
-            .switch_stmt => |sw| {
-                if (sw.branches.len >= 5) counted_multiway_switches += 1;
-            },
-            else => {},
+        const stmt = store.cf_stmts.get(i);
+        if (stmt == .switch_stmt) {
+            if (stmt.switch_stmt.branches.len >= 5) counted_multiway_switches += 1;
         }
     }
 }
@@ -59,18 +57,30 @@ fn countShapes(store: *const lir.LirStore, _: *const layout.Store) harness.Lower
 /// For every proc containing a >= 5-case switch (the `rank` specializations),
 /// assert the proc reads exactly one discriminant: one multiway dispatch per
 /// match, one read per tested position.
-fn checkRankProcShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
-    const gpa = std.testing.allocator;
-    const buf = try gpa.alloc(u8, 1 << 20);
-    defer gpa.free(buf);
+fn checkRankProcShape(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
     var found_multiway_proc = false;
-    for (0..store.proc_specs.len()) |index| {
-        var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
-        const text = writer.buffered();
-        if (std.mem.count(u8, text, "case ") >= 5) {
+    for (store.getProcSpecs()) |proc| {
+        const body = proc.body orelse continue;
+        var work = std.ArrayList(lir.LIR.CFStmtId).empty;
+        defer work.deinit(store.allocator);
+        var visited = std.AutoHashMap(lir.LIR.CFStmtId, void).init(store.allocator);
+        defer visited.deinit();
+        try work.append(store.allocator, body);
+
+        var has_multiway_switch = false;
+        var discriminant_count: usize = 0;
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(stmt_id);
+            if (entry.found_existing) continue;
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .switch_stmt and stmt.switch_stmt.branches.len >= 5) has_multiway_switch = true;
+            if (stmt == .assign_ref and stmt.assign_ref.op == .discriminant) discriminant_count += 1;
+            try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+        }
+
+        if (has_multiway_switch) {
             found_multiway_proc = true;
-            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "ref.discriminant"));
+            try std.testing.expectEqual(@as(usize, 1), discriminant_count);
         }
     }
     try std.testing.expect(found_multiway_proc);

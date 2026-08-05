@@ -99,13 +99,13 @@ comptime {
         if (target.cpuLevel() != .default) continue;
         if (target.baselineCpuTarget() == null) continue;
 
-        const detected_features = switch (target.toCpuArch()) {
+        const detected_features = switch (target_mod.classifyCpuArch(target.toCpuArch())) {
             .x86_64 => detectedX86Features(),
             .aarch64, .aarch64_be => detectedAarch64Features(),
             // A wasm runtime's feature set is the embedder's to decide and is
             // not reportable from inside the module, so `detect` answers with
             // the level every runtime executes and nothing here constrains it.
-            else => continue,
+            .arm, .wasm32, .other => continue,
         };
 
         if (!detected_features.eql(target.requiredRuntimeCpuFeatures())) {
@@ -173,14 +173,14 @@ pub fn nativeTarget() RocTarget {
 }
 
 fn detect() CpuLevel {
-    switch (comptime builtin.cpu.arch) {
+    switch (comptime target_mod.classifyCpuArch(builtin.cpu.arch)) {
         .x86_64 => return detectX86_64(),
         .aarch64, .aarch64_be => return detectAarch64(),
         // A wasm module cannot ask its runtime which proposals the runtime
         // implements, so it gets the level every runtime executes. The
         // architectures left over have no `v1` twin, so `level` answers them
         // before reaching here.
-        else => return .v1,
+        .arm, .wasm32, .other => return .v1,
     }
 }
 
@@ -274,7 +274,7 @@ fn detectX86_64() CpuLevel {
 }
 
 fn detectAarch64() CpuLevel {
-    switch (comptime builtin.os.tag) {
+    switch (comptime target_mod.classifyOs(builtin.os.tag)) {
         .linux => {
             const required = hwcap_aes | hwcap_pmull | hwcap_asimddp;
             const hwcap = getauxval(std.elf.AT_HWCAP);
@@ -286,7 +286,7 @@ fn detectAarch64() CpuLevel {
             if (!windows.IsProcessorFeaturePresent(.ARM_V82_DP_INSTRUCTIONS_AVAILABLE)) return .v1;
             return .default;
         },
-        else => return .v1,
+        .macos, .freebsd, .openbsd, .netbsd, .other => return .v1,
     }
 }
 

@@ -21,10 +21,8 @@ fn rand_idx(random: std.Random, comptime T: type) T {
         };
     }
 
-    return switch (@typeInfo(T)) {
-        .@"enum" => @enumFromInt(random.int(u32)),
-        else => @compileError("rand_idx needs an explicit constructor for this index type"),
-    };
+    if (@typeInfo(T) != .@"enum") @compileError("rand_idx needs an explicit constructor for this index type");
+    return @enumFromInt(random.int(u32));
 }
 
 /// Generate a random token index.

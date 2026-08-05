@@ -42,10 +42,7 @@ test "adjacent string pattern captures emit warnings" {
     const diag_indices = env.store.sliceDiagnostics(env.diagnostics);
     for (diag_indices) |diag_idx| {
         const diag = env.store.getDiagnostic(diag_idx);
-        switch (diag) {
-            .unreachable_string_pattern_capture => warning_count += 1,
-            else => {},
-        }
+        if (diag == .unreachable_string_pattern_capture) warning_count += 1;
     }
 
     try testing.expectEqual(@as(usize, 2), warning_count);
