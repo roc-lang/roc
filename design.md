@@ -3658,11 +3658,13 @@ cache, and nominal declaration-scope stack; it does not construct a parallel
 body-lowering context. Type-only instantiation contexts do not materialize
 module-sized body tables.
 The dense checked-binder-to-draft-local table is allocated only when a body
-actually installs its first binding. Checked string literals are shared by the
-specialization draft under the exact `(checked module id, checked literal id)`
-address, so child and call contexts neither allocate parallel literal tables nor
-append duplicate draft literals. Generated strings remain ordinary distinct
-draft entries because they have no checked literal identity.
+actually installs its first binding. Checked string literals are shared under
+the exact `(draft owner, checked module id, checked literal id)` address, so
+child and call contexts lowering the same retained body neither allocate
+parallel literal tables nor append duplicate draft literals. A draft value is
+never reused across body owners: suppressing one owner must suppress all of the
+content referenced only by that owner. Generated strings remain ordinary
+distinct draft entries because they have no checked literal identity.
 
 Checked roots explicitly record whether their graph contains identity
 variables, but closure does not authorize reuse across instantiation scopes.

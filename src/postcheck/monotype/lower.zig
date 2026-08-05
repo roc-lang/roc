@@ -10578,6 +10578,12 @@ const DraftOwnerRun = struct {
 const CheckedStringLiteralAddress = struct {
     module_bytes: [32]u8,
     literal: checked.CheckedStringLiteralId,
+    owner: DraftOwner,
+};
+
+const StaticDataCandidateAddress = struct {
+    static_data: Common.StaticDataId,
+    owner: DraftOwner,
 };
 
 const BodyDraftStore = struct {
@@ -10635,8 +10641,8 @@ const BodyDraftStore = struct {
     if_branches: std.ArrayList(DraftIfBranch),
     string_literals: std.ArrayList(DraftStringLiteral),
     string_bytes: std.ArrayList(u8),
-    /// Checked literal identities are immutable and shared by every lowering
-    /// context that writes into this specialization draft.
+    /// Checked literal identities are immutable and shared by lowering
+    /// contexts that write content owned by the same retained body.
     checked_string_literals: std.AutoHashMap(CheckedStringLiteralAddress, DraftStringLiteralId),
     proc_debug_names: std.ArrayList(Ast.ProcDebugName),
     roots: std.ArrayList(DraftRoot),
@@ -10655,9 +10661,9 @@ const BodyDraftStore = struct {
     current_owner: DraftOwner,
     owner_starts: DraftCoreLengths,
     owner_runs: std.ArrayList(DraftOwnerRun),
-    /// Closed static-data candidates are shared by every child lowering
-    /// context writing into this specialization draft.
-    static_data_candidate_exprs: collections.DenseMap(Common.StaticDataId, DraftExprId),
+    /// Closed static-data candidates are shared by child lowering contexts
+    /// only within the body that owns their explicit runtime expression.
+    static_data_candidate_exprs: std.AutoHashMap(StaticDataCandidateAddress, DraftExprId),
 
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
@@ -10731,7 +10737,7 @@ const BodyDraftStore = struct {
             .current_owner = .root,
             .owner_starts = @splat(0),
             .owner_runs = .empty,
-            .static_data_candidate_exprs = collections.DenseMap(Common.StaticDataId, DraftExprId).init(allocator),
+            .static_data_candidate_exprs = std.AutoHashMap(StaticDataCandidateAddress, DraftExprId).init(allocator),
         };
     }
 
@@ -11178,9 +11184,15 @@ const BodyDraftStore = struct {
 
     fn addCheckedStringLiteral(
         self: *BodyDraftStore,
-        address: CheckedStringLiteralAddress,
+        checked_module_bytes: [32]u8,
+        literal: checked.CheckedStringLiteralId,
         text: []const u8,
     ) Allocator.Error!DraftStringLiteralId {
+        const address: CheckedStringLiteralAddress = .{
+            .module_bytes = checked_module_bytes,
+            .literal = literal,
+            .owner = self.current_owner,
+        };
         if (self.checked_string_literals.get(address)) |existing| return existing;
         const lowered = try self.addStringLiteral(text);
         try self.checked_string_literals.put(address, lowered);
@@ -18025,8 +18037,11 @@ const BodyContext = struct {
         if (index >= self.view.bodies.stringLiteralCount()) {
             Common.invariant("checked string literal id outside checked body string store");
         }
-        const address: CheckedStringLiteralAddress = .{ .module_bytes = self.view.key.bytes, .literal = id };
-        return try self.draft.addCheckedStringLiteral(address, self.view.bodies.stringLiteral(@enumFromInt(index)));
+        return try self.draft.addCheckedStringLiteral(
+            self.view.key.bytes,
+            id,
+            self.view.bodies.stringLiteral(@enumFromInt(index)),
+        );
     }
 
     fn lowerCallExpr(
@@ -27767,14 +27782,18 @@ const BodyContext = struct {
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
             const id = try self.builder.staticDataValue(const_locator, node, checked_type, DraftTypeCell.fromSealed(ty));
-            if (self.draft.static_data_candidate_exprs.get(id)) |existing| return existing;
+            const address: StaticDataCandidateAddress = .{
+                .static_data = id,
+                .owner = self.draft.current_owner,
+            };
+            if (self.draft.static_data_candidate_exprs.get(address)) |existing| return existing;
 
             const runtime_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, const_locator);
             const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
                 .static_data = id,
                 .runtime_expr = runtime_expr,
             } } });
-            try self.draft.static_data_candidate_exprs.put(id, candidate_expr);
+            try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
             return candidate_expr;
         }
         return try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, const_locator);
@@ -48557,26 +48576,28 @@ test "binder map materializes dense storage only on first binding" {
     try std.testing.expectEqual(@as(usize, 1), binders.count());
 }
 
-test "checked string literal cache is shared by exact module identity" {
+test "checked string literal cache is shared only within one draft owner" {
     var draft = BodyDraftStore.init(std.testing.allocator);
     defer draft.deinit();
 
     const literal: checked.CheckedStringLiteralId = @enumFromInt(3);
-    const first_address: CheckedStringLiteralAddress = .{
-        .module_bytes = [_]u8{1} ** 32,
-        .literal = literal,
-    };
-    const other_module_address: CheckedStringLiteralAddress = .{
-        .module_bytes = [_]u8{2} ** 32,
-        .literal = literal,
-    };
+    const first_module = [_]u8{1} ** 32;
+    const other_module = [_]u8{2} ** 32;
 
-    const first = try draft.addCheckedStringLiteral(first_address, "same");
-    const reused = try draft.addCheckedStringLiteral(first_address, "same");
-    const other_module = try draft.addCheckedStringLiteral(other_module_address, "same");
+    const first = try draft.addCheckedStringLiteral(first_module, literal, "same");
+    const reused = try draft.addCheckedStringLiteral(first_module, literal, "same");
+    const other_module_literal = try draft.addCheckedStringLiteral(other_module, literal, "same");
+
+    const owner_scope = try draft.enterOwner(.{ .draft_fn = @enumFromInt(7) });
+    defer owner_scope.leave();
+    const other_owner = try draft.addCheckedStringLiteral(first_module, literal, "same");
+    const other_owner_reused = try draft.addCheckedStringLiteral(first_module, literal, "same");
+
     try std.testing.expectEqual(first, reused);
-    try std.testing.expect(first != other_module);
-    try std.testing.expectEqual(@as(usize, 2), draft.string_literals.items.len);
+    try std.testing.expect(first != other_module_literal);
+    try std.testing.expect(first != other_owner);
+    try std.testing.expectEqual(other_owner, other_owner_reused);
+    try std.testing.expectEqual(@as(usize, 3), draft.string_literals.items.len);
 }
 
 test "checked type instantiation scopes have exact isolated identities" {
