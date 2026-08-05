@@ -5052,6 +5052,16 @@ pub const MonoLlvmCodeGen = struct {
             dec_to_u32_try_unsafe,
             dec_to_u64_try_unsafe,
             dec_to_u128_try_unsafe,
+            dec_to_i8_trunc,
+            dec_to_i16_trunc,
+            dec_to_i32_trunc,
+            dec_to_i64_trunc,
+            dec_to_i128_trunc,
+            dec_to_u8_trunc,
+            dec_to_u16_trunc,
+            dec_to_u32_trunc,
+            dec_to_u64_trunc,
+            dec_to_u128_trunc,
         };
         if (std.meta.stringToEnum(SpecialConversion, name)) |conversion| switch (conversion) {
             .f32_to_i8_try_unsafe,
@@ -5092,6 +5102,20 @@ pub const MonoLlvmCodeGen = struct {
             },
             .dec_to_f32_wrap, .dec_to_f64 => {
                 try self.emitDecToFloatConversion(target, GuardedList.at(args, 0), op == .dec_to_f32_wrap);
+                return;
+            },
+            .dec_to_i8_trunc,
+            .dec_to_i16_trunc,
+            .dec_to_i32_trunc,
+            .dec_to_i64_trunc,
+            .dec_to_u8_trunc,
+            .dec_to_u16_trunc,
+            .dec_to_u32_trunc,
+            .dec_to_u64_trunc,
+            .dec_to_i128_trunc,
+            .dec_to_u128_trunc,
+            => {
+                try self.emitDecToIntTrunc(target, op, GuardedList.at(args, 0));
                 return;
             },
             .dec_to_i8_try_unsafe,
@@ -5175,6 +5199,40 @@ pub const MonoLlvmCodeGen = struct {
             &.{ parts.low, parts.high },
         );
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+    }
+
+    /// Dec to integer, truncating the fractional part toward zero and wrapping
+    /// the integer part to the target width.
+    fn emitDecToIntTrunc(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const dec_value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const parts = try self.splitI128Value(dec_value);
+
+        const bytes: u8 = if (op == .dec_to_i8_trunc or op == .dec_to_u8_trunc)
+            1
+        else if (op == .dec_to_i16_trunc or op == .dec_to_u16_trunc)
+            2
+        else if (op == .dec_to_i32_trunc or op == .dec_to_u32_trunc)
+            4
+        else if (op == .dec_to_i64_trunc or op == .dec_to_u64_trunc)
+            8
+        else if (op == .dec_to_i128_trunc or op == .dec_to_u128_trunc)
+            16
+        else
+            unreachable;
+
+        // The builtin divides at 128 bits, then wraps to the requested width.
+        try self.callBuiltinVoid(
+            builtinSymbol(.dec_to_int_wrap),
+            &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
+            &.{
+                self.slot(target).ptr,
+                parts.low,
+                parts.high,
+                builder.intValue(.i32, @as(u32, bytes) * 8) catch return error.OutOfMemory,
+                builder.intValue(.i32, bytes) catch return error.OutOfMemory,
+            },
+        );
     }
 
     const FloatToIntTruncInfo = struct {

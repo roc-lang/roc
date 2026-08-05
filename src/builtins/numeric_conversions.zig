@@ -167,6 +167,19 @@ pub fn floatToIntWrap(comptime Float: type, comptime Int: type, value: Float) In
     return @bitCast(@as(U, @truncate(bits)));
 }
 
+/// Convert a Roc Dec payload to raw target integer bits using Roc's wrapping
+/// Dec-to-integer semantics: the fractional part truncates toward zero and the
+/// integer part wraps modulo 2^target_bits. The division runs at 128 bits
+/// because a Dec's integer part goes up to ~1.7e20, past what an i64 holds.
+pub fn decToIntWrapBits(dec_value: i128, target_bits: u32) u128 {
+    std.debug.assert(target_bits > 0 and target_bits <= 128);
+
+    const whole_part = i128h.divTrunc_i128(dec_value, dec.RocDec.one_point_zero_i128);
+    const magnitude: u128 = @bitCast(whole_part);
+    if (target_bits == 128) return magnitude;
+    return magnitude & (i128h.shl(1, @intCast(target_bits)) - 1);
+}
+
 /// Convert a Roc Dec payload to raw target integer bits after truncating.
 pub fn decToIntTryBits(dec_value: i128, target_bits: u32, target_signed: bool) ?u128 {
     const whole_part = i128h.divTrunc_i128(dec_value, dec.RocDec.one_point_zero_i128);

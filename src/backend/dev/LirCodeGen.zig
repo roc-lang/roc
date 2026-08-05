@@ -3165,28 +3165,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_i16_trunc,
                 .dec_to_i32_trunc,
                 .dec_to_i64_trunc,
+                .dec_to_i128_trunc,
                 .dec_to_u8_trunc,
                 .dec_to_u16_trunc,
                 .dec_to_u32_trunc,
                 .dec_to_u64_trunc,
+                .dec_to_u128_trunc,
                 => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
 
-                    // Call roc_builtins_dec_to_i64_trunc(low, high) -> i64
-                    const result_reg = try self.allocTempGeneral();
-
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addRegArg(parts.low);
-                    try builder.addRegArg(parts.high);
-                    try self.callBuiltin(&builder, .dec_to_i64_trunc);
-                    const ret_reg: GeneralReg = ret_reg_0;
-                    try self.codegen.emit.movRegReg(.w64, result_reg, ret_reg);
-                    self.codegen.freeGeneral(parts.low);
-                    self.codegen.freeGeneral(parts.high);
-
-                    // Mask to target width
                     const dst_bits: u8 = if (ll.op == .dec_to_i8_trunc or ll.op == .dec_to_u8_trunc)
                         8
                     else if (ll.op == .dec_to_i16_trunc or ll.op == .dec_to_u16_trunc)
@@ -3195,53 +3184,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         32
                     else if (ll.op == .dec_to_i64_trunc or ll.op == .dec_to_u64_trunc)
                         64
+                    else if (ll.op == .dec_to_i128_trunc or ll.op == .dec_to_u128_trunc)
+                        128
                     else
                         unreachable;
+
+                    const stack_offset = self.codegen.allocStackSlot(16);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(frame_ptr, stack_offset);
+                    try builder.addRegArg(parts.low);
+                    try builder.addRegArg(parts.high);
+                    try builder.addImmArg(@intCast(dst_bits));
+                    try builder.addImmArg(@intCast(dst_bits / 8));
+                    try self.callBuiltin(&builder, .dec_to_int_wrap);
+                    self.codegen.freeGeneral(parts.low);
+                    self.codegen.freeGeneral(parts.high);
+
+                    if (dst_bits == 128) return .{ .stack_i128 = stack_offset };
+
+                    const result_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, result_reg, frame_ptr, stack_offset);
+                    // The builtin wrote only the low dst_bits/8 bytes, so mask the
+                    // rest of the register off.
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
                         try self.emitShlImm(.w64, result_reg, result_reg, shift_amount);
                         try self.emitLsrImm(.w64, result_reg, result_reg, shift_amount);
                     }
                     return .{ .general_reg = result_reg };
-                },
-
-                // ── Dec to i128 truncating ──
-                .dec_to_i128_trunc => {
-                    if (args.len < 1) unreachable;
-                    const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addRegArg(parts.low);
-                    try builder.addRegArg(parts.high);
-                    try self.callBuiltin(&builder, .dec_to_i64_trunc);
-                    self.codegen.freeGeneral(parts.low);
-                    self.codegen.freeGeneral(parts.high);
-
-                    // Sign-extend result from i64 to i128
-                    const stack_offset = self.codegen.allocStackSlot(16);
-                    try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                    try self.emitAsrImm(.w64, ret_reg_0, ret_reg_0, 63);
-                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_0);
-                    return .{ .stack_i128 = stack_offset };
-                },
-
-                // ── Dec to u128 truncating ──
-                .dec_to_u128_trunc => {
-                    if (args.len < 1) unreachable;
-                    const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addRegArg(parts.low);
-                    try builder.addRegArg(parts.high);
-                    try self.callBuiltin(&builder, .dec_to_i64_trunc);
-                    self.codegen.freeGeneral(parts.low);
-                    self.codegen.freeGeneral(parts.high);
-
-                    const stack_offset = self.codegen.allocStackSlot(16);
-                    try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                    try self.codegen.emitLoadImm(ret_reg_0, 0);
-                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_0);
-                    return .{ .stack_i128 = stack_offset };
                 },
 
                 // ── Dec to float conversions ──
