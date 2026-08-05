@@ -345,7 +345,7 @@ pub const InstGraph = struct {
     /// Current extension root for each row root. This is the authority for
     /// maintaining `row_parents`; stale extension edges are removed when row
     /// content changes.
-    row_exts: std.AutoHashMap(NodeId, NodeId),
+    row_exts: std.ArrayList(?NodeId),
     /// Row nodes by the extension node they currently chain through.
     row_parents: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     /// Declaration-backed nominal backings already instantiated in this graph,
@@ -357,7 +357,7 @@ pub const InstGraph = struct {
     /// function was constructed. A generic source interface may itself carry
     /// upstream generated-private arguments; retaining that producer node is
     /// what lets the callee instantiate those relations without reconstruction.
-    request_source_interfaces: std.AutoHashMap(NodeId, NodeId),
+    request_source_interfaces: std.ArrayList(?NodeId),
     /// Minted iterator roots whose relation graph proved that retaining the
     /// minted tier would create a recursive component identity. The raw node
     /// remains valid across later unions; finalization resolves it to the live
@@ -405,10 +405,10 @@ pub const InstGraph = struct {
             .current_snapshots_dirty = false,
             .linked_type_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
             .imported_monos = std.AutoHashMap(NodeId, Type.TypeId).init(allocator),
-            .row_exts = std.AutoHashMap(NodeId, NodeId).init(allocator),
+            .row_exts = .empty,
             .row_parents = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
-            .request_source_interfaces = std.AutoHashMap(NodeId, NodeId).init(allocator),
+            .request_source_interfaces = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
             .generated_private_pending = .empty,
@@ -452,7 +452,7 @@ pub const InstGraph = struct {
             bucket.deinit(allocator);
         }
         self.nominal_backings.deinit();
-        self.request_source_interfaces.deinit();
+        self.request_source_interfaces.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
         self.generated_private_pending.deinit(allocator);
@@ -463,7 +463,7 @@ pub const InstGraph = struct {
         }
         self.generated_private_cache.deinit();
         self.row_parents.deinit();
-        self.row_exts.deinit();
+        self.row_exts.deinit(allocator);
         self.imported_monos.deinit();
         self.linked_type_nodes.deinit();
         self.processed_relations.deinit();
@@ -489,18 +489,18 @@ pub const InstGraph = struct {
         if (!try self.containsGeneratedPrivate(request_fn)) {
             Common.invariant("registered private request interface contained no generated-private evidence");
         }
-        const entry = try self.request_source_interfaces.getOrPut(request_fn);
-        if (entry.found_existing) {
-            if (self.find(entry.value_ptr.*) != self.find(source_fn)) {
+        const entry = &self.request_source_interfaces.items[@intFromEnum(request_fn)];
+        if (entry.*) |existing| {
+            if (self.find(existing) != self.find(source_fn)) {
                 Common.invariant("generated-private request was registered with two source interfaces");
             }
         } else {
-            entry.value_ptr.* = source_fn;
+            entry.* = source_fn;
         }
     }
 
     pub fn requestSourceInterface(self: *InstGraph, request_fn: NodeId) ?NodeId {
-        const source_fn = self.request_source_interfaces.get(request_fn) orelse return null;
+        const source_fn = self.request_source_interfaces.items[@intFromEnum(request_fn)] orelse return null;
         return self.find(source_fn);
     }
 
@@ -1267,6 +1267,8 @@ pub const InstGraph = struct {
         try self.class_member_head.append(self.allocator, id);
         try self.class_member_tail.append(self.allocator, id);
         try self.generated_private_visit_epochs.append(self.allocator, 0);
+        try self.row_exts.append(self.allocator, null);
+        try self.request_source_interfaces.append(self.allocator, null);
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
@@ -1338,21 +1340,24 @@ pub const InstGraph = struct {
             return;
         };
 
-        if (self.row_exts.get(row_root)) |old_ext| {
+        const row_ext = &self.row_exts.items[@intFromEnum(row_root)];
+        if (row_ext.*) |old_ext| {
             if (old_ext == ext) {
                 try self.addRowParent(ext, row_root);
                 return;
             }
             self.removeRowParent(old_ext, row_root);
         }
-        try self.row_exts.put(row_root, ext);
+        row_ext.* = ext;
         try self.addRowParent(ext, row_root);
     }
 
     fn unregisterRowParent(self: *InstGraph, row: NodeId) Allocator.Error!void {
         const row_root = self.find(row);
-        if (self.row_exts.fetchRemove(row_root)) |old| {
-            self.removeRowParent(old.value, row_root);
+        const row_ext = &self.row_exts.items[@intFromEnum(row_root)];
+        if (row_ext.*) |old| {
+            row_ext.* = null;
+            self.removeRowParent(old, row_root);
         }
     }
 
@@ -2581,7 +2586,7 @@ pub const InstGraph = struct {
             var moved_list = moved.value;
             for (moved_list.items) |parent| {
                 const parent_root = self.find(parent);
-                try self.row_exts.put(parent_root, winner);
+                self.row_exts.items[@intFromEnum(parent_root)] = winner;
                 try self.addRowParent(winner, parent_root);
             }
             moved_list.deinit(self.allocator);

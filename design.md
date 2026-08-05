@@ -3474,6 +3474,13 @@ callable family, method scope, checked source-function key, exact evidence
 topology, lexical context, and the exact function request interface. A
 different or still-unproven request remains independent.
 
+Instantiation graph node ids are dense, append-only indexes for the lifetime of
+the graph. Per-node optional attributes such as a row root's current extension
+and a generated-private request's source interface are therefore dense parallel
+columns, not hash tables keyed by node id. Union-find redirects may change which
+node is a class root, but they never renumber a node; root-owned columns are
+updated explicitly when a union moves that ownership.
+
 A context-free callee body never joins the caller group's graph. Instead
 CheckedModule stores a complete specialization-interface relation table for
 every procedure template. Its records explicitly name checked equalities,
