@@ -3039,6 +3039,18 @@ pub const InstGraph = struct {
             try pending.append(self.allocator, .{ .left = backing_node, .right = other });
             return;
         }
+        if (self.find(backing_node) == self.find(other)) {
+            const moved = try self.newNode(self.nodes.items[@intFromEnum(other)]);
+            var rewired = named;
+            rewired.backing = .{
+                .node = moved,
+                .use = declared_backing.use,
+                .authority = declared_backing.authority,
+            };
+            try self.setContent(named_node, .{ .named = rewired });
+            try self.union_(named_node, other);
+            return;
+        }
         const moved = try self.newNode(self.nodes.items[@intFromEnum(other)]);
         try self.union_(named_node, other);
         try pending.append(self.allocator, .{ .left = backing_node, .right = moved });
@@ -5189,6 +5201,38 @@ test "alias unification does not make the alias its own backing" {
     const named = alias_content.named;
     const named_backing = named.backing orelse return error.TestExpectedEqual;
     try std.testing.expect(named_backing.ty != alias_ty);
+}
+
+test "nominal unification with its own backing preserves a distinct backing node" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const backing = try graph.newNode(.{ .primitive = .u64 });
+    const nominal = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(2) },
+        .def = .{ .module = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32)), .type_name = @enumFromInt(2) },
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = backing, .use = .inspectable },
+    } });
+
+    try graph.unify(nominal, backing);
+    try std.testing.expect(graph.sameClass(nominal, backing));
+
+    const named = graph.content(nominal).named;
+    const retained_backing = named.backing orelse return error.TestExpectedEqual;
+    try std.testing.expect(!graph.sameClass(nominal, retained_backing.node));
+    try std.testing.expectEqual(InstNode{ .primitive = .u64 }, graph.content(retained_backing.node));
+    try std.testing.expect(!graph.finalizesAsClosedEmptyTagUnion(nominal));
 }
 
 test "final sealing does not mutate an earlier active snapshot" {
