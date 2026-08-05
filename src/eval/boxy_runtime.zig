@@ -1326,7 +1326,6 @@ pub const BoxyRuntime = struct {
     ) Error!u32 {
         const key = AdapterDescMergeKey{ .source = @intFromPtr(source), .target = @intFromPtr(target) };
         if (merged.get(key)) |existing| return existing;
-
         const result = try self.descriptor_arena.create(LirProgram.BoxyTypeDesc);
         result.* = target.*;
         const id = try self.appendRuntimeBoxyTypeDesc(result);
@@ -6974,31 +6973,83 @@ pub const BoxyRuntime = struct {
             );
         }
         const call_descs = self.requireBoxyDescRefs(method_slot.adapter.call_descs);
-        if (hidden_index >= call_descs.len) {
+        const call_sources = self.requireBoxyMethodHiddenDescSources(method_slot.adapter.call_desc_sources);
+        const call_desc_count = if (call_sources.len != 0) call_sources.len else call_descs.len;
+        if (hidden_index >= call_desc_count) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: dictionary method call descriptor index {d} exceeded adapter count {d}",
-                .{ hidden_index, call_descs.len },
+                .{ hidden_index, call_desc_count },
             );
         }
         if (shape == .worker) {
             const hidden_descs = self.requireBoxyDescRefs(method_slot.hidden_descs);
             const sources = self.requireBoxyMethodHiddenDescSources(method_slot.adapter.hidden_desc_sources);
-            if (hidden_descs.len != sources.len) {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: dictionary method had {d} hidden descriptors but {d} source mappings",
-                    .{ hidden_descs.len, sources.len },
-                );
-            }
-            for (sources, 0..) |source, slot_index| {
+            for (sources) |source| {
                 switch (source) {
                     .call => |call_index| if (call_index == hidden_index) {
-                        return try hooks.resolveDescRef(hidden_descs[slot_index]);
+                        return try self.resolveDictMethodRequirementDesc(hooks, method_slot, hidden_index);
                     },
-                    .slot, .argument => {},
+                    .slot => |slot_index| if (slot_index >= hidden_descs.len) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: dictionary method static descriptor slot {d} exceeded slot count {d}",
+                            .{ slot_index, hidden_descs.len },
+                        );
+                    },
+                    .argument => {},
                 }
             }
         }
-        return try hooks.resolveDescRef(call_descs[hidden_index]);
+        return try self.resolveDictMethodRequirementDesc(hooks, method_slot, hidden_index);
+    }
+
+    fn resolveDictMethodRequirementDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        method_slot: LirProgram.BoxyMethodSlot,
+        descriptor_index: u32,
+    ) Error!*const LirProgram.BoxyTypeDesc {
+        const refs = self.requireBoxyDescRefs(method_slot.adapter.call_descs);
+        const sources = self.requireBoxyMethodHiddenDescSources(method_slot.adapter.call_desc_sources);
+        if (sources.len == 0) {
+            if (descriptor_index >= refs.len) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: dictionary method static call descriptor index {d} exceeded descriptor count {d}",
+                    .{ descriptor_index, refs.len },
+                );
+            }
+            return try hooks.resolveDescRef(refs[descriptor_index]);
+        }
+        if (descriptor_index >= sources.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: dictionary method requirement descriptor index {d} exceeded source count {d}",
+                .{ descriptor_index, sources.len },
+            );
+        }
+        return switch (sources[descriptor_index]) {
+            .slot => |slot_index| blk: {
+                if (slot_index >= refs.len) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: dictionary method requirement descriptor slot {d} exceeded static descriptor count {d}",
+                        .{ slot_index, refs.len },
+                    );
+                }
+                break :blk try hooks.resolveDescRef(refs[slot_index]);
+            },
+            .argument => |arg_index| blk: {
+                const arg_descs = self.requireBoxyDescRefs(method_slot.adapter.arg_descs);
+                if (arg_index >= arg_descs.len) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: dictionary method requirement argument descriptor {d} exceeded adapter arity {d}",
+                        .{ arg_index, arg_descs.len },
+                    );
+                }
+                break :blk try hooks.resolveDescRef(arg_descs[arg_index]);
+            },
+            .call => self.invariantFailedError(
+                "LIR/interpreter invariant violated: invocation-supplied dictionary method descriptor was requested outside its call",
+                .{},
+            ),
+        };
     }
 
     /// Resolve one dictionary method call into either the structural-equality
@@ -7061,12 +7112,6 @@ pub const BoxyRuntime = struct {
         const slot_hidden_descs = self.requireBoxyDescRefs(method_slot.hidden_descs);
         const slot_nested_dicts = self.requireBoxyDictRefs(method_slot.nested_dicts);
         const adapter_hidden_desc_sources = self.requireBoxyMethodHiddenDescSources(method_slot.adapter.hidden_desc_sources);
-        if (adapter_hidden_desc_sources.len != 0 and adapter_hidden_desc_sources.len != slot_hidden_descs.len) {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: dictionary method adapter had {d} hidden descriptor sources for {d} slot descriptors",
-                .{ adapter_hidden_desc_sources.len, slot_hidden_descs.len },
-            );
-        }
         if (adapter_hidden_desc_sources.len == 0 and slot_hidden_descs.len != 0) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: dictionary method slot had {d} hidden descriptors but no adapter hidden descriptor sources",

@@ -90,17 +90,6 @@ pub const OptLevel = enum {
             .size, .speed => .llvm,
         };
     }
-
-    pub fn defaultSpecializationStrategy(self: OptLevel) SpecializationStrategy {
-        return switch (self) {
-            .dev, .interpreter => .boxy,
-            .size, .speed => .lss,
-        };
-    }
-
-    pub fn effectiveSpecializationStrategy(self: OptLevel, explicit: ?SpecializationStrategy) SpecializationStrategy {
-        return explicit orelse self.defaultSpecializationStrategy();
-    }
 };
 
 /// Default optimization level for commands that favor fast compilation over
@@ -423,7 +412,7 @@ const main_help =
     \\                     e.g. `roc app.roc -- arg1 arg2`
     \\Options:
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
-    \\      --specialize=<yes|no>          Use lambda-set specialization (yes) or boxy lowering (no)
+    \\      --specialize=<yes|no>          Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
     \\      --no-color                     Do not use ANSI escape codes in CLI output
@@ -591,7 +580,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<opt>                    Build mode: speed (default LLVM optimized), size (LLVM optimized for binary size), dev (native dev backend), or interpreter (embedded interpreter backend)
-            \\      --specialize=<yes|no>          Use lambda-set specialization (yes) or boxy lowering (no)
+            \\      --specialize=<yes|no>          Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking
             \\      --debug                        Include debug information in the output binary
             \\      --keep-temp                    Keep all temporary directories created during build
@@ -891,7 +880,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --opt=<opt>                     Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
-            \\      --specialize=<yes|no>           Use lambda-set specialization (yes) or boxy lowering (no)
+            \\      --specialize=<yes|no>           Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
             \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose                       Enable verbose output showing individual test results
             \\      --no-cache                      Disable compilation caching, force re-run all tests
@@ -981,7 +970,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --opt=<opt>  Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
-            \\      --specialize=<yes|no>  Use lambda-set specialization (yes) or boxy lowering (no)
+            \\      --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
             \\  -h, --help       Print help
             \\
             };
@@ -1030,7 +1019,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\  --opt=<level>  Compile and run the glue spec with dev, size, or speed [default: dev]
-            \\  --specialize=<yes|no>  Use lambda-set specialization (yes) or boxy lowering (no)
+            \\  --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
             \\  --no-cache     Disable compilation caching
             \\  -h, --help     Print help
             \\
@@ -1085,7 +1074,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\
         \\Options:
         \\  --opt=<level>  Compile and run the glue spec with dev, size, or speed [default: dev]
-        \\  --specialize=<yes|no>  Use lambda-set specialization (yes) or boxy lowering (no)
+        \\  --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
         \\  -h, --help     Print help
         \\
         };
@@ -1107,7 +1096,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\
         \\Options:
         \\  --opt=<level>  Compile and run the glue spec with dev, size, or speed [default: dev]
-        \\  --specialize=<yes|no>  Use lambda-set specialization (yes) or boxy lowering (no)
+        \\  --specialize=<yes|no>  Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
         \\  -h, --help     Print help
         \\
         };
@@ -1565,12 +1554,6 @@ fn getFlagValue(arg: []const u8) ?[]const u8 {
 
 test "specialization strategy parsing" {
     const gpa = testing.allocator;
-
-    try testing.expectEqual(SpecializationStrategy.boxy, OptLevel.dev.defaultSpecializationStrategy());
-    try testing.expectEqual(SpecializationStrategy.boxy, OptLevel.interpreter.defaultSpecializationStrategy());
-    try testing.expectEqual(SpecializationStrategy.lss, OptLevel.size.defaultSpecializationStrategy());
-    try testing.expectEqual(SpecializationStrategy.lss, OptLevel.speed.defaultSpecializationStrategy());
-    try testing.expectEqual(SpecializationStrategy.lss, OptLevel.dev.effectiveSpecializationStrategy(.lss));
 
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{});

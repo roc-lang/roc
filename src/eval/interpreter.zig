@@ -2425,8 +2425,13 @@ pub const Interpreter = struct {
                         assign.arg_layouts.len != arg_locals.len)
                     {
                         return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: erased-call argument layout span was invalid",
-                            .{},
+                            "LIR/interpreter invariant violated: erased-call argument layout span {d}+{d} exceeded table length {d} or disagreed with {d} argument locals",
+                            .{
+                                assign.arg_layouts.start,
+                                assign.arg_layouts.len,
+                                self.boxy_runtime.boxy_tables.erased_arg_layouts.len,
+                                arg_locals.len,
+                            },
                         );
                     }
                     const arg_layouts = self.boxy_runtime.boxy_tables.erased_arg_layouts[assign.arg_layouts.start..arg_layouts_end];

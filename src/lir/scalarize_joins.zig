@@ -16,6 +16,9 @@
 //! literal builds are deleted or replaced, and field reads become local
 //! aliases. Refcounted state then flows through pure alias chains that borrow
 //! inference turns into moves, and the wrapper disappears entirely.
+//! Descriptor-bearing wrappers remain aggregate because their field values are
+//! coupled to projections of the root descriptor; scalarizing them requires
+//! explicit per-field descriptor parameters as well as value parameters.
 //!
 //! A join's remainder (its run-once entry path) may enter the join without an
 //! `initialize_join_param` write for a parameter — a plain tail-call
@@ -438,8 +441,10 @@ const Pass = struct {
         param: LIR.LocalId,
         position: usize,
     ) ScalarizeError!bool {
-        const param_layout = self.layouts.getLayout(self.store.getLocal(param).layout_idx);
+        const param_local = self.store.getLocal(param);
+        const param_layout = self.layouts.getLayout(param_local.layout_idx);
         if (param_layout.tag != .struct_) return false;
+        if (param_local.boxy_desc != null) return false;
 
         const info = self.layouts.getStructInfo(param_layout);
         var field_count: usize = 0;
@@ -1330,6 +1335,76 @@ test "scalarize splits a literal-initialized struct join parameter" {
     // The text literal now flows straight to the first snapshot.
     const new_text_assign = store.getCFStmt(text_assign).assign_literal;
     try testing.expectEqual(set_state, new_text_assign.next);
+}
+
+test "scalarize keeps descriptor-bearing struct join parameters" {
+    var f = try ScalarizeTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+
+    const state = try store.addLocal(.{ .layout_idx = f.pair });
+    const state_desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    store.setLocalBoxyDesc(state, .{ .local = state_desc });
+    const num = try store.addLocal(.{ .layout_idx = .i64 });
+    const text = try store.addLocal(.{ .layout_idx = .str });
+    const wrapper = try store.addLocal(.{ .layout_idx = f.pair });
+    const n = try store.addLocal(.{ .layout_idx = .i64 });
+    const s = try store.addLocal(.{ .layout_idx = .str });
+    const join_id = f.freshJoinPointId();
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
+    const read_s = try store.addCFStmt(.{ .assign_ref = .{
+        .target = s,
+        .op = .{ .field = .{ .source = state, .field_idx = 1 } },
+        .next = ret,
+    } });
+    const read_n = try store.addCFStmt(.{ .assign_ref = .{
+        .target = n,
+        .op = .{ .field = .{ .source = state, .field_idx = 0 } },
+        .next = read_s,
+    } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const set_state = try store.addCFStmt(.{ .set_local = .{
+        .target = state,
+        .value = wrapper,
+        .mode = .initialize_join_param,
+        .next = jump,
+    } });
+    const build = try store.addCFStmt(.{ .assign_struct = .{
+        .target = wrapper,
+        .fields = try store.addLocalSpan(&.{ num, text }),
+        .next = set_state,
+    } });
+    const text_assign = try store.addCFStmt(.{ .assign_literal = .{
+        .target = text,
+        .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
+        .next = build,
+    } });
+    const num_assign = try store.addCFStmt(.{ .assign_literal = .{
+        .target = num,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+        .next = text_assign,
+    } });
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{state}),
+        .body = read_n,
+        .remainder = num_assign,
+    } });
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{state_desc}),
+        .body = join,
+        .ret_layout = .i64,
+    });
+
+    try run(store, &f.layouts);
+
+    const params = store.getLocalSpan(store.getCFStmt(join).join.params);
+    try testing.expectEqual(@as(usize, 1), params.len);
+    try testing.expectEqual(state, GuardedList.at(params, 0));
+    try testing.expectEqual(state, store.getCFStmt(read_n).assign_ref.op.field.source);
+    try testing.expectEqual(state, store.getCFStmt(read_s).assign_ref.op.field.source);
 }
 
 test "scalarize keeps parameters with whole-value uses" {

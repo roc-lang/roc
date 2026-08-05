@@ -43,6 +43,7 @@ const BoxyRuntime = boxy_runtime.BoxyRuntime;
 const BoxyTables = boxy_runtime.BoxyTables;
 const Error = boxy_runtime.Error;
 const BoxyTypeDesc = LirProgram.BoxyTypeDesc;
+
 const BoxyDict = LirProgram.BoxyDict;
 const RocList = builtins.list.RocList;
 

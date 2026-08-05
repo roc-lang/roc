@@ -3839,10 +3839,11 @@ The command-line spelling is `--specialize=yes` for `.lss` and
 `--specialize=no` for `.boxy`. All runtime-producing commands accept the flag
 except `roc check`, because `roc check` stops at checked module output and the
 checked module is independent of post-check lowering strategy. If the flag is
-omitted, `--opt=dev` and `--opt=interpreter` default to `.boxy`; `--opt=size`
-and `--opt=speed` default to `.lss`. The `--opt` flag still selects the
-code-generation backend and optimization family. The `--specialize` flag
-selects how checked data becomes LIR before ARC and code generation.
+omitted, every optimization level uses `.lss`. `.boxy` is experimental and is
+selected only by the explicit `--specialize=no` opt-in. The `--opt` flag still
+selects the code-generation backend and optimization family. The
+`--specialize` flag selects how checked data becomes LIR before ARC and code
+generation.
 
 Compiler progress text follows the selected strategy. `.lss` reports the
 lambda-set-specializing work as `Specializing`. `.boxy` reports the same
@@ -3981,6 +3982,16 @@ layout agree before emitting statements. Reserved const nodes, pending nodes,
 compile-time eval templates that were not finalized, and `fn_value` nodes at an
 ordinary value lookup are invariant failures; function values are restored only
 through erased callable construction.
+
+The producer representation for a stored value is keyed by the exact
+`(ModuleId, ConstTypeId)` identity recorded by `ConstStore`, independently of
+the checked type at the runtime use. This matters when the stored value is
+monomorphic but the checked binding has a generalized type. Restoration first
+emits the stored node under that exact producer representation, then crosses one
+explicit planned boundary into the checked use representation. Stored callable
+captures follow the same rule. Boxy planning and lowering do not scan the
+checked type graph, infer a producer from the requested layout, or treat the
+checked use type as evidence for the stored bytes.
 
 `.boxy` represents an unknown type-variable value as one ordinary Roc box
 payload pointer. This is the same runtime shape as `Box(T)`: a nullable or
@@ -4161,10 +4172,11 @@ derive a descriptor from runtime bytes.
 ### Compile-Time Evaluation Strategy
 
 `--specialize` does not affect compile-time evaluation during checking
-finalization. Compile-time evaluation uses the existing checked-finalization
-pipeline described in Compile-Time Constants, runs the LIR interpreter, and
-stores checked values in `ConstStore`. Runtime `.boxy` builds do not make
-compile-time roots use boxy descriptors, dictionaries, or host ABI adapters.
+finalization. Compile-time evaluation always selects `.lss` explicitly, uses
+the existing checked-finalization pipeline described in Compile-Time Constants,
+runs the LIR interpreter or native dev evaluator, and stores checked values in
+`ConstStore`. Runtime `.boxy` builds do not make compile-time roots use boxy
+descriptors, dictionaries, or host ABI adapters.
 
 ### Strategy Equivalence Tests
 
@@ -6217,6 +6229,16 @@ interchangeability bits from committed item layouts and emits either a
 constant false value or an `assign_low_level` with explicit
 `interchangeable` metadata.
 
+Typed numeric `*_from_str` operations have a closed concrete result ABI. The
+lowerer consumes the operation's `NumericParseSpec`, emits `assign_low_level`
+into a two-variant tag union whose `Err` payload is zero-sized and whose `Ok`
+payload is the specified integer, float, or decimal layout, and attaches a
+descriptor derived from the exact checked result type. When the worker result
+uses erased payload storage, a subsequent `assign_boxy_adapt` carries that
+concrete value and descriptor into the planned result representation. The
+interpreter and code-generation backends therefore receive the concrete builtin
+ABI directly; they do not select numeric payload layouts or descriptor data.
+
 Checked unary operator nodes use that same primitive path when they remain in a
 checked body. Unary `-` lowers as `num_negate`, so signed-integer
 lowest-value protection is emitted by the low-level expander before the raw
@@ -6236,15 +6258,20 @@ dispatch evidence. It does not inspect the expression variant to decide whether
 the expression type or parameter type is authoritative.
 
 Alias and nominal wrappers make substitution ordering explicit. Before the
-planner descends a wrapper backing, it records each checked `alias_arg` or
-`nominal_arg` pair from the worker and call representations. Every occurrence
-of that worker argument in the backing graph then uses the recorded call
-representation, independent of child traversal order. An identity observation
-cannot replace an already-recorded concrete instantiation, and two different
-concrete instantiations for one worker representation are an invariant failure.
-The descriptor source still names the original call operand root plus the exact
-instantiated descendant; it never changes to a sibling value merely because the
-substitution was learned from the wrapper's explicit argument child.
+planner descends an alias backing, it records each checked `alias_arg` pair from
+the worker and call representations. A nominal instead records each declaration
+backing formal together with the exact `actual_rep` for that nominal use. Its
+visible `nominal_arg` child describes checked shape and may remain generalized;
+it is not evidence for the backing's concrete representation. Direct-call,
+erased-callable, and generated-callable descriptor and dictionary planning use
+the exact backing substitution. Every occurrence of that worker argument in the
+backing graph then uses the recorded call representation, independent of child
+traversal order. An identity observation cannot replace an already-recorded
+concrete instantiation, and two different concrete instantiations for one worker
+representation are an invariant failure. The descriptor source still names the
+original call operand root plus the exact instantiated descendant; it never
+changes to a sibling value merely because the substitution was learned from the
+wrapper's explicit argument metadata.
 
 The substitution is consumed to produce one exact source for every hidden
 descriptor, hidden dictionary, and erased-callable metadata capture. A source is
@@ -6312,6 +6339,10 @@ separately materialized target descriptor describing the bytes it will produce
 or consume. Argument binding, match-condition binding, result binding, and
 container item extraction copy descriptor identities into fresh locals; they
 never repurpose the source value's descriptor local as operation scratch space.
+ARC treats a same-value alias as borrow-capable only when its source and target
+name the exact same explicit Boxy RC descriptor reference. A distinct
+descriptor reference is an ownership boundary: the alias receives a moved or
+retained unit before the source descriptor storage can be reused.
 
 Equal storage layouts do not make two descriptors interchangeable. When a
 boundary leaves the bytes unchanged, the value retains its source descriptor if
@@ -6950,8 +6981,11 @@ refcounted loop state: without it, every jump pays a retain on each refcounted
 field read whose wrapper dies at the jump, and ARC cannot turn that into a move
 because the wrapper's release covers all fields at once. After scalarization
 the state flows through pure alias chains that borrow inference resolves to
-moves. Parameters with any whole-value use keep their shape, and the pass
-iterates so nested wrappers dissolve.
+moves. Parameters with any whole-value use remain unsplit, and the pass
+iterates so nested wrappers dissolve. A struct parameter carrying a Boxy
+descriptor also remains unsplit: scalarization may not replace its `assign_ref`
+field reads with local aliases unless it also introduces and initializes a
+matching descriptor parameter for every resulting field local.
 
 ## ARC Borrow Inference
 

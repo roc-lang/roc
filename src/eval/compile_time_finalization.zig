@@ -1146,6 +1146,7 @@ fn lowerDevEvalAndFinishRoots(
         .{ .requests = requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .specialization_strategy = .lss,
             .checked_module_state = .checking_finalization,
             .timing = if (options.timing) |timing| &timing.lowering else null,
         },

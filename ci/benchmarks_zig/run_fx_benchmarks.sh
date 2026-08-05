@@ -592,7 +592,7 @@ done
 
 # Files benchmarked in both interpreter lowering modes within the PR binary.
 # The main-vs-PR runs above compare across branches; this compares boxy
-# (the default, --specialize=no) against lambda-set specialization within the
+# (explicitly selected with --specialize=no) against lambda-set specialization within the
 # same binary so boxy-specific regressions stay visible. Informational only:
 # it never fails the job.
 BOXY_VS_LSS_FILES=(
@@ -615,11 +615,11 @@ for fx_file in "${BOXY_VS_LSS_FILES[@]}"; do
         --shell=none \
         --export-json "$json_file" \
         --ignore-failure \
-        -n "boxy" "$PR_ROC --opt=interpreter $fx_file --no-cache" \
+        -n "boxy" "$PR_ROC --opt=interpreter --specialize=no $fx_file --no-cache" \
         -n "lss" "$PR_ROC --opt=interpreter --specialize=yes $fx_file --no-cache" 2>&1; then
         if [ -f "$json_file" ]; then
-            boxy_median=$(jq -r '.results[] | select(.command | contains("specialize") | not) | .median' "$json_file")
-            lss_median=$(jq -r '.results[] | select(.command | contains("specialize")) | .median' "$json_file")
+            boxy_median=$(jq -r '.results[] | select(.command | contains("--specialize=no")) | .median' "$json_file")
+            lss_median=$(jq -r '.results[] | select(.command | contains("--specialize=yes")) | .median' "$json_file")
             if [ -n "$boxy_median" ] && [ -n "$lss_median" ] && [ "$boxy_median" != "null" ] && [ "$lss_median" != "null" ]; then
                 pct=$(awk "BEGIN {printf \"%.2f\", (($boxy_median - $lss_median) / $lss_median) * 100}")
                 echo "  boxy vs lss: ${pct}% (boxy median $(awk "BEGIN {printf \"%.1f\", $boxy_median * 1000}") ms, lss median $(awk "BEGIN {printf \"%.1f\", $lss_median * 1000}") ms)"

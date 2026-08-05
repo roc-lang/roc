@@ -2671,6 +2671,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 null,
                 args.max_threads,
                 args.opt,
+                currentRuntimeSpecializationStrategy(args.specialization_strategy),
                 resolutionConfigFromLimits(args.resolve_limits),
                 !args.no_cache,
                 &reporter,
@@ -2689,6 +2690,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 null,
                 args.max_threads,
                 args.opt,
+                currentRuntimeSpecializationStrategy(args.specialization_strategy),
                 resolutionConfigFromLimits(args.resolve_limits),
                 !args.no_cache,
                 &reporter,
@@ -3388,6 +3390,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         .{ .original_path = args.path, .original_source = original_source },
         args.max_threads,
         args.opt,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         &reporter,
@@ -3496,6 +3499,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         .{ .original_path = args.path, .original_source = original_source },
         args.max_threads,
         args.opt,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         &reporter,
@@ -4153,6 +4157,13 @@ fn buildHotReloadChildArgv(
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-size={}", .{shm_handle.mapped_size});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--expected-host={s}", .{expected_hex[0..]});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+    try appendOwnedArg(
+        ctx.gpa,
+        &argv,
+        &owned,
+        "--specialization-strategy={s}",
+        .{@tagName(currentRuntimeSpecializationStrategy(args.specialization_strategy))},
+    );
     if (source_rewrite) |rewrite| {
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--synthetic-source={s}", .{rewrite.source_path});
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--synthetic-output={s}", .{rewrite.synthetic_app_path});
@@ -4870,6 +4881,7 @@ test "hot reload worker args require append offset" {
         "--shm-size=8192",
         "--expected-host=" ++ zero_host,
         "--watch-inputs-file=watch-inputs",
+        "--specialization-strategy=lss",
         "--no-color=1",
     });
 
@@ -4880,6 +4892,7 @@ test "hot reload worker args require append offset" {
     try std.testing.expectEqual(@as(usize, 3072), parsed.region_end);
     try std.testing.expectEqual(@as(usize, 4096), parsed.append_offset);
     try std.testing.expectEqual(true, parsed.preserve_descriptor_refs);
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, parsed.specialization_strategy);
     try std.testing.expect(parsed.no_color);
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
@@ -4895,6 +4908,7 @@ test "hot reload worker args require append offset" {
         "--shm-size=8192",
         "--expected-host=" ++ zero_host,
         "--watch-inputs-file=watch-inputs",
+        "--specialization-strategy=lss",
     }));
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
@@ -4906,6 +4920,7 @@ test "hot reload worker args require append offset" {
         "--shm-size=8192",
         "--expected-host=" ++ zero_host,
         "--watch-inputs-file=watch-inputs",
+        "--specialization-strategy=lss",
     }));
 }
 
@@ -5411,6 +5426,7 @@ const HotReloadDevWorkerArgs = struct {
     shm_size: usize,
     expected_host_identity: [32]u8,
     watch_inputs_file: []const u8,
+    specialization_strategy: base.SpecializationStrategy,
     synthetic_source_path: ?[]const u8,
     synthetic_output_path: ?[]const u8,
     source_dir_override: ?[]const u8,
@@ -5458,6 +5474,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var shm_size: ?usize = null;
     var expected_host_identity: ?[32]u8 = null;
     var watch_inputs_file: ?[]const u8 = null;
+    var specialization_strategy: ?base.SpecializationStrategy = null;
     var synthetic_source_path: ?[]const u8 = null;
     var synthetic_output_path: ?[]const u8 = null;
     var source_dir_override: ?[]const u8 = null;
@@ -5493,6 +5510,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             expected_host_identity = try parseHotReloadDigest(value);
         } else if (hotReloadFlagValue(arg, "--watch-inputs-file")) |value| {
             watch_inputs_file = value;
+        } else if (hotReloadFlagValue(arg, "--specialization-strategy")) |value| {
+            specialization_strategy = std.meta.stringToEnum(base.SpecializationStrategy, value) orelse return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--synthetic-source")) |value| {
             synthetic_source_path = value;
         } else if (hotReloadFlagValue(arg, "--synthetic-output")) |value| {
@@ -5528,6 +5547,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
         .shm_size = shm_size orelse return error.InvalidArguments,
         .expected_host_identity = expected_host_identity orelse return error.InvalidArguments,
         .watch_inputs_file = watch_inputs_file orelse return error.InvalidArguments,
+        .specialization_strategy = specialization_strategy orelse return error.InvalidArguments,
         .synthetic_source_path = synthetic_source_path,
         .synthetic_output_path = synthetic_output_path,
         .source_dir_override = source_dir_override,
@@ -5591,6 +5611,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         } else null,
         args.max_threads,
         .dev,
+        args.specialization_strategy,
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         null,
@@ -5674,11 +5695,13 @@ fn writeDevRunImageToSharedMemory(
 
         // This image executes in this process, so its instructions are held to
         // what this machine's CPU runs rather than to the target's level.
-        var codegen = try backend.HostLirCodeGen.init(
+        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(
             ctx.gpa,
             store,
             layouts,
             static_strings.entries,
+            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+            lowered.lir_result.boxy_erased_arg_desc_params.items,
             .preserve,
             roc_target.host_cpu.level(),
         );
@@ -5951,7 +5974,14 @@ fn evaluateLirImageEntrypoint(
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
 ) Allocator.Error!void {
-    var interpreter = try eval.LirInterpreter.init(allocator, &view.store, &view.layouts, ops, .preserve);
+    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+        allocator,
+        &view.store,
+        &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
+        ops,
+        .preserve,
+    );
     defer interpreter.deinit();
 
     _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
@@ -5991,6 +6021,7 @@ fn lowerLirWithBuildEnv(
     synthetic_default_app: ?SyntheticDefaultAppMapping,
     max_threads: ?usize,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     resolution_config: compile.package_resolution.Config,
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
@@ -6073,7 +6104,7 @@ fn lowerLirWithBuildEnv(
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    if (reporter) |r| r.begin(post_check_lowering_phase_name);
+    if (reporter) |r| r.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (reporter != null and reporter.?.always) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
@@ -6084,6 +6115,7 @@ fn lowerLirWithBuildEnv(
         relation_artifacts,
         .{ .platform_entrypoints = artifact },
         opt,
+        specialization_strategy,
         base.target.TargetUsize.native,
         false,
         &spec_timing,
@@ -6153,6 +6185,7 @@ pub fn buildLirImageWithBuildEnv(
     synthetic_default_app: ?SyntheticDefaultAppMapping,
     max_threads: ?usize,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     resolution_config: compile.package_resolution.Config,
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
@@ -6175,6 +6208,7 @@ pub fn buildLirImageWithBuildEnv(
         synthetic_default_app,
         max_threads,
         opt,
+        specialization_strategy,
         resolution_config,
         enable_checked_cache,
         reporter,
@@ -9184,7 +9218,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin(post_check_lowering_phase_name);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
@@ -9195,6 +9230,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         relation_artifacts,
         .linked_output,
         args.opt,
+        specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
         &spec_timing,
@@ -9511,7 +9547,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin(post_check_lowering_phase_name);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
@@ -9522,6 +9559,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         relation_artifacts,
         .linked_output,
         args.opt,
+        specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
         &spec_timing,
@@ -9845,7 +9883,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    reporter.begin(post_check_lowering_phase_name);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
@@ -9856,6 +9895,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         relation_artifacts,
         .{ .platform_entrypoints = .lir_image },
         args.opt,
+        specialization_strategy,
         base.target.TargetUsize.native,
         false,
         &spec_timing,
@@ -10141,15 +10181,26 @@ fn cliTestTranscriptEventPayload(event: CliTestTranscriptEvent) []const u8 {
 }
 
 fn cliTestCacheKey(
-    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    specialization_strategy: base.SpecializationStrategy,
 ) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(cli_test_cache_magic);
     hasher.update(build_options.compiler_version);
-    hasher.update(&artifact.key.bytes);
+    hasher.update(@tagName(specialization_strategy));
+    hasher.update(&artifact_key.bytes);
     var out: [32]u8 = undefined;
     hasher.final(&out);
     return out;
+}
+
+test "CLI test cache key includes specialization strategy" {
+    const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
+        .bytes = [_]u8{0x5a} ** 32,
+    };
+    const lss_key = cliTestCacheKey(artifact_key, .lss);
+    const boxy_key = cliTestCacheKey(artifact_key, .boxy);
+    try std.testing.expect(!std.mem.eql(u8, &lss_key, &boxy_key));
 }
 
 fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
@@ -10168,6 +10219,7 @@ fn storeCliTestResultsInCache(
     ctx: *CliCtx,
     cache_manager: ?*CacheManager,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    specialization_strategy: base.SpecializationStrategy,
     results: []const CliTestResultItem,
 ) (Allocator.Error || error{NoHomeDirectory})!void {
     const manager = cache_manager orelse return;
@@ -10206,7 +10258,7 @@ fn storeCliTestResultsInCache(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    manager.storeRawBytes(cliTestCacheKey(artifact), bytes.items, entries_dir);
+    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), bytes.items, entries_dir);
 }
 
 fn loadCliTestTranscriptEvents(
@@ -10263,6 +10315,7 @@ fn loadCachedCliTestResults(
     ctx: *CliCtx,
     cache_manager: ?*CacheManager,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    specialization_strategy: base.SpecializationStrategy,
     module: BuildEnv.CompiledModuleInfo,
     test_roots: []const check.CheckedArtifact.RootRequest,
 ) (Allocator.Error || error{NoHomeDirectory})!?CliCachedModuleTestResults {
@@ -10270,7 +10323,7 @@ fn loadCachedCliTestResults(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    const data = manager.loadRawBytes(cliTestCacheKey(artifact), entries_dir) orelse return null;
+    const data = manager.loadRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), entries_dir) orelse return null;
     defer ctx.gpa.free(data);
 
     var offset: usize = 0;
@@ -10726,10 +10779,9 @@ fn cliTestExecutionMode(opt: cli_args.OptLevel) CliTestExecutionMode {
 }
 
 fn currentRuntimeSpecializationStrategy(
-    opt: cli_args.OptLevel,
     explicit: ?base.SpecializationStrategy,
 ) base.SpecializationStrategy {
-    return opt.effectiveSpecializationStrategy(explicit);
+    return explicit orelse .lss;
 }
 
 fn loweringProgressLabel(strategy: base.SpecializationStrategy) []const u8 {
@@ -10740,12 +10792,9 @@ fn loweringProgressLabel(strategy: base.SpecializationStrategy) []const u8 {
 }
 
 test "runtime specialization strategy helpers" {
-    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.dev, null));
-    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.interpreter, null));
-    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.size, null));
-    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.speed, null));
-    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.dev, .lss));
-    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.speed, .boxy));
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(null));
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.lss));
+    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.boxy));
     try std.testing.expectEqualStrings("Specializing", loweringProgressLabel(.lss));
     try std.testing.expectEqualStrings("Lowering", loweringProgressLabel(.boxy));
 }
@@ -10822,6 +10871,7 @@ fn lowerCheckedSourceToLir(
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     roots: CheckedLirRoots,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     target_usize: base.target.TargetUsize,
     proc_debug_names: bool,
     timing: ?*lir.CheckedPipeline.Timing,
@@ -10866,6 +10916,7 @@ fn lowerCheckedSourceToLir(
         },
         .{
             .target_usize = target_usize,
+            .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
             // Test lowering executes inline expects at every opt level; other
             // backends omit them from optimized output.
@@ -11475,6 +11526,7 @@ fn lowerPlannedTestModule(
     planned: *const CliTestPlanModule,
     plan_entries: []const CliTestPlanEntry,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
 ) Allocator.Error!CliLoweredTestModule {
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, planned.artifact);
     defer ctx.gpa.free(imported_artifacts);
@@ -11511,6 +11563,7 @@ fn lowerPlannedTestModule(
             .metadata = root_plan_metadata,
         } },
         opt,
+        specialization_strategy,
         base.target.TargetUsize.native,
         false,
         null,
@@ -11533,12 +11586,13 @@ fn runCheckedArtifactTests(
     planned: *const CliTestPlanModule,
     plan_entries: []const CliTestPlanEntry,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
 ) (Allocator.Error || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
-    var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt);
+    var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt, specialization_strategy);
     defer lowered_module.deinit(ctx.gpa);
 
     var results = std.ArrayList(CliTestResultItem).empty;
@@ -11556,7 +11610,7 @@ fn runCheckedArtifactTests(
     }
     summary.modules_with_tests = 1;
 
-    try storeCliTestResultsInCache(ctx, cache_manager, artifact, results.items);
+    try storeCliTestResultsInCache(ctx, cache_manager, artifact, specialization_strategy, results.items);
 
     try module_results.append(ctx.gpa, .{
         .env = module.semantic.env,
@@ -11729,6 +11783,7 @@ fn runOptimizedTestPlan(
     build_env: *BuildEnv,
     test_plan: *CliTestPlan,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     max_workers: ?usize,
     cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
@@ -11780,7 +11835,7 @@ fn runOptimizedTestPlan(
 
         try lowered_modules.append(
             ctx.gpa,
-            try lowerPlannedTestModule(ctx, build_env, planned_index, planned, test_plan.entries, opt),
+            try lowerPlannedTestModule(ctx, build_env, planned_index, planned, test_plan.entries, opt, specialization_strategy),
         );
     }
 
@@ -11789,7 +11844,7 @@ fn runOptimizedTestPlan(
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
         if (summaries[lowered_module.planned_index].compiler_errors == 0) {
-            try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, fresh_results[lowered_module.planned_index].?);
+            try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, fresh_results[lowered_module.planned_index].?);
         }
     }
 
@@ -12939,11 +12994,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var test_plan = try buildCliTestPlan(ctx, modules);
     defer test_plan.deinit(ctx.gpa);
 
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
     for (test_plan.modules) |*planned| {
         if (try loadCachedCliTestResults(
             ctx,
             build_env.cache_manager,
             planned.artifact,
+            specialization_strategy,
             planned.module,
             planned.test_roots,
         )) |cached| {
@@ -12991,6 +13048,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             &build_env,
             &test_plan,
             args.opt,
+            specialization_strategy,
             args.max_threads,
             build_env.cache_manager,
             &module_results,
@@ -13009,6 +13067,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     planned,
                     test_plan.entries,
                     args.opt,
+                    specialization_strategy,
                     build_env.cache_manager,
                     &module_results,
                 );
@@ -13977,7 +14036,12 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     // it before printing the greeting so the greeting and the first prompt appear
     // together and the REPL is immediately interactive — otherwise the greeting
     // shows with no prompt until this finishes.
-    var session = try ReplSession.init(ctx.gpa, ctx.coreCtx(), backend_kind);
+    var session = try ReplSession.init(
+        ctx.gpa,
+        ctx.coreCtx(),
+        backend_kind,
+        currentRuntimeSpecializationStrategy(repl_args.specialization_strategy),
+    );
     defer session.deinit();
 
     if (mode == .interactive) {
@@ -14102,6 +14166,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
     // instead of compiling a dylib on the fly.
     var glue_spec = args.glue_spec;
     var installed_dylib_path: ?[]const u8 = null;
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
     switch (install_store.classifySourceRef(args.glue_spec)) {
         .local_path => {},
         .url => glue_spec = (try resolveUrlBundle(ctx, args.glue_spec)).source_path,
@@ -14115,7 +14180,9 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
                 return error.InvalidArguments;
             }
             glue_spec = entry.paths.main_roc_path;
-            installed_dylib_path = entry.artifact_path;
+            if (specialization_strategy == .lss) {
+                installed_dylib_path = entry.artifact_path;
+            }
         },
     }
     const platform_path = (try resolveSourceArg(ctx, args.platform_path, false)).path;
@@ -14125,6 +14192,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
         .output_dir = args.output_dir,
         .platform_path = platform_path,
         .report_config = ctx.reportConfig(.stderr),
+        .specialization_strategy = specialization_strategy,
         .no_cache = args.no_cache,
         .installed_dylib_path = installed_dylib_path,
         .opt = switch (args.opt) {

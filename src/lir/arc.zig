@@ -252,7 +252,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     const borrow_anchor_refcounted = try computeBorrowAnchorRefcounted(store.allocator, store, layouts, local_contains_refcounted);
     defer store.allocator.free(borrow_anchor_refcounted);
 
-    var solution = try arc_solve.solve(store.allocator, store, borrow_anchor_refcounted, options.roots);
+    var solution = try arc_solve.solve(
+        store.allocator,
+        store,
+        borrow_anchor_refcounted,
+        boxy_rc_descs,
+        options.roots,
+    );
     defer solution.deinit();
     inserter.solution = &solution;
 
@@ -543,13 +549,14 @@ fn computeLocalContainsRefcounted(
 /// (`box_of_zst`) content borrowed out of a refcounted source. Such a
 /// projection is an alias into its source's allocation whose extracted boxes
 /// stay live past the projection, so the source's release must land after the
-/// projection's last use. The projection itself owns no RC unit: its dynamic
-/// payloads are refcounted by descriptor, which the layout-only refcount check
-/// cannot see, so it carries no boxy descriptor of its own. Marking it
-/// refcounted for the solver alone lets it join its source's liveness group as
-/// a borrow. Emission keeps consulting the narrower `local_contains_refcounted`,
-/// so a projection that solves to owned is never forced to carry an RC helper
-/// it lacks.
+/// projection's last use. An erased capture load similarly produces a view of
+/// the capture storage owned by the pinned callable frame. These intermediate
+/// views own no RC unit: their dynamic payloads are refcounted by descriptor,
+/// which the layout-only refcount check cannot see, so the views carry no Boxy
+/// descriptor of their own. Marking them refcounted for the solver alone lets
+/// projections join an explicit liveness group. Emission keeps consulting the
+/// narrower `local_contains_refcounted`, so a solver-only anchor is never
+/// forced to carry an RC helper it lacks.
 fn computeBorrowAnchorRefcounted(
     allocator: Allocator,
     store: *const LirStore,
@@ -571,6 +578,12 @@ fn computeBorrowAnchorRefcounted(
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = store.getCFStmt(stmt_id);
             switch (stmt) {
+                .assign_low_level => |assign| {
+                    if (assign.op != .erased_capture_load) continue;
+                    const target_layout = store.getLocal(assign.target).layout_idx;
+                    if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
+                    changed = markLocalRc(anchor, assign.target) or changed;
+                },
                 .assign_ref => |assign| switch (assign.op) {
                     .field, .tag_payload, .tag_payload_struct => {
                         const source_index = @intFromEnum(refOpSource(assign.op));
@@ -1611,6 +1624,11 @@ const Inserter = struct {
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
+                    .arg_layouts = assign.arg_layouts,
+                    .arg_descs = assign.arg_descs,
+                    .arg_desc_keys = assign.arg_desc_keys,
+                    .result_desc = assign.result_desc,
+                    .out_desc = assign.out_desc,
                     .arg_plan = assign.arg_plan,
                     .reuse_closure = assign.reuse_closure,
                     .reuse_source = assign.reuse_source,
@@ -1627,6 +1645,7 @@ const Inserter = struct {
                     .capture = assign.capture,
                     .capture_layout = assign.capture_layout,
                     .on_drop = assign.on_drop,
+                    .result_desc = assign.result_desc,
                     .reuse = assign.reuse,
                     .reuse_unique = step.reuse_unique,
                     .next = next,
@@ -3624,9 +3643,7 @@ const Inserter = struct {
         loop_keep: ?LoopKeep,
         releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
-        var local_index: usize = 0;
-        while (local_index < self.store.localCount()) : (local_index += 1) {
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
+        for (owned.domain.frame_locals) |local| {
             if (!owned.contains(local)) continue;
             if (!self.localUsesDescriptorLocal(local, desc_local)) continue;
             if (try self.valueUsedInPath(next, local, loop_keep)) continue;
@@ -5221,15 +5238,16 @@ const Inserter = struct {
         }
     }
 
-    /// Value liveness for one raw local (no group extension): answered by
-    /// the local's value-use bit in the liveness table.
+    /// Value liveness for one raw local (no group extension). Borrowed call
+    /// results have a dedicated value-use bit; other resources use their raw
+    /// ownership bit.
     fn valueUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
         needle: LIR.LocalId,
         loop_keep: ?LoopKeep,
     ) ResourceError!bool {
-        const bit = self.valueUseBitOf(needle) orelse
+        const bit = self.valueUseBitOf(needle) orelse self.rawLivenessBitOf(needle) orelse
             arcInvariant("ARC value-use query for a local without a value-use bit");
         const reads = try self.livenessRow(start, loop_keep);
         return reads.isSet(bit);
@@ -6432,6 +6450,55 @@ const ArcTest = struct {
     }
 };
 
+test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = erased_box },
+        .{ .index = 1, .layout = .opaque_ptr },
+    });
+    const capture_ptr = try f.local(.opaque_ptr);
+    const capture_view = try f.local(capture_layout);
+    const captured_value = try f.local(erased_box);
+    f.store.setLocalBoxyDesc(captured_value, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_stmt = try f.assignI64(result, 0, ret);
+    const field_read = try f.assignRefField(captured_value, capture_view, 0, result_stmt);
+    _ = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = capture_view,
+        .op = .erased_capture_load,
+        .rc_effect = LIR.LowLevel.erased_capture_load.rcEffect(),
+        .args = try f.span(&.{capture_ptr}),
+        .next = field_read,
+    } });
+
+    const boxy_descs = try computeBoxyRcDescs(&f.store);
+    defer f.allocator.free(boxy_descs);
+    const local_contains_refcounted = try computeLocalContainsRefcounted(
+        f.allocator,
+        &f.store,
+        &f.layouts,
+        boxy_descs,
+    );
+    defer f.allocator.free(local_contains_refcounted);
+    const borrow_anchors = try computeBorrowAnchorRefcounted(
+        f.allocator,
+        &f.store,
+        &f.layouts,
+        local_contains_refcounted,
+    );
+    defer f.allocator.free(borrow_anchors);
+
+    try testing.expect(!local_contains_refcounted[@intFromEnum(capture_view)]);
+    try testing.expect(local_contains_refcounted[@intFromEnum(captured_value)]);
+    try testing.expect(borrow_anchors[@intFromEnum(capture_view)]);
+    try testing.expect(borrow_anchors[@intFromEnum(captured_value)]);
+}
+
 test "ARC preserves erased callable repack reuse" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -6451,12 +6518,14 @@ test "ARC preserves erased callable repack reuse" {
     });
 
     const ret = try f.ret(new_callable);
+    const result_desc: LIR.BoxyDescRef = .{ .static = @enumFromInt(fixtureTableIndex(2)) };
     const new_pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = new_callable,
         .proc = callback,
         .capture = capture,
         .capture_layout = .str,
         .on_drop = .none,
+        .result_desc = result_desc,
         .reuse = old_callable,
         .next = ret,
     } });
@@ -6482,6 +6551,7 @@ test "ARC preserves erased callable repack reuse" {
                     try testing.expect(cursor != new_pack);
                     try testing.expectEqual(old_callable, assign.reuse.?);
                     try testing.expect(assign.reuse_unique);
+                    try testing.expectEqual(result_desc, assign.result_desc.?);
                     found = true;
                     break;
                 }
@@ -6496,6 +6566,61 @@ test "ARC preserves erased callable repack reuse" {
         }
     }
     try testing.expect(found);
+}
+
+test "ARC preserves erased call ABI metadata" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const closure = try f.local(erased_callable);
+    const arg = try f.local(.u64);
+    const arg_desc = try f.local(.opaque_ptr);
+    const result = try f.local(.u64);
+    const out_desc = try f.local(.opaque_ptr);
+    const args = try f.span(&.{arg});
+    const arg_descs = try f.span(&.{arg_desc});
+    const arg_layouts: LIR.BoxySpan = .{ .start = 4, .len = 1 };
+    const arg_desc_keys: LIR.BoxySpan = .{ .start = 7, .len = 1 };
+    const result_desc: LIR.BoxyDescRef = .{ .static = @enumFromInt(fixtureTableIndex(3)) };
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{.u64});
+
+    const ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .closure = closure,
+        .args = args,
+        .arg_layouts = arg_layouts,
+        .arg_descs = arg_descs,
+        .arg_desc_keys = arg_desc_keys,
+        .result_desc = result_desc,
+        .out_desc = out_desc,
+        .arg_plan = arg_plan,
+        .next = ret,
+    } });
+    const caller = try f.addProc(&.{ closure, arg, arg_desc }, call, .u64);
+
+    try f.run();
+
+    var cursor = f.store.getProcSpec(caller).body.?;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_call_erased => |rewritten| {
+                try testing.expectEqual(args, rewritten.args);
+                try testing.expectEqual(arg_layouts, rewritten.arg_layouts);
+                try testing.expectEqual(arg_descs, rewritten.arg_descs);
+                try testing.expectEqual(arg_desc_keys, rewritten.arg_desc_keys);
+                try testing.expectEqual(result_desc, rewritten.result_desc.?);
+                try testing.expectEqual(out_desc, rewritten.out_desc.?);
+                try testing.expectEqual(arg_plan, rewritten.arg_plan);
+                return;
+            },
+            inline .incref, .decref, .decref_if_initialized, .free => |rc| cursor = rc.next,
+            else => return error.UnexpectedStatement,
+        }
+    }
+    return error.MissingErasedCall;
 }
 
 test "ARC runtime-checks erased callable repack from an ordinary parameter" {
@@ -6816,7 +6941,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     });
 
     const local_contains_refcounted = [_]bool{ true, false, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{});
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{}, &.{});
     defer solution.deinit();
     var global_local_index = [_]u32{ no_proc_local_index, no_proc_local_index, no_proc_local_index };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -6890,7 +7015,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     });
 
     const local_contains_refcounted = [_]bool{ true, true, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{});
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{}, &.{});
     defer solution.deinit();
     try testing.expectEqual(leader, solution.leaderOf(local_alias));
 
@@ -9461,6 +9586,86 @@ test "RC releases descriptor-backed old set_local value before immutable replace
 
     try f.run();
     try f.expectReachableDecrefBeforeSet(f.procBody(), current, current);
+}
+
+test "RC descriptor updates scan only the current proc frame" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const unrelated = try f.local(.str);
+    const desc = try f.local(.opaque_ptr);
+    const current = try f.local(.str);
+    const result = try f.local(.i64);
+    f.store.setLocalBoxyDesc(current, .{ .local = desc });
+
+    const unrelated_ret = try f.ret(unrelated);
+    const unrelated_body = try f.assignStr(unrelated, "other proc", unrelated_ret);
+    _ = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = unrelated_body,
+        .frame_locals = try f.span(&.{unrelated}),
+        .ret_layout = .str,
+    });
+
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, 1, ret);
+    const update_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = desc,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .next = assign_result,
+    } });
+    const assign_current = try f.assignStr(current, "old", update_desc);
+    const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = desc,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .next = assign_current,
+    } });
+    _ = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = init_desc,
+        .frame_locals = try f.span(&.{ desc, current, result }),
+        .ret_layout = .i64,
+    });
+
+    try f.run();
+    try f.expectRc(current, 0, 1, 0);
+}
+
+test "RC descriptor snapshot owns an alias across source descriptor reuse" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const source_desc = try f.local(.opaque_ptr);
+    const alias_desc = try f.local(.opaque_ptr);
+    const source = try f.local(.str);
+    const alias = try f.local(.str);
+    const result = try f.local(.i64);
+    f.store.setLocalBoxyDesc(source, .{ .local = source_desc });
+    f.store.setLocalBoxyDesc(alias, .{ .local = alias_desc });
+
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, 1, ret);
+    const use_alias = try f.expectStmt(alias, assign_result);
+    const reuse_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = source_desc,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(1)) },
+        .next = use_alias,
+    } });
+    const assign_alias = try f.assignRefLocal(alias, source, reuse_source_desc);
+    const snapshot_desc = try f.setLocal(alias_desc, source_desc, .initialize_join_result, assign_alias);
+    const assign_source = try f.assignStr(source, "old", snapshot_desc);
+    const init_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = source_desc,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .next = assign_source,
+    } });
+    _ = try f.addProc(&.{}, init_source_desc, .i64);
+
+    try f.run();
+    try f.expectRc(source, 0, 0, 0);
+    try f.expectRc(alias, 0, 1, 0);
 }
 
 test "RC preserves a surviving source before a consuming boxy adapter" {

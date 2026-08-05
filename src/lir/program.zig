@@ -197,9 +197,12 @@ pub const BoxyMethodAdapter = struct {
     arg_layouts: BoxySpan = .{},
     ret_layout: ?layout.Idx = null,
     arg_descs: BoxySpan = .{},
-    /// Exact descriptors for every descriptor-bearing position in the
-    /// checked method requirement, in requirement traversal order.
+    /// Compact static descriptor references used by `call_desc_sources`.
     call_descs: BoxySpan = .{},
+    /// Exact source for every descriptor-bearing position in the checked
+    /// method requirement, in requirement traversal order. Empty means the
+    /// legacy one-to-one static `call_descs` representation.
+    call_desc_sources: BoxySpan = .{},
     ret_desc: ?BoxyDescRef = null,
     nested_dicts: BoxySpan = .{},
     hidden_desc_sources: BoxySpan = .{},

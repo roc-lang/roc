@@ -11,7 +11,8 @@
 //!
 //! - its single defining statement is borrow-capable: a payload read
 //!   (`assign_ref` with `.field`/`.tag_payload`/`.tag_payload_struct`), a
-//!   local alias (`.local`, `.list_reinterpret`, `.nominal`), a low-level op
+//!   local alias (`.local`, `.list_reinterpret`, `.nominal`) whose source and
+//!   target use the same explicit Boxy RC descriptor, a low-level op
 //!   whose `RcEffect.result_borrows_args` names exactly one refcounted
 //!   argument, or a call whose return borrows exactly one refcounted argument
 //! - no occurrence of the binding demands ownership: it is never an owned
@@ -505,6 +506,7 @@ const Solver = struct {
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
+    boxy_rc_descs: []const ?LIR.BoxyDescRef,
     domain: *const ArcLocalDomain,
     sigs: []arc_sig.RcSig,
     unique_seed_masks: []u64,
@@ -565,10 +567,14 @@ pub fn solve(
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
+    boxy_rc_descs: []const ?LIR.BoxyDescRef,
     roots: []const LIR.LirProcSpecId,
 ) SolveError!Solution {
     const local_count = store.localCount();
     const proc_count = store.procSpecCount();
+    if (boxy_rc_descs.len != 0 and boxy_rc_descs.len != local_count) {
+        solveInvariant("ARC Boxy descriptor table did not cover every local");
+    }
     var domain = try ArcLocalDomain.init(allocator, rc_local);
     defer domain.deinit(allocator);
     const arc_local_count = domain.arc_to_local.len;
@@ -577,6 +583,7 @@ pub fn solve(
         .allocator = allocator,
         .store = store,
         .rc_local = rc_local,
+        .boxy_rc_descs = boxy_rc_descs,
         .domain = &domain,
         .sigs = try allocator.alloc(arc_sig.RcSig, proc_count),
         .unique_seed_masks = try allocator.alloc(u64, proc_count),
@@ -1844,7 +1851,18 @@ fn noteDef(solver: *Solver, local: LIR.LocalId, kind: DefKind) void {
 fn noteBorrowDef(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void {
     const source_index = solver.domain.indexOf(source) orelse {
         if (solver.domain.indexOf(target) != null) {
-            solveInvariant("ARC borrow source was outside the ARC-local domain");
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic(
+                    "ARC borrow source was outside the ARC-local domain: target={d} source={d} target_rc={} source_rc={}",
+                    .{
+                        @intFromEnum(target),
+                        @intFromEnum(source),
+                        solver.rc_local[@intFromEnum(target)],
+                        solver.rc_local[@intFromEnum(source)],
+                    },
+                );
+            }
+            unreachable;
         }
         return;
     };
@@ -1894,6 +1912,9 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     if (assign.target != source) {
                         try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = source } });
                         try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = source } });
+                        if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, source)) {
+                            try solver.binding_facts.append(allocator, .{ .demand = assign.target });
+                        }
                     } else {
                         try solver.binding_facts.append(allocator, .{ .multi = assign.target });
                     }
@@ -1905,10 +1926,16 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .list_reinterpret => |op| {
                     try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.backing_ref } });
                     try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref } });
+                    if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, op.backing_ref)) {
+                        try solver.binding_facts.append(allocator, .{ .demand = assign.target });
+                    }
                 },
                 .nominal => |op| {
                     try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.backing_ref } });
                     try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref } });
+                    if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, op.backing_ref)) {
+                        try solver.binding_facts.append(allocator, .{ .demand = assign.target });
+                    }
                 },
             }
             switch (assign.op) {
@@ -2388,6 +2415,18 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         .jump => {},
         .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
     }
+}
+
+fn aliasPreservesBoxyRcDescriptor(
+    solver: *const Solver,
+    target: LIR.LocalId,
+    source: LIR.LocalId,
+) bool {
+    if (solver.boxy_rc_descs.len == 0) return true;
+    return std.meta.eql(
+        solver.boxy_rc_descs[@intFromEnum(target)],
+        solver.boxy_rc_descs[@intFromEnum(source)],
+    );
 }
 
 /// Returns the single refcounted argument a borrowed-return call result may

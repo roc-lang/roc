@@ -3960,12 +3960,10 @@ const Certifier = struct {
     fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, field_idx: ?u16) CertifyError!void {
         const source_value = try self.requireLive(state, source);
         if (!self.isRc(target)) return;
-        if (source_value == no_value) {
-            _ = try self.bindBorrowedFromImplicitLive(state, target);
-        } else {
-            _ = try self.bindFresh(state, target, 0, &.{source_value});
-        }
-        const value = try self.bindFresh(state, target, 0, &.{source_value});
+        const value = if (source_value == no_value)
+            try self.bindBorrowedFromImplicitLive(state, target)
+        else
+            try self.bindFresh(state, target, 0, &.{source_value});
         if (field_idx) |field| {
             const info = &self.values.items[value];
             info.payload_source = source_value;
@@ -4925,6 +4923,55 @@ test "certify accepts a payload borrow used while the owner is live" {
     const body = try f.assignStr(a, assign_b);
     _ = try f.addProc(&.{}, body, .i64);
     try f.certify();
+}
+
+test "certify accepts a retained Boxy field borrowed from implicit capture storage" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = erased_box },
+    });
+    const capture = try f.local(capture_layout);
+    const field = try f.local(erased_box);
+    const result = try f.local(.i64);
+    const desc_local = try f.local(.opaque_ptr);
+    const desc = LIR.BoxyDescRef{ .local = desc_local };
+    f.store.setLocalBoxyDesc(field, desc);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release = try f.store.addCFStmt(.{ .decref = .{
+        .value = field,
+        .rc = .{ .boxy = desc },
+        .next = result_assign,
+    } });
+    const retain = try f.store.addCFStmt(.{ .incref = .{
+        .value = field,
+        .rc = .{ .boxy = desc },
+        .next = release,
+    } });
+    const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = field,
+        .op = .{ .field = .{ .source = capture, .field_idx = 0 } },
+        .next = retain,
+    } });
+    _ = try f.addProc(&.{ capture, desc_local }, field_read, .i64);
+
+    const boxy_descs = try f.allocator.alloc(?LIR.BoxyDescRef, f.store.localCount());
+    defer f.allocator.free(boxy_descs);
+    @memset(boxy_descs, null);
+    boxy_descs[@intFromEnum(field)] = desc;
+    try certifyStore(
+        f.allocator,
+        &f.store,
+        &f.layouts,
+        boxy_descs,
+        arc_sig.SigTable.all_owned,
+        &.{},
+        &f.diag,
+    );
 }
 
 test "certify flags a payload borrow used after the owner dies" {

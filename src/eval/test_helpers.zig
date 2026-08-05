@@ -975,7 +975,7 @@ pub fn compileInspectedProgramForTarget(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
 ) TestHelperError!CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null, null);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null, null, .lss);
 }
 
 /// Same as `compileInspectedProgramForTarget` but reuses a pre-published
@@ -990,8 +990,9 @@ pub fn compileInspectedProgramForTargetWithBuiltin(
     target_usize: base.target.TargetUsize,
     pre_published_builtin: PrePublishedBuiltin,
     roc_ctx: ?CoreCtx,
+    specialization_strategy: base.SpecializationStrategy,
 ) TestHelperError!CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin, roc_ctx);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin, roc_ctx, specialization_strategy);
 }
 
 fn compileInspectedProgramForTargetImpl(
@@ -1003,6 +1004,7 @@ fn compileInspectedProgramForTargetImpl(
     target_usize: base.target.TargetUsize,
     pre_published_builtin: ?PrePublishedBuiltin,
     roc_ctx: ?CoreCtx,
+    specialization_strategy: base.SpecializationStrategy,
 ) TestHelperError!CompiledTargetProgram {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
@@ -1020,7 +1022,9 @@ fn compileInspectedProgramForTargetImpl(
         return error.TypeCheckError;
     }
 
-    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
+    const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, target_usize, .{
+        .specialization_strategy = specialization_strategy,
+    });
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
@@ -1589,6 +1593,7 @@ fn lowerParsedProgramToLir(
 }
 
 const LowerToLirOptions = struct {
+    specialization_strategy: base.SpecializationStrategy = .lss,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     tag_reachability: bool = false,
     /// Match optimized builds so every backend exercises the in-place
@@ -1677,6 +1682,7 @@ fn lowerCheckedRootWithViews(
         .{ .requests = root_module.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
+            .specialization_strategy = options.specialization_strategy,
             .inline_mode = options.inline_mode,
             .list_in_place_map = options.list_in_place_map,
             .monotype_cache = options.monotype_cache,
