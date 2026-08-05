@@ -3779,16 +3779,6 @@ const Builder = struct {
                     census.bump("recursive_join_shadow_extra");
                 } else {
                     census.bump("recursive_join_shadow_missed");
-                    if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                        const missed_spec = &source_ctx.draft.template_specs.items[selection.selected().?];
-                        const template_view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-                        std.debug.print("JOIN-MISSED name={s} spec_state={s} walk_fn={d} frames={d}\n", .{
-                            templateExportName(template_view, template_ref),
-                            @tagName(missed_spec.state),
-                            walk_fn_id.?,
-                            rehearsal.frames.items.len,
-                        });
-                    }
                 }
             }
             // Independently instantiated recursive calls do not necessarily share
@@ -16107,6 +16097,11 @@ const BodyContext = struct {
         // instantiation made concrete (reunify.md 13.2d, the literal-leaves
         // rule).
         switch (checkedPayload(self.view, checked_ty)) {
+            // The finer cut was measured and refuted: even a leaf the
+            // innermost frame binds answers differently at half the corpus's
+            // variable leaves (8 of 16), because the value belongs to a NESTED
+            // scheme's actual that frame does not carry. The class keeps the
+            // node until the request's recorded actual replaces it.
             .flex, .rigid => return try self.activeTypeFromNode(node),
             else => {},
         }
@@ -33865,7 +33860,29 @@ const BodyContext = struct {
         // pre-target numeral variable, whose value the target supplies
         // through the relation — the literal-leaves law verbatim; a directed
         // read would default what the target made concrete.
-        const ret_ty = try self.activeTypeFromNode(fn_nodes.ret);
+        // The literal-leaves law, executed in its own terms: the value comes
+        // from the target, so the target IS the binding, and the return is the
+        // callable's checked return emitted with the pre-target variable bound
+        // to it. Certified digest-equal to the graph's relation-flowed answer
+        // on every numeral call in the eval corpus before the read flipped;
+        // the node read stands exactly where the derivation declines.
+        const directed_ret: ?Type.TypeId = directed: {
+            const rehearsal = self.builder.rehearsal orelse break :directed null;
+            const callable_fn = self.checkedFunctionType(plan.callable_ty);
+            break :directed rehearsal.typeForCheckedUnderSingleBinding(
+                self.view.key.bytes,
+                callable_fn.ret,
+                checked_ret_ty,
+                target_ty,
+            );
+        };
+        const ret_ty = if (directed_ret) |directed| blk: {
+            census.bump("numeral_ret_directed_route");
+            break :blk directed;
+        } else blk: {
+            census.bump("numeral_ret_node_route");
+            break :blk try self.activeTypeFromNode(fn_nodes.ret);
+        };
 
         const call_expr = try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(fn_nodes.ret),

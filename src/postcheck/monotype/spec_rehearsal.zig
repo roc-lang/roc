@@ -3622,6 +3622,42 @@ pub const Rehearsal = struct {
         };
     }
 
+    /// The directed answer for a checked position with exactly one extra
+    /// binder stated by the caller: the numeral call's return emitted with
+    /// the pre-target variable bound to the target the site holds (reunify.md
+    /// 13.2d, the literal-leaves rule executed in its own terms — the value
+    /// comes from the target, so the target is the binding). The live frame's
+    /// environment sits underneath for any other position the type carries.
+    pub fn typeForCheckedUnderSingleBinding(
+        self: *Rehearsal,
+        module_bytes: [32]u8,
+        ty: checked.CheckedTypeId,
+        binder: checked.CheckedTypeId,
+        bound_value: Type.TypeId,
+    ) ?Type.TypeId {
+        if (self.disabled) return null;
+        const cursor = self.lookup.cursor(module_bytes) orelse return null;
+        const frame_env: ?*const direct_translate.BindingEnvironment =
+            if (self.frameForModule(module_bytes)) |frame| frame.environment() else null;
+        const binders = [_]checked.CheckedTypeId{binder};
+        const bound = [_]direct_translate.BoundType{direct_translate.BoundType.of(bound_value)};
+        const env = direct_translate.BindingEnvironment{
+            .scheme = .{ .module_bytes = module_bytes, .scheme = 0 },
+            .binders = &binders,
+            .bound = &bound,
+            .captured = &.{},
+            .parent = frame_env,
+        };
+        var reason: direct_translate.SkipReason = undefined;
+        return self.translator.translateUnderEnvironment(
+            cursor,
+            &env,
+            checked.checked_residual_disposition_module_body_owner,
+            ty,
+            &reason,
+        ) catch null;
+    }
+
     /// The reserved function id of the innermost active specialization frame
     /// whose directed request root carries this representation-erased digest:
     /// the graph-free half of the open recursive-request join (reunify.md
