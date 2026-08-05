@@ -5310,6 +5310,39 @@ pub const Interpreter = struct {
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
                 break :blk val;
             },
+            .list_cursor_unsafe => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const buffer = list_val.bytes orelse self.invariantFailed(
+                    "LIR/interpreter invariant violated: list_cursor_unsafe on a list without a buffer",
+                    .{},
+                );
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, @intFromPtr(buffer) + @as(u64, @intCast(list_val.len() * info.width)));
+                break :blk val;
+            },
+            .cursor_append_unsafe => blk: {
+                const elem_layout = ll.arg_layouts[1];
+                const width = self.helper.sizeAlignOf(elem_layout).size;
+                const cursor = args[0].read(u64);
+                const dest: [*]u8 = @ptrFromInt(@as(usize, @intCast(cursor)));
+                const elem_bytes: [*]const u8 = @ptrCast(args[1].ptr);
+                @memcpy(dest[0..width], elem_bytes[0..width]);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, cursor + width);
+                break :blk val;
+            },
+            .list_seal_cursor_unsafe => blk: {
+                const info = self.listElemInfo(arg_layout);
+                var list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const buffer = list_val.bytes orelse self.invariantFailed(
+                    "LIR/interpreter invariant violated: list_seal_cursor_unsafe on a list without a buffer",
+                    .{},
+                );
+                const cursor = args[1].read(u64);
+                list_val.length = (@as(usize, @intCast(cursor)) - @intFromPtr(buffer)) / info.width;
+                break :blk self.rocListToValue(list_val, ll.ret_layout);
+            },
             .list_append_unsafe => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const list_val = self.valueToRocListForLayout(args[0], arg_layout);

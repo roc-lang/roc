@@ -1535,6 +1535,93 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     };
                 },
+                .list_cursor_unsafe => {
+                    // list_cursor_unsafe(list) -> U64: address one past the
+                    // last element, where the next append writes.
+                    std.debug.assert(args.len == 1);
+                    const ls = self.layout_store;
+                    const list_layout = self.store.getLocal(GuardedList.at(args, 0)).layout_idx;
+                    const list_abi = builtinInternalListAbi(ls, "dev.list_cursor_unsafe.builtin_list_abi", list_layout);
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const base_offset: i32 = switch (list_loc) {
+                        .stack => |st| st.offset,
+                        .list_stack => |ls_info| ls_info.struct_offset,
+                        else => unreachable,
+                    };
+                    const ptr_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, base_offset);
+                    const len_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
+                    // The promotion pass only emits cursor ops for power-of-two
+                    // element widths, so the scale is a shift.
+                    const shift: u8 = @intCast(std.math.log2_int(u64, @intCast(list_abi.elem_size_align.size)));
+                    if (shift != 0) try self.emitShlImm(.w64, len_reg, len_reg, shift);
+                    try self.emitAddRegs(.w64, ptr_reg, ptr_reg, len_reg);
+                    self.codegen.freeGeneral(len_reg);
+                    return .{ .general_reg = ptr_reg };
+                },
+                .cursor_append_unsafe => {
+                    // cursor_append_unsafe(cursor, elem) -> U64: store the
+                    // element through the cursor and advance it.
+                    std.debug.assert(args.len == 2);
+                    const ls = self.layout_store;
+                    const elem_layout = self.store.getLocal(GuardedList.at(args, 1)).layout_idx;
+                    const elem_size = ls.layoutSizeAlign(ls.getLayout(elem_layout)).size;
+                    const cursor_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const cursor_reg = try self.ensureInGeneralReg(cursor_loc);
+                    const elem_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    const elem_reg = try self.ensureInGeneralReg(elem_loc);
+                    switch (elem_size) {
+                        1 => try self.emitStoreW8(cursor_reg, 0, elem_reg),
+                        2 => try self.emitStoreW16(cursor_reg, 0, elem_reg),
+                        4 => try self.emitStore(.w32, cursor_reg, 0, elem_reg),
+                        8 => try self.emitStore(.w64, cursor_reg, 0, elem_reg),
+                        else => unreachable,
+                    }
+                    self.codegen.freeGeneral(elem_reg);
+                    const result_reg = try self.allocTempGeneral();
+                    try self.emitAddImm(result_reg, cursor_reg, @intCast(elem_size));
+                    self.codegen.freeGeneral(cursor_reg);
+                    return .{ .general_reg = result_reg };
+                },
+                .list_seal_cursor_unsafe => {
+                    // list_seal_cursor_unsafe(list, cursor) -> List: the list
+                    // with its length recomputed from the fill cursor.
+                    std.debug.assert(args.len == 2);
+                    const ls = self.layout_store;
+                    const list_layout = self.store.getLocal(GuardedList.at(args, 0)).layout_idx;
+                    const list_abi = builtinInternalListAbi(ls, "dev.list_seal_cursor_unsafe.builtin_list_abi", list_layout);
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const base_offset: i32 = switch (list_loc) {
+                        .stack => |st| st.offset,
+                        .list_stack => |ls_info| ls_info.struct_offset,
+                        else => unreachable,
+                    };
+                    const cursor_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    const cursor_reg = try self.ensureInGeneralReg(cursor_loc);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
+                    const tmp_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, tmp_reg, frame_ptr, base_offset);
+                    try self.emitStore(.w64, frame_ptr, result_offset, tmp_reg);
+                    // len = (cursor - data_ptr) >> log2(elem_width)
+                    const len_reg = try self.allocTempGeneral();
+                    try self.emitSubRegs(.w64, len_reg, cursor_reg, tmp_reg);
+                    self.codegen.freeGeneral(cursor_reg);
+                    const shift: u8 = @intCast(std.math.log2_int(u64, @intCast(list_abi.elem_size_align.size)));
+                    if (shift != 0) try self.emitLsrImm(.w64, len_reg, len_reg, shift);
+                    try self.emitStore(.w64, frame_ptr, result_offset + 8, len_reg);
+                    self.codegen.freeGeneral(len_reg);
+                    try self.emitLoad(.w64, tmp_reg, frame_ptr, base_offset + 16);
+                    try self.emitStore(.w64, frame_ptr, result_offset + 16, tmp_reg);
+                    self.codegen.freeGeneral(tmp_reg);
+                    return .{
+                        .list_stack = .{
+                            .struct_offset = result_offset,
+                            .data_offset = 0,
+                            .num_elements = 0,
+                        },
+                    };
+                },
                 .list_append_unsafe => {
                     // list_append(list, element) -> List
                     if (args.len != 2) {
