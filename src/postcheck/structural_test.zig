@@ -392,13 +392,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(lower_source, "containsGeneratedPrivate");
     try expectNotContains(lower_source, "selectRequestRepresentation");
 
-    const dispatch_selection = sourceSliceBetween(
-        lower_source,
-        "fn selectExprRepresentationAtNode(",
-        "fn lowerCallExprAtNode(",
-    );
-    try expectContains(dispatch_selection, "applyProducedTypeToRequest(");
-    try expectContains(dispatch_selection, "try self.lowerExprTypeNode(checked_expr)");
+    try expectNotContains(lower_source, "selectExprRepresentationAtNode");
 
     const dispatch_instantiation = sourceSliceBetween(
         lower_source,

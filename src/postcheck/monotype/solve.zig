@@ -1882,7 +1882,7 @@ pub const InstGraph = struct {
         // produced root. The reverse is not valid: a structural producer for
         // a nominal request means the producer failed to construct the named
         // value, and descending through the request would hide that bug.
-        if (public_content != .named and private_content == .named) {
+        if (public_content != .named and public_content != .unresolved and private_content == .named) {
             const backing = private_content.named.backing orelse
                 Common.invariant("produced-type substitution found an exact nominal without backing");
             try self.relateOpaqueChild(public_node, backing.node, pending);
