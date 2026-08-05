@@ -867,11 +867,29 @@ inline fn appendRangeWithinCore(
             src += 8;
             dst += 8;
         }
-        while (@intFromPtr(dst) < @intFromPtr(end)) {
-            inline for (0..5) |_| {
-                dst[0..8].* = src[0..8].*;
-                src += 8;
-                dst += 8;
+        if (@intFromPtr(dst) < @intFromPtr(end)) {
+            // Only ranges longer than the burst reach here, so this branch
+            // costs short copies nothing. Distances of sixteen or more
+            // stream through vector registers; shorter distances stay on
+            // word stores, whose reads overlap the just-written words
+            // exactly and forward without stalling, where a doubled-reach
+            // vector read would overlap them partially and stall.
+            if (distance >= 16) {
+                while (@intFromPtr(dst) < @intFromPtr(end)) {
+                    dst[0..16].* = src[0..16].*;
+                    dst[16..32].* = src[16..32].*;
+                    dst[32..40].* = src[32..40].*;
+                    src += 40;
+                    dst += 40;
+                }
+            } else {
+                while (@intFromPtr(dst) < @intFromPtr(end)) {
+                    inline for (0..5) |_| {
+                        dst[0..8].* = src[0..8].*;
+                        src += 8;
+                        dst += 8;
+                    }
+                }
             }
         }
     } else if (distance == 1) {
