@@ -14248,7 +14248,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [14]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -14265,11 +14265,6 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]
         .{ .name = "Monotype import requests", .count = graph.mono_import_requests },
         .{ .name = "Monotype import hits", .count = graph.mono_import_hits },
         .{ .name = "Monotype import misses", .count = graph.mono_import_misses },
-        .{ .name = "Generated-private scans", .count = graph.generated_private_scans },
-        .{ .name = "Generated-private cache hits", .count = graph.generated_private_cache_hits },
-        .{ .name = "Generated-private nodes visited", .count = graph.generated_private_nodes_visited },
-        .{ .name = "Finished-Monotype scans", .count = graph.finished_mono_scans },
-        .{ .name = "Finished-Monotype nodes visited", .count = graph.finished_mono_nodes_visited },
     };
 }
 
@@ -14358,7 +14353,6 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.specialization.template_requests = 101;
     diagnostics.specialization.nested_misses = 102;
     diagnostics.graph.nodes_created = 201;
-    diagnostics.graph.generated_private_nodes_visited = 202;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
@@ -14374,8 +14368,6 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     const graph = monotypeGraphCounters(diagnostics);
     try std.testing.expectEqualStrings("Nodes created", graph[1].name);
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
-    try std.testing.expectEqualStrings("Generated-private nodes visited", graph[16].name);
-    try std.testing.expectEqual(@as(u64, 202), graph[16].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);

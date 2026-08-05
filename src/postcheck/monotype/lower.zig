@@ -666,95 +666,12 @@ fn enterEvidenceScope(
     };
 }
 
-fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_fn: NodeId) Allocator.Error!void {
-    if (try graph.containsGeneratedPrivate(public_fn) or try graph.containsGeneratedPrivate(private_fn)) {
-        try relateRequestComponent(graph, public_fn, private_fn);
-    } else {
-        try graph.unify(public_fn, private_fn);
-    }
+fn relateFunctionRequestInterface(graph: *InstGraph, request_fn: NodeId, produced_fn: NodeId) Allocator.Error!void {
+    _ = try graph.applyProducedTypeToRequest(request_fn, produced_fn);
 }
 
-fn relateRequestComponent(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!void {
-    const left_root_private = isGeneratedPrivateRootNode(graph, left_node);
-    const right_root_private = isGeneratedPrivateRootNode(graph, right_node);
-    if (left_root_private and right_root_private) {
-        try graph.unify(left_node, right_node);
-        return;
-    }
-    if (right_root_private) {
-        try graph.relateOpaqueInterface(left_node, right_node);
-        return;
-    }
-    if (left_root_private) {
-        try graph.relateOpaqueInterface(right_node, left_node);
-        return;
-    }
-
-    const left_private = try graph.containsGeneratedPrivate(left_node);
-    const right_private = try graph.containsGeneratedPrivate(right_node);
-    if (left_private and right_private) {
-        if (try relateMatchingRequestContainers(graph, left_node, right_node)) return;
-        try graph.unify(left_node, right_node);
-    } else if (right_private) {
-        try graph.relateOpaqueInterface(left_node, right_node);
-    } else if (left_private) {
-        try graph.relateOpaqueInterface(right_node, left_node);
-    } else {
-        try graph.unify(left_node, right_node);
-    }
-}
-
-fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!bool {
-    if (graph.sameClass(left_node, right_node)) return true;
-    const left_content = graph.content(left_node);
-    const right_content = graph.content(right_node);
-    switch (left_content) {
-        .list => |left_elem| switch (right_content) {
-            .list => |right_elem| {
-                try relateRequestComponent(graph, left_elem, right_elem);
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
-            },
-            else => {},
-        },
-        .box => |left_elem| switch (right_content) {
-            .box => |right_elem| {
-                try relateRequestComponent(graph, left_elem, right_elem);
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
-            },
-            else => {},
-        },
-        .tuple => |left_items| switch (right_content) {
-            .tuple => |right_items| {
-                if (left_items.len != right_items.len) {
-                    Common.invariant("request component relation received tuples of different arity");
-                }
-                for (left_items, right_items) |left_item, right_item| {
-                    try relateRequestComponent(graph, left_item, right_item);
-                }
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
-            },
-            else => {},
-        },
-        .func => |left_fn| switch (right_content) {
-            .func => |right_fn| {
-                if (left_fn.args.len != right_fn.args.len) {
-                    Common.invariant("request component relation received functions of different arity");
-                }
-                for (left_fn.args, right_fn.args) |left_arg, right_arg| {
-                    try relateRequestComponent(graph, left_arg, right_arg);
-                }
-                try relateRequestComponent(graph, left_fn.ret, right_fn.ret);
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
-            },
-            else => {},
-        },
-        else => {},
-    }
-    return false;
+fn applyProducedTypeToRequest(graph: *InstGraph, request_node: NodeId, produced_node: NodeId) Allocator.Error!void {
+    _ = try graph.applyProducedTypeToRequest(request_node, produced_node);
 }
 
 const DeferredConstructorPair = struct {
@@ -922,7 +839,7 @@ fn constrainDeferredTemplateArgument(
     const request_root = graph.rootNode(request_node);
     if (checked_root == request_root) return;
     if (graph.content(checked_root) == .unresolved) {
-        try relateRequestComponent(graph, checked_root, request_root);
+        try applyProducedTypeToRequest(graph, checked_root, request_root);
         return;
     }
     try constrainDeferredTemplateTypeArgumentsAt(graph, checked_root, request_root, seen);
@@ -936,28 +853,6 @@ fn isGeneratedPrivateRootNode(graph: *InstGraph, node: NodeId) bool {
             false,
         else => false,
     };
-}
-
-/// Choose producer-authored generated-private evidence for a live draft result
-/// while keeping ordinary graph unification unable to cross the public/private
-/// boundary. The directed selection capability rejects imported Monotypes.
-fn selectRequestRepresentation(graph: *InstGraph, declared_node: NodeId, produced_node: NodeId) Allocator.Error!void {
-    const declared_private = try graph.containsGeneratedPrivate(declared_node);
-    const produced_private = try graph.containsGeneratedPrivate(produced_node);
-    if (declared_private != produced_private) {
-        const public_node = if (declared_private) produced_node else declared_node;
-        const private_node = if (declared_private) declared_node else produced_node;
-        if (try graph.containsFinishedMono(public_node) or try graph.containsFinishedMono(private_node)) {
-            // The finished request remains an immutable interface snapshot;
-            // the expression and its enclosing producer boundary carry the
-            // distinct private result representation.
-            try graph.relateOpaqueInterface(public_node, private_node);
-        } else {
-            try graph.selectGeneratedPrivateRepresentation(public_node, private_node);
-        }
-    } else {
-        try relateRequestComponent(graph, declared_node, produced_node);
-    }
 }
 
 const HostedTryAdapterCapability = struct {
@@ -1058,13 +953,13 @@ fn relateHostedTryWidening(
     if (widening.request_err.len == widening.public_err.len) return false;
 
     for (public.args, request.args) |public_arg, request_arg| {
-        try relateRequestComponent(graph, public_arg, request_arg);
+        try applyProducedTypeToRequest(graph, public_arg, request_arg);
     }
-    try relateRequestComponent(graph, widening.public_try.ok, widening.request_try.ok);
+    try applyProducedTypeToRequest(graph, widening.public_try.ok, widening.request_try.ok);
     for (widening.public_err) |public_tag| {
         const request_tag = graphTagByName(widening.request_err, public_tag.name) orelse unreachable;
         for (public_tag.payloads, request_tag.payloads) |public_payload, request_payload| {
-            try relateRequestComponent(graph, public_payload, request_payload);
+            try applyProducedTypeToRequest(graph, public_payload, request_payload);
         }
     }
     return true;
@@ -1124,161 +1019,10 @@ fn relateCheckedNodeToMono(graph: *InstGraph, checked_node: NodeId, mono_node: N
     _ = try checkedMonoRequestNode(graph, checked_node, mono_node);
 }
 
-/// Relate a checker-public node to an explicit Monotype request node. The
-/// returned node is the one specialization identity must consume: ordinary
-/// Monotypes join the checked class, while generated-private evidence remains
-/// a distinct request node related recursively to the public interface.
+/// Apply an exact Monotype request to its checked source mapping and retain the
+/// exact request as specialization identity.
 fn checkedMonoRequestNode(graph: *InstGraph, checked_node: NodeId, mono_node: NodeId) Allocator.Error!NodeId {
-    if (try graph.containsGeneratedPrivate(mono_node)) {
-        try graph.relateOpaqueInterface(checked_node, mono_node);
-        return mono_node;
-    }
-    var seen = std.AutoHashMap(CheckedMonoRequestPair, void).init(graph.allocator);
-    defer seen.deinit();
-    try relateCheckedMonoRequestNodeAt(graph, checked_node, mono_node, &seen);
-    return checked_node;
-}
-
-const CheckedMonoRequestPair = struct {
-    checked: NodeId,
-    request: NodeId,
-};
-
-fn relateCheckedMonoRequestNodeAt(
-    graph: *InstGraph,
-    checked_node: NodeId,
-    request_node: NodeId,
-    seen: *std.AutoHashMap(CheckedMonoRequestPair, void),
-) Allocator.Error!void {
-    const checked_root = graph.rootNode(checked_node);
-    const request_root = graph.rootNode(request_node);
-    if (checked_root == request_root) return;
-
-    if (try graph.containsGeneratedPrivate(checked_root) or
-        try graph.containsGeneratedPrivate(request_root))
-    {
-        try relateRequestComponent(graph, checked_root, request_root);
-        return;
-    }
-
-    const entry = try seen.getOrPut(.{ .checked = checked_root, .request = request_root });
-    if (entry.found_existing) return;
-    defer _ = seen.remove(.{ .checked = checked_root, .request = request_root });
-
-    const checked_content = graph.content(checked_root);
-    const request_content = graph.content(request_root);
-    switch (checked_content) {
-        .named => |checked_named| switch (request_content) {
-            .named => |request_named| {
-                if (sameNamedValueDefinition(checked_named, request_named)) {
-                    const checked_backing = checked_named.backing orelse {
-                        try graph.unify(checked_root, request_root);
-                        return;
-                    };
-                    const request_backing = request_named.backing orelse {
-                        try graph.unify(checked_root, request_root);
-                        return;
-                    };
-                    try relateCheckedMonoRequestNodeAt(
-                        graph,
-                        checked_backing.node,
-                        request_backing.node,
-                        seen,
-                    );
-                    return;
-                }
-            },
-            else => {},
-        },
-        .list => |checked_elem| switch (request_content) {
-            .list => |request_elem| {
-                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, seen);
-                try graph.joinRelatedRequestContainer(checked_root, request_root);
-                return;
-            },
-            else => {},
-        },
-        .box => |checked_elem| switch (request_content) {
-            .box => |request_elem| {
-                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, seen);
-                try graph.joinRelatedRequestContainer(checked_root, request_root);
-                return;
-            },
-            else => {},
-        },
-        .tuple => |checked_items| switch (request_content) {
-            .tuple => |request_items| {
-                if (checked_items.len != request_items.len) {
-                    Common.invariant("checked Monotype request related tuples of different arity");
-                }
-                for (checked_items, request_items) |checked_item, request_item| {
-                    try relateCheckedMonoRequestNodeAt(graph, checked_item, request_item, seen);
-                }
-                try graph.joinRelatedRequestContainer(checked_root, request_root);
-                return;
-            },
-            else => {},
-        },
-        .func => |checked_fn| switch (request_content) {
-            .func => |request_fn| {
-                if (checked_fn.args.len != request_fn.args.len) {
-                    Common.invariant("checked Monotype request related functions of different arity");
-                }
-                for (checked_fn.args, request_fn.args) |checked_arg, request_arg| {
-                    try relateCheckedMonoRequestNodeAt(graph, checked_arg, request_arg, seen);
-                }
-                try relateCheckedMonoRequestNodeAt(graph, checked_fn.ret, request_fn.ret, seen);
-                try graph.joinRelatedRequestContainer(checked_root, request_root);
-                return;
-            },
-            else => {},
-        },
-        .record => |checked_row| switch (request_content) {
-            .record => |request_row| {
-                if (checked_row.fields.len == request_row.fields.len) {
-                    for (checked_row.fields, request_row.fields) |checked_field, request_field| {
-                        if (checked_field.name != request_field.name) break;
-                    } else {
-                        for (checked_row.fields, request_row.fields) |checked_field, request_field| {
-                            try relateCheckedMonoRequestNodeAt(graph, checked_field.ty, request_field.ty, seen);
-                        }
-                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
-                        try graph.joinRelatedRequestContainer(checked_root, request_root);
-                        return;
-                    }
-                }
-            },
-            else => {},
-        },
-        .tag_union => |checked_row| switch (request_content) {
-            .tag_union => |request_row| {
-                if (checked_row.tags.len == request_row.tags.len) {
-                    for (checked_row.tags, request_row.tags) |checked_tag, request_tag| {
-                        if (checked_tag.name != request_tag.name or checked_tag.payloads.len != request_tag.payloads.len) break;
-                    } else {
-                        for (checked_row.tags, request_row.tags) |checked_tag, request_tag| {
-                            for (checked_tag.payloads, request_tag.payloads) |checked_payload, request_payload| {
-                                try relateCheckedMonoRequestNodeAt(graph, checked_payload, request_payload, seen);
-                            }
-                        }
-                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
-                        try graph.joinRelatedRequestContainer(checked_root, request_root);
-                        return;
-                    }
-                }
-            },
-            else => {},
-        },
-        else => {},
-    }
-    try graph.unify(checked_root, request_root);
-}
-
-fn sameNamedValueDefinition(left: anytype, right: anytype) bool {
-    return left.kind == right.kind and
-        sameTypeDef(left.def, right.def) and
-        left.builtin_owner == right.builtin_owner and
-        left.args.len == right.args.len;
+    return try graph.applyProducedTypeToRequest(checked_node, mono_node);
 }
 
 fn functionRequestNode(
@@ -1287,25 +1031,22 @@ fn functionRequestNode(
     request_args: []const NodeId,
     request_ret: NodeId,
 ) Allocator.Error!NodeId {
-    for (request_args) |request_arg| {
-        if (try graph.containsGeneratedPrivate(request_arg)) {
-            const request_fn = try graph.newNode(.{ .func = .{
-                .args = try graph.arena().dupe(NodeId, request_args),
-                .ret = request_ret,
-            } });
-            try graph.registerRequestSourceInterface(request_fn, source_fn);
-            return request_fn;
-        }
+    const source = try graph.functionNodes(source_fn);
+    if (source.args.len != request_args.len) {
+        Common.invariant("exact function request had different arity from its checked source");
     }
-    if (try graph.containsGeneratedPrivate(request_ret)) {
-        const request_fn = try graph.newNode(.{ .func = .{
-            .args = try graph.arena().dupe(NodeId, request_args),
-            .ret = request_ret,
-        } });
-        try graph.registerRequestSourceInterface(request_fn, source_fn);
-        return request_fn;
+    var changed = !graph.sameClass(source.ret, request_ret);
+    for (source.args, request_args) |source_arg, request_arg| {
+        if (!graph.sameClass(source_arg, request_arg)) changed = true;
     }
-    return source_fn;
+    if (!changed) return source_fn;
+
+    const request_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, request_args),
+        .ret = request_ret,
+    } });
+    try graph.registerRequestCheckedSource(request_fn, source_fn);
+    return request_fn;
 }
 
 fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
@@ -3958,8 +3699,8 @@ const Builder = struct {
             signature_relation == .independent_roots and
             template.target != .hosted)
         {
-            const public_request = source_ctx.graph.requestSourceInterface(request_fn_node) orelse request_fn_node;
-            try constrainDeferredTemplateTypeArguments(source_ctx.graph, root_node, public_request);
+            const checked_source = source_ctx.graph.requestCheckedSource(request_fn_node) orelse request_fn_node;
+            try constrainDeferredTemplateTypeArguments(source_ctx.graph, root_node, checked_source);
         } else {
             if (template.target == .hosted) {
                 try relateHostedFunctionRequestInterface(
@@ -3968,13 +3709,11 @@ const Builder = struct {
                     root_node,
                     request_fn_node,
                 );
-            } else if (try source_ctx.graph.containsGeneratedPrivate(request_fn_node)) {
-                if (source_ctx.graph.requestSourceInterface(request_fn_node)) |source_fn_node| {
+            } else {
+                if (source_ctx.graph.requestCheckedSource(request_fn_node)) |source_fn_node| {
                     try relateFunctionRequestInterface(source_ctx.graph, root_node, source_fn_node);
                 }
                 try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
-            } else {
-                try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
         if (!local_context_dependent and template.target != .hosted) {
@@ -3990,15 +3729,9 @@ const Builder = struct {
         }
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
-        // A generated-private request is the exact runtime interface owned by
-        // this specialization. The checked root remains the public interface
-        // used to instantiate dispatch relations, but lowering the body
-        // against it would discard the producer-supplied private backing from
-        // parameters and returns.
-        const body_fn_node = if (try source_ctx.graph.containsGeneratedPrivate(request_fn_node))
-            request_fn_node
-        else
-            root_node;
+        // The request is the exact runtime function type owned by this
+        // specialization; the checked root supplies substitution data only.
+        const body_fn_node = request_fn_node;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, body_fn_node);
         const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
@@ -5665,11 +5398,8 @@ const Builder = struct {
                 scope,
             );
         }
-        const request_contains_generated_private = try nested_ctx.graph.containsGeneratedPrivate(request_fn_node);
-        if (request_contains_generated_private) {
-            if (nested_ctx.graph.requestSourceInterface(request_fn_node)) |source_fn_node| {
-                try relateFunctionRequestInterface(nested_ctx.graph, root_node, source_fn_node);
-            }
+        if (nested_ctx.graph.requestCheckedSource(request_fn_node)) |source_fn_node| {
+            try relateFunctionRequestInterface(nested_ctx.graph, root_node, source_fn_node);
         }
         try relateFunctionRequestInterface(nested_ctx.graph, root_node, request_fn_node);
         const body_fn_node = request_fn_node;
@@ -5970,8 +5700,10 @@ const Builder = struct {
         };
         const restored_expr = body_draft.exprs.items[@intFromEnum(restored)];
         const restored_node = try restored_expr.ty.toGraphNode(graph);
-        try relateRequestComponent(graph, boundary.witness_node, restored_node);
-        try relateRequestComponent(graph, boundary.request_node, boundary.witness_node);
+        if (!graph.sameClass(boundary.witness_node, restored_node)) {
+            try graph.unify(boundary.witness_node, restored_node);
+        }
+        _ = try graph.applyProducedTypeToRequest(boundary.request_node, restored_node);
         const restored_proof = body_draft.expr_impossibility_proofs.items[@intFromEnum(restored)];
         body_draft.impossibility_proofs.items[@intFromEnum(boundary.proof_reservation)] =
             if (restored_proof) |proof| .{ .forward = proof } else .never;
@@ -13551,6 +13283,36 @@ const BodyContext = struct {
         return current;
     }
 
+    /// Rebuild a nominal constructor layer around an exact produced backing,
+    /// or return the exact structural backing directly. Transparent aliases do
+    /// not create runtime constructor layers.
+    fn producedConstructorNode(
+        self: *BodyContext,
+        request_node: NodeId,
+        produced_backing: NodeId,
+    ) Allocator.Error!NodeId {
+        const representation_node = self.constructorRepresentationNode(request_node);
+        const produced_node = switch (self.graph.content(representation_node)) {
+            .named => |named| blk: {
+                const backing = named.backing orelse
+                    Common.invariant("named constructor had no produced backing slot");
+                if (self.graph.sameClass(backing.node, produced_backing)) break :blk representation_node;
+                var produced_named = named;
+                produced_named.backing = .{
+                    .node = produced_backing,
+                    .use = backing.use,
+                    .authority = backing.authority,
+                };
+                break :blk try self.graph.newNode(.{ .named = produced_named });
+            },
+            else => produced_backing,
+        };
+        if (!self.graph.sameClass(request_node, produced_node)) {
+            _ = try self.graph.applyProducedTypeToRequest(request_node, produced_node);
+        }
+        return produced_node;
+    }
+
     /// Pattern counterpart to `addConstructorExpr`, used by compiler-generated
     /// exhaustive matches whose constructor pattern has no checked source node.
     fn addConstructorPat(self: *BodyContext, ty: Type.TypeId, data: BodyPatData) Allocator.Error!DraftPatId {
@@ -15157,21 +14919,8 @@ const BodyContext = struct {
         }
     }
 
-    fn constrainTypeToCell(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        cell: DraftTypeCell,
-    ) Allocator.Error!void {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-        defer timing_scope.end();
-        try self.graph.unify(try self.instNode(checked_ty), try cell.toGraphNode(self.graph));
-    }
-
-    /// Relate a checked public interface to an exact producer-owned value
-    /// representation without allowing that private representation to replace
-    /// the checked type node shared by other source occurrences. A binding's
-    /// draft cell retains the private node directly; the fresh checked node is
-    /// only its source-level interface proof.
+    /// Apply a value's exact produced type to a fresh occurrence of its checked
+    /// substitution mapping. The value cell remains the runtime authority.
     fn constrainCheckedInterfaceToCell(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -15180,11 +14929,7 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
         const value_node = try cell.toGraphNode(self.graph);
-        if (try self.graph.containsGeneratedPrivate(value_node)) {
-            try self.graph.relateOpaqueInterface(try self.freshInstNode(checked_ty), value_node);
-        } else {
-            try self.constrainTypeToCell(checked_ty, cell);
-        }
+        _ = try self.graph.applyProducedTypeToRequest(try self.freshInstNode(checked_ty), value_node);
     }
 
     /// Constrain two checked types from (possibly different) instantiation
@@ -15822,8 +15567,7 @@ const BodyContext = struct {
         for (relations) |relation| {
             if (!dispatchRefBelongsToScope(relation.scope, scope_id)) continue;
             switch (relation.data) {
-                .type_equality => |equality| try relateRequestComponent(
-                    self.graph,
+                .type_equality => |equality| try self.graph.unify(
                     try self.instNode(equality.left),
                     try self.instNode(equality.right),
                 ),
@@ -15833,8 +15577,7 @@ const BodyContext = struct {
                         try relateFunctionRequestInterface(self.graph, fn_node, scope_root_node);
                     }
                     const function = try self.graph.functionNodes(fn_node);
-                    try relateRequestComponent(
-                        self.graph,
+                    try self.graph.unify(
                         function.ret,
                         try self.instNode(procedure.body_ret_ty),
                     );
@@ -15845,16 +15588,16 @@ const BodyContext = struct {
                     else
                         call.callable_ty;
                     const fn_node = try self.instNode(source_fn_ty);
-                    try relateRequestComponent(self.graph, fn_node, try self.instNode(call.callee_ty));
+                    try self.graph.unify(fn_node, try self.instNode(call.callee_ty));
                     const function = try self.graph.functionNodes(fn_node);
                     const arg_tys = self.view.templates.specializationRelationTypes(call.args);
                     if (function.args.len != arg_tys.len) {
                         Common.invariant("checked specialization call relation changed arity");
                     }
                     for (function.args, arg_tys) |arg_node, arg_ty| {
-                        try relateRequestComponent(self.graph, arg_node, try self.instNode(arg_ty));
+                        try self.graph.unify(arg_node, try self.instNode(arg_ty));
                     }
-                    try relateRequestComponent(self.graph, function.ret, try self.instNode(call.ret_ty));
+                    try self.graph.unify(function.ret, try self.instNode(call.ret_ty));
                     if (call.direct_target) |target| {
                         try pending_dependencies.append(self.allocator, .{
                             .target = target,
@@ -16121,18 +15864,11 @@ const BodyContext = struct {
         const declared_ret_node = try ret_cell.toGraphNode(self.graph);
         const body_ret_cell = self.exprTypeCell(body);
         const body_ret_node = try body_ret_cell.toGraphNode(self.graph);
-        const produced_ret_cell = if (self.graph.sameClass(declared_ret_node, body_ret_node))
-            ret_cell
-        else if (try self.resultCompletesRequest(declared_ret_node, body_ret_node) or
-            try self.graph.containsGeneratedPrivate(body_ret_node) or
-            self.exprCarriesFunctionDefinitionEvidence(body))
-            body_ret_cell
-        else blk: {
-            try relateRequestComponent(self.graph, declared_ret_node, body_ret_node);
-            break :blk ret_cell;
-        };
-        self.draft.exprs.items[@intFromEnum(body)].ty = produced_ret_cell;
-        return .{ .args = .empty(), .body = body, .ret = produced_ret_cell };
+        if (!self.graph.sameClass(declared_ret_node, body_ret_node)) {
+            _ = try self.graph.applyProducedTypeToRequest(declared_ret_node, body_ret_node);
+        }
+        self.draft.exprs.items[@intFromEnum(body)].ty = body_ret_cell;
+        return .{ .args = .empty(), .body = body, .ret = body_ret_cell };
     }
 
     fn instantiateTemplateDispatchRelations(
@@ -16309,598 +16045,20 @@ const BodyContext = struct {
         return expr;
     }
 
-    const RequestCompletion = enum {
-        unchanged,
-        completed,
-        mismatch,
-    };
-
-    const RequestCompletionPair = struct {
-        request: NodeId,
-        produced: NodeId,
-    };
-
-    const ProducedValuePair = struct {
-        request: NodeId,
-        produced: NodeId,
-    };
-
-    const ProducedValueRowKind = enum {
-        record,
-        tag_union,
-    };
-
-    fn resultCompletesRequest(
-        self: *BodyContext,
-        request_ret_node: NodeId,
-        produced_ret_node: NodeId,
-    ) Allocator.Error!bool {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-        defer timing_scope.end();
-        var visiting = std.AutoHashMap(RequestCompletionPair, void).init(self.allocator);
-        defer visiting.deinit();
-        return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting)) == .completed;
-    }
-
-    fn relateCheckedNodeToProducedValue(
-        self: *BodyContext,
-        checked_node: NodeId,
-        produced_node: NodeId,
-    ) Allocator.Error!NodeId {
-        var visiting = std.AutoHashMap(ProducedValuePair, void).init(self.allocator);
-        defer visiting.deinit();
-        return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting);
-    }
-
-    fn relateCheckedNodeToProducedValueInner(
-        self: *BodyContext,
-        checked_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!NodeId {
-        const checked_root = self.graph.rootNode(checked_node);
-        const produced_root = self.graph.rootNode(produced_node);
-        if (checked_root == produced_root) return checked_node;
-
-        const pair = ProducedValuePair{ .request = checked_root, .produced = produced_root };
-        const entry = try visiting.getOrPut(pair);
-        if (entry.found_existing) return produced_node;
-        defer _ = visiting.remove(pair);
-
-        if (try self.producedRuntimeValueIsProvenUninhabited(produced_root)) return produced_node;
-        const checked_private = try self.graph.containsGeneratedPrivate(checked_root);
-        const produced_private = try self.graph.containsGeneratedPrivate(produced_root);
-        if (checked_private or produced_private) {
-            try relateRequestComponent(self.graph, checked_root, produced_root);
-            return if (produced_private) produced_node else checked_node;
-        }
-        if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
-        if (try self.relateMatchingProducedValueContainers(checked_root, produced_root, visiting)) |witness| {
-            return witness;
-        }
-        try self.graph.unify(checked_root, produced_root);
-        return checked_node;
-    }
-
-    fn producedValueHasExplicitRepresentationEvidence(
-        self: *BodyContext,
-        checked_node: NodeId,
-        produced_node: NodeId,
-    ) Allocator.Error!bool {
-        var visiting = std.AutoHashMap(ProducedValuePair, void).init(self.allocator);
-        defer visiting.deinit();
-        return try self.producedValueHasExplicitRepresentationEvidenceInner(
-            checked_node,
-            produced_node,
-            &visiting,
-        );
-    }
-
-    fn producedValueHasExplicitRepresentationEvidenceInner(
-        self: *BodyContext,
-        checked_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!bool {
-        const checked_root = self.graph.rootNode(checked_node);
-        const produced_root = self.graph.rootNode(produced_node);
-        if (checked_root == produced_root) return false;
-        if (try self.graph.containsGeneratedPrivate(checked_root)) return true;
-        if (try self.graph.containsGeneratedPrivate(produced_root)) return true;
-        if (try self.resultCompletesRequest(checked_root, produced_root)) return true;
-
-        const pair = ProducedValuePair{ .request = checked_root, .produced = produced_root };
-        const entry = try visiting.getOrPut(pair);
-        if (entry.found_existing) return false;
-        defer _ = visiting.remove(pair);
-
-        const checked_content = self.graph.content(checked_root);
-        const produced_content = self.graph.content(produced_root);
-        switch (checked_content) {
-            .named => |checked_named| switch (produced_content) {
-                .named => |produced_named| {
-                    if (!sameNamedValueDefinition(checked_named, produced_named)) return false;
-                    const checked_backing = checked_named.backing orelse return false;
-                    const produced_backing = produced_named.backing orelse return false;
-                    return try self.producedValueHasExplicitRepresentationEvidenceInner(
-                        checked_backing.node,
-                        produced_backing.node,
-                        visiting,
-                    );
-                },
-                else => return false,
-            },
-            .func => |checked_fn| switch (produced_content) {
-                .func => |produced_fn| return checked_fn.args.len == produced_fn.args.len,
-                else => return false,
-            },
-            .list => |checked_elem| switch (produced_content) {
-                .list => |produced_elem| return try self.producedValueHasExplicitRepresentationEvidenceInner(
-                    checked_elem,
-                    produced_elem,
-                    visiting,
-                ),
-                else => return false,
-            },
-            .box => |checked_elem| switch (produced_content) {
-                .box => |produced_elem| return try self.producedValueHasExplicitRepresentationEvidenceInner(
-                    checked_elem,
-                    produced_elem,
-                    visiting,
-                ),
-                else => return false,
-            },
-            .tuple => |checked_items| switch (produced_content) {
-                .tuple => |produced_items| {
-                    if (checked_items.len != produced_items.len) return false;
-                    var has_evidence = false;
-                    for (checked_items, produced_items) |checked_item, produced_item| {
-                        if (self.graph.sameClass(checked_item, produced_item)) continue;
-                        if (!try self.producedValueHasExplicitRepresentationEvidenceInner(
-                            checked_item,
-                            produced_item,
-                            visiting,
-                        )) return false;
-                        has_evidence = true;
-                    }
-                    return has_evidence;
-                },
-                else => return false,
-            },
-            .record => |checked_row| switch (produced_content) {
-                .record => |produced_row| return try self.recordValueHasExplicitRepresentationEvidence(
-                    checked_row,
-                    produced_row,
-                    visiting,
-                ),
-                else => return false,
-            },
-            .tag_union => |checked_row| switch (produced_content) {
-                .tag_union => |produced_row| return try self.tagValueHasExplicitRepresentationEvidence(
-                    checked_row,
-                    produced_row,
-                    visiting,
-                ),
-                else => return false,
-            },
-            else => return false,
-        }
-    }
-
-    fn recordValueHasExplicitRepresentationEvidence(
-        self: *BodyContext,
-        checked_row: anytype,
-        produced_row: anytype,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!bool {
-        if (checked_row.fields.len != produced_row.fields.len) return false;
-        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record)) return false;
-        var has_evidence = false;
-        for (checked_row.fields, produced_row.fields) |checked_field, produced_field| {
-            if (checked_field.name != produced_field.name) return false;
-            if (self.graph.sameClass(checked_field.ty, produced_field.ty)) continue;
-            if (!try self.producedValueHasExplicitRepresentationEvidenceInner(
-                checked_field.ty,
-                produced_field.ty,
-                visiting,
-            )) return false;
-            has_evidence = true;
-        }
-        return has_evidence;
-    }
-
-    fn tagValueHasExplicitRepresentationEvidence(
-        self: *BodyContext,
-        checked_row: anytype,
-        produced_row: anytype,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!bool {
-        if (checked_row.tags.len != produced_row.tags.len) return false;
-        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union)) return false;
-        var has_evidence = false;
-        for (checked_row.tags, produced_row.tags) |checked_tag, produced_tag| {
-            if (checked_tag.name != produced_tag.name or checked_tag.payloads.len != produced_tag.payloads.len) {
-                return false;
-            }
-            for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
-                if (self.graph.sameClass(checked_payload, produced_payload)) continue;
-                if (!try self.producedValueHasExplicitRepresentationEvidenceInner(
-                    checked_payload,
-                    produced_payload,
-                    visiting,
-                )) return false;
-                has_evidence = true;
-            }
-        }
-        return has_evidence;
-    }
-
-    fn relateMatchingProducedValueContainers(
-        self: *BodyContext,
-        checked_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!?NodeId {
-        const checked_content = self.graph.content(checked_node);
-        const produced_content = self.graph.content(produced_node);
-        switch (checked_content) {
-            .named => |checked_named| switch (produced_content) {
-                .named => |produced_named| {
-                    if (!sameNamedValueDefinition(checked_named, produced_named)) return null;
-                    const checked_backing = checked_named.backing orelse return null;
-                    const produced_backing = produced_named.backing orelse return null;
-                    const backing = try self.relateCheckedNodeToProducedValueInner(
-                        checked_backing.node,
-                        produced_backing.node,
-                        visiting,
-                    );
-                    if (self.graph.sameClass(backing, produced_backing.node)) return produced_node;
-                    var witness = produced_named;
-                    witness.backing = .{
-                        .node = backing,
-                        .use = produced_backing.use,
-                        .authority = produced_backing.authority,
-                    };
-                    return try self.graph.newNode(.{ .named = witness });
-                },
-                else => return null,
-            },
-            .list => |checked_elem| switch (produced_content) {
-                .list => |produced_elem| {
-                    const elem = try self.relateCheckedNodeToProducedValueInner(checked_elem, produced_elem, visiting);
-                    if (self.graph.sameClass(elem, produced_elem)) return produced_node;
-                    return try self.graph.newNode(.{ .list = elem });
-                },
-                else => return null,
-            },
-            .box => |checked_elem| switch (produced_content) {
-                .box => |produced_elem| {
-                    const elem = try self.relateCheckedNodeToProducedValueInner(checked_elem, produced_elem, visiting);
-                    if (self.graph.sameClass(elem, produced_elem)) return produced_node;
-                    return try self.graph.newNode(.{ .box = elem });
-                },
-                else => return null,
-            },
-            .tuple => |checked_items| switch (produced_content) {
-                .tuple => |produced_items| {
-                    if (checked_items.len != produced_items.len) return null;
-                    const items = try self.graph.arena().alloc(NodeId, produced_items.len);
-                    var changed = false;
-                    for (checked_items, produced_items, items) |checked_item, produced_item, *out| {
-                        const item = try self.relateCheckedNodeToProducedValueInner(checked_item, produced_item, visiting);
-                        out.* = item;
-                        changed = changed or !self.graph.sameClass(item, produced_item);
-                    }
-                    if (!changed) return produced_node;
-                    return try self.graph.newNode(.{ .tuple = items });
-                },
-                else => return null,
-            },
-            .func => |checked_fn| switch (produced_content) {
-                .func => |produced_fn| {
-                    if (checked_fn.args.len != produced_fn.args.len) return null;
-                    return checked_node;
-                },
-                else => return null,
-            },
-            .record => |checked_row| switch (produced_content) {
-                .record => |produced_row| {
-                    return try self.producedRecordValueWitness(checked_row, produced_row, produced_node, visiting);
-                },
-                else => return null,
-            },
-            .tag_union => |checked_row| switch (produced_content) {
-                .tag_union => |produced_row| {
-                    return try self.producedTagValueWitness(checked_row, produced_row, produced_node, visiting);
-                },
-                else => return null,
-            },
-            else => return null,
-        }
-    }
-
-    fn rowExtsAreValueCompatible(self: *BodyContext, checked_ext: NodeId, produced_ext: NodeId, kind: ProducedValueRowKind) bool {
-        const checked_root = self.graph.rootNode(checked_ext);
-        const produced_root = self.graph.rootNode(produced_ext);
-        if (checked_root == produced_root) return true;
-        return switch (self.graph.content(checked_root)) {
-            .empty_record => kind == .record and self.graph.content(produced_root) == .empty_record,
-            .empty_tag_union => kind == .tag_union and self.graph.content(produced_root) == .empty_tag_union,
-            else => false,
-        };
-    }
-
-    fn producedRecordValueWitness(
-        self: *BodyContext,
-        checked_row: anytype,
-        produced_row: anytype,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!?NodeId {
-        if (checked_row.fields.len != produced_row.fields.len) return null;
-        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record)) return null;
-        const fields = try self.graph.arena().alloc(InstField, produced_row.fields.len);
-        var changed = false;
-        for (checked_row.fields, produced_row.fields, fields) |checked_field, produced_field, *out| {
-            if (checked_field.name != produced_field.name) return null;
-            const ty = try self.relateCheckedNodeToProducedValueInner(checked_field.ty, produced_field.ty, visiting);
-            out.* = .{ .name = produced_field.name, .ty = ty };
-            changed = changed or !self.graph.sameClass(ty, produced_field.ty);
-        }
-        if (!changed) return produced_node;
-        return try self.graph.newNode(.{ .record = .{
-            .fields = fields,
-            .ext = self.graph.rootNode(produced_row.ext),
-        } });
-    }
-
-    fn producedTagValueWitness(
-        self: *BodyContext,
-        checked_row: anytype,
-        produced_row: anytype,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!?NodeId {
-        if (checked_row.tags.len != produced_row.tags.len) return null;
-        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union)) return null;
-        const tags = try self.graph.arena().alloc(InstTag, produced_row.tags.len);
-        var changed = false;
-        for (checked_row.tags, produced_row.tags, tags) |checked_tag, produced_tag, *out| {
-            if (checked_tag.name != produced_tag.name or checked_tag.payloads.len != produced_tag.payloads.len) return null;
-            const payloads = try self.graph.arena().alloc(NodeId, produced_tag.payloads.len);
-            for (checked_tag.payloads, produced_tag.payloads, payloads) |checked_payload, produced_payload, *payload_out| {
-                const payload = try self.relateCheckedNodeToProducedValueInner(checked_payload, produced_payload, visiting);
-                payload_out.* = payload;
-                changed = changed or !self.graph.sameClass(payload, produced_payload);
-            }
-            out.* = .{
-                .name = produced_tag.name,
-                .checked_name = produced_tag.checked_name,
-                .payloads = payloads,
-            };
-        }
-        if (!changed) return produced_node;
-        return try self.graph.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = self.graph.rootNode(produced_row.ext),
-        } });
-    }
-
-    fn requestCompletionRelation(
-        self: *BodyContext,
-        request_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!RequestCompletion {
-        const request_root = self.graph.rootNode(request_node);
-        const produced_root = self.graph.rootNode(produced_node);
-        if (request_root == produced_root) return .unchanged;
-        if (try self.nodeIsProvenUninhabited(request_root) and
-            !try self.nodeIsProvenUninhabited(produced_root))
-        {
-            return .completed;
-        }
-
-        const pair = RequestCompletionPair{ .request = request_root, .produced = produced_root };
-        const entry = try visiting.getOrPut(pair);
-        if (entry.found_existing) return .unchanged;
-        defer _ = visiting.remove(pair);
-
-        if (try self.producedPublicNamedBackingCompletion(request_root, produced_root, visiting)) |relation| {
-            return relation;
-        }
-        if (try self.requestPublicNamedBackingCompletion(request_root, produced_root, visiting)) |relation| {
-            return relation;
-        }
-
-        return switch (self.graph.content(request_root)) {
-            .primitive => |request_primitive| switch (self.graph.content(produced_root)) {
-                .primitive => |produced_primitive| if (request_primitive == produced_primitive) .unchanged else .mismatch,
-                else => .mismatch,
-            },
-            .list => |request_elem| switch (self.graph.content(produced_root)) {
-                .list => |produced_elem| try self.requestCompletionRelation(request_elem, produced_elem, visiting),
-                else => .mismatch,
-            },
-            .box => |request_elem| switch (self.graph.content(produced_root)) {
-                .box => |produced_elem| try self.requestCompletionRelation(request_elem, produced_elem, visiting),
-                else => .mismatch,
-            },
-            .tuple => |request_items| switch (self.graph.content(produced_root)) {
-                .tuple => |produced_items| try self.requestCompletionSliceRelation(request_items, produced_items, visiting),
-                else => .mismatch,
-            },
-            .func => |request_fn| switch (self.graph.content(produced_root)) {
-                .func => |produced_fn| try self.requestCompletionFunctionRelation(request_fn, produced_fn, visiting),
-                else => .mismatch,
-            },
-            .tag_union => |request_row| switch (self.graph.content(produced_root)) {
-                .tag_union => |produced_row| try self.requestCompletionTagRowRelation(request_row, produced_row, visiting),
-                .empty_tag_union => .mismatch,
-                else => .mismatch,
-            },
-            .record => |request_row| switch (self.graph.content(produced_root)) {
-                .record => |produced_row| try self.requestCompletionRecordRelation(request_row, produced_row, visiting),
-                .empty_record => .mismatch,
-                else => .mismatch,
-            },
-            .empty_tag_union => switch (self.graph.content(produced_root)) {
-                .empty_tag_union => .unchanged,
-                else => .mismatch,
-            },
-            .empty_record => switch (self.graph.content(produced_root)) {
-                .empty_record => .unchanged,
-                else => .mismatch,
-            },
-            .erased => |request_digest| switch (self.graph.content(produced_root)) {
-                .erased => |produced_digest| if (std.mem.eql(u8, request_digest.bytes[0..], produced_digest.bytes[0..])) .unchanged else .mismatch,
-                else => .mismatch,
-            },
-            .zst => switch (self.graph.content(produced_root)) {
-                .zst => .unchanged,
-                else => .mismatch,
-            },
-            .named,
-            .unresolved,
-            .redirect,
-            => .mismatch,
-        };
-    }
-
-    fn producedPublicNamedBackingCompletion(
-        self: *BodyContext,
-        request_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!?RequestCompletion {
-        const backing = self.checkedPublicInspectableBacking(produced_node) orelse return null;
-
-        return switch (try self.requestCompletionRelation(request_node, backing.node, visiting)) {
-            .unchanged, .completed => .completed,
-            .mismatch => .mismatch,
-        };
-    }
-
-    fn requestPublicNamedBackingCompletion(
-        self: *BodyContext,
-        request_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!?RequestCompletion {
-        const backing = self.checkedPublicInspectableBacking(request_node) orelse return null;
-
-        return switch (try self.requestCompletionRelation(backing.node, produced_node, visiting)) {
-            .unchanged, .completed => .completed,
-            .mismatch => .mismatch,
-        };
-    }
-
-    fn checkedPublicInspectableBacking(self: *BodyContext, node: NodeId) ?InstBacking {
-        const named = switch (self.graph.content(node)) {
-            .named => |named| named,
-            else => return null,
-        };
-        const backing = named.backing orelse return null;
-        if (backing.authority != .checked_public or backing.use != .inspectable) return null;
-        return backing;
-    }
-
-    fn requestCompletionSliceRelation(
-        self: *BodyContext,
-        request_items: []const NodeId,
-        produced_items: []const NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!RequestCompletion {
-        if (request_items.len != produced_items.len) return .mismatch;
-        var relation: RequestCompletion = .unchanged;
-        for (request_items, produced_items) |request_item, produced_item| {
-            switch (try self.requestCompletionRelation(request_item, produced_item, visiting)) {
-                .unchanged => {},
-                .completed => relation = .completed,
-                .mismatch => return .mismatch,
-            }
-        }
-        return relation;
-    }
-
-    fn requestCompletionFunctionRelation(
-        self: *BodyContext,
-        request_fn: anytype,
-        produced_fn: anytype,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!RequestCompletion {
-        if (request_fn.args.len != produced_fn.args.len) return .mismatch;
-        for (request_fn.args, produced_fn.args) |request_arg, produced_arg| {
-            if (!self.graph.sameClass(request_arg, produced_arg)) return .mismatch;
-        }
-        return try self.requestCompletionRelation(request_fn.ret, produced_fn.ret, visiting);
-    }
-
-    fn requestCompletionTagRowRelation(
-        self: *BodyContext,
-        request_row: anytype,
-        produced_row: anytype,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!RequestCompletion {
-        if ((try self.requestCompletionRelation(request_row.ext, produced_row.ext, visiting)) != .unchanged) {
-            return .mismatch;
-        }
-        if (request_row.tags.len != produced_row.tags.len) return .mismatch;
-        var relation: RequestCompletion = .unchanged;
-        for (request_row.tags, produced_row.tags) |request_tag, produced_tag| {
-            if (request_tag.name != produced_tag.name) return .mismatch;
-            switch (try self.requestCompletionSliceRelation(request_tag.payloads, produced_tag.payloads, visiting)) {
-                .unchanged => {},
-                .completed => relation = .completed,
-                .mismatch => return .mismatch,
-            }
-        }
-        return relation;
-    }
-
-    fn requestCompletionRecordRelation(
-        self: *BodyContext,
-        request_row: anytype,
-        produced_row: anytype,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!RequestCompletion {
-        if ((try self.requestCompletionRelation(request_row.ext, produced_row.ext, visiting)) != .unchanged) {
-            return .mismatch;
-        }
-        if (request_row.fields.len != produced_row.fields.len) return .mismatch;
-        var relation: RequestCompletion = .unchanged;
-        for (request_row.fields, produced_row.fields) |request_field, produced_field| {
-            if (request_field.name != produced_field.name) return .mismatch;
-            switch (try self.requestCompletionRelation(request_field.ty, produced_field.ty, visiting)) {
-                .unchanged => {},
-                .completed => relation = .completed,
-                .mismatch => return .mismatch,
-            }
-        }
-        return relation;
-    }
-
     fn completedFunctionNodeForLoweredRet(
         self: *BodyContext,
         fn_node: NodeId,
         lowered_ret: DraftTypeCell,
-        has_explicit_value_witness: bool,
+        _: bool,
     ) Allocator.Error!NodeId {
         const function = try self.graph.functionNodes(fn_node);
         const lowered_ret_node = try lowered_ret.toGraphNode(self.graph);
         if (self.graph.sameClass(function.ret, lowered_ret_node)) return fn_node;
-        const completes_request = try self.resultCompletesRequest(function.ret, lowered_ret_node);
-        const contains_generated_private = try self.graph.containsGeneratedPrivate(lowered_ret_node);
-        if (!completes_request and !contains_generated_private and !has_explicit_value_witness) {
-            try relateRequestComponent(self.graph, function.ret, lowered_ret_node);
-            return fn_node;
-        }
+        _ = try self.graph.applyProducedTypeToRequest(function.ret, lowered_ret_node);
         const completed_fn = try self.graphFunctionNode(function.args, lowered_ret_node);
-        if (try self.graph.containsGeneratedPrivate(completed_fn) and
-            self.graph.requestSourceInterface(completed_fn) == null)
-        {
-            const source_interface = self.graph.requestSourceInterface(fn_node) orelse fn_node;
-            try self.graph.registerRequestSourceInterface(completed_fn, source_interface);
+        if (self.graph.requestCheckedSource(completed_fn) == null) {
+            const checked_source = self.graph.requestCheckedSource(fn_node) orelse fn_node;
+            try self.graph.registerRequestCheckedSource(completed_fn, checked_source);
         }
         return completed_fn;
     }
@@ -16984,7 +16142,7 @@ const BodyContext = struct {
 
         for (checked_args, arg_nodes, 0..) |pattern_id, arg_node, i| {
             const arg_cell = DraftTypeCell.fromGraphNode(arg_node);
-            try relateRequestComponent(
+            try applyProducedTypeToRequest(
                 self.graph,
                 try self.instNode(self.view.bodies.pattern(pattern_id).ty),
                 arg_node,
@@ -17076,15 +16234,10 @@ const BodyContext = struct {
         }
 
         const body_ret_node = try self.exprTypeCell(body).toGraphNode(self.graph);
-        const produced_ret_cell = if (self.graph.sameClass(declared_ret_node, body_ret_node))
-            ret_cell
-        else if (try self.resultCompletesRequest(declared_ret_node, body_ret_node) or
-            try self.graph.containsGeneratedPrivate(body_ret_node))
-            DraftTypeCell.fromGraphNode(body_ret_node)
-        else blk: {
-            try relateRequestComponent(self.graph, declared_ret_node, body_ret_node);
-            break :blk ret_cell;
-        };
+        if (!self.graph.sameClass(declared_ret_node, body_ret_node)) {
+            _ = try self.graph.applyProducedTypeToRequest(declared_ret_node, body_ret_node);
+        }
+        const produced_ret_cell = DraftTypeCell.fromGraphNode(body_ret_node);
         self.draft.exprs.items[@intFromEnum(body)].ty = produced_ret_cell;
 
         return .{
@@ -17557,7 +16710,7 @@ const BodyContext = struct {
         return switch (template.state) {
             .stored_const => |stored| blk: {
                 const stored_node = try self.storedConstRootTypeNode(self.view, stored, entry.checked_type);
-                try relateRequestComponent(self.graph, request_node, stored_node);
+                try applyProducedTypeToRequest(self.graph, request_node, stored_node);
                 const saved_loc = self.builder.program.current_loc;
                 defer self.builder.program.current_loc = saved_loc;
                 const saved_region = self.builder.program.current_region;
@@ -17836,10 +16989,6 @@ const BodyContext = struct {
         return self.nodeIsProvenUninhabitedInner(node, .inspectable_only);
     }
 
-    fn producedRuntimeValueIsProvenUninhabited(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        return self.nodeIsProvenUninhabitedInner(node, .runtime_layout);
-    }
-
     fn deferredInspectHasProvenUninhabitedValueGuard(
         self: *BodyContext,
         boundary: DraftDeferredInspect,
@@ -18113,40 +17262,14 @@ const BodyContext = struct {
         const lowered = try self.lowerCall(checked_ret_ty, call);
         const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
         const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);
-        var result_request_node = checked_ret_node;
         if (!self.graph.sameClass(ret_node, checked_ret_node)) {
-            const public_ret = if (try self.graph.containsGeneratedPrivate(checked_ret_node))
-                try self.freshInstNode(checked_ret_ty)
-            else
-                checked_ret_node;
-            result_request_node = public_ret;
-            if (!try self.resultCompletesRequest(public_ret, ret_node) or
-                try self.graph.containsGeneratedPrivate(ret_node))
-            {
-                if (try self.graph.containsGeneratedPrivate(ret_node))
-                    try relateRequestComponent(self.graph, public_ret, ret_node)
-                else
-                    _ = try self.relateCheckedNodeToProducedValue(public_ret, ret_node);
-            }
+            _ = try self.graph.applyProducedTypeToRequest(checked_ret_node, ret_node);
         }
         const expr = try self.addExprWithTypeCell(
-            try self.producedResultCell(result_request_node, lowered.ret_ty),
+            lowered.ret_ty,
             lowered.data,
         );
         return expr;
-    }
-
-    fn producedResultCell(
-        self: *BodyContext,
-        request_node: NodeId,
-        produced_cell: DraftTypeCell,
-    ) Allocator.Error!DraftTypeCell {
-        const produced_node = try produced_cell.toGraphNode(self.graph);
-        return if (try self.resultCompletesRequest(request_node, produced_node) or
-            try self.graph.containsGeneratedPrivate(produced_node))
-            produced_cell
-        else
-            DraftTypeCell.fromGraphNode(try self.relateCheckedNodeToProducedValue(request_node, produced_node));
     }
 
     fn checkedFunctionType(self: *BodyContext, checked_fn_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
@@ -18336,9 +17459,7 @@ const BodyContext = struct {
             expected_ret_ty,
             null,
         );
-        if (try self.graph.containsGeneratedPrivate(callable.ret)) {
-            self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(callable.ret);
-        }
+        self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(callable.ret);
         return lowered;
     }
 
@@ -18606,7 +17727,7 @@ const BodyContext = struct {
             const active = self.draft.active_callable_eval_bindings.items[index];
             if (!moduleBytesEqual(active.module.bytes, view.key.bytes) or active.root != root_id) continue;
 
-            try relateRequestComponent(self.graph, active.request_node, request_fn_node);
+            try self.graph.unify(active.request_node, request_fn_node);
             self.draft.active_callable_eval_bindings.items[index].used = true;
             return try self.addExprWithTypeCell(
                 DraftTypeCell.fromGraphNode(request_fn_node),
@@ -18672,8 +17793,7 @@ const BodyContext = struct {
                 continue;
             }
 
-            try relateRequestComponent(
-                self.graph,
+            try self.graph.unify(
                 try active.cell.toGraphNode(self.graph),
                 try request_cell.toGraphNode(self.graph),
             );
@@ -18718,10 +17838,9 @@ const BodyContext = struct {
                 cursor = existing.previous_same_address;
                 continue;
             }
-            try relateRequestComponent(
-                self.graph,
-                try self.exprTypeCell(existing.expr).toGraphNode(self.graph),
+            _ = try self.graph.applyProducedTypeToRequest(
                 try request_cell.toGraphNode(self.graph),
+                try self.exprTypeCell(existing.expr).toGraphNode(self.graph),
             );
             return existing.expr;
         }
@@ -20033,7 +19152,7 @@ const BodyContext = struct {
                 } };
             }
         };
-        return try self.graph.addRecursiveNode(Context{
+        const generated = try self.graph.addRecursiveNode(Context{
             .body = self,
             .public_source = public_source,
             .item_node = public_named.args[0],
@@ -20042,6 +19161,8 @@ const BodyContext = struct {
             .kind = kind,
             .mint_depth = mint_depth,
         }, Context.fill);
+        try self.graph.registerGeneratedIterator(generated);
+        return generated;
     }
 
     const max_minted_iterator_chain_depth: u8 = 16;
@@ -20141,11 +19262,13 @@ const BodyContext = struct {
                 } };
             }
         };
-        return try self.graph.addRecursiveNode(Context{
+        const generated = try self.graph.addRecursiveNode(Context{
             .body = self,
             .item_node = item_node,
             .public_source = public_source,
         }, Context.fill);
+        try self.graph.registerGeneratedIterator(generated);
+        return generated;
     }
 
     fn generatedIteratorBackingNode(
@@ -25314,7 +24437,9 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
         const local_node = try cell.toGraphNode(self.graph);
-        try relateRequestComponent(self.graph, local_node, value_node);
+        if (!self.graph.sameClass(local_node, value_node)) {
+            try self.graph.unify(local_node, value_node);
+        }
         const local_expr = try self.addExprWithTypeCell(cell, .{ .local = local });
         const stmt = try self.addStmt(.{ .let_ = .{
             .pat = try self.addPatWithTypeCell(cell, .{ .bind = local }),
@@ -25400,9 +24525,9 @@ const BodyContext = struct {
             );
             const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
             if (iterator_procedure) |procedure| {
-                const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
+                const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
                 if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
-                    try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
+                    try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
                     try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                     fn_node = private_fn_node;
                 }
@@ -25628,9 +24753,9 @@ const BodyContext = struct {
             if (!self.sameType(expected, fn_data.ret)) return null;
         }
         for (checked_args) |checked_arg| {
-            if (try self.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
-                if (try self.graph.containsGeneratedPrivate(evidence_node)) return null;
-            }
+            const evidence_node = (try self.callArgumentEvidenceNode(checked_arg, null)) orelse continue;
+            const checked_node = try self.freshInstNode(self.view.bodies.expr(checked_arg).ty);
+            if (!self.graph.sameClass(checked_node, evidence_node)) return null;
         }
         return fn_ty;
     }
@@ -25722,12 +24847,8 @@ const BodyContext = struct {
         };
     }
 
-    /// Unify a callee formal with the caller's checked argument type. The
-    /// checked type's cached cell may already carry a generated-private
-    /// producer representation (e.g. a list literal of minted iterators), and
-    /// private content never enters ordinary public unification: the formal
-    /// gets a fresh public interface related opaquely, and the private node
-    /// itself becomes the request argument.
+    /// Apply the caller's exact argument cell to a callee formal and return the
+    /// exact argument as specialization input.
     fn unifyFormalWithCallerArgNode(
         self: *BodyContext,
         caller: *BodyContext,
@@ -25735,14 +24856,8 @@ const BodyContext = struct {
         arg_ty: checked.CheckedTypeId,
     ) Allocator.Error!NodeId {
         const arg_node = try caller.instNode(arg_ty);
-        if (try self.graph.containsGeneratedPrivate(arg_node)) {
-            const public_node = try caller.freshInstNode(arg_ty);
-            try self.graph.relateOpaqueInterface(public_node, arg_node);
-            try relateRequestComponent(self.graph, formal_node, public_node);
-            return arg_node;
-        }
-        try relateRequestComponent(self.graph, formal_node, arg_node);
-        return formal_node;
+        _ = try self.graph.applyProducedTypeToRequest(formal_node, arg_node);
+        return arg_node;
     }
 
     fn instantiateCallNodeFromCallerAtNode(
@@ -25770,16 +24885,12 @@ const BodyContext = struct {
         for (fn_graph.args, checked_args, 0..) |formal_node, checked_arg, index| {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
             if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
-                if (try self.graph.containsGeneratedPrivate(evidence_node)) {
-                    const public_node = try caller.freshInstNode(arg_ty);
-                    try self.graph.relateOpaqueInterface(public_node, evidence_node);
-                    try relateRequestComponent(self.graph, formal_node, public_node);
-                    request_args[index] = evidence_node;
-                } else {
-                    const request = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
-                    try relateRequestComponent(self.graph, formal_node, evidence_node);
-                    request_args[index] = request;
-                }
+                _ = try self.graph.applyProducedTypeToRequest(
+                    try caller.freshInstNode(arg_ty),
+                    evidence_node,
+                );
+                _ = try self.graph.applyProducedTypeToRequest(formal_node, evidence_node);
+                request_args[index] = evidence_node;
             } else {
                 request_args[index] = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
             }
@@ -25790,11 +24901,10 @@ const BodyContext = struct {
                     return request_fn;
                 }
             }
-            // An explicit request owns the call's exact result evidence. Keep
-            // the checked result as a fresh public interface: its cached cell
-            // may already contain private evidence from another occurrence.
-            const public_ret = try caller.freshInstNode(checked_ret_ty);
-            try relateRequestComponent(self.graph, fn_graph.ret, public_ret);
+            _ = try self.graph.applyProducedTypeToRequest(
+                try caller.freshInstNode(checked_ret_ty),
+                expected,
+            );
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
             if (hosted_try_capability) |capability| {
@@ -25802,24 +24912,11 @@ const BodyContext = struct {
                     return request_fn;
                 }
             }
-            if (try self.graph.containsGeneratedPrivate(caller_ret)) {
-                // A prior occurrence may already have refined this cached cell
-                // to a private producer representation. Preserve its public
-                // interface without letting that representation select this
-                // call's producer before the call itself has done so.
-                const public_ret = try caller.freshInstNode(checked_ret_ty);
-                try self.graph.relateOpaqueInterface(public_ret, caller_ret);
-                try relateRequestComponent(self.graph, fn_graph.ret, public_ret);
-            } else {
-                try relateRequestComponent(self.graph, fn_graph.ret, caller_ret);
-            }
+            try self.graph.unify(fn_graph.ret, caller_ret);
         }
         var request_ret = fn_graph.ret;
         if (expected_ret_node) |expected| {
-            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
-                expected
-            else
-                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
+            request_ret = try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
         }
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
@@ -25841,7 +24938,7 @@ const BodyContext = struct {
         if (!try relateHostedTryWidening(self.graph, capability, source_fn, request_fn)) {
             Common.invariant("hosted Try widening request lost its additional error labels");
         }
-        try self.graph.registerRequestSourceInterface(request_fn, source_fn);
+        try self.graph.registerRequestCheckedSource(request_fn, source_fn);
         return request_fn;
     }
 
@@ -25888,7 +24985,7 @@ const BodyContext = struct {
             .arg => |index| {
                 if (index >= fn_graph.args.len) Common.invariant("dispatch plan dispatcher argument index was outside the callable graph");
                 const dispatcher_node = try caller.instNode(plan.dispatcher_ty);
-                try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node);
+                try applyProducedTypeToRequest(self.graph, fn_graph.args[index], dispatcher_node);
             },
             .type_only => {},
         }
@@ -25900,18 +24997,14 @@ const BodyContext = struct {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     if (phase == .expression_lowering) {
                         const evidence_node = try caller.lowerExprTypeNode(checked_arg);
-                        if (try self.graph.containsGeneratedPrivate(evidence_node)) {
-                            const public_node = try caller.freshInstNode(arg_ty);
-                            try self.graph.relateOpaqueInterface(public_node, evidence_node);
-                            try relateRequestComponent(self.graph, formal_node, public_node);
-                            request_arg.* = evidence_node;
-                        } else {
-                            const public_node = try caller.instNode(arg_ty);
-                            try relateRequestComponent(self.graph, formal_node, public_node);
-                            try relateRequestComponent(self.graph, formal_node, evidence_node);
-                        }
+                        _ = try self.graph.applyProducedTypeToRequest(
+                            try caller.freshInstNode(arg_ty),
+                            evidence_node,
+                        );
+                        _ = try self.graph.applyProducedTypeToRequest(formal_node, evidence_node);
+                        request_arg.* = evidence_node;
                     } else {
-                        try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
+                        request_arg.* = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
                     }
                 },
                 .generated_interpolation_iter,
@@ -25922,20 +25015,14 @@ const BodyContext = struct {
         }
         var request_ret = fn_graph.ret;
         if (expected_ret_node) |expected| {
-            try relateRequestComponent(self.graph, fn_graph.ret, try caller.freshInstNode(checked_ret_ty));
-            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
-                expected
-            else
-                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
+            _ = try self.graph.applyProducedTypeToRequest(
+                try caller.freshInstNode(checked_ret_ty),
+                expected,
+            );
+            request_ret = try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
-            if (try self.graph.containsGeneratedPrivate(caller_ret)) {
-                const public_ret = try caller.freshInstNode(checked_ret_ty);
-                try self.graph.relateOpaqueInterface(public_ret, caller_ret);
-                try relateRequestComponent(self.graph, fn_graph.ret, public_ret);
-            } else {
-                try relateRequestComponent(self.graph, fn_graph.ret, caller_ret);
-            }
+            try self.graph.unify(fn_graph.ret, caller_ret);
         }
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
@@ -25949,7 +25036,7 @@ const BodyContext = struct {
         switch (operand) {
             .checked_expr => |checked_arg| {
                 const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-                try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
+                try applyProducedTypeToRequest(self.graph, formal_node, try caller.instNode(arg_ty));
             },
             .generated_interpolation_iter,
             .generated_numeral,
@@ -26176,9 +25263,8 @@ const BodyContext = struct {
         return try self.activeTypeFromNode(node);
     }
 
-    /// Constrain a local call argument's cell and return its evidence node
-    /// when the local carries generated-private content; otherwise the
-    /// caller's expected type (if any) is the evidence.
+    /// Constrain a local call argument's checked mapping and return the local's
+    /// exact produced type as call evidence.
     fn localCallArgumentEvidenceNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -26193,8 +25279,10 @@ const BodyContext = struct {
             .sealed => |ty| try self.activeNodeFromType(ty),
         };
         try self.constrainCheckedInterfaceToCell(checked_ty, cell);
-        if (expected_ty) |expected| try self.graph.unify(node, try self.graph.importMono(expected));
-        return if (try self.graph.containsGeneratedPrivate(node)) node else null;
+        if (expected_ty) |expected| {
+            _ = try self.graph.applyProducedTypeToRequest(try self.graph.importMono(expected), node);
+        }
+        return node;
     }
 
     fn lookupExprTypeNode(
@@ -26298,7 +25386,7 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(field_node),
         );
         if (expected_ty) |expected| {
-            try relateRequestComponent(self.graph, try self.graph.importMono(expected), field_node);
+            try applyProducedTypeToRequest(self.graph, try self.graph.importMono(expected), field_node);
         }
         return field_node;
     }
@@ -26395,9 +25483,9 @@ const BodyContext = struct {
             try self.hostedTryCapabilityForResolvedTarget(call.direct_target.?),
         );
         if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
-            const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
+            const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
             if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
-                try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
+                try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
                 try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                 fn_node = private_fn_node;
             }
@@ -27007,7 +26095,7 @@ const BodyContext = struct {
         const local_node = try local_cell.toGraphNode(self.graph);
         try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
         try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
-        try relateRequestComponent(self.graph, local_node, expected_node);
+        _ = try self.graph.applyProducedTypeToRequest(expected_node, local_node);
         return try self.addExprWithTypeCell(local_cell, .{ .local = binding.local });
     }
 
@@ -27090,7 +26178,7 @@ const BodyContext = struct {
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
-            try relateRequestComponent(self.graph, local_node, try self.activeNodeFromType(ty));
+            _ = try self.graph.applyProducedTypeToRequest(try self.activeNodeFromType(ty), local_node);
             return try self.addExprWithTypeCell(local_cell, .{ .local = local_id });
         }
 
@@ -27206,7 +26294,7 @@ const BodyContext = struct {
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
-            try relateRequestComponent(self.graph, local_node, expected_node);
+            _ = try self.graph.applyProducedTypeToRequest(expected_node, local_node);
             return try self.addExprWithTypeCell(
                 local_cell,
                 .{ .local = local_id },
@@ -27331,7 +26419,7 @@ const BodyContext = struct {
             },
         }
         const requested_node = try self.constUseTypeNode(checked_ty, const_use);
-        try relateRequestComponent(self.graph, expected_node, requested_node);
+        try applyProducedTypeToRequest(self.graph, expected_node, requested_node);
         const expr = try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(requested_node),
             .pending_deferred,
@@ -27459,7 +26547,7 @@ const BodyContext = struct {
             .eval_template => try self.instNode(requested_ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype type selection"),
         };
-        return try self.relateCheckedNodeToProducedValue(try self.instNode(checked_ty), requested_node);
+        return try self.graph.applyProducedTypeToRequest(try self.instNode(checked_ty), requested_node);
     }
 
     fn restoreConstUseAtType(
@@ -27531,7 +26619,7 @@ const BodyContext = struct {
             .stored_const => |stored| blk: {
                 const stored_node = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
                 const interface_node = try self.instNode(requested_ty);
-                try relateRequestComponent(self.graph, request_node, stored_node);
+                try applyProducedTypeToRequest(self.graph, request_node, stored_node);
                 var active_const_scope: ActiveConstBindingScope = .{};
                 const has_active_const_binding = try self.enterActiveConstBindingAtCell(
                     store_view,
@@ -27578,7 +26666,7 @@ const BodyContext = struct {
         requested_ty: checked.CheckedTypeId,
     ) Allocator.Error!Type.TypeId {
         const stored_ty = try self.lowerConstCaptureType(store_view, stored.root_type);
-        _ = try self.relateCheckedNodeToProducedValue(try self.instNode(requested_ty), try self.graph.importMono(stored_ty));
+        _ = try self.graph.applyProducedTypeToRequest(try self.instNode(requested_ty), try self.graph.importMono(stored_ty));
         return stored_ty;
     }
 
@@ -27593,7 +26681,7 @@ const BodyContext = struct {
         requested_ty: checked.CheckedTypeId,
     ) Allocator.Error!NodeId {
         const stored_ty = try self.lowerConstCaptureType(store_view, stored.root_type);
-        return try self.relateCheckedNodeToProducedValue(
+        return try self.graph.applyProducedTypeToRequest(
             try self.instNode(requested_ty),
             try self.graph.importMono(stored_ty),
         );
@@ -29675,14 +28763,14 @@ const BodyContext = struct {
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
             try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
-            try relateRequestComponent(self.graph, local_node, expected_node);
+            _ = try self.graph.applyProducedTypeToRequest(expected_node, local_node);
             return;
         }
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
-            try relateRequestComponent(self.graph, local_node, expected_node);
+            _ = try self.graph.applyProducedTypeToRequest(expected_node, local_node);
             return;
         }
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
@@ -29695,7 +28783,7 @@ const BodyContext = struct {
         };
         if (const_use) |value| {
             const witness_node = try self.constUseTypeNode(expr.ty, value);
-            try relateRequestComponent(self.graph, expected_node, witness_node);
+            try applyProducedTypeToRequest(self.graph, expected_node, witness_node);
             return;
         }
         switch (record.ref) {
@@ -29836,7 +28924,7 @@ const BodyContext = struct {
             expected_ret_node,
             .expression_lowering,
         );
-        try relateRequestComponent(self.graph, actual_ret_node, expected_ret_node);
+        _ = try self.graph.applyProducedTypeToRequest(expected_ret_node, actual_ret_node);
     }
 
     fn relateCallExprAtNode(
@@ -29870,7 +28958,7 @@ const BodyContext = struct {
             hosted_try_capability,
         );
         const fn_nodes = try self.graph.functionNodes(fn_node);
-        try relateRequestComponent(self.graph, fn_nodes.ret, expected_ret_node);
+        _ = try self.graph.applyProducedTypeToRequest(expected_ret_node, fn_nodes.ret);
         for (call.args, fn_nodes.args) |arg, arg_node| try self.relateExprAtNode(arg, arg_node);
         if (call.direct_target == null) try self.relateExprAtNode(call.func, fn_node);
     }
@@ -29886,7 +28974,7 @@ const BodyContext = struct {
             .inspectable => try self.graph.recordFieldNode(receiver_node, field_name),
             .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, field_name),
         };
-        try relateRequestComponent(self.graph, actual_field_node, expected_field_node);
+        _ = try self.graph.applyProducedTypeToRequest(expected_field_node, actual_field_node);
     }
 
     fn prepareConstructorChildrenAtNodes(
@@ -30029,7 +29117,7 @@ const BodyContext = struct {
         if (operands.len != nodes.len) Common.invariant("dispatch argument arity differs from function graph node");
         for (operands, nodes, 0..) |operand, node, index| {
             if (self.preLoweredOperandAt(pre_lowered, index)) |pre| {
-                try relateRequestComponent(
+                try applyProducedTypeToRequest(
                     self.graph,
                     node,
                     try self.exprTypeCell(pre).toGraphNode(self.graph),
@@ -30078,7 +29166,7 @@ const BodyContext = struct {
                 => try self.lowerDispatchOperandAtType(operand, try self.activeTypeFromNode(node)),
             };
             self.draft.setReservedExprSpanItem(reserved, index, lowered);
-            try relateRequestComponent(
+            try applyProducedTypeToRequest(
                 self.graph,
                 node,
                 try self.exprTypeCell(lowered).toGraphNode(self.graph),
@@ -30529,7 +29617,7 @@ const BodyContext = struct {
                     },
                     else => {},
                 }
-                try relateRequestComponent(
+                try applyProducedTypeToRequest(
                     self.graph,
                     expected_node,
                     try self.lowerExprTypeNode(checked_expr),
@@ -30540,10 +29628,8 @@ const BodyContext = struct {
                         const item_nodes = try self.graph.tupleItemNodes(tuple_node);
                         if (access.elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
                         const item_node = item_nodes[access.elem_index];
-                        try relateRequestComponent(self.graph, expected_node, item_node);
-                        const result_cell = DraftTypeCell.fromGraphNode(
-                            if (try self.graph.containsGeneratedPrivate(item_node)) item_node else expected_node,
-                        );
+                        _ = try self.graph.applyProducedTypeToRequest(expected_node, item_node);
+                        const result_cell = DraftTypeCell.fromGraphNode(item_node);
                         break :blk try self.addExprWithTypeCell(result_cell, .{ .tuple_access = .{
                             .tuple = try self.lowerExprAtTypeCell(access.tuple, DraftTypeCell.fromGraphNode(tuple_node)),
                             .elem_index = access.elem_index,
@@ -30559,12 +29645,10 @@ const BodyContext = struct {
                     else => {},
                 }
                 const lowered = try self.lowerExprInner(checked_expr);
-                try relateRequestComponent(
-                    self.graph,
+                _ = try self.graph.applyProducedTypeToRequest(
                     expected_node,
                     try self.exprTypeCell(lowered).toGraphNode(self.graph),
                 );
-                self.draft.exprs.items[@intFromEnum(lowered)].ty = cell;
                 break :blk lowered;
             },
         };
@@ -30575,8 +29659,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         expected_node: NodeId,
     ) Allocator.Error!void {
-        try selectRequestRepresentation(
-            self.graph,
+        _ = try self.graph.applyProducedTypeToRequest(
             expected_node,
             try self.lowerExprTypeNode(checked_expr),
         );
@@ -30618,21 +29701,8 @@ const BodyContext = struct {
             break :lowered try self.addExprWithTypeCell(call_data.ret_ty, call_data.data);
         };
         const lowered_node = try self.exprTypeCell(lowered).toGraphNode(self.graph);
-        const completes_request = try self.resultCompletesRequest(expected_node, lowered_node);
-        const contains_generated_private = try self.graph.containsGeneratedPrivate(lowered_node);
-        const result_node = if (completes_request)
-            lowered_node
-        else if (contains_generated_private) blk: {
-            try relateRequestComponent(
-                self.graph,
-                expected_node,
-                lowered_node,
-            );
-            break :blk lowered_node;
-        } else try self.relateCheckedNodeToProducedValue(expected_node, lowered_node);
-        self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(
-            result_node,
-        );
+        _ = try self.graph.applyProducedTypeToRequest(expected_node, lowered_node);
+        self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(lowered_node);
         return lowered;
     }
 
@@ -30648,10 +29718,9 @@ const BodyContext = struct {
             .inspectable => try self.graph.recordFieldNode(receiver_node, field_name),
             .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, field_name),
         };
-        try relateRequestComponent(self.graph, expected_node, field_node);
-        const result_node = if (try self.graph.containsGeneratedPrivate(field_node)) field_node else expected_node;
+        _ = try self.graph.applyProducedTypeToRequest(expected_node, field_node);
         return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(result_node),
+            DraftTypeCell.fromGraphNode(field_node),
             .{ .field_access = .{
                 .receiver = try self.lowerExprAtTypeCell(field.receiver, DraftTypeCell.fromGraphNode(receiver_node)),
                 .field = field_name,
@@ -30697,15 +29766,8 @@ const BodyContext = struct {
                 }
                 const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
                 const expected_node = try self.activeNodeFromType(ty);
-                const completes_request = try self.resultCompletesRequest(expected_node, ret_node);
-                const contains_generated_private = try self.graph.containsGeneratedPrivate(ret_node);
-                const result_cell: DraftTypeCell = if (completes_request)
-                    lowered.ret_ty
-                else if (contains_generated_private) blk: {
-                    try relateRequestComponent(self.graph, expected_node, ret_node);
-                    break :blk lowered.ret_ty;
-                } else DraftTypeCell.fromGraphNode(try self.relateCheckedNodeToProducedValue(expected_node, ret_node));
-                const lowered_expr = try self.addExprWithTypeCell(result_cell, lowered.data);
+                _ = try self.graph.applyProducedTypeToRequest(expected_node, ret_node);
+                const lowered_expr = try self.addExprWithTypeCell(lowered.ret_ty, lowered.data);
                 return lowered_expr;
             },
             .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, .{ .sealed = ty }),
@@ -31091,7 +30153,6 @@ const BodyContext = struct {
         const produced_fields = try self.allocator.alloc(InstField, target_fields.len);
         defer self.allocator.free(produced_fields);
         var requires_distinct_witness = false;
-        var distinct_witness_needs_relation = false;
 
         const base_record = if (record.ext) |ext|
             self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext)
@@ -31130,27 +30191,7 @@ const BodyContext = struct {
                     Common.invariant("record graph constructor lost its pre-lowered field child");
                 const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
                 if (!self.graph.sameClass(field.ty, child_node)) {
-                    // Either side may carry the generated-private
-                    // representation: a producer-authored child adopted by a
-                    // checked-public construction, or a construction whose
-                    // field slot was selected private by generated codec
-                    // machinery while the user's opaque handle value stays
-                    // checked-public (e.g. a FieldName passed through
-                    // user-authored parse_record_field).
-                    const child_private = try self.graph.containsGeneratedPrivate(child_node);
-                    const field_private = try self.graph.containsGeneratedPrivate(field.ty);
-                    const field_completion = try self.resultCompletesRequest(field.ty, child_node);
-                    const has_explicit_evidence = try self.producedValueHasExplicitRepresentationEvidence(
-                        field.ty,
-                        child_node,
-                    );
-                    if (!child_private and !field_private and !field_completion and !has_explicit_evidence) {
-                        Common.invariant("record graph constructor child differed without explicit representation evidence");
-                    }
                     requires_distinct_witness = true;
-                    if (child_private or field_private) {
-                        distinct_witness_needs_relation = true;
-                    }
                 }
                 produced_fields[index] = .{ .name = field.name, .ty = child_node };
                 break :blk pre;
@@ -31174,9 +30215,7 @@ const BodyContext = struct {
                 .fields = fields,
                 .ext = try self.graph.newNode(.empty_record),
             } });
-            if (distinct_witness_needs_relation) {
-                try relateRequestComponent(self.graph, record_node, node);
-            }
+            _ = try self.graph.applyProducedTypeToRequest(record_node, node);
             break :blk node;
         } else record_node;
         var record_expr = try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
@@ -31221,7 +30260,34 @@ const BodyContext = struct {
                 DraftTypeCell.fromGraphNode(payload_node),
             );
         }
-        return try self.addConstructorExprAtNode(tag_node, .{ .tag = .{
+        const request_row = try self.graph.tagConstructionRow(tag_node);
+        const produced_tags = try self.graph.arena().alloc(InstTag, request_row.tags.len);
+        var changed = false;
+        var found = false;
+        for (request_row.tags, produced_tags) |request_tag, *produced_tag| {
+            produced_tag.* = request_tag;
+            if (!self.builder.program.names.tagLabelTextEql(request_tag.name, name)) continue;
+            found = true;
+            if (request_tag.payloads.len != lowered.len) {
+                Common.invariant("tag constructor payload count differed from its exact row");
+            }
+            const produced_payloads = try self.graph.arena().alloc(NodeId, lowered.len);
+            for (lowered, request_tag.payloads, produced_payloads) |payload_expr, request_payload, *produced_payload| {
+                produced_payload.* = try self.exprTypeCell(payload_expr).toGraphNode(self.graph);
+                changed = changed or !self.graph.sameClass(request_payload, produced_payload.*);
+            }
+            produced_tag.payloads = produced_payloads;
+        }
+        if (!found) Common.invariant("tag constructor was absent from its exact row");
+        const structural_node = if (changed)
+            try self.graph.newNode(.{ .tag_union = .{
+                .tags = produced_tags,
+                .ext = request_row.ext,
+            } })
+        else
+            self.constructorRepresentationNode(tag_node);
+        const produced_node = try self.producedConstructorNode(tag_node, structural_node);
+        return try self.addConstructorExprAtNode(produced_node, .{ .tag = .{
             .name = name,
             .payloads = try self.addExprSpan(lowered),
         } });
@@ -31244,8 +30310,10 @@ const BodyContext = struct {
             nominal.backing_expr,
             DraftTypeCell.fromGraphNode(backing_node),
         );
+        const produced_backing = try self.exprTypeCell(backing).toGraphNode(self.graph);
+        const produced_node = try self.producedConstructorNode(nominal_node, produced_backing);
         return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(representation_node),
+            DraftTypeCell.fromGraphNode(produced_node),
             .{ .nominal = backing },
         );
     }
@@ -31263,7 +30331,18 @@ const BodyContext = struct {
         for (items, item_nodes, 0..) |item, item_node, index| {
             lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(item_node));
         }
-        return try self.addConstructorExprAtNode(tuple_node, .{ .tuple = try self.addExprSpan(lowered) });
+        const produced_items = try self.graph.arena().alloc(NodeId, lowered.len);
+        var changed = false;
+        for (lowered, item_nodes, produced_items) |item, request_item, *produced_item| {
+            produced_item.* = try self.exprTypeCell(item).toGraphNode(self.graph);
+            changed = changed or !self.graph.sameClass(request_item, produced_item.*);
+        }
+        const produced_node = if (changed) blk: {
+            const node = try self.graph.newNode(.{ .tuple = produced_items });
+            _ = try self.graph.applyProducedTypeToRequest(tuple_node, node);
+            break :blk node;
+        } else tuple_node;
+        return try self.addConstructorExprAtNode(produced_node, .{ .tuple = try self.addExprSpan(lowered) });
     }
 
     fn lowerListConstructorAtNode(
@@ -31281,8 +30360,26 @@ const BodyContext = struct {
         for (items, 0..) |item, index| {
             lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(element_node));
         }
+        var produced_element = element_node;
+        if (lowered.len > 0) {
+            produced_element = try self.exprTypeCell(lowered[0]).toGraphNode(self.graph);
+            for (lowered[1..]) |item| {
+                const item_node = try self.exprTypeCell(item).toGraphNode(self.graph);
+                if (!self.graph.sameClass(produced_element, item_node)) {
+                    try self.graph.unify(produced_element, item_node);
+                    produced_element = self.graph.rootNode(produced_element);
+                }
+            }
+        }
+        const produced_node = if (self.graph.sameClass(element_node, produced_element))
+            list_node
+        else blk: {
+            const node = try self.graph.newNode(.{ .list = produced_element });
+            _ = try self.graph.applyProducedTypeToRequest(list_node, node);
+            break :blk node;
+        };
         return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(list_node),
+            DraftTypeCell.fromGraphNode(produced_node),
             .{ .list = try self.addExprSpan(lowered) },
         );
     }
@@ -31799,10 +30896,7 @@ const BodyContext = struct {
                 },
             },
         };
-        const checked_result_node = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
-            try self.freshInstNode(checked_ret_ty)
-        else
-            try self.lowerTypeNode(checked_ret_ty);
+        const checked_result_node = try self.freshInstNode(checked_ret_ty);
         _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node);
         if (direct_parametric_low_level) |op| {
             const args = try self.lowerDispatchOperandsAtNodes(
@@ -31810,10 +30904,7 @@ const BodyContext = struct {
                 callable_graph.args,
                 pre_lowered.items,
             );
-            const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
-                DraftTypeCell.fromGraphNode(plan_ret_node)
-            else
-                expected_ret_cell;
+            const call_ret_cell = DraftTypeCell.fromGraphNode(plan_ret_node);
             const call_expr = try self.addExprWithTypeCell(call_ret_cell, .{ .low_level = .{
                 .op = op,
                 .args = args,
@@ -31828,10 +30919,7 @@ const BodyContext = struct {
             try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items)
         else
             try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
-        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
-            DraftTypeCell.fromGraphNode(plan_ret_node)
-        else
-            expected_ret_cell;
+        const call_ret_cell = DraftTypeCell.fromGraphNode(plan_ret_node);
         const call_expr = try self.addExprWithTypeCell(
             call_ret_cell,
             call_data,
@@ -31867,16 +30955,16 @@ const BodyContext = struct {
             Common.invariant("checked closed direct low-level call argument arity differed from its callable type");
         }
 
-        switch (expected_ret_cell) {
+        const produced_ret_cell: DraftTypeCell = switch (expected_ret_cell) {
             .sealed => |expected| if (!self.sameType(expected, function.ret)) {
                 Common.invariant("checked closed direct low-level call result differed from its expected type");
+            } else .{ .sealed = function.ret },
+            .graph_node => |expected| blk: {
+                const produced = try self.activeNodeFromType(function.ret);
+                _ = try self.graph.applyProducedTypeToRequest(expected, produced);
+                break :blk DraftTypeCell.fromGraphNode(produced);
             },
-            .graph_node => |expected| try relateRequestComponent(
-                self.graph,
-                expected,
-                try self.activeNodeFromType(function.ret),
-            ),
-        }
+        };
 
         const lowered = switch (try self.lowerClosedDispatchOperandsAtTypes(
             operands,
@@ -31886,7 +30974,7 @@ const BodyContext = struct {
             .args => |args| args,
             .uninhabited => |expr| return expr,
         };
-        const call = try self.addExprWithTypeCell(expected_ret_cell, .{ .low_level = .{
+        const call = try self.addExprWithTypeCell(produced_ret_cell, .{ .low_level = .{
             .op = op,
             .args = lowered,
         } });
@@ -31964,16 +31052,16 @@ const BodyContext = struct {
             Common.invariant("checked closed direct procedure call argument arity differed from its callable type");
         }
         try self.constrainTypeToMono(checked_ret_ty, function.ret);
-        switch (expected_ret_cell) {
+        const produced_ret_cell: DraftTypeCell = switch (expected_ret_cell) {
             .sealed => |expected| if (!self.sameType(expected, function.ret)) {
                 Common.invariant("checked closed direct procedure call result differed from its expected type");
+            } else .{ .sealed = function.ret },
+            .graph_node => |expected| blk: {
+                const produced = try self.activeNodeFromType(function.ret);
+                _ = try self.graph.applyProducedTypeToRequest(expected, produced);
+                break :blk DraftTypeCell.fromGraphNode(produced);
             },
-            .graph_node => |expected| try relateRequestComponent(
-                self.graph,
-                expected,
-                try self.activeNodeFromType(function.ret),
-            ),
-        }
+        };
 
         const callable_node = try self.activeNodeFromType(callable_ty);
         const lowered = switch (try self.lowerClosedDispatchOperandsAtNode(
@@ -32038,7 +31126,7 @@ const BodyContext = struct {
             });
             break :blk created;
         };
-        const call = try self.addExprWithTypeCell(expected_ret_cell, .{ .call_proc = .{
+        const call = try self.addExprWithTypeCell(produced_ret_cell, .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(slot),
             .args = lowered,
             .captures = try self.methodTargetCaptureSpan(lookup),
@@ -32869,7 +31957,7 @@ const BodyContext = struct {
         const ret_ty = (try self.closedDirectGraphFreeResultType(checked_ret_ty, plan)) orelse return null;
         const ret_node = try self.activeNodeFromType(ret_ty);
         if (expected_ret_node) |expected| {
-            try relateRequestComponent(self.graph, ret_node, expected);
+            _ = try self.graph.applyProducedTypeToRequest(expected, ret_node);
         }
         return ret_node;
     }
@@ -33500,7 +32588,7 @@ const BodyContext = struct {
             request_node,
             checked_args,
         )) orelse return null;
-        try self.graph.registerRequestSourceInterface(private_node, public_target_node);
+        try self.graph.registerRequestCheckedSource(private_node, public_target_node);
         try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
         return private_node;
     }
@@ -33521,7 +32609,7 @@ const BodyContext = struct {
             request_node,
             checked_args,
         )) orelse return null;
-        try self.graph.registerRequestSourceInterface(private_node, public_target_node);
+        try self.graph.registerRequestCheckedSource(private_node, public_target_node);
         try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
         return private_node;
     }
@@ -34269,11 +33357,7 @@ const BodyContext = struct {
         root_node: NodeId,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
-        if (try self.graph.containsGeneratedPrivate(request_fn_node)) {
-            try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
-        } else {
-            try self.graph.unify(root_node, request_fn_node);
-        }
+        try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
     }
 
     fn methodTargetCalleeAtNode(
@@ -37258,7 +36342,7 @@ const BodyContext = struct {
                 Common.invariant("custom parser error injection changed tag payload arity");
             }
             for (source_tag.payloads, target_tag.payloads) |source_payload, target_payload| {
-                try relateRequestComponent(self.graph, source_payload, target_payload);
+                try applyProducedTypeToRequest(self.graph, target_payload, source_payload);
             }
         }
     }
@@ -37436,7 +36520,7 @@ const BodyContext = struct {
         }
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 1) Common.invariant("custom codec target did not have one encoding argument");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
         const target_runtime = try self.graph.functionNodes(target.ret);
 
         switch (kind) {
@@ -37444,20 +36528,20 @@ const BodyContext = struct {
                 if (runtime.args.len != 1 or target_runtime.args.len != 1) {
                     Common.invariant("custom parser runtime did not have one state argument");
                 }
-                try relateRequestComponent(self.graph, target_runtime.args[0], runtime.args[0]);
+                try applyProducedTypeToRequest(self.graph, target_runtime.args[0], runtime.args[0]);
                 const outer_result = try self.graphParserResultNodes(runtime.ret);
                 const target_result = try self.graphParserResultNodes(target_runtime.ret);
-                try relateRequestComponent(self.graph, target_result.value, shape_node);
-                try relateRequestComponent(self.graph, target_result.rest, outer_result.rest);
+                try applyProducedTypeToRequest(self.graph, target_result.value, shape_node);
+                try applyProducedTypeToRequest(self.graph, target_result.rest, outer_result.rest);
                 try self.relateCustomParserErrorInjection(target_result.err, outer_result.err);
             },
             .encoder => {
                 if (runtime.args.len != 2 or target_runtime.args.len != 2) {
                     Common.invariant("custom encoder runtime did not have value and state arguments");
                 }
-                try relateRequestComponent(self.graph, target_runtime.args[0], shape_node);
-                try relateRequestComponent(self.graph, target_runtime.args[1], runtime.args[1]);
-                try relateRequestComponent(self.graph, target_runtime.ret, runtime.ret);
+                try applyProducedTypeToRequest(self.graph, target_runtime.args[0], shape_node);
+                try applyProducedTypeToRequest(self.graph, target_runtime.args[1], runtime.args[1]);
+                try applyProducedTypeToRequest(self.graph, target_runtime.ret, runtime.ret);
             },
         }
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
@@ -37495,9 +36579,9 @@ const BodyContext = struct {
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("rename_field target did not have two arguments");
         const str_node = try self.graph.newNode(.{ .primitive = .str });
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], str_node);
-        try relateRequestComponent(self.graph, target.ret, str_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], str_node);
+        try applyProducedTypeToRequest(self.graph, target.ret, str_node);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -37535,8 +36619,8 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len < 1) Common.invariant("container encoder target had no state argument");
-        try relateRequestComponent(self.graph, target.args[0], state_node);
-        try relateRequestComponent(self.graph, target.ret, runtime.ret);
+        try applyProducedTypeToRequest(self.graph, target.args[0], state_node);
+        try applyProducedTypeToRequest(self.graph, target.ret, runtime.ret);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -37833,10 +36917,10 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 3) Common.invariant("parse_record_field target did not have three arguments");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[2], state_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[2], state_node);
         const target_try = try self.graphTryPayloads(target.ret);
-        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
+        try applyProducedTypeToRequest(self.graph, target_try.err, outer_result.err);
 
         const field_tag_name = try self.builder.program.names.internTagLabel("Field");
         const field_tag = graphTagByName((try self.graph.tagRowNodes(target_try.ok)).tags, field_tag_name) orelse
@@ -37923,11 +37007,11 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("skip_record_field target did not have two arguments");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], state_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], state_node);
         const target_try = try self.graphTryPayloads(target.ret);
-        try relateRequestComponent(self.graph, target_try.ok, state_node);
-        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
+        try applyProducedTypeToRequest(self.graph, target_try.ok, state_node);
+        try applyProducedTypeToRequest(self.graph, target_try.err, outer_result.err);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -37966,12 +37050,12 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 3) Common.invariant("parse_tag_union target did not have three arguments");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[2], state_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[2], state_node);
         const target_result = try self.graphParserResultNodes(target.ret);
-        try relateRequestComponent(self.graph, target_result.value, shape_node);
-        try relateRequestComponent(self.graph, target_result.rest, outer_result.rest);
-        try relateRequestComponent(self.graph, target_result.err, outer_result.err);
+        try applyProducedTypeToRequest(self.graph, target_result.value, shape_node);
+        try applyProducedTypeToRequest(self.graph, target_result.rest, outer_result.rest);
+        try applyProducedTypeToRequest(self.graph, target_result.err, outer_result.err);
 
         const private_spec = try self.cloneGraphNamedWithGeneratedBacking(
             target.args[1],
@@ -38147,12 +37231,12 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("scalar parser target did not have two arguments");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], state_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], state_node);
         const target_result = try self.graphParserResultNodes(target.ret);
-        try relateRequestComponent(self.graph, target_result.value, shape_node);
-        try relateRequestComponent(self.graph, target_result.rest, outer_result.rest);
-        try relateRequestComponent(self.graph, target_result.err, outer_result.err);
+        try applyProducedTypeToRequest(self.graph, target_result.value, shape_node);
+        try applyProducedTypeToRequest(self.graph, target_result.rest, outer_result.rest);
+        try applyProducedTypeToRequest(self.graph, target_result.err, outer_result.err);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38192,11 +37276,11 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("parser format-control target did not have encoding and state arguments");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], state_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], state_node);
         const target_try = try self.graphTryPayloads(target.ret);
-        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
-        if (result_is_state) try relateRequestComponent(self.graph, target_try.ok, state_node);
+        try applyProducedTypeToRequest(self.graph, target_try.err, outer_result.err);
+        if (result_is_state) try applyProducedTypeToRequest(self.graph, target_try.ok, state_node);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38234,9 +37318,9 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("invalid_value target did not have encoding and state arguments");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], state_node);
-        try relateRequestComponent(self.graph, target.ret, outer_result.err);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], state_node);
+        try applyProducedTypeToRequest(self.graph, target.ret, outer_result.err);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38273,8 +37357,8 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 1) Common.invariant("encode_null target did not have one state argument");
-        try relateRequestComponent(self.graph, target.args[0], state_node);
-        try relateRequestComponent(self.graph, target.ret, runtime.ret);
+        try applyProducedTypeToRequest(self.graph, target.args[0], state_node);
+        try applyProducedTypeToRequest(self.graph, target.ret, runtime.ret);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38360,9 +37444,9 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("encode_key_start target did not have encoding and state arguments");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], state_node);
-        try relateRequestComponent(self.graph, target.ret, runtime.ret);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], state_node);
+        try applyProducedTypeToRequest(self.graph, target.ret, runtime.ret);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38501,15 +37585,15 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2 + arity_arg_count) Common.invariant("parser tuple format target had an unexpected arity");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], state_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], state_node);
         for (target.args[2..]) |arity_arg| {
             const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
-            try relateRequestComponent(self.graph, arity_arg, u64_node);
+            try applyProducedTypeToRequest(self.graph, arity_arg, u64_node);
         }
         const target_try = try self.graphTryPayloads(target.ret);
-        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
-        try relateRequestComponent(self.graph, target_try.ok, state_node);
+        try applyProducedTypeToRequest(self.graph, target_try.err, outer_result.err);
+        try applyProducedTypeToRequest(self.graph, target_try.ok, state_node);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38549,12 +37633,12 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("object-key parser target did not have encoding and state arguments");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], state_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], state_node);
         const target_result = try self.graphParserResultNodes(target.ret);
-        try relateRequestComponent(self.graph, target_result.value, value_node);
-        try relateRequestComponent(self.graph, target_result.rest, state_node);
-        try relateRequestComponent(self.graph, target_result.err, outer_result.err);
+        try applyProducedTypeToRequest(self.graph, target_result.value, value_node);
+        try applyProducedTypeToRequest(self.graph, target_result.rest, state_node);
+        try applyProducedTypeToRequest(self.graph, target_result.err, outer_result.err);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38594,12 +37678,12 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 3) Common.invariant("object-key encoder target did not have encoding, key, and state arguments");
-        try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], value_node);
-        try relateRequestComponent(self.graph, target.args[2], state_node);
+        try applyProducedTypeToRequest(self.graph, target.args[0], encoding_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], value_node);
+        try applyProducedTypeToRequest(self.graph, target.args[2], state_node);
         const target_try = try self.graphTryPayloads(target.ret);
-        try relateRequestComponent(self.graph, target_try.ok, state_node);
-        try relateRequestComponent(self.graph, target_try.err, outer_try.err);
+        try applyProducedTypeToRequest(self.graph, target_try.ok, state_node);
+        try applyProducedTypeToRequest(self.graph, target_try.err, outer_try.err);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38637,9 +37721,9 @@ const BodyContext = struct {
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != 2) Common.invariant("scalar encoder target did not have value and state arguments");
-        try relateRequestComponent(self.graph, target.args[0], shape_node);
-        try relateRequestComponent(self.graph, target.args[1], state_node);
-        try relateRequestComponent(self.graph, target.ret, runtime.ret);
+        try applyProducedTypeToRequest(self.graph, target.args[0], shape_node);
+        try applyProducedTypeToRequest(self.graph, target.args[1], state_node);
+        try applyProducedTypeToRequest(self.graph, target.ret, runtime.ret);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38675,9 +37759,9 @@ const BodyContext = struct {
         const target = try self.graph.functionNodes(target_node);
         if (target.args.len != arg_nodes.len) Common.invariant("generated codec helper target had an unexpected arity");
         for (target.args, arg_nodes) |target_arg, request_arg| {
-            try relateRequestComponent(self.graph, target_arg, request_arg);
+            try applyProducedTypeToRequest(self.graph, target_arg, request_arg);
         }
-        try relateRequestComponent(self.graph, target.ret, ret_node);
+        try applyProducedTypeToRequest(self.graph, target.ret, ret_node);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -38984,7 +38068,7 @@ const BodyContext = struct {
             .tags = tags,
             .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
         } });
-        try relateRequestComponent(self.graph, outer_result.err, evidence);
+        try applyProducedTypeToRequest(self.graph, outer_result.err, evidence);
         return true;
     }
 
@@ -41662,10 +40746,9 @@ const BodyContext = struct {
                 if (try self.checkedPatternIsProvenUninhabited(pattern.pattern)) continue;
                 var branch_ctx = try self.childContext(self.current_fn_key);
                 errdefer branch_ctx.deinit();
-                try relateRequestComponent(
-                    self.graph,
-                    scrutinee_node,
+                _ = try self.graph.applyProducedTypeToRequest(
                     try branch_ctx.instNode(branch_ctx.view.bodies.pattern(pattern.pattern).ty),
+                    scrutinee_node,
                 );
                 try pending.append(self.allocator, .{
                     .ctx = branch_ctx,
@@ -42128,51 +41211,42 @@ const BodyContext = struct {
     const ControlFlowResultSelection = struct {
         declared: DraftTypeCell,
         selected: DraftTypeCell,
+        has_selection: bool = false,
         has_value: bool = false,
     };
 
     /// A value-producing control-flow expression owns one result selection
-    /// while its inhabited branches are lowered. A finished expected Monotype
-    /// remains an immutable outer interface, so selection begins on a fresh
-    /// checked-public graph cell unless the caller already supplied exact
-    /// generated-private evidence.
+    /// while its inhabited branches are lowered. The checked result is only a
+    /// request. The first exact branch result becomes the selection, and later
+    /// exact branch results join that representation explicitly.
     fn initControlFlowResultSelection(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
+        _: *BodyContext,
+        _: checked.CheckedTypeId,
         declared: DraftTypeCell,
     ) Allocator.Error!ControlFlowResultSelection {
-        const declared_node = try declared.toGraphNode(self.graph);
-        const selected = if (try self.graph.containsGeneratedPrivate(declared_node) or
-            !try self.graph.containsFinishedMono(declared_node))
-            DraftTypeCell.fromGraphNode(declared_node)
-        else
-            DraftTypeCell.fromGraphNode(try self.freshInstNode(checked_ty));
-        return .{ .declared = declared, .selected = selected };
+        return .{ .declared = declared, .selected = declared };
     }
 
-    /// Discover producer-authored representation evidence before emitting any
-    /// branch. Public-only evidence does not constrain the selection: every
-    /// inhabited branch will consume the final selected request during the
-    /// subsequent emission pass. Generated-private evidence is joined now, so
-    /// source order cannot make an already-emitted branch authoritative.
+    /// Discover exact producer types before emitting any branch so branch
+    /// order cannot decide the selected representation.
     fn prepareControlFlowResultSelection(
         self: *BodyContext,
         selection: *ControlFlowResultSelection,
         checked_value: checked.CheckedExprId,
     ) Allocator.Error!void {
-        const selected_node = try selection.selected.toGraphNode(self.graph);
-        const produced_node = (try self.controlFlowResultEvidenceNode(checked_value, selected_node)) orelse return;
-        if (!try self.graph.containsGeneratedPrivate(produced_node)) return;
-
-        try selectRequestRepresentation(self.graph, selected_node, produced_node);
-        const selected_private = try self.graph.containsGeneratedPrivate(selected_node);
-        const produced_private = try self.graph.containsGeneratedPrivate(produced_node);
-        if (selected_private == produced_private) return;
-        if (!selected_private and produced_private) {
+        const request_node = try selection.selected.toGraphNode(self.graph);
+        const produced_node = (try self.controlFlowResultEvidenceNode(checked_value, request_node)) orelse return;
+        if (!selection.has_selection) {
+            const declared_node = try selection.declared.toGraphNode(self.graph);
+            _ = try self.graph.applyProducedTypeToRequest(declared_node, produced_node);
             selection.selected = DraftTypeCell.fromGraphNode(produced_node);
+            selection.has_selection = true;
             return;
         }
-        Common.invariant("control-flow representation prepass lost generated-private evidence");
+        const selected_node = try selection.selected.toGraphNode(self.graph);
+        if (!self.graph.sameClass(selected_node, produced_node)) {
+            try self.graph.unify(selected_node, produced_node);
+        }
     }
 
     /// Resolve the exact result evidence of a branch producer against the
@@ -42236,16 +41310,10 @@ const BodyContext = struct {
                 .expression_lowering,
             ),
             .field_access => try self.lowerExprTypeNode(checked_value),
-            // Lookups are use-sites. Once a generated-private request is
-            // selected, branch emission validates the lookup against that
-            // request; the prepass must not join the raw stored binding cell.
             .lookup_local,
             .lookup_external,
             .lookup_required,
-            => if (try self.graph.containsGeneratedPrivate(expected_node))
-                expected_node
-            else
-                try self.lowerExprTypeNode(checked_value),
+            => try self.lowerExprTypeNode(checked_value),
             .block => |block| if (block.statements.len == 0)
                 try self.controlFlowResultEvidenceNode(block.final_expr, expected_node)
             else
@@ -42260,21 +41328,17 @@ const BodyContext = struct {
         value: DraftExprId,
     ) Allocator.Error!void {
         if (self.exprImpossibilityProof(value) != null) return;
-        const selected_node = try selection.selected.toGraphNode(self.graph);
         const value_cell = self.exprTypeCell(value);
         const value_node = try value_cell.toGraphNode(self.graph);
-        try selectRequestRepresentation(self.graph, selected_node, value_node);
-
-        const selected_private = try self.graph.containsGeneratedPrivate(selected_node);
-        const value_private = try self.graph.containsGeneratedPrivate(value_node);
-        if (selected_private != value_private) {
-            if (!selection.has_value and !selected_private and value_private) {
-                // A finished private producer remains immutable and therefore
-                // cannot merge into the live public accumulator. Carry its
-                // exact cell forward as the request for every later branch.
-                selection.selected = value_cell;
-            } else {
-                Common.invariant("control-flow branch could not use its selected runtime representation");
+        if (!selection.has_selection) {
+            const declared_node = try selection.declared.toGraphNode(self.graph);
+            _ = try self.graph.applyProducedTypeToRequest(declared_node, value_node);
+            selection.selected = value_cell;
+            selection.has_selection = true;
+        } else {
+            const selected_node = try selection.selected.toGraphNode(self.graph);
+            if (!self.graph.sameClass(selected_node, value_node)) {
+                try self.graph.unify(selected_node, value_node);
             }
         }
         selection.has_value = true;
@@ -42293,11 +41357,8 @@ const BodyContext = struct {
 
         const declared_node = try selection.declared.toGraphNode(self.graph);
         const selected_node = try selection.selected.toGraphNode(self.graph);
-        try relateRequestComponent(self.graph, declared_node, selected_node);
-        return if (try self.graph.containsGeneratedPrivate(selected_node))
-            selection.selected
-        else
-            selection.declared;
+        _ = try self.graph.applyProducedTypeToRequest(declared_node, selected_node);
+        return selection.selected;
     }
 
     fn stateMergeBinders(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error![]MergeBinder {
@@ -42936,19 +41997,14 @@ const BodyContext = struct {
             else
                 try self.lowerExprAtTypeCell(block.final_expr, result_cell),
         };
-        // A block is representation-transparent: preserve an exact
-        // producer-authored runtime representation from its final expression.
-        // Ordinary public results continue to use the enclosing request cell,
-        // whose graph may still be unresolved at this draft boundary.
+        // A block is representation-transparent: its final expression's exact
+        // produced type is the block's exact produced type.
         const value_cell = switch (stmts.termination) {
             .none => blk: {
                 const produced_cell = self.exprTypeCell(final_expr);
                 const produced_node = try produced_cell.toGraphNode(self.graph);
-                break :blk if (try self.resultCompletesRequest(result_node, produced_node) or
-                    try self.graph.containsGeneratedPrivate(produced_node))
-                    produced_cell
-                else
-                    result_cell;
+                _ = try self.graph.applyProducedTypeToRequest(result_node, produced_node);
+                break :blk produced_cell;
             },
             .checked_control_transfer, .uninhabited => result_cell,
         };
@@ -43795,7 +42851,7 @@ const BodyContext = struct {
         const dispatcher_node = plan_fn.args[plan.dispatcher_arg_index];
         try call_ctx.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
         const actual_dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], loop_iterator);
-        try relateRequestComponent(self.graph, dispatcher_node, actual_dispatcher_node);
+        try applyProducedTypeToRequest(self.graph, dispatcher_node, actual_dispatcher_node);
         if (!self.graph.sameClass(dispatcher_node, actual_dispatcher_node)) {
             Common.invariant("iterator dispatch plan dispatcher operand differed from the checked dispatcher type");
         }
@@ -43845,14 +42901,14 @@ const BodyContext = struct {
         switch (procedure) {
             .iter_iter => {
                 if (expected_ret_ty) |expected| {
-                    try relateRequestComponent(self.graph, dispatcher_node, try expected.toGraphNode(self.graph));
+                    _ = try self.graph.applyProducedTypeToRequest(try expected.toGraphNode(self.graph), dispatcher_node);
                 }
                 return iterator;
             },
             .iter_next => {
                 const step_ret_node = try self.generatedIteratorStepReturnNode(dispatcher_node);
                 if (expected_ret_ty) |expected| {
-                    try relateRequestComponent(self.graph, step_ret_node, try expected.toGraphNode(self.graph));
+                    _ = try self.graph.applyProducedTypeToRequest(try expected.toGraphNode(self.graph), step_ret_node);
                 }
                 return try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(step_ret_node),
@@ -43903,13 +42959,12 @@ const BodyContext = struct {
         const fn_node = try self.instNode(source_fn_ty);
         const function_nodes = try self.graph.functionNodes(fn_node);
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
-        var contains_generated_private = false;
         for (function_nodes.args, operands, request_args) |formal_node, operand, *request_arg| {
             switch (operand) {
                 .checked_expr => |checked_arg| {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     const public_node = try caller.instNode(arg_ty);
-                    try relateRequestComponent(self.graph, formal_node, public_node);
+                    try applyProducedTypeToRequest(self.graph, formal_node, public_node);
                     if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
                         request_arg.* = try checkedMonoRequestNode(
                             self.graph,
@@ -43917,7 +42972,7 @@ const BodyContext = struct {
                             evidence_node,
                         );
                     } else {
-                        request_arg.* = formal_node;
+                        request_arg.* = public_node;
                     }
                 },
                 .loop_iterator_state => {
@@ -43929,19 +42984,13 @@ const BodyContext = struct {
                     );
                 },
             }
-            if (try self.graph.containsGeneratedPrivate(request_arg.*)) contains_generated_private = true;
         }
         var request_ret = function_nodes.ret;
         if (expected_ret_ty) |expected| {
             const expected_node = try expected.toGraphNode(self.graph);
-            request_ret = if (try self.graph.containsGeneratedPrivate(expected_node))
-                expected_node
-            else
-                try checkedMonoRequestNode(self.graph, function_nodes.ret, expected_node);
-            if (try self.graph.containsGeneratedPrivate(request_ret)) contains_generated_private = true;
+            request_ret = try checkedMonoRequestNode(self.graph, function_nodes.ret, expected_node);
         }
-        if (contains_generated_private) return try self.graphFunctionNode(request_args, request_ret);
-        return fn_node;
+        return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
 
     fn iteratorOperandNode(
@@ -44307,7 +43356,7 @@ const BodyContext = struct {
             try self.graph.markRecursiveValueSlot(carry_node);
         }
         if (!self.graph.sameClass(carry_node, current_node)) {
-            try selectRequestRepresentation(self.graph, carry_node, current_node);
+            _ = try self.graph.applyProducedTypeToRequest(carry_node, current_node);
         }
         return try self.addExprWithTypeCell(carry.ty, .{ .local = current });
     }
@@ -44794,12 +43843,8 @@ const BodyContext = struct {
             },
             .graph_node => |requested_node| blk: {
                 const produced_node = try produced_cell.toGraphNode(self.graph);
-                const completes_request = try self.resultCompletesRequest(requested_node, produced_node);
-                const contains_generated_private = try self.graph.containsGeneratedPrivate(produced_node);
-                break :blk if (completes_request or contains_generated_private)
-                    produced_cell
-                else
-                    requested_cell;
+                _ = try self.graph.applyProducedTypeToRequest(requested_node, produced_node);
+                break :blk produced_cell;
             },
         };
         const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and self.patternCanMiss(pattern))
@@ -44857,11 +43902,7 @@ const BodyContext = struct {
             .sealed => |ty| try self.requireClosedCheckedType(pattern.ty, ty),
             .graph_node => |value_node| {
                 const pattern_node = try self.instNode(pattern.ty);
-                if (!try self.resultCompletesRequest(pattern_node, value_node) or
-                    try self.graph.containsGeneratedPrivate(value_node))
-                {
-                    try self.constrainCheckedInterfaceToCell(pattern.ty, ty_cell);
-                }
+                _ = try self.graph.applyProducedTypeToRequest(pattern_node, value_node);
             },
         }
         const data: BodyPatData = switch (pattern.data) {
@@ -47877,14 +46918,14 @@ test "request component relation follows root authority before nested private ev
         },
     } });
 
-    try relateRequestComponent(graph, public, private);
+    try applyProducedTypeToRequest(graph, public, private);
 
     try std.testing.expect(!graph.sameClass(public, private));
     try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public).named.backing.?.authority);
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private).named.backing.?.authority);
 }
 
-test "request component relation descends through matching private-bearing containers" {
+test "request component substitution preserves the exact produced container" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -47938,9 +46979,9 @@ test "request component relation descends through matching private-bearing conta
     const public_list = try graph.newNode(.{ .list = public_elem });
     const private_list = try graph.newNode(.{ .list = private_elem });
 
-    try relateRequestComponent(graph, public_list, private_list);
+    try applyProducedTypeToRequest(graph, public_list, private_list);
 
-    try std.testing.expect(graph.sameClass(public_list, private_list));
+    try std.testing.expect(!graph.sameClass(public_list, private_list));
     try std.testing.expect(!graph.sameClass(public_elem, private_elem));
     try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public_elem).named.backing.?.authority);
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_elem).named.backing.?.authority);
@@ -48002,7 +47043,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(mono_opaque).named.backing.?.authority);
 }
 
-test "checked-to-mono relation joins exact tag request roots without collapsing named payloads" {
+test "checked-to-mono substitution preserves the exact produced tag root" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -48056,9 +47097,9 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
 
     try relateCheckedNodeToMono(graph, checked_row, mono_row);
 
-    try std.testing.expect(graph.sameClass(checked_row, mono_row));
+    try std.testing.expect(!graph.sameClass(checked_row, mono_row));
     try std.testing.expect(!graph.sameClass(checked_payload, mono_payload));
-    try std.testing.expect(graph.sameClass(checked_backing, mono_backing));
+    try std.testing.expect(!graph.sameClass(checked_backing, mono_backing));
 }
 
 test "direct call request preserves generated-private return provenance" {

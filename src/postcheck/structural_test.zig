@@ -349,44 +349,36 @@ test "Monotype instantiation does not reopen empty tag union views" {
     try expectNotContains(solve_source, "reopenUnsolvedEmptyTagUnionView");
 }
 
-test "Monotype generated-private selection cannot become ordinary or reopen finished types" {
+test "Monotype lowering carries exact produced types without containment scans" {
     const solve_source = @embedFile("monotype/solve.zig");
-    const selection = sourceSliceBetween(
+    try expectNotContains(solve_source, "containsGeneratedPrivate");
+
+    const substitution = sourceSliceBetween(
         solve_source,
-        "pub fn selectGeneratedPrivateRepresentation(",
-        "fn relateOpaqueInterfacePair(",
+        "pub fn applyProducedTypeToRequest(",
+        "fn applyProducedTypePair(",
     );
-    try expectContains(selection, "incorrect public/private direction");
-    try expectContains(selection, "containsFinishedMono(public_node)");
-    try expectContains(selection, "containsFinishedMono(private_node)");
-    try expectContains(selection, "finished Monotype reached generated-private representation selection");
-    try expectContains(selection, "unifyRootsTransitively(public_node, private_node, true)");
+    try expectContains(substitution, "request_node: NodeId, produced_node: NodeId");
+    try expectContains(substitution, "return self.find(produced_node)");
 
     const ordinary_unify = sourceSliceBetween(
         solve_source,
         "pub fn unify(self: *InstGraph",
         "fn relationStamp(",
     );
-    try expectContains(ordinary_unify, "unifyRootsTransitively(a, b, false)");
+    try expectContains(ordinary_unify, "unifyRootsTransitively(a, b)");
     try expectContains(ordinary_unify, "generated-private representation reached ordinary public/private graph unification");
 
     const lower_source = @embedFile("monotype/lower.zig");
-    const request_selection = sourceSliceBetween(
-        lower_source,
-        "fn selectRequestRepresentation(",
-        "const HostedTryAdapterCapability",
-    );
-    try expectContains(request_selection, "containsFinishedMono(public_node)");
-    try expectContains(request_selection, "containsFinishedMono(private_node)");
-    try expectContains(request_selection, "relateOpaqueInterface(public_node, private_node)");
-    try expectContains(request_selection, "selectGeneratedPrivateRepresentation(public_node, private_node)");
+    try expectNotContains(lower_source, "containsGeneratedPrivate");
+    try expectNotContains(lower_source, "selectRequestRepresentation");
 
     const dispatch_selection = sourceSliceBetween(
         lower_source,
         "fn selectExprRepresentationAtNode(",
         "fn lowerCallExprAtNode(",
     );
-    try expectContains(dispatch_selection, "selectRequestRepresentation(");
+    try expectContains(dispatch_selection, "applyProducedTypeToRequest(");
     try expectContains(dispatch_selection, "try self.lowerExprTypeNode(checked_expr)");
 
     const dispatch_instantiation = sourceSliceBetween(
@@ -395,16 +387,15 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
         "fn relateFormalToOperand(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
-    try expectContains(dispatch_instantiation, "try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node)");
+    try expectContains(dispatch_instantiation, "try applyProducedTypeToRequest(self.graph, fn_graph.args[index], dispatcher_node)");
 
     const entry_wrapper = sourceSliceBetween(
         lower_source,
         "fn lowerEntryWrapperAtCell(",
         "fn instantiateTemplateDispatchRelations(",
     );
-    try expectContains(entry_wrapper, "try relateRequestComponent(self.graph, declared_ret_node, body_ret_node)");
-    try expectContains(entry_wrapper, "containsGeneratedPrivate(body_ret_node)");
-    try expectContains(entry_wrapper, ".ret = produced_ret_cell");
+    try expectContains(entry_wrapper, "applyProducedTypeToRequest(declared_ret_node, body_ret_node)");
+    try expectContains(entry_wrapper, ".ret = body_ret_cell");
 }
 
 test "Monotype active snapshots reject unresolved rows and cannot be refilled" {
@@ -695,7 +686,7 @@ test "Monotype match lowering relates patterns before specialization and project
         "fn savePatternBinders(",
     );
     try expectContains(match_source, "const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node)");
-    try expectContains(match_source, "try relateRequestComponent(");
+    try expectContains(match_source, "try self.graph.applyProducedTypeToRequest(");
     try expectContains(match_source, "try entry.ctx.preRegisterPatternBindersAtNode");
     try expectContains(match_source, "entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame");
     try expectContains(match_source, "try entry.ctx.lowerMatchBranchBody");
@@ -704,7 +695,7 @@ test "Monotype match lowering relates patterns before specialization and project
     try expectNotContains(match_source, "lowerPatternAtType(entry.pattern.pattern");
     try expectNotContains(lower_source, "rebindPreRegisteredPatternBindersAtNode");
 
-    const relate = std.mem.find(u8, match_source, "try relateRequestComponent(").?;
+    const relate = std.mem.find(u8, match_source, "try self.graph.applyProducedTypeToRequest(").?;
     const prepare_binders = std.mem.find(u8, match_source, "try entry.ctx.preRegisterPatternBindersAtNode").?;
     const prepare_result = std.mem.find(u8, match_source, "try entry.ctx.prepareControlFlowResultSelection").?;
     const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
@@ -825,7 +816,7 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(lower_source, "declared const use reached a hoisted deferred boundary");
     try expectContains(lower_source, "deferred hoisted const provenance referenced a different const template");
     try expectContains(lower_source, "ctx.restoredHoistedConstAtNode(entry, boundary.witness_node)");
-    try expectContains(lower_source, "relateRequestComponent(graph, boundary.witness_node, restored_node)");
+    try expectContains(lower_source, "graph.unify(boundary.witness_node, restored_node)");
     try expectNotContains(lower_source, "body_draft.exprs.items[reservation_index].ty = DraftTypeCell.fromGraphNode(boundary.request_node)");
     try expectNotContains(lower_source, "runtimeResultProducerForDraftCallee");
     try expectNotContains(lower_source, "runtimeDemandHasUninhabitedProducerGuard");
@@ -1282,7 +1273,7 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(lower_source, "instantiateTargetCallNodeFromMonoArgAtIndex");
     try expectNotContains(lower_source, "methodTargetMonoTypeFromArgAtIndexIsolated");
     try expectContains(iterator, "checkedMonoRequestNode");
-    try expectContains(iterator, "self.graphFunctionNode(request_args, request_ret)");
+    try expectContains(iterator, "functionRequestNode(self.graph, fn_node, request_args, request_ret)");
     try expectNotContains(iterator, "self.graph.unify(formal_node, try self.graph.importMono(evidence_ty))");
 }
 
