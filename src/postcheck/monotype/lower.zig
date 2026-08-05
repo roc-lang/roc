@@ -12366,16 +12366,22 @@ const InstantiationScopeId = enum(u64) { _ };
 const TypeInstantiationContext = struct {
     allocator: Allocator,
     id: InstantiationScopeId,
-    node_map: std.AutoHashMap(CheckedTypeAddress, NodeId),
+    module_bytes: [32]u8,
+    node_map: std.AutoHashMap(checked.CheckedTypeId, NodeId),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
-    decl_scopes: std.ArrayList(*std.AutoHashMap(CheckedTypeAddress, NodeId)) = .empty,
+    decl_scopes: std.ArrayList(*std.AutoHashMap(checked.CheckedTypeId, NodeId)) = .empty,
 
-    fn init(allocator: Allocator, id: InstantiationScopeId) TypeInstantiationContext {
+    fn init(
+        allocator: Allocator,
+        id: InstantiationScopeId,
+        module_bytes: [32]u8,
+    ) TypeInstantiationContext {
         return .{
             .allocator = allocator,
             .id = id,
-            .node_map = std.AutoHashMap(CheckedTypeAddress, NodeId).init(allocator),
+            .module_bytes = module_bytes,
+            .node_map = std.AutoHashMap(checked.CheckedTypeId, NodeId).init(allocator),
         };
     }
 
@@ -13010,7 +13016,7 @@ const BodyContext = struct {
             .draft = draft,
             .evidence = rootEvidence(owner_template, &.{}),
             .restore_evidence = rootEvidence(owner_template, &.{}),
-            .instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope()),
+            .instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), view.key.bytes),
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
             .equality_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
@@ -15141,8 +15147,11 @@ const BodyContext = struct {
         try self.constrainTypeToMono(checked_ty, mono_ty);
     }
 
-    fn typeAddress(self: *BodyContext, checked_ty: checked.CheckedTypeId) CheckedTypeAddress {
-        return checkedTypeAddress(self.view, checked_ty);
+    fn scopedCheckedType(self: *BodyContext, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+        if (!moduleBytesEqual(self.instantiation.module_bytes, self.view.key.bytes)) {
+            Common.invariant("checked type lookup used an instantiation context owned by another module");
+        }
+        return checked_ty;
     }
 
     fn lowerTypeNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
@@ -15311,14 +15320,14 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
         self.builder.countBodyDiagnostic("checked_node_requests");
-        const address = self.typeAddress(checked_ty);
-        if (self.scopedNode(address)) |existing| {
+        const scoped_ty = self.scopedCheckedType(checked_ty);
+        if (self.scopedNode(scoped_ty)) |existing| {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
             return existing;
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        try self.putScopedNode(address, placeholder);
+        try self.putScopedNode(scoped_ty, placeholder);
         const built = try self.instNodeContent(checked_ty);
         try self.graph.unify(placeholder, built);
         return placeholder;
@@ -15329,7 +15338,7 @@ const BodyContext = struct {
         defer timing_scope.end();
         self.builder.countBodyDiagnostic("fresh_checked_node_requests");
         const previous = self.instantiation;
-        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope());
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
         defer {
             self.instantiation.deinit();
             self.instantiation = previous;
@@ -15337,22 +15346,22 @@ const BodyContext = struct {
         return try self.instNode(checked_ty);
     }
 
-    fn scopedNode(self: *BodyContext, address: CheckedTypeAddress) ?NodeId {
+    fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?NodeId {
         var index = self.instantiation.decl_scopes.items.len;
         while (index > 0) {
             index -= 1;
-            if (self.instantiation.decl_scopes.items[index].get(address)) |existing| return existing;
+            if (self.instantiation.decl_scopes.items[index].get(checked_ty)) |existing| return existing;
         }
         if (self.instantiation.decl_scopes.items.len != 0) return null;
-        return self.instantiation.node_map.get(address);
+        return self.instantiation.node_map.get(checked_ty);
     }
 
-    fn putScopedNode(self: *BodyContext, address: CheckedTypeAddress, node: NodeId) Allocator.Error!void {
+    fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
         if (self.instantiation.decl_scopes.items.len != 0) {
-            try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(address, node);
+            try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(checked_ty, node);
             return;
         }
-        try self.instantiation.node_map.put(address, node);
+        try self.instantiation.node_map.put(checked_ty, node);
     }
 
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
@@ -15550,7 +15559,7 @@ const BodyContext = struct {
             const previous_view = self.view;
             const previous_instantiation = self.instantiation;
             self.view = source.view;
-            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope());
+            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), source.view.key.bytes);
             defer {
                 self.instantiation.deinit();
                 self.instantiation = previous_instantiation;
@@ -15571,10 +15580,10 @@ const BodyContext = struct {
         if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
-        var scope = std.AutoHashMap(CheckedTypeAddress, NodeId).init(self.allocator);
+        var scope = std.AutoHashMap(checked.CheckedTypeId, NodeId).init(self.allocator);
         defer scope.deinit();
         for (formal_args, args) |formal, arg| {
-            try scope.put(self.typeAddress(formal), arg);
+            try scope.put(self.scopedCheckedType(formal), arg);
         }
         try self.instantiation.decl_scopes.append(self.allocator, &scope);
         defer _ = self.instantiation.decl_scopes.pop();
@@ -48571,17 +48580,18 @@ test "checked type instantiation scopes have exact isolated identities" {
     builder.next_instantiation_scope = 0;
     builder.diagnostics = &diagnostics;
 
-    var first = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope());
+    const module_bytes = [_]u8{7} ** 32;
+    var first = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope(), module_bytes);
     defer first.deinit();
-    var second = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope());
+    var second = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope(), module_bytes);
     defer second.deinit();
 
     try std.testing.expect(first.id != second.id);
-    const address: CheckedTypeAddress = .{ .module_bytes = [_]u8{7} ** 32, .type_id = 11 };
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(11);
     const node: NodeId = @enumFromInt(13);
-    try first.node_map.put(address, node);
-    try std.testing.expectEqual(@as(?NodeId, node), first.node_map.get(address));
-    try std.testing.expectEqual(@as(?NodeId, null), second.node_map.get(address));
+    try first.node_map.put(checked_ty, node);
+    try std.testing.expectEqual(@as(?NodeId, node), first.node_map.get(checked_ty));
+    try std.testing.expectEqual(@as(?NodeId, null), second.node_map.get(checked_ty));
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
 }
 

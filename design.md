@@ -3494,13 +3494,16 @@ must be attached when the real dispatch call lowers; declaration-only replay
 evidence can never be consumed by body emission.
 
 Within the specialization, each body instantiation context has an exact fresh
-scope identity and caches nodes by `(scope id, checked module id, checked type
-id)`. The address is the checked identity of the type variable/content in that
-body specialization. It is not a structural digest, source name, runtime
-layout, object symbol, or generated procedure id. A child that needs independent
-generic cells receives a new scope identity; copying cells into that scope is
-explicit. Nodes begin unresolved. As relations are produced, explicit evidence
-from checked data unifies those nodes:
+scope identity, owns one checked module id, and caches nodes by checked type id
+inside that `(scope id, checked module id)` context. The module id is an
+invariant of the context rather than a repeated hash-map key; entering another
+checked module creates another context before any type id from that module is
+looked up. The resulting address is still the exact checked identity of the type
+variable/content in that body specialization. It is not a structural digest,
+source name, runtime layout, object symbol, or generated procedure id. A child
+that needs independent generic cells receives a new scope identity; copying
+cells into that scope is explicit. Nodes begin unresolved. As relations are
+produced, explicit evidence from checked data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
