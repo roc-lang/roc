@@ -39,10 +39,15 @@ update_box = |boxed| {
 	Box.box(next)
 }
 
-main! = |_seed| {
+main! = |seed| {
 	inner_box = Box.unbox(Box.box(boxed_callable_transition))({})
 	callable_result = Box.unbox(inner_box)({})
-	first = update_box(Box.box(Title({ frame_count: 5 })))
+	initial = if seed == 0 {
+		Title({ frame_count: 5 })
+	} else {
+		Game({ frame_count: 5, last_generated: 5 })
+	}
+	first = update_box(Box.box(initial))
 	first_model = Box.unbox(first)
 	model = update_model(first_model)
 
