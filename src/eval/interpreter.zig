@@ -9,6 +9,7 @@
 //! - all ordinary eval paths are forbidden from deciding ownership policy
 
 const std = @import("std");
+const collections = @import("collections");
 const builtin = @import("builtin");
 const base = @import("base");
 const layout_mod = @import("layout");
@@ -2268,7 +2269,7 @@ pub const Interpreter = struct {
             }
         }
 
-        var visited = std.AutoHashMap(CFStmtId, void).init(self.evalAllocator());
+        var visited = collections.DenseMap(CFStmtId, void).init(self.evalAllocator());
         defer visited.deinit();
         var stack = std.ArrayListUnmanaged(CFStmtId).empty;
         defer stack.deinit(self.evalAllocator());

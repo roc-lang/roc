@@ -89,6 +89,47 @@ are two distinct identities even when their declaring modules are
 byte-identical, and no deduplication, specialization, or merging step may
 collapse two externally-bound identities into one.
 
+### Dense IDs and structural keys
+
+Compiler-owned identity domains prefer dense, store-local integer IDs. The
+producer that owns an append-only table assigns its IDs densely from zero, or
+provides an explicit bijection to a dense ordinal when the ID's raw bits encode
+multiple disjoint namespaces. An identity with this contract is named `...Id`.
+The integer value of an `Id` is meaningful only in the scope of its owning
+store; it is not a stable serialization, object-file, or cross-process
+identity unless that store and its mapping are carried across the same
+boundary.
+
+Per-ID data is a parallel column on the owning store, or a
+`collections.DenseMap` when the column is dynamic or scoped. A short-lived
+scope over a larger ID domain uses a paged, reusable, epoch-based, or explicitly
+remapped dense column so that clearing and iteration remain proportional to the
+live scope. `DenseMap`'s sparse pages contain only ID-to-dense-position rows;
+its values occupy a compact live-entry column, so opening a sparse page never
+initializes a page of potentially large values. The size of the owning ID domain
+is not a reason to hash an ID. Direct columns avoid hashing, table growth,
+repeated key storage, allocator traffic, and duplicate per-consumer indexing
+work.
+
+The suffix `...Key` is reserved for structural or composite identity for which
+a dense owner-relative ID cannot preserve the required identity. Examples
+include identities which must remain stable before or across serialization,
+cache, object-file, or process boundaries where no owning ID table accompanies
+them. Prefer assigning or interning a dense `Id` at the producer boundary and
+passing that ID downstream. Use a `Key` only when such a dense ID cannot work,
+not merely to avoid maintaining the owning table, and never rename an `Id` to
+`Key` merely to permit hashing.
+
+The Zig source lint in `ci/zig_lints.zig` rejects a `HashMap` whose first type
+argument is named `...Id` (including qualified and multiline type names). This
+lint makes the naming contract mechanically useful: hashing an ID hides
+unnecessary work and often means that multiple consumers are rebuilding an
+index already represented by the producer's dense domain. Replace such a map
+with an owning-store column or `collections.DenseMap`. If the key genuinely
+requires structural identity, name it `...Key` only after establishing why a
+dense ID cannot represent it; changing the name solely to silence the lint
+violates this invariant.
+
 Backends do not reason about reference counting. They lower and execute the
 explicit LIR `incref`, `decref`, and `free` statements emitted before backend
 code generation. Each explicit RC statement carries the concrete RC helper
@@ -3481,11 +3522,31 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-Each specialization owns an instantiation graph: union-find nodes with explicit
-row-extension links, created by instantiating checked types on first touch. A
-context-free callee body never joins the caller's graph. Instead CheckedModule
-stores a complete specialization-interface relation table for every procedure
-template. Its records explicitly name checked equalities,
+Each independently sealed specialization group owns an instantiation graph:
+union-find nodes with explicit row-extension links, created by instantiating
+checked types on first touch. An ordinary procedure body begins a group by
+itself. The root producer may explicitly mark adjacent procedure-template roots
+as one shared group so a callee request proven equivalent under the complete
+graph-local specialization identity is reused before a second root replays that
+request. Test plans select this grouping; ordinary build and platform roots are
+independently sealed. Every root still uses a fresh instantiation scope, owns
+its own body and durable specialization record, and contributes its own checked
+relations; sharing the graph never authorizes importing a checked node from
+another scope. The reuse key includes callable family, method scope, checked
+source-function key, exact evidence topology, lexical context, and the exact
+function request interface. A different or still-unproven request remains
+independent.
+
+Instantiation graph node ids are dense, append-only indexes for the lifetime of
+the graph. Per-node optional attributes such as a row root's current extension
+and a generated-private request's source interface are therefore dense parallel
+columns, not hash tables keyed by node id. Union-find redirects may change which
+node is a class root, but they never renumber a node; root-owned columns are
+updated explicitly when a union moves that ownership.
+
+A context-free callee body never joins the caller group's graph. Instead
+CheckedModule stores a complete specialization-interface relation table for
+every procedure template. Its records explicitly name checked equalities,
 procedure/result relations, ordinary call interfaces and direct targets, and
 generalized local-procedure uses. A generalized scope also records its exact
 checked scheme root, so evidence paths are replayed against the same callable
@@ -3502,12 +3563,17 @@ BodyDraft data, are intentionally absent from durable specialization evidence, a
 must be attached when the real dispatch call lowers; declaration-only replay
 evidence can never be consumed by body emission.
 
-Within the specialization, each body instantiation context caches nodes by `(checked
-module id, checked type id)`. The address is the checked identity of the type
+Within the specialization, each body instantiation context has an exact fresh
+scope identity, owns one checked module id, and caches nodes by checked type id
+inside that `(scope id, checked module id)` context. The module id is an
+invariant of the context rather than a repeated hash-map key; entering another
+checked module creates another context before any type id from that module is
+looked up. The resulting address is still the exact checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
-source name, runtime layout, object symbol, or generated procedure id. Nodes
-begin unresolved. As relations are produced, explicit evidence from checked
-data unifies those nodes:
+source name, runtime layout, object symbol, or generated procedure id. A child
+that needs independent generic cells receives a new scope identity; copying
+cells into that scope is explicit. Nodes begin unresolved. As relations are
+produced, explicit evidence from checked data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -3609,6 +3675,30 @@ strings, deriving names, inspecting layouts, or using incidental expression
 shape. It must also not attach a contextual monotype to a checked expression id
 as if that checked expression were a reusable runtime value.
 
+Type-only instantiation state is separate from operational body-lowering state.
+Creating a fresh checked-type instance swaps only its exact scope, checked-node
+cache, and nominal declaration-scope stack; it does not construct a parallel
+body-lowering context. Type-only instantiation contexts do not materialize
+module-sized body tables.
+The dense checked-binder-to-draft-local table is allocated only when a body
+actually installs its first binding. Checked string literals are shared under
+the exact `(draft owner, checked module id, checked literal id)` address, so
+child and call contexts lowering the same retained body neither allocate
+parallel literal tables nor append duplicate draft literals. A draft value is
+never reused across body owners: suppressing one owner must suppress all of the
+content referenced only by that owner. Generated strings remain ordinary
+distinct draft entries because they have no checked literal identity.
+
+Checked roots explicitly record whether their graph contains identity
+variables, but closure does not authorize reuse across instantiation scopes.
+Specialization relations may still refine representation-bearing nominal
+backings below a closed public type. Every checked graph therefore instantiates
+fresh relation-production cells in its exact scope. Immutable `TypeId` imports
+are reserved for types explicitly completed by an earlier Monotype stage.
+Function roots and their components remain scope-local request-interface
+identities even when the complete checked graph is closed, so distinct
+callable requests never merge their relation-production identity.
+
 This distinction matters most for lambdas and closures. Expression-position
 functions are checked templates. Lowering a lambda or closure at an expected
 function type creates or reuses a nested Monotype function specialization keyed
@@ -3663,6 +3753,12 @@ snapshot cache and a subsequent inspection allocates a fresh snapshot rather
 than refilling an observed `TypeId`. The draft retains the graph node, not the
 snapshot id, and final sealing allocates fresh durable ids. Consequently no
 durable `TypeId` can change shape after a consumer has seen it.
+
+Snapshot invalidation is logically immediate but may be physically coalesced.
+A relation mutation marks the complete active-snapshot cache stale; the next
+inspection clears it once before performing any lookup. Multiple mutations with
+no intervening inspection therefore do not repeatedly clear the same cache, and
+no inspection may consume an entry produced before the most recent mutation.
 
 Interface-replay memo lookup has one narrower inspection operation. It may
 materialize an unresolved request as an immutable provisional scratch view,
@@ -3938,6 +4034,12 @@ must join capture slots and operands only by that explicit post-check identity;
 they never recover identity from binder, symbol, type, source text, or runtime
 representation.
 
+`CaptureId`'s raw bits reserve disjoint source-authored, check-generated, and
+lift-generated namespaces; the raw integer is therefore not itself a dense
+array offset. ID-keyed columns use the explicit `(index, namespace)` dense
+ordinal supplied by `CaptureId`, which interleaves the three namespaces without
+hashing or allocating across their reserved high-bit gaps.
+
 Draft body ownership is equally strict. A copied lexical binder map may expose
 an enclosing value to a nested function, but a source binding pattern always
 materializes its runtime local under the current specialization owner. It may
@@ -4113,7 +4215,12 @@ const MonoTypeNode = extern struct {
 The mutable instantiation graph may use union-find, row-extension links, and
 work queues while solving one specialization's interface and body relations.
 Its final output is an immutable `TypeId` in `MonoTypeStore`. After that point,
-the type node is never refilled.
+the type node is never refilled. Recursive groups may reserve type ids before
+their contents are available, but those slots are unavailable construction
+state: digest lookup and freezing are forbidden until every reserved slot has
+been filled. Filling a reserved slot completes a new immutable node; it does
+not mutate any older node, so cached digests for unrelated existing types
+remain valid.
 Rows are normalized once, with field and tag names in explicit sorted order,
 and the type digest is stored beside the node when the node is interned. Parent
 digests are computed from child digests, so structurally growing records and

@@ -176,7 +176,7 @@ fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
         const reuse_arg = proc.erased_reuse_arg.?;
         var work = std.ArrayList(lir.LIR.CFStmtId).empty;
         defer work.deinit(store.allocator);
-        var visited = std.AutoHashMap(lir.LIR.CFStmtId, void).init(store.allocator);
+        var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(store.allocator);
         defer visited.deinit();
         try work.append(store.allocator, proc.body.?);
         while (work.pop()) |stmt_id| {

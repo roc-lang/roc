@@ -1,6 +1,7 @@
 //! Structural LIR tests for post-check wrapper inlining.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 const eval = @import("eval");
@@ -157,6 +158,9 @@ const LowerMonotypeOptions = struct {
     specialization_cache: MonoLower.SpecializationCacheControl = .{},
     loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
+    diagnostics: ?*MonoLower.Diagnostics = null,
+    root_selection: enum { all, test_expects } = .all,
+    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -181,17 +185,33 @@ fn lowerMonotypeModuleWithOptions(
         view_index += 1;
     }
 
+    var selected_test_roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    defer selected_test_roots.deinit(allocator);
+    const root_requests = switch (options.root_selection) {
+        .all => resources.checked_artifact.root_requests.requests,
+        .test_expects => blk: {
+            for (resources.checked_artifact.root_requests.requests) |request| {
+                if (request.kind == .test_expect) try selected_test_roots.append(allocator, request);
+            }
+            break :blk selected_test_roots.items;
+        },
+    };
+
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{
+            .requests = root_requests,
+            .procedure_template_root_grouping = options.procedure_template_root_grouping,
+        },
         .{
             .specialization_cache = options.specialization_cache,
             .loaded_specialization_shards = options.loaded_specialization_shards,
             .specialization_counters = options.specialization_counters,
+            .diagnostics = options.diagnostics,
         },
     );
     errdefer mono.deinit();
@@ -1087,7 +1107,7 @@ fn collectAssignCallProcs(
     defer work.deinit(allocator);
     try work.append(allocator, body);
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |stmt_id| {
@@ -1247,7 +1267,7 @@ fn reachableIterCollectShape(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |proc_id| {
@@ -1273,7 +1293,7 @@ fn reachableProcShapeCount(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var count: usize = 0;
@@ -1845,6 +1865,37 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .nominal_backing_reuses = 1,
         .nominal_backing_instantiations = 86,
     });
+}
+
+test "test roots share template work only when explicitly grouped" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\expect identity(1) == 1
+        \\expect identity(2) == 2
+        \\
+        \\main = 0
+    ;
+
+    var isolated_diagnostics = MonoLower.Diagnostics{};
+    var isolated = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &isolated_diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer isolated.deinit(allocator);
+
+    var shared_diagnostics = MonoLower.Diagnostics{};
+    var shared = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &shared_diagnostics,
+        .root_selection = .test_expects,
+        .procedure_template_root_grouping = .shared_adjacent,
+    });
+    defer shared.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 0), isolated_diagnostics.body.cross_root_template_reuses);
+    try std.testing.expect(shared_diagnostics.body.cross_root_template_reuses > 0);
 }
 
 test "issue 10529 open Try chain with named local callback stays bounded" {
@@ -3350,7 +3401,7 @@ fn collectLirResultProcShape(
     defer work.deinit(allocator);
     try work.append(allocator, body);
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |stmt_id| {
@@ -3492,7 +3543,7 @@ fn reachableProcDebugName(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |proc_id| {
@@ -3519,7 +3570,7 @@ fn reachableProcShapeFieldTotal(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var total: usize = 0;
@@ -3946,7 +3997,7 @@ fn reachableReturnSlotProcCount(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var count: usize = 0;
@@ -6765,7 +6816,7 @@ fn recordFieldReadCounts(
     const proc = store.getProcSpec(proc_id);
     const body = proc.body orelse return .{ .before_first_call = 0, .total = 0 };
 
-    var aliases = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var aliases = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer aliases.deinit();
     try aliases.put(record, {});
 
@@ -6870,9 +6921,9 @@ fn fieldReadRetainCount(
     const proc = store.getProcSpec(proc_id);
     const body = proc.body orelse return 0;
 
-    var read_targets = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var read_targets = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer read_targets.deinit();
-    var retained = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var retained = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer retained.deinit();
     var visited = std.AutoHashMap(u32, void).init(allocator);
     defer visited.deinit();

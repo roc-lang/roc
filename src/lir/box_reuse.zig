@@ -32,6 +32,7 @@
 //! validate the payload/box layouts before rewriting.
 
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -580,7 +581,7 @@ const Transform = struct {
 
         var work = std.ArrayList(CFStmtId).empty;
         defer work.deinit(self.store.allocator);
-        var visited = std.AutoHashMap(CFStmtId, void).init(self.store.allocator);
+        var visited = collections.DenseMap(CFStmtId, void).init(self.store.allocator);
         defer visited.deinit();
 
         var count: usize = 0;

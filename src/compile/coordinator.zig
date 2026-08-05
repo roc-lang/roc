@@ -4275,7 +4275,7 @@ pub const Coordinator = struct {
         const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(allocator, expected_capacity);
         errdefer imported_envs.deinit(allocator);
-        var local_module_indices = std.AutoHashMap(ModuleId, u32).init(allocator);
+        var local_module_indices = collections.DenseMap(ModuleId, u32).init(allocator);
         defer local_module_indices.deinit();
 
         try imported_envs.append(allocator, self.builtin_modules.builtin_module.env);

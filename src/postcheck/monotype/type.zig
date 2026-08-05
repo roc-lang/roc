@@ -280,9 +280,10 @@ pub const Store = struct {
     types: StoreList(Content, "types"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
-    type_digest_generations: StoreList(u64, "type_digest_generations"),
-    specialization_digest_generations: StoreList(u64, "specialization_digest_generations"),
-    digest_cache_generation: u64,
+    /// Newly reserved recursive slots may be referenced while their content is
+    /// being built, but they are not observable types until filled. Filled
+    /// nodes are immutable, which makes their cached digests permanently valid.
+    constructing: StoreList(bool, "constructing"),
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     tags: StoreList(Tag, "tags"),
@@ -295,9 +296,7 @@ pub const Store = struct {
             .types = .empty,
             .type_digests = .empty,
             .specialization_digests = .empty,
-            .type_digest_generations = .empty,
-            .specialization_digest_generations = .empty,
-            .digest_cache_generation = 1,
+            .constructing = .empty,
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -311,14 +310,16 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
-        self.specialization_digest_generations.deinit(self.allocator);
-        self.type_digest_generations.deinit(self.allocator);
+        self.constructing.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
     }
 
     pub fn freeze(self: *Store) void {
+        for (self.constructing.unsafeRawItemsForView()) |unfinished| {
+            if (unfinished) Common.invariant("cannot freeze Monotype types with an unfinished reserved slot");
+        }
         self.frozen = true;
     }
 
@@ -379,9 +380,7 @@ pub const Store = struct {
         errdefer _ = self.type_digests.pop();
         try self.specialization_digests.append(self.allocator, null);
         errdefer _ = self.specialization_digests.pop();
-        try self.type_digest_generations.append(self.allocator, 0);
-        errdefer _ = self.type_digest_generations.pop();
-        try self.specialization_digest_generations.append(self.allocator, 0);
+        try self.constructing.append(self.allocator, false);
         return @enumFromInt(@as(u32, @intCast(index)));
     }
 
@@ -403,13 +402,19 @@ pub const Store = struct {
     }
 
     fn reserveSlot(self: *Store) std.mem.Allocator.Error!TypeId {
-        return try self.add(.zst);
+        const reserved = try self.add(.zst);
+        self.constructing.set(@intFromEnum(reserved), true);
+        return reserved;
     }
 
     fn fillReservedSlot(self: *Store, ty: TypeId, content: Content) void {
         self.assertMutable();
-        self.types.set(@intFromEnum(ty), content);
-        self.clearTypeDigestCache();
+        const index = @intFromEnum(ty);
+        if (!self.constructing.unsafeRawItemsForView()[index]) {
+            Common.invariant("filled a Monotype type slot that was not under construction");
+        }
+        self.types.set(index, content);
+        self.constructing.set(index, false);
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
@@ -444,8 +449,7 @@ pub const Store = struct {
         types_len: usize,
         type_digests_len: usize,
         specialization_digests_len: usize,
-        type_digest_generations_len: usize,
-        specialization_digest_generations_len: usize,
+        constructing_len: usize,
         spans_len: usize,
         fields_len: usize,
         tags_len: usize,
@@ -457,8 +461,7 @@ pub const Store = struct {
             .types_len = self.types.len(),
             .type_digests_len = self.type_digests.len(),
             .specialization_digests_len = self.specialization_digests.len(),
-            .type_digest_generations_len = self.type_digest_generations.len(),
-            .specialization_digest_generations_len = self.specialization_digest_generations.len(),
+            .constructing_len = self.constructing.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
             .tags_len = self.tags.len(),
@@ -471,8 +474,7 @@ pub const Store = struct {
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
-        self.type_digest_generations.restoreLen(mark_.type_digest_generations_len);
-        self.specialization_digest_generations.restoreLen(mark_.specialization_digest_generations_len);
+        self.constructing.restoreLen(mark_.constructing_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
         self.tags.restoreLen(mark_.tags_len);
@@ -504,6 +506,7 @@ pub const Store = struct {
     }
 
     pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
+        self.requireConstructed(ty);
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         var visiting = DigestVisiting{};
         self.writeTypeDigest(name_store, &hasher, ty, &visiting, .full);
@@ -511,6 +514,7 @@ pub const Store = struct {
     }
 
     pub fn specializationDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
+        self.requireConstructed(ty);
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         var visiting = DigestVisiting{};
         self.writeTypeDigest(name_store, &hasher, ty, &visiting, .identity_only);
@@ -778,13 +782,15 @@ pub const Store = struct {
         identity_only,
     };
 
-    fn clearTypeDigestCache(self: *Store) void {
-        if (self.digest_cache_generation == std.math.maxInt(u64)) Common.invariant("Monotype digest cache generation exhausted");
-        self.digest_cache_generation += 1;
-    }
-
     fn assertMutable(self: *const Store) void {
         if (self.frozen) Common.invariant("frozen Monotype type store cannot be mutated");
+    }
+
+    fn requireConstructed(self: *const Store, ty: TypeId) void {
+        const index = @intFromEnum(ty);
+        if (index >= self.constructing.len() or self.constructing.unsafeRawItemsForView()[index]) {
+            Common.invariant("Monotype digest requested for an unfinished type slot");
+        }
     }
 
     fn typeRefInBounds(self: *const Store, ty: TypeId) bool {
@@ -856,6 +862,7 @@ pub const Store = struct {
         ctx: *CachedDigestContext,
         stats: ?*DigestStats,
     ) names.TypeDigest {
+        self.requireConstructed(ty);
         for (ctx.items[0..ctx.len], 0..) |open_ty, position| {
             if (open_ty == ty) {
                 ctx.cycle_count += 1;
@@ -870,19 +877,15 @@ pub const Store = struct {
         const index = @intFromEnum(ty);
         switch (named_mode) {
             .full => {
-                if (self.type_digest_generations.unsafeRawItemsForView()[index] == self.digest_cache_generation) {
-                    if (self.type_digests.unsafeRawItemsForView()[index]) |digest| {
-                        if (stats) |s| s.cache_hits += 1;
-                        return digest;
-                    }
+                if (self.type_digests.unsafeRawItemsForView()[index]) |digest| {
+                    if (stats) |s| s.cache_hits += 1;
+                    return digest;
                 }
             },
             .identity_only => {
-                if (self.specialization_digest_generations.unsafeRawItemsForView()[index] == self.digest_cache_generation) {
-                    if (self.specialization_digests.unsafeRawItemsForView()[index]) |digest| {
-                        if (stats) |s| s.cache_hits += 1;
-                        return digest;
-                    }
+                if (self.specialization_digests.unsafeRawItemsForView()[index]) |digest| {
+                    if (stats) |s| s.cache_hits += 1;
+                    return digest;
                 }
             },
         }
@@ -907,14 +910,8 @@ pub const Store = struct {
         const digest: names.TypeDigest = .{ .bytes = hasher.finalResult() };
         if (ctx.cycle_count == cycle_count_before) {
             switch (named_mode) {
-                .full => {
-                    self.type_digests.set(index, digest);
-                    self.type_digest_generations.set(index, self.digest_cache_generation);
-                },
-                .identity_only => {
-                    self.specialization_digests.set(index, digest);
-                    self.specialization_digest_generations.set(index, self.digest_cache_generation);
-                },
+                .full => self.type_digests.set(index, digest),
+                .identity_only => self.specialization_digests.set(index, digest),
             }
         }
         return digest;
@@ -1199,6 +1196,7 @@ pub const Store = struct {
         visiting: *DigestVisiting,
         named_mode: NamedDigestMode,
     ) void {
+        self.requireConstructed(ty);
         for (visiting.items[0..visiting.len], 0..) |open_ty, position| {
             if (open_ty == ty) {
                 writeBytes(hasher, "cycle");
@@ -2986,7 +2984,7 @@ test "monotype digest terminates on recursive structural types" {
     try std.testing.expect(std.mem.eql(u8, first.bytes[0..], other.bytes[0..]));
 }
 
-test "monotype cached digest reuses acyclic child digests and invalidates on reserved refill" {
+test "monotype cached digest survives completion of an unrelated reserved slot" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -3015,14 +3013,15 @@ test "monotype cached digest reuses acyclic child digests and invalidates on res
     try std.testing.expectEqual(@as(u64, 1), outer_stats.cache_misses);
     try std.testing.expectEqual(@as(u64, 1), outer_stats.nodes_visited);
 
-    store.fillReservedSlot(inner, .{ .record = Span.empty() });
+    const unrelated = try store.reserveSlot();
+    store.fillReservedSlot(unrelated, .{ .record = Span.empty() });
 
-    var after_refill_stats: Store.DigestStats = .{};
-    const after_refill = store.typeDigestCached(&name_store, inner, &after_refill_stats);
-    try std.testing.expect(!std.mem.eql(u8, inner_digest.bytes[0..], after_refill.bytes[0..]));
-    try std.testing.expectEqual(@as(u64, 0), after_refill_stats.cache_hits);
-    try std.testing.expectEqual(@as(u64, 1), after_refill_stats.cache_misses);
-    try std.testing.expectEqual(@as(u64, 1), after_refill_stats.nodes_visited);
+    var after_fill_stats: Store.DigestStats = .{};
+    const after_fill = store.typeDigestCached(&name_store, inner, &after_fill_stats);
+    try std.testing.expect(std.mem.eql(u8, inner_digest.bytes[0..], after_fill.bytes[0..]));
+    try std.testing.expectEqual(@as(u64, 1), after_fill_stats.cache_hits);
+    try std.testing.expectEqual(@as(u64, 0), after_fill_stats.cache_misses);
+    try std.testing.expectEqual(@as(u64, 0), after_fill_stats.nodes_visited);
 }
 
 test "monotype cached digest stays stable across multiple edges into one recursive group" {

@@ -201,12 +201,12 @@ fn certifyStoreWithWorkStats(
         .sigs = sigs,
         .rc_local = rc_local,
         .lender_arena = std.heap.ArenaAllocator.init(allocator),
-        .records = std.AutoHashMap(LIR.JoinPointId, JoinRecord).init(allocator),
+        .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
         .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
-        .repr_scratch = std.AutoHashMap(ValueId, u32).init(allocator),
-        .join_bodies = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
-        .reads_before_rebind_cache = std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
-        .erased_owner_states = std.AutoHashMap(LIR.LocalId, ErasedOwnerState).init(allocator),
+        .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
+        .join_bodies = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
+        .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
+        .erased_owner_states = collections.DenseMap(LIR.LocalId, ErasedOwnerState).init(allocator),
         .diag = diag,
         .work_stats = work_stats,
     };
@@ -577,7 +577,7 @@ fn writeFailureContext(
     }
     context.append("\n", .{});
 
-    var reachable = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
+    var reachable = collections.DenseMap(LIR.CFStmtId, void).init(store.allocator);
     defer reachable.deinit();
     if (proc.body) |body| {
         var walk = std.ArrayList(LIR.CFStmtId).empty;
@@ -1168,27 +1168,27 @@ const Certifier = struct {
     rc_local: []const bool,
     values: std.ArrayList(ValueInfo) = .empty,
     lender_arena: std.heap.ArenaAllocator,
-    records: std.AutoHashMap(LIR.JoinPointId, JoinRecord),
+    records: collections.DenseMap(LIR.JoinPointId, JoinRecord),
     memo: std.AutoHashMap(MemoEntry, void),
     /// Statements with more than one structural predecessor. Only these
     /// statements can be revisited by distinct control-flow walks, so only
     /// these need quotient-state memoization.
     memo_points: std.bit_set.DynamicBitSetUnmanaged = .{},
     summary_scratch: std.ArrayList(LocalSummary) = .empty,
-    repr_scratch: std.AutoHashMap(ValueId, u32),
+    repr_scratch: collections.DenseMap(ValueId, u32),
     /// Dense position per reference-counted store local used by the proc
     /// being certified, or `no_dense` otherwise.
     local_dense: std.ArrayList(u32) = .empty,
     /// Reference-counted store local id per dense position.
     proc_locals: std.ArrayList(LIR.LocalId) = .empty,
     /// Join bodies of the proc being certified, for jump-following scans.
-    join_bodies: std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId),
+    join_bodies: collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId),
     /// Per-proc cache for join-body read-before-rebind sets. These bitsets use
     /// dense proc-local positions, so the cache is cleared at each proc boundary.
-    reads_before_rebind_cache: std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged),
+    reads_before_rebind_cache: collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged),
     /// Exact erased-allocation producer relation for the current proc, plus
     /// calls checked after every reachable definition has been collected.
-    erased_owner_states: std.AutoHashMap(LIR.LocalId, ErasedOwnerState),
+    erased_owner_states: collections.DenseMap(LIR.LocalId, ErasedOwnerState),
     erased_call_owner_checks: std.ArrayList(ErasedCallOwnerCheck) = .empty,
     /// Scratch bitset over dense proc-local positions, reused by
     /// join-relevance extension.
@@ -2123,7 +2123,7 @@ const Certifier = struct {
             try self.noteErasedOwnerDefinition(param, null);
         }
 
-        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.allocator);
+        var visited = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
@@ -2507,14 +2507,14 @@ const Certifier = struct {
         allocator: Allocator,
         nodes: std.ArrayList(ReadBeforeRebindNode),
         successors: std.ArrayList(LIR.CFStmtId),
-        indices: std.AutoHashMap(LIR.CFStmtId, usize),
+        indices: collections.DenseMap(LIR.CFStmtId, usize),
 
         fn init(allocator: Allocator) ReadBeforeRebindGraph {
             return .{
                 .allocator = allocator,
                 .nodes = .empty,
                 .successors = .empty,
-                .indices = std.AutoHashMap(LIR.CFStmtId, usize).init(allocator),
+                .indices = collections.DenseMap(LIR.CFStmtId, usize).init(allocator),
             };
         }
     };
