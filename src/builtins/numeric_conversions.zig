@@ -4,6 +4,14 @@ const std = @import("std");
 const dec = @import("dec.zig");
 const i128h = @import("compiler_rt_128.zig");
 
+/// The widest integer Roc has. Every conversion here computes its result at this
+/// width before narrowing to the target, so a target wider than this cannot be
+/// represented.
+pub const max_int_bits: u32 = 128;
+
+/// `max_int_bits` as a byte count, for sizing a result's byte representation.
+pub const max_int_bytes: u32 = max_int_bits / 8;
+
 /// Exact F64 representation of the greatest finite F32 value.
 pub const f32_max_as_f64: f64 = std.math.floatMax(f32);
 
@@ -116,7 +124,7 @@ pub fn floatToIntTryBits(comptime Float: type, value: Float, target_bits: u32, t
 /// 2^target_bits. This works from the IEEE-754 representation directly so
 /// wrapping does not itself incur float rounding near a modulus boundary.
 pub fn floatToIntWrapBits(comptime Float: type, value: Float, target_bits: u32) u128 {
-    std.debug.assert(target_bits > 0 and target_bits <= 128);
+    std.debug.assert(target_bits > 0 and target_bits <= max_int_bits);
 
     const Bits = if (Float == f32)
         u32
@@ -172,7 +180,7 @@ pub fn floatToIntWrap(comptime Float: type, comptime Int: type, value: Float) In
 /// integer part wraps modulo 2^target_bits. The division runs at 128 bits
 /// because a Dec's integer part goes up to ~1.7e20, past what an i64 holds.
 pub fn decToIntWrapBits(dec_value: i128, target_bits: u32) u128 {
-    std.debug.assert(target_bits > 0 and target_bits <= 128);
+    std.debug.assert(target_bits > 0 and target_bits <= max_int_bits);
 
     const whole_part = i128h.divTrunc_i128(dec_value, dec.RocDec.one_point_zero_i128);
     const magnitude: u128 = @bitCast(whole_part);

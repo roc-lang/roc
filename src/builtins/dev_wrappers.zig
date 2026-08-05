@@ -1591,7 +1591,7 @@ pub fn roc_builtins_dec_to_i64_trunc(low: u64, high: u64) callconv(.c) i64 {
 pub fn roc_builtins_dec_to_int_wrap(out: [*]u8, dec_low: u64, dec_high: u64, target_bits: u32, val_size: u32) callconv(.c) void {
     const dec_val: i128 = @bitCast(i128h.from_u64_pair(dec_low, dec_high));
     const bits = numeric_conversions.decToIntWrapBits(dec_val, target_bits);
-    const v_bytes: [16]u8 = @bitCast(bits);
+    const v_bytes: [numeric_conversions.max_int_bytes]u8 = @bitCast(bits);
     @memcpy(out[0..val_size], v_bytes[0..val_size]);
 }
 
@@ -1765,14 +1765,14 @@ pub fn roc_builtins_f32_to_int_try_unsafe(out: [*]u8, val: f32, target_bits: u32
 /// f32 → integer wrapping conversion (writes val_size result bytes to out)
 pub fn roc_builtins_f32_to_int_wrap(out: [*]u8, val: f32, target_bits: u32, val_size: u32) callconv(.c) void {
     const bits = numeric_conversions.floatToIntWrapBits(f32, val, target_bits);
-    const v_bytes: [16]u8 = @bitCast(bits);
+    const v_bytes: [numeric_conversions.max_int_bytes]u8 = @bitCast(bits);
     @memcpy(out[0..val_size], v_bytes[0..val_size]);
 }
 
 /// f64 → integer wrapping conversion (writes val_size result bytes to out)
 pub fn roc_builtins_f64_to_int_wrap(out: [*]u8, val: f64, target_bits: u32, val_size: u32) callconv(.c) void {
     const bits = numeric_conversions.floatToIntWrapBits(f64, val, target_bits);
-    const v_bytes: [16]u8 = @bitCast(bits);
+    const v_bytes: [numeric_conversions.max_int_bytes]u8 = @bitCast(bits);
     @memcpy(out[0..val_size], v_bytes[0..val_size]);
 }
 
