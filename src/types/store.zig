@@ -770,11 +770,6 @@ pub const Store = struct {
         /// whose error has already been reported, and the redirect only lets
         /// checking continue past it.
         diagnostic_recovery_reported_error,
-        /// (ii) design.md "Platform/App Relation" (for-clause alias identity):
-        /// a platform requirement's for-clause alias is a binder over an
-        /// app-supplied type, so copied occurrences of the alias resolve to the
-        /// app's own type declaration.
-        for_clause_alias_identity,
         /// (ii) design.md "Hosted Try Question Widening": `?` on a direct call
         /// of a hosted function widens the condition's closed error row to the
         /// enclosing annotated return's error row when every visible error is
