@@ -131,7 +131,7 @@ pub const CaptureId = enum(u32) {
         return @as(usize, index) * 3 + namespace;
     }
 
-    /// Recover a namespaced identity from its direct-column index.
+    /// Construct a namespaced identity from its direct-column index.
     pub fn fromDenseIndex(dense_index: usize) CaptureId {
         const index: u32 = @intCast(dense_index / 3);
         return switch (dense_index % 3) {

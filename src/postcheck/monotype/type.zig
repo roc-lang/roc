@@ -281,7 +281,7 @@ pub const Store = struct {
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
     /// Newly reserved recursive slots may be referenced while their content is
-    /// being built, but they are not observable types until filled. Published
+    /// being built, but they are not observable types until filled. Filled
     /// nodes are immutable, which makes their cached digests permanently valid.
     constructing: StoreList(bool, "constructing"),
     spans: StoreList(TypeId, "spans"),

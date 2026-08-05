@@ -109,7 +109,7 @@ Direct columns avoid hashing, table growth, repeated key storage, allocator
 traffic, and duplicate per-consumer indexing work.
 
 The suffix `...Key` is reserved for structural or composite identity for which
-a dense owner-relative ID cannot preserve the required semantics. Examples
+a dense owner-relative ID cannot preserve the required identity. Examples
 include identities which must remain stable before or across serialization,
 cache, object-file, or process boundaries where no owning ID table accompanies
 them. Prefer assigning or interning a dense `Id` at the producer boundary and
@@ -4007,7 +4007,7 @@ must join capture slots and operands only by that explicit post-check identity;
 they never recover identity from binder, symbol, type, source text, or runtime
 representation.
 
-`CaptureId`'s raw bits reserve disjoint canonical, check-generated, and
+`CaptureId`'s raw bits reserve disjoint source-authored, check-generated, and
 lift-generated namespaces; the raw integer is therefore not itself a dense
 array offset. ID-keyed columns use the explicit `(index, namespace)` dense
 ordinal supplied by `CaptureId`, which interleaves the three namespaces without
@@ -4189,11 +4189,11 @@ The mutable instantiation graph may use union-find, row-extension links, and
 work queues while solving one specialization's interface and body relations.
 Its final output is an immutable `TypeId` in `MonoTypeStore`. After that point,
 the type node is never refilled. Recursive groups may reserve type ids before
-their contents are available, but those slots are unpublished construction
+their contents are available, but those slots are unavailable construction
 state: digest lookup and freezing are forbidden until every reserved slot has
-been filled. Filling a reserved slot publishes a new immutable node; it does
-not mutate any previously published node, so cached digests for unrelated
-published types remain valid.
+been filled. Filling a reserved slot completes a new immutable node; it does
+not mutate any older node, so cached digests for unrelated existing types
+remain valid.
 Rows are normalized once, with field and tag names in explicit sorted order,
 and the type digest is stored beside the node when the node is interned. Parent
 digests are computed from child digests, so structurally growing records and
