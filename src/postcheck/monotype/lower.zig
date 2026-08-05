@@ -13197,19 +13197,38 @@ const BodyContext = struct {
     }
 
     fn addConstructorExprAtNode(self: *BodyContext, node: NodeId, data: BodyExprData) Allocator.Error!DraftExprId {
-        return switch (self.graph.content(node)) {
+        const representation_node = self.constructorRepresentationNode(node);
+        return switch (self.graph.content(representation_node)) {
             .named => blk: {
-                const named = self.graph.namedNodes(node);
+                const named = self.graph.namedNodes(representation_node);
+                if (named.kind == .alias) Common.invariant("constructor representation retained a transparent alias node");
                 const backing = named.backing orelse
                     Common.invariant("named constructor graph node had no explicit backing");
                 const backing_expr = try self.addConstructorExprAtNode(backing.node, data);
                 break :blk try self.addExprWithTypeCell(
-                    DraftTypeCell.fromGraphNode(node),
+                    DraftTypeCell.fromGraphNode(representation_node),
                     .{ .nominal = backing_expr },
                 );
             },
             else => try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(node), data),
         };
+    }
+
+    /// Follow only producer-authored transparent alias edges to the runtime
+    /// representation node used by constructor and pattern topology. A
+    /// nominal or opaque node remains as an explicit construction layer;
+    /// an alias never creates a `.nominal` expression or pattern.
+    fn constructorRepresentationNode(self: *BodyContext, node: NodeId) NodeId {
+        var current = node;
+        while (self.graph.content(current) == .named) {
+            const named = self.graph.namedNodes(current);
+            if (named.kind != .alias) return current;
+            const backing = named.backing orelse
+                Common.invariant("transparent alias graph node had no explicit backing");
+            if (backing.node == current) Common.invariant("transparent alias backing did not advance");
+            current = backing.node;
+        }
+        return current;
     }
 
     /// Pattern counterpart to `addConstructorExpr`, used by compiler-generated
@@ -13232,6 +13251,14 @@ const BodyContext = struct {
     }
 
     fn addPatWithTypeCell(self: *BodyContext, ty: DraftTypeCell, data: BodyPatData) Allocator.Error!DraftPatId {
+        if (std.debug.runtime_safety and data == .nominal) {
+            switch (ty) {
+                .graph_node => |node| if (self.graph.content(node) == .named and self.graph.namedNodes(node).kind == .alias) {
+                    Common.invariant("Monotype graph lowering emitted a nominal pattern at an alias type");
+                },
+                .sealed => {},
+            }
+        }
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
         const id = try self.draft.addPat(.{ .ty = ty, .data = data });
@@ -27565,7 +27592,11 @@ const BodyContext = struct {
                 ),
             ),
             .nominal => |nominal| blk: {
-                const named = self.graph.namedNodes(request_node);
+                const representation_node = self.constructorRepresentationNode(request_node);
+                if (self.graph.content(representation_node) != .named) {
+                    Common.invariant("ConstStore nominal restored without a nominal graph representation");
+                }
+                const named = self.graph.namedNodes(representation_node);
                 const backing = named.backing orelse
                     Common.invariant("ConstStore nominal restored with a named graph node that had no backing");
                 const backing_expr = try self.restoreConstNodeAtNodeWithStaticRoot(
@@ -27576,7 +27607,7 @@ const BodyContext = struct {
                     static_data_const_locator,
                 );
                 break :blk try self.addExprWithTypeCell(
-                    DraftTypeCell.fromGraphNode(request_node),
+                    DraftTypeCell.fromGraphNode(representation_node),
                     .{ .nominal = backing_expr },
                 );
             },
@@ -29421,7 +29452,11 @@ const BodyContext = struct {
         nominal: anytype,
         nominal_node: NodeId,
     ) Allocator.Error!void {
-        const named = self.graph.namedNodes(nominal_node);
+        const representation_node = self.constructorRepresentationNode(nominal_node);
+        if (self.graph.content(representation_node) != .named) {
+            Common.invariant("nominal constructor had no nominal graph representation");
+        }
+        const named = self.graph.namedNodes(representation_node);
         const backing_node = (named.backing orelse
             Common.invariant("nominal constructor graph node had no backing")).node;
         try self.relateExprAtNode(nominal.backing_expr, backing_node);
@@ -30869,7 +30904,11 @@ const BodyContext = struct {
         nominal: anytype,
         nominal_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        const named = self.graph.namedNodes(nominal_node);
+        const representation_node = self.constructorRepresentationNode(nominal_node);
+        if (self.graph.content(representation_node) != .named) {
+            Common.invariant("nominal constructor had no nominal graph representation");
+        }
+        const named = self.graph.namedNodes(representation_node);
         const backing_node = (named.backing orelse
             Common.invariant("nominal constructor graph node had no backing")).node;
         try self.prepareConstructorChildrenAtNodes(&.{nominal.backing_expr}, &.{backing_node});
@@ -30878,7 +30917,7 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(backing_node),
         );
         return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(nominal_node),
+            DraftTypeCell.fromGraphNode(representation_node),
             .{ .nominal = backing },
         );
     }
@@ -44986,6 +45025,7 @@ const BodyContext = struct {
         }
 
         const pattern = self.view.bodies.pattern(pattern_id);
+        const representation_node = self.constructorRepresentationNode(node);
         const data: BodyPatData = switch (pattern.data) {
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPatternPlanPlaceholderAtNode(as.pattern, node, pending),
@@ -44993,11 +45033,14 @@ const BodyContext = struct {
                     Common.invariant("materialized as-pattern binder was not pre-registered"),
             } },
             .applied_tag => |tag| blk: {
-                if (self.graph.content(node) == .named) {
-                    const backing = self.graph.namedNodes(node).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
-                    if (backing.node == node) Common.invariant("nominal tag pattern shell backing did not advance");
-                    break :blk .{ .nominal = try self.lowerPatternShellAtNodeInner(pattern_id, backing.node, pending, active) };
+                    if (backing.node == representation_node) Common.invariant("nominal tag pattern shell backing did not advance");
+                    return try self.addPatWithTypeCell(
+                        DraftTypeCell.fromGraphNode(representation_node),
+                        .{ .nominal = try self.lowerPatternShellAtNodeInner(pattern_id, backing.node, pending, active) },
+                    );
                 }
                 const name = try self.builder.tagName(self.view, tag.name);
                 const payloads = try self.allocator.alloc(DraftPatId, tag.args.len);
@@ -45005,24 +45048,33 @@ const BodyContext = struct {
                 for (tag.args, 0..) |arg, payload_index| {
                     payloads[payload_index] = try self.lowerPatternPlanPlaceholderAtNode(
                         arg,
-                        try self.graph.tagPayloadNode(node, name, payload_index),
+                        try self.graph.tagPayloadNode(representation_node, name, payload_index),
                         pending,
                     );
                 }
                 break :blk .{ .tag = .{ .name = name, .payloads = try self.addPatSpan(payloads) } };
             },
-            .nominal => |nominal| blk: {
-                const backing = self.graph.namedNodes(node).backing orelse
+            .nominal => |nominal| {
+                if (self.graph.content(representation_node) != .named) {
+                    Common.invariant("checked nominal pattern had no nominal graph representation");
+                }
+                const backing = self.graph.namedNodes(representation_node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
-                if (backing.node == node) Common.invariant("nominal pattern shell backing did not advance");
-                break :blk .{ .nominal = try self.lowerPatternShellAtNodeInner(nominal.backing_pattern, backing.node, pending, active) };
+                if (backing.node == representation_node) Common.invariant("nominal pattern shell backing did not advance");
+                return try self.addPatWithTypeCell(
+                    DraftTypeCell.fromGraphNode(representation_node),
+                    .{ .nominal = try self.lowerPatternShellAtNodeInner(nominal.backing_pattern, backing.node, pending, active) },
+                );
             },
             .record_destructure => |destructs| blk: {
-                if (self.graph.content(node) == .named) {
-                    const backing = self.graph.namedNodes(node).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal record pattern had no runtime backing");
-                    if (backing.node == node) Common.invariant("nominal record pattern shell backing did not advance");
-                    break :blk .{ .nominal = try self.lowerPatternShellAtNodeInner(pattern_id, backing.node, pending, active) };
+                    if (backing.node == representation_node) Common.invariant("nominal record pattern shell backing did not advance");
+                    return try self.addPatWithTypeCell(
+                        DraftTypeCell.fromGraphNode(representation_node),
+                        .{ .nominal = try self.lowerPatternShellAtNodeInner(pattern_id, backing.node, pending, active) },
+                    );
                 }
                 var lowered = std.ArrayList(DraftRecordDestruct).empty;
                 defer lowered.deinit(self.allocator);
@@ -45039,7 +45091,7 @@ const BodyContext = struct {
                         .name = name,
                         .pattern = try self.lowerPatternPlanPlaceholderAtNode(
                             child,
-                            try self.graph.recordFieldNode(node, name),
+                            try self.graph.recordFieldNode(representation_node, name),
                             pending,
                         ),
                     });
@@ -45047,13 +45099,16 @@ const BodyContext = struct {
                 break :blk .{ .record = try self.addRecordDestructSpan(lowered.items) };
             },
             .tuple => |items| blk: {
-                if (self.graph.content(node) == .named) {
-                    const backing = self.graph.namedNodes(node).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
-                    if (backing.node == node) Common.invariant("nominal tuple pattern shell backing did not advance");
-                    break :blk .{ .nominal = try self.lowerPatternShellAtNodeInner(pattern_id, backing.node, pending, active) };
+                    if (backing.node == representation_node) Common.invariant("nominal tuple pattern shell backing did not advance");
+                    return try self.addPatWithTypeCell(
+                        DraftTypeCell.fromGraphNode(representation_node),
+                        .{ .nominal = try self.lowerPatternShellAtNodeInner(pattern_id, backing.node, pending, active) },
+                    );
                 }
-                const item_nodes = try self.graph.tupleItemNodes(node);
+                const item_nodes = try self.graph.tupleItemNodes(representation_node);
                 if (items.len != item_nodes.len) Common.invariant("tuple pattern arity differed from graph tuple arity");
                 const lowered = try self.allocator.alloc(DraftPatId, items.len);
                 defer self.allocator.free(lowered);
@@ -45129,6 +45184,7 @@ const BodyContext = struct {
         }
         const pattern = self.view.bodies.pattern(pattern_id);
         const cell = DraftTypeCell.fromGraphNode(node);
+        const representation_node = self.constructorRepresentationNode(node);
         const data: BodyPatData = switch (pattern.data) {
             .pending,
             .runtime_error,
@@ -45142,10 +45198,13 @@ const BodyContext = struct {
                 } };
             },
             .applied_tag => |tag| blk: {
-                if (self.graph.content(node) == .named) {
-                    const backing = self.graph.namedNodes(node).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
-                    break :blk .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) };
+                    return try self.addPatWithTypeCell(
+                        DraftTypeCell.fromGraphNode(representation_node),
+                        .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) },
+                    );
                 }
                 const name = try self.builder.tagName(self.view, tag.name);
                 const payloads = try self.allocator.alloc(DraftPatId, tag.args.len);
@@ -45153,7 +45212,7 @@ const BodyContext = struct {
                 for (tag.args, 0..) |arg, payload_index| {
                     payloads[payload_index] = try self.lowerPatternAtNodeInner(
                         arg,
-                        try self.graph.tagPayloadNode(node, name, payload_index),
+                        try self.graph.tagPayloadNode(representation_node, name, payload_index),
                         match_lowering,
                     );
                 }
@@ -45162,10 +45221,16 @@ const BodyContext = struct {
                     .payloads = try self.addPatSpan(payloads),
                 } };
             },
-            .nominal => |nominal| blk: {
-                const backing = self.graph.namedNodes(node).backing orelse
+            .nominal => |nominal| {
+                if (self.graph.content(representation_node) != .named) {
+                    Common.invariant("checked nominal pattern had no nominal graph representation");
+                }
+                const backing = self.graph.namedNodes(representation_node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
-                break :blk .{ .nominal = try self.lowerPatternAtNodeInner(nominal.backing_pattern, backing.node, match_lowering) };
+                return try self.addPatWithTypeCell(
+                    DraftTypeCell.fromGraphNode(representation_node),
+                    .{ .nominal = try self.lowerPatternAtNodeInner(nominal.backing_pattern, backing.node, match_lowering) },
+                );
             },
             .record_destructure => |destructs| return try self.lowerRecordPatternAtNodeInner(
                 pattern_id,
@@ -45190,12 +45255,15 @@ const BodyContext = struct {
                 } };
             },
             .tuple => |items| blk: {
-                if (self.graph.content(node) == .named) {
-                    const backing = self.graph.namedNodes(node).backing orelse
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
-                    break :blk .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) };
+                    return try self.addPatWithTypeCell(
+                        DraftTypeCell.fromGraphNode(representation_node),
+                        .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) },
+                    );
                 }
-                const item_nodes = try self.graph.tupleItemNodes(node);
+                const item_nodes = try self.graph.tupleItemNodes(representation_node);
                 if (items.len != item_nodes.len) Common.invariant("tuple pattern arity differed from graph tuple arity");
                 const lowered = try self.allocator.alloc(DraftPatId, items.len);
                 defer self.allocator.free(lowered);
@@ -45226,11 +45294,12 @@ const BodyContext = struct {
         match_lowering: ?*MatchPatternLowering,
     ) Allocator.Error!DraftPatId {
         const cell = DraftTypeCell.fromGraphNode(node);
-        if (self.graph.content(node) == .named) {
-            const backing = self.graph.namedNodes(node).backing orelse
+        const representation_node = self.constructorRepresentationNode(node);
+        if (self.graph.content(representation_node) == .named) {
+            const backing = self.graph.namedNodes(representation_node).backing orelse
                 Common.invariant("nominal record pattern had no runtime backing");
-            if (backing.node == node) Common.invariant("nominal record pattern backing did not advance");
-            return try self.addPatWithTypeCell(cell, .{ .nominal = try self.lowerRecordPatternAtNodeInner(
+            if (backing.node == representation_node) Common.invariant("nominal record pattern backing did not advance");
+            return try self.addPatWithTypeCell(DraftTypeCell.fromGraphNode(representation_node), .{ .nominal = try self.lowerRecordPatternAtNodeInner(
                 pattern_id,
                 backing.node,
                 destructs,
@@ -45249,7 +45318,7 @@ const BodyContext = struct {
                         .name = name,
                         .pattern = try self.lowerPatternAtNodeInner(
                             child,
-                            try self.graph.recordFieldNode(node, name),
+                            try self.graph.recordFieldNode(representation_node, name),
                             match_lowering,
                         ),
                     });
@@ -45347,11 +45416,12 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
     ) Allocator.Error!DraftPatId {
-        if (self.graph.content(node) == .named) {
-            const backing = self.graph.namedNodes(node).backing orelse
+        const representation_node = self.constructorRepresentationNode(node);
+        if (self.graph.content(representation_node) == .named) {
+            const backing = self.graph.namedNodes(representation_node).backing orelse
                 Common.invariant("nested nominal constructor pattern had no runtime backing");
             return try self.addPatWithTypeCell(
-                DraftTypeCell.fromGraphNode(node),
+                DraftTypeCell.fromGraphNode(representation_node),
                 .{ .nominal = try self.lowerConstructorPatternAtNode(pattern_id, backing.node) },
             );
         }
@@ -45997,6 +46067,54 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     try std.testing.expect(ctx.sameType(str_ty, alias_str));
     try std.testing.expect(!ctx.sameType(alias_i64, alias_str));
     try std.testing.expect(!ctx.sameType(alias_str, alias_i64));
+}
+
+test "graph constructor representation follows aliases and preserves nominal layers" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const alias_name = try name_store.internTypeName("Alias");
+    const nominal_name = try name_store.internTypeName("Nominal");
+    const outer_alias_name = try name_store.internTypeName("OuterAlias");
+    const structural = try graph.newNode(.empty_tag_union);
+    const alias = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = alias_name },
+        .kind = .alias,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = structural, .use = .inspectable },
+    } });
+    const nominal = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .def = .{ .module = module_identity, .type_name = nominal_name },
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = alias, .use = .inspectable },
+    } });
+    const outer_alias = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(3) },
+        .def = .{ .module = module_identity, .type_name = outer_alias_name },
+        .kind = .alias,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = nominal, .use = .inspectable },
+    } });
+
+    var ctx: BodyContext = undefined;
+    ctx.graph = graph;
+    try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(structural));
+    try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(alias));
+    try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(nominal));
+    try std.testing.expectEqual(nominal, ctx.constructorRepresentationNode(outer_alias));
 }
 
 test "specialization evidence equality includes exact target instantiation" {

@@ -1138,7 +1138,8 @@ test "Monotype recursive materialization predicate stays paired with graph shell
     try expectContains(shell, "const key: PatternNodeVisit");
     try expectContains(shell, "active.contains(key)");
     try expectContains(shell, "defer _ = active.remove(key)");
-    try expectContains(shell, "backing.node == node");
+    try expectContains(shell, "backing.node == representation_node");
+    try expectContains(shell, "constructorRepresentationNode(node)");
     try expectContains(shell, "lowerPatternPlanPlaceholderAtNode");
     try expectContains(shell, ".applied_tag => |tag|");
     try expectContains(shell, ".nominal => |nominal|");
