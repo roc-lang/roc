@@ -36,7 +36,11 @@ for patch in ci/lambda_mono_mutations/*.patch; do
     if ! zig build build-test-lambda-mono-differential >"$build_log" 2>&1; then
         echo "FAILED: mutated compiler did not build ($name)"
         tail -20 "$build_log"
-        git apply -R "$patch"
+        git apply -R "$patch" || {
+            echo "FAILED: could not reverse $patch — halting so later mutations run on a clean tree"
+            failed=1
+            break
+        }
         failed=1
         continue
     fi
@@ -50,7 +54,11 @@ for patch in ci/lambda_mono_mutations/*.patch; do
         grep -E "DIVERGED|FAILED" "$run_log" | head -3
     fi
 
-    git apply -R "$patch"
+    git apply -R "$patch" || {
+        echo "FAILED: could not reverse $patch — halting so later mutations run on a clean tree"
+        failed=1
+        break
+    }
 done
 
 echo

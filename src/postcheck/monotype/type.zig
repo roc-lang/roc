@@ -387,18 +387,35 @@ pub const Store = struct {
     /// verbatim copy has no live-node provenance to preserve.
     pub fn cloneMutable(self: *const Store, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
         const source_view = self.view();
+        var types = try cloneStoreSlice(Content, allocator, source_view.types);
+        errdefer types.deinit(allocator);
+        var type_digests = try cloneStoreSlice(?names.TypeDigest, allocator, source_view.type_digests);
+        errdefer type_digests.deinit(allocator);
+        var specialization_digests = try cloneStoreSlice(?names.TypeDigest, allocator, self.specializationDigestsView());
+        errdefer specialization_digests.deinit(allocator);
+        var type_digest_generations = try cloneStoreSlice(u64, allocator, self.type_digest_generations.unsafeRawItemsForView());
+        errdefer type_digest_generations.deinit(allocator);
+        var specialization_digest_generations = try cloneStoreSlice(u64, allocator, self.specialization_digest_generations.unsafeRawItemsForView());
+        errdefer specialization_digest_generations.deinit(allocator);
+        var spans = try cloneStoreSlice(TypeId, allocator, source_view.spans);
+        errdefer spans.deinit(allocator);
+        var fields = try cloneStoreSlice(Field, allocator, source_view.fields);
+        errdefer fields.deinit(allocator);
+        var tags = try cloneStoreSlice(Tag, allocator, source_view.tags);
+        errdefer tags.deinit(allocator);
+        const declared_fields = try cloneStoreSlice(DeclaredField, allocator, source_view.declared_fields);
         return .{
             .allocator = allocator,
-            .types = @TypeOf(self.types).fromArrayList(try cloneStoreSlice(Content, allocator, source_view.types)),
-            .type_digests = @TypeOf(self.type_digests).fromArrayList(try cloneStoreSlice(?names.TypeDigest, allocator, source_view.type_digests)),
-            .specialization_digests = @TypeOf(self.specialization_digests).fromArrayList(try cloneStoreSlice(?names.TypeDigest, allocator, self.specializationDigestsView())),
-            .type_digest_generations = @TypeOf(self.type_digest_generations).fromArrayList(try cloneStoreSlice(u64, allocator, self.type_digest_generations.unsafeRawItemsForView())),
-            .specialization_digest_generations = @TypeOf(self.specialization_digest_generations).fromArrayList(try cloneStoreSlice(u64, allocator, self.specialization_digest_generations.unsafeRawItemsForView())),
+            .types = @TypeOf(self.types).fromArrayList(types),
+            .type_digests = @TypeOf(self.type_digests).fromArrayList(type_digests),
+            .specialization_digests = @TypeOf(self.specialization_digests).fromArrayList(specialization_digests),
+            .type_digest_generations = @TypeOf(self.type_digest_generations).fromArrayList(type_digest_generations),
+            .specialization_digest_generations = @TypeOf(self.specialization_digest_generations).fromArrayList(specialization_digest_generations),
             .digest_cache_generation = self.digest_cache_generation,
-            .spans = @TypeOf(self.spans).fromArrayList(try cloneStoreSlice(TypeId, allocator, source_view.spans)),
-            .fields = @TypeOf(self.fields).fromArrayList(try cloneStoreSlice(Field, allocator, source_view.fields)),
-            .tags = @TypeOf(self.tags).fromArrayList(try cloneStoreSlice(Tag, allocator, source_view.tags)),
-            .declared_fields = @TypeOf(self.declared_fields).fromArrayList(try cloneStoreSlice(DeclaredField, allocator, source_view.declared_fields)),
+            .spans = @TypeOf(self.spans).fromArrayList(spans),
+            .fields = @TypeOf(self.fields).fromArrayList(fields),
+            .tags = @TypeOf(self.tags).fromArrayList(tags),
+            .declared_fields = @TypeOf(self.declared_fields).fromArrayList(declared_fields),
             .frozen = false,
             .intern_buckets = null,
             .dedup_excluded = std.AutoHashMap(TypeId, void).init(allocator),
@@ -825,7 +842,16 @@ pub const Store = struct {
         // Common case: every member is a distinct new root. Keep the provisional
         // slots and register each so any entry node deduplicates a future graph.
         if (!has_dedup) {
-            for (provisional) |member| try self.registerRoot(name_store, member);
+            // A failure mid-loop unwinds through the provisional-mark restore,
+            // so the roots already registered must leave the buckets with it:
+            // a bucket entry naming a restored slot would match later lookups
+            // against whatever content reoccupies the slot.
+            var registered: usize = 0;
+            errdefer for (provisional[0..registered]) |member| self.unregisterRoot(name_store, member);
+            for (provisional) |member| {
+                try self.registerRoot(name_store, member);
+                registered += 1;
+            }
             census.bump("intern_miss");
             @memcpy(out_ids, provisional);
             return;
@@ -854,7 +880,13 @@ pub const Store = struct {
             const lowered = try self.lowerRecursiveContent(name_store, final_ids, final_ids[0], contents[index]);
             try self.fillReservedSlot(final_ids[index], lowered);
         }
+        var registered: usize = 0;
+        errdefer for (representative[0..registered], 0..) |rep, index| {
+            if (rep != index or existing_id[index] != null) continue;
+            self.unregisterRoot(name_store, final_ids[index]);
+        };
         for (representative, 0..) |rep, index| {
+            registered = index + 1;
             if (rep != index or existing_id[index] != null) continue;
             try self.registerRoot(name_store, final_ids[index]);
         }
@@ -869,12 +901,31 @@ pub const Store = struct {
         const key = self.lookupKey(name_store, member);
         if (self.intern_buckets.?.getPtr(key)) |bucket| {
             for (bucket.items) |existing| {
+                // An id excluded from dedup is structurally live elsewhere;
+                // handing it to a recursive-group member would alias the two.
+                if (self.dedup_excluded.contains(existing)) continue;
                 if (try self.typeEql(name_store, existing, member)) {
                     return existing;
                 }
             }
         }
         return null;
+    }
+
+    /// Take `member` back out of its rooted-digest bucket, for a group build
+    /// that unwinds after registering it: the slot it names is about to be
+    /// restored, and a bucket entry naming a restored slot would match later
+    /// lookups against whatever content reoccupies it.
+    fn unregisterRoot(self: *Store, name_store: *const names.NameStore, member: TypeId) void {
+        const key = self.lookupKey(name_store, member);
+        const bucket = self.intern_buckets.?.getPtr(key) orelse return;
+        var index = bucket.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (bucket.items[index] != member) continue;
+            _ = bucket.orderedRemove(index);
+            return;
+        }
     }
 
     /// Register `member` under its rooted digest so a future equivalent graph

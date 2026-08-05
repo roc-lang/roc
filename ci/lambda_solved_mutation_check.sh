@@ -46,7 +46,11 @@ for patch in ci/lambda_solved_mutations/*.patch; do
         grep -E "error:|panic|FAIL|expected" "$run_log" | head -3
     fi
 
-    git apply -R "$patch"
+    git apply -R "$patch" || {
+        echo "FAILED: could not reverse $patch — halting so later mutations run on a clean tree"
+        failed=1
+        break
+    }
 done
 
 echo

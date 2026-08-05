@@ -412,6 +412,10 @@ pub fn run(
     // sealed population (reunify.md section 9, Slice 7 Stage A). Disconnected on
     // every non-probe lowering, so seal collection stays inert.
     if (reunify_shadow.shouldRun()) program.types.committed_census = &builder.sealed_population;
+    // The sink points into the builder, which every exit of this function
+    // deinitializes; disconnecting on every path keeps the pointer from
+    // outliving it.
+    defer program.types.committed_census = null;
 
     // The per-specialization instantiation state (reunify.md sections 9/10/11).
     // It runs alongside lowering because a specialization's binder environment
@@ -467,8 +471,6 @@ pub fn run(
 
     // Disconnect the probe sink so the returned program's type store never holds
     // a pointer into the builder's soon-freed population set.
-    program.types.committed_census = null;
-
     return program;
 }
 

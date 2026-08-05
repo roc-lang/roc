@@ -442,7 +442,7 @@ const Emission = struct {
 
     /// The producer atom for one position: minted content shares the atom of
     /// its content tuple; everything else is a fresh occurrence.
-    fn producerFor(self: *Emission, input: ?ProducerRepresentation) closure.ProducerAtom {
+    fn producerFor(self: *Emission, input: ?ProducerRepresentation) Allocator.Error!closure.ProducerAtom {
         const stated = input orelse return self.freshProducer();
         if (stated.iterator_representation != .minted) return self.freshProducer();
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -461,7 +461,7 @@ const Emission = struct {
             }
         }
         const key = hasher.finalResult();
-        const gop = self.minted_atoms.getOrPut(key) catch return self.freshProducer();
+        const gop = try self.minted_atoms.getOrPut(key);
         if (!gop.found_existing) gop.value_ptr.* = self.freshProducer();
         return gop.value_ptr.*;
     }
@@ -499,7 +499,7 @@ const Emission = struct {
         const identity = identityDigest(store, name_store, declared, args);
         const token = try self.tokenForDigest(identity);
         const shape = try self.shapeAt(store, name_store, declared, token, args, backing);
-        return self.engine.createSlot(token, self.freshProducer(), shape) catch null;
+        return try self.engine.createSlot(token, self.freshProducer(), shape);
     }
 
     /// Open a representation slot at one position, run the declared relation to
@@ -523,7 +523,7 @@ const Emission = struct {
         const token = try self.tokenForDigest(identity);
         const shape = try self.shapeAt(store, name_store, declared, token, args, backing);
         const input = self.inputFor(address);
-        const slot = try self.engine.createSlot(token, self.producerFor(input), shape);
+        const slot = try self.engine.createSlot(token, try self.producerFor(input), shape);
 
         var produced_stands = false;
         if (input) |stated| {

@@ -69,7 +69,11 @@ for patch in ci/spec_constr_mutations/*.patch; do
         grep -E "terminated with signal|failed:|tests passed" "$run_log" | head -4
     fi
 
-    git apply -R "$patch"
+    git apply -R "$patch" || {
+        echo "FAILED: could not reverse $patch — halting so later mutations run on a clean tree"
+        failed=1
+        break
+    }
 done
 
 echo
