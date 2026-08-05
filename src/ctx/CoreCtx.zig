@@ -911,6 +911,7 @@ fn osCanonicalize(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: A
     const len = std.Io.Dir.cwd().realPathFile(std_io, path, &buffer) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
+        else => error.IoError,
     };
     return allocator.dupe(u8, buffer[0..len]) catch error.OutOfMemory;
 }

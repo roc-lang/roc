@@ -443,6 +443,13 @@ const BodySize = union(enum) {
             .over_limit => false,
         };
     }
+
+    fn exactValue(self: BodySize) ?usize {
+        return switch (self) {
+            .exact => |value| value,
+            .over_limit => null,
+        };
+    }
 };
 
 const FnPlan = struct {
@@ -1752,13 +1759,16 @@ const Pass = struct {
         return .admitted;
     }
 
-    fn inlineBodyAdmission(self: *const Pass, fn_id: Ast.FnId, body: Ast.ExprId) SpecAdmission {
+    fn inlineBodySize(self: *const Pass, fn_id: Ast.FnId, body: Ast.ExprId) BodySize {
         const raw = @intFromEnum(fn_id);
-        const body_size = if (raw < self.plans.len)
+        return if (raw < self.plans.len)
             self.plans[raw].body_size
         else
             exprBodySizeWithin(self.program, body, spec_constr_body_expr_threshold);
-        return if (body_size.admits()) .admitted else .denied_body_size;
+    }
+
+    fn inlineBodyAdmission(self: *const Pass, fn_id: Ast.FnId, body: Ast.ExprId) SpecAdmission {
+        return if (self.inlineBodySize(fn_id, body).admits()) .admitted else .denied_body_size;
     }
 
     fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
@@ -4557,11 +4567,19 @@ const Cloner = struct {
     /// cannot multiply the expression store or recurse without spending this
     /// total growth budget.
     case_of_case_growth: CodeGrowthBudget,
+    /// Remaining source-body work that this clone may inline. The per-function
+    /// body-size gate bounds one expansion, but a small acyclic wrapper graph
+    /// can still duplicate each child at every level and grow exponentially.
+    /// Charging every accepted inline by its exact source-body size bounds the
+    /// complete transitive expansion while retaining the ordinary call once
+    /// the budget is spent.
+    inline_body_growth: CodeGrowthBudget,
     current_loc: SourceLoc,
     current_region: Region,
     current_inline_scope: Ast.InlineScopeId,
 
     const case_of_case_work_budget: u32 = 256;
+    const inline_body_work_budget: u32 = 4096;
 
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
@@ -4588,6 +4606,7 @@ const Cloner = struct {
             .rewrite_call_patterns = true,
             .emit_callable_workers = true,
             .case_of_case_growth = .init(case_of_case_work_budget),
+            .inline_body_growth = .init(inline_body_work_budget),
             .current_loc = SourceLoc.none,
             .current_region = Region.zero(),
             .current_inline_scope = Ast.InlineScopeId.none,
@@ -4619,6 +4638,7 @@ const Cloner = struct {
             .rewrite_call_patterns = true,
             .emit_callable_workers = true,
             .case_of_case_growth = .init(case_of_case_work_budget),
+            .inline_body_growth = .init(inline_body_work_budget),
             .current_loc = SourceLoc.none,
             .current_region = Region.zero(),
             .current_inline_scope = Ast.InlineScopeId.none,
@@ -4637,6 +4657,11 @@ const Cloner = struct {
         self.inline_scope_origins.deinit();
         self.subst.deinit();
         self.arena.deinit();
+    }
+
+    fn admitInlineBodyGrowth(self: *Cloner, body_size: BodySize) bool {
+        const exact_size = body_size.exactValue() orelse return false;
+        return self.inline_body_growth.admit(@max(exact_size, 1)) == .admitted;
     }
 
     fn collectCallPatternsInExpr(self: *Cloner, owner: Ast.FnId, expr_id: Ast.ExprId) Common.LowerError!void {
@@ -8699,7 +8724,8 @@ const Cloner = struct {
                 .args = try self.cloneExprSpan(args_span),
             } } }) },
         };
-        if (self.pass.inlineBodyAdmission(callable.fn_id, body) != .admitted) {
+        const body_size = self.pass.inlineBodySize(callable.fn_id, body);
+        if (!body_size.admits()) {
             return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(.{ .callable = callable }),
                 .args = try self.cloneExprSpan(args_span),
@@ -8728,6 +8754,12 @@ const Cloner = struct {
                     .args = try self.cloneExprSpan(args_span),
                 } } }) };
             }
+        }
+        if (!self.admitInlineBodyGrowth(body_size)) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
         }
 
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
@@ -8808,7 +8840,8 @@ const Cloner = struct {
             .roc => |body| body,
             .hosted => return .{ .expr = try self.cloneExprPlain(original_expr) },
         };
-        if (self.pass.inlineBodyAdmission(callee, body) != .admitted) {
+        const body_size = self.pass.inlineBodySize(callee, body);
+        if (!body_size.admits()) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
         }
         if (exprContainsReturn(self.pass.program, body)) {
@@ -8821,6 +8854,9 @@ const Cloner = struct {
             if (exact_call_size == 0 or exact_call_size >= active.known_size) {
                 return .{ .expr = try self.cloneExprPlain(original_expr) };
             }
+        }
+        if (!self.admitInlineBodyGrowth(body_size)) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
         }
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
@@ -12206,6 +12242,76 @@ test "SpecConstr admission uses body size and worker count before cloning" {
     });
     pass.refreshPreCloneBodySize(1);
     try std.testing.expectEqual(SpecAdmission.admitted, pass.newSpecAdmission(1));
+}
+
+test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    var result_ty = unit_ty;
+    var callee = try program.addFn(.{
+        .symbol = @enumFromInt(1),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = unit_expr },
+        .ret = unit_ty,
+    });
+
+    // Every wrapper is individually tiny, but each calls the preceding
+    // wrapper twice. Per-body admission alone therefore expands this graph
+    // exponentially even though it contains no recursion.
+    for (0..14) |depth| {
+        const first = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = callee },
+            .args = Ast.Span(Ast.ExprId).empty(),
+            .captures = Ast.Span(Ast.CaptureOperand).empty(),
+        } } });
+        const second = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = callee },
+            .args = Ast.Span(Ast.ExprId).empty(),
+            .captures = Ast.Span(Ast.CaptureOperand).empty(),
+        } } });
+        const wrapper_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ result_ty, result_ty }) });
+        const body = try program.addExpr(.{
+            .ty = wrapper_ty,
+            .data = .{ .tuple = try program.addExprSpan(&.{ first, second }) },
+        });
+        callee = try program.addFn(.{
+            .symbol = @enumFromInt(@as(u32, @intCast(depth + 2))),
+            .args = Ast.Span(Ast.TypedLocal).empty(),
+            .captures = Ast.Span(Ast.TypedLocal).empty(),
+            .body = .{ .roc = body },
+            .ret = wrapper_ty,
+        });
+        result_ty = wrapper_ty;
+    }
+
+    const root_call = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = callee },
+        .args = Ast.Span(Ast.ExprId).empty(),
+        .captures = Ast.Span(Ast.CaptureOperand).empty(),
+    } } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    const before = program.exprCount();
+    _ = try cloner.cloneExprValue(root_call);
+    const growth = program.exprCount() - before;
+
+    var retained_call = false;
+    for (before..program.exprCount()) |index| {
+        if (program.getExprAt(index).data == .call_proc) {
+            retained_call = true;
+            break;
+        }
+    }
+    try std.testing.expect(retained_call);
+    try std.testing.expect(growth < Cloner.inline_body_work_budget * 2);
 }
 
 test "value-aware call-pattern collection keeps generic producer calls opaque" {

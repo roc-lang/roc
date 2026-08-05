@@ -597,16 +597,60 @@ fn nativeRunnableTargetName() ?[]const u8 {
     };
 }
 
+fn isolatedProcessGroupId() ?std.posix.pid_t {
+    return switch (builtin.os.tag) {
+        .windows, .wasi => null,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .linux,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .macos,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => 0,
+    };
+}
+
 fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8, request: []const u8, expected_response: []const u8) TestError!void {
     var child = try std.process.spawn(io, .{
         .argv = &.{exe_path},
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
-        .pgid = switch (classifyPlatformOs(builtin.os.tag)) {
-            .windows, .wasi => null,
-            .linux, .macos, .other => 0,
-        },
+        .pgid = isolatedProcessGroupId(),
     });
     var child_running = true;
     errdefer if (child_running) child.kill(io);
@@ -668,10 +712,7 @@ fn runServerAndCheckRequestFailure(allocator: std.mem.Allocator, exe_path: []con
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
-        .pgid = switch (classifyPlatformOs(builtin.os.tag)) {
-            .windows, .wasi => null,
-            .linux, .macos, .other => 0,
-        },
+        .pgid = isolatedProcessGroupId(),
     });
     var child_running = true;
     errdefer if (child_running) child.kill(io);

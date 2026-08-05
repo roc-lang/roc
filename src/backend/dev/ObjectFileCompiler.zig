@@ -225,6 +225,7 @@ pub fn writeFileWindowsAvSafe(io: std.Io, sub_path: []const u8, data: []const u8
                 std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(delay_ms)), .awake) catch {};
                 continue;
             },
+            else => return err,
         };
         return;
     }

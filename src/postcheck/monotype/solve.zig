@@ -208,6 +208,7 @@ pub const GraphDiagnostics = struct {
 
 /// Graph-native named-type cells.
 pub const NamedNodes = struct {
+    kind: Type.NamedKind,
     args: []const NodeId,
     backing: ?InstBacking,
 };
@@ -2385,6 +2386,7 @@ pub const InstGraph = struct {
         if (node_content != .named) Common.invariant("instantiation named read had a non-named node");
         const named = node_content.named;
         return .{
+            .kind = named.kind,
             .args = named.args,
             .backing = if (named.backing) |backing| .{
                 .node = self.find(backing.node),
