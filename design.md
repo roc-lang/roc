@@ -89,6 +89,44 @@ are two distinct identities even when their declaring modules are
 byte-identical, and no deduplication, specialization, or merging step may
 collapse two externally-bound identities into one.
 
+### Dense IDs and structural keys
+
+Compiler-owned identity domains prefer dense, store-local integer IDs. The
+producer that owns an append-only table assigns its IDs densely from zero, or
+provides an explicit bijection to a dense ordinal when the ID's raw bits encode
+multiple disjoint namespaces. An identity with this contract is named `...Id`.
+The integer value of an `Id` is meaningful only in the scope of its owning
+store; it is not a stable serialization, object-file, or cross-process
+identity unless that store and its mapping are carried across the same
+boundary.
+
+Per-ID data is a parallel column on the owning store, or a
+`collections.DenseMap` when the column is dynamic or scoped. A short-lived
+scope over a larger ID domain uses a paged, reusable, epoch-based, or explicitly
+remapped dense column so that clearing and iteration remain proportional to the
+live scope. The size of the owning ID domain is not a reason to hash an ID.
+Direct columns avoid hashing, table growth, repeated key storage, allocator
+traffic, and duplicate per-consumer indexing work.
+
+The suffix `...Key` is reserved for structural or composite identity for which
+a dense owner-relative ID cannot preserve the required semantics. Examples
+include identities which must remain stable before or across serialization,
+cache, object-file, or process boundaries where no owning ID table accompanies
+them. Prefer assigning or interning a dense `Id` at the producer boundary and
+passing that ID downstream. Use a `Key` only when such a dense ID cannot work,
+not merely to avoid maintaining the owning table, and never rename an `Id` to
+`Key` merely to permit hashing.
+
+The Zig source lint in `ci/zig_lints.zig` rejects a `HashMap` whose first type
+argument is named `...Id` (including qualified and multiline type names). This
+lint makes the naming contract mechanically useful: hashing an ID hides
+unnecessary work and often means that multiple consumers are rebuilding an
+index already represented by the producer's dense domain. Replace such a map
+with an owning-store column or `collections.DenseMap`. If the key genuinely
+requires structural identity, name it `...Key` only after establishing why a
+dense ID cannot represent it; changing the name solely to silence the lint
+violates this invariant.
+
 Backends do not reason about reference counting. They lower and execute the
 explicit LIR `incref`, `decref`, and `free` statements emitted before backend
 code generation. Each explicit RC statement carries the concrete RC helper
