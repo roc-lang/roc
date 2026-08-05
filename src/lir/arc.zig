@@ -1925,8 +1925,16 @@ const Inserter = struct {
                     try self.solveJumpContribution(tasks, segment);
                     return;
                 },
-                .runtime_error, .comptime_exhaustiveness_failed, .crash => {
+                .runtime_error, .comptime_exhaustiveness_failed => {
                     try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, null);
+                    return;
+                },
+                .crash => |crash_stmt| {
+                    const retain_value = if (crash_stmt.msg.localId()) |message|
+                        if (self.consumeAtTerminal(&segment.owned, message)) null else message
+                    else
+                        null;
+                    try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
                     return;
                 },
                 .loop_continue, .loop_break => {
@@ -4137,12 +4145,14 @@ const Inserter = struct {
                 .ret => |ret_stmt| {
                     self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, ret_stmt.value);
                 },
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, message);
+                },
                 .loop_continue,
                 .loop_break,
                 => try loop_edge_nodes.append(graph_allocator, node_index),
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .crash,
                 => {},
                 .comptime_branch_taken => |marker| {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next);
@@ -5245,7 +5255,7 @@ const ArcTest = struct {
     }
 
     fn crash(self: *ArcTest, message: []const u8) Allocator.Error!LIR.CFStmtId {
-        return try self.store.addCFStmt(.{ .crash = .{ .msg = try self.store.insertString(message) } });
+        return try self.store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = try self.store.insertString(message) } } });
     }
 
     fn assignI64(self: *ArcTest, target: LIR.LocalId, value: i64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {

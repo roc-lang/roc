@@ -1057,6 +1057,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, join_stmt.remainder);
                 },
                 .ret => |ret_stmt| try self.noteUse(ret_stmt.value),
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteUse(message),
                 .incref => |rc| {
                     try self.noteUse(rc.value);
                     try self.stack.append(self.allocator, rc.next);
@@ -1074,7 +1075,7 @@ const Pass = struct {
                     try self.noteUse(rc.value);
                     try self.stack.append(self.allocator, rc.next);
                 },
-                .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
     }

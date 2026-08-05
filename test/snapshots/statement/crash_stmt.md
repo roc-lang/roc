@@ -29,7 +29,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-crash (msg "some message")))
+	(s-expr
+		(e-run-low-level (op "crash")
+			(args
+				(e-string
+					(e-literal (string "some message")))))))
 ~~~
 # TYPES
 ~~~clojure

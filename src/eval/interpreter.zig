@@ -2236,7 +2236,17 @@ pub const Interpreter = struct {
                     current = join_point.body;
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
-                .crash => |crash_stmt| return self.triggerCrash(self.store.getString(crash_stmt.msg)),
+                .crash => |crash_stmt| switch (crash_stmt.msg) {
+                    .literal => |literal| return self.triggerCrash(self.store.getString(literal)),
+                    .local => |message_local| {
+                        const message_value = try self.getLocalChecked(frame, message_local);
+                        const message = self.readRocStr(message_value);
+                        self.recordActiveFailureLocIfUnset();
+                        self.roc_env.reportCrash(message);
+                        self.dropValue(message_value, self.store.getLocal(message_local).layout_idx);
+                        return error.Crash;
+                    },
+                },
                 .expect_err => |expect_err_stmt| {
                     const message_value = try self.getLocalChecked(frame, expect_err_stmt.message);
                     const message = self.readRocStr(message_value);
@@ -2605,10 +2615,16 @@ pub const Interpreter = struct {
                     });
                 },
                 .crash => |crash| {
-                    debugPrint("    {d}: crash msg={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(crash.msg),
-                    });
+                    switch (crash.msg) {
+                        .literal => |literal| debugPrint("    {d}: crash literal={d}\n", .{
+                            @intFromEnum(stmt_id),
+                            @intFromEnum(literal),
+                        }),
+                        .local => |local| debugPrint("    {d}: crash local={d}\n", .{
+                            @intFromEnum(stmt_id),
+                            @intFromEnum(local),
+                        }),
+                    }
                 },
                 .expect_err => |expect_err_stmt| {
                     debugPrint("    {d}: expect_err message={d}\n", .{

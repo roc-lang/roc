@@ -834,7 +834,8 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
             break :blk false;
         },
         .ret => |r| r.value == needle,
-        .join, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
+        .crash => |s| if (s.msg.localId()) |message| message == needle else false,
+        .join, .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
     };
 }
 
@@ -2339,7 +2340,8 @@ const Certifier = struct {
                     try stack.append(self.allocator, join_stmt.remainder);
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
-                .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
+                .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
                 .comptime_branch_taken => |marker| try stack.append(self.allocator, marker.next),
             }
         }
@@ -2759,7 +2761,10 @@ const Certifier = struct {
                     }
                 },
                 .ret => |ret_stmt| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, ret_stmt.value),
-                .runtime_error, .comptime_exhaustiveness_failed, .crash, .loop_continue, .loop_break => {},
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, message);
+                },
+                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
                 .comptime_branch_taken => |marker| try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next),
             }
         }
@@ -3444,7 +3449,13 @@ const Certifier = struct {
                     try self.checkLeaks(&state);
                     return;
                 },
-                .crash => {
+                .crash => |crash_stmt| {
+                    if (crash_stmt.msg.localId()) |message| {
+                        if (self.isRc(message)) {
+                            const value = try self.requireLive(&state, message);
+                            try self.consumeUnit(&state, value, message);
+                        }
+                    }
                     try self.checkLeaks(&state);
                     return;
                 },

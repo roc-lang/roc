@@ -9077,7 +9077,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .jump => {},
                     .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
-                    .crash => {},
+                    .crash => |crash| if (crash.msg.localId()) |message| {
+                        try locals.put(localKey(message), message);
+                    },
                     .loop_continue => {},
                     .loop_break => {},
                 }
@@ -9277,7 +9279,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .jump => {},
                     .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
-                    .crash => {},
+                    .crash => |crash| if (crash.msg.localId()) |message| {
+                        try locals.put(localKey(message), message);
+                    },
                     .loop_continue => {},
                     .loop_break => {},
                 }
@@ -20080,7 +20084,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
 
                         .crash => |crash| {
-                            try self.emitRocCrash(self.store.getString(crash.msg));
+                            switch (crash.msg) {
+                                .literal => |literal| try self.emitRocCrash(self.store.getString(literal)),
+                                .local => |message| {
+                                    const msg_loc = try self.emitValueLocal(message);
+                                    const msg_offset = switch (msg_loc) {
+                                        .stack_str => |offset| offset,
+                                        .general_reg,
+                                        .float_reg,
+                                        .vector_reg,
+                                        .stack,
+                                        .stack_i128,
+                                        .list_stack,
+                                        .immediate_i64,
+                                        .immediate_f32,
+                                        .immediate_f64,
+                                        .immediate_i128,
+                                        .noreturn,
+                                        => std.debug.panic(
+                                            "Dev/codegen invariant violated: crash message local {d} did not lower to a RocStr stack value",
+                                            .{@intFromEnum(message)},
+                                        ),
+                                    };
+                                    try self.emitRocCrashFromStackStr(msg_offset);
+                                },
+                            }
                             try self.emitTrap();
                         },
 
@@ -20949,6 +20977,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, str_offset);
             try builder.addRegArg(self.roc_ops_reg orelse unreachable);
             try self.callBuiltin(&builder, .dbg_str);
+        }
+
+        fn emitRocCrashFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
+            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, str_offset);
+            try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+            try self.callBuiltin(&builder, .crash_str);
         }
 
         fn emitRocExpectErrFromStackStr(self: *Self, str_offset: i32, region: base.Region) Allocator.Error!void {

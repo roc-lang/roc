@@ -450,6 +450,19 @@ pub fn layoutNeedsStackProbe(layouts: *const layout.Store, layout_idx: layout.Id
     return size >= stack_probe_page_size;
 }
 
+/// A compiler-generated static message or a source-level `Str` evaluated at runtime.
+pub const CrashMessage = union(enum) {
+    literal: StringLiteral.Idx,
+    local: LocalId,
+
+    pub fn localId(self: CrashMessage) ?LocalId {
+        return switch (self) {
+            .literal => null,
+            .local => |local| local,
+        };
+    }
+};
+
 /// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     init_uninitialized: struct {
@@ -706,7 +719,7 @@ pub const CFStmt = union(enum) {
         value: LocalId,
     },
     crash: struct {
-        msg: StringLiteral.Idx,
+        msg: CrashMessage,
     },
 };
 
