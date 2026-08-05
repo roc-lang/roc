@@ -4614,6 +4614,52 @@ pub const Rehearsal = struct {
         ) catch null;
         const direct_ty = probed orelse {
             census.bump("seam_direct_absent");
+            // The seal's own disposition: an undisposed residual denotes the
+            // uninhabited row, which is what the graph materializes for it.
+            // Measured here before it becomes the seal's answer.
+            if (self.sealingTypeForCheckedPosition(record.address, record.callee_context)) |disposed| {
+                const disposed_digest = self.types.typeDigest(self.program_names, disposed);
+                const sealed_digest = self.types.typeDigest(self.program_names, sealed);
+                if (std.mem.eql(u8, &disposed_digest.bytes, &sealed_digest.bytes)) {
+                    census.bump("seam_disposed_agrees");
+                } else if (std.mem.eql(
+                    u8,
+                    &self.types.unfoldedDigest(self.program_names, disposed).bytes,
+                    &self.types.unfoldedDigest(self.program_names, sealed).bytes,
+                )) {
+                    census.bump("seam_disposed_agrees");
+                } else {
+                    census.bump("seam_disposed_differs");
+                    if (self.frameForModule(record.address.module_bytes) != null) {
+                        census.bump("seam_disposed_differs_with_frame");
+                    } else {
+                        census.bump("seam_disposed_differs_no_frame");
+                    }
+                }
+            } else {
+                census.bump("seam_disposed_absent");
+            }
+            // Why the position states nothing, so the absent class is a named
+            // list rather than a bulk (reunify.md 13.2 2a).
+            switch (binding) {
+                .callee => census.bump("seam_absent_under_callee_binding"),
+                .frame => census.bump("seam_absent_under_frame"),
+                .none => census.bump("seam_absent_no_environment"),
+            }
+            if (self.lookup.cursor(record.address.module_bytes)) |cursor| {
+                const ty: checked.CheckedTypeId = @enumFromInt(record.address.type_id);
+                if (@intFromEnum(ty) < cursor.view.payloadCount()) {
+                    if (self.schemeRootReachesVariable(cursor.view, ty)) {
+                        census.bump("seam_absent_reaches_variable");
+                    } else {
+                        census.bump("seam_absent_ground_position");
+                    }
+                } else {
+                    census.bump("seam_absent_address_out_of_range");
+                }
+            } else {
+                census.bump("seam_absent_module_absent");
+            }
             return;
         };
         const left = self.types.typeDigest(self.program_names, direct_ty);
@@ -7658,6 +7704,39 @@ pub const Rehearsal = struct {
 
     /// The same, first trying a level for the definition the position's unbound
     /// variable belongs to, bound from the site the entering edge names.
+    /// The position's type as a SEAL states it: the same directed emission a
+    /// read performs, with a residual no disposition or default answers
+    /// materialized as the uninhabited row instead of declining (reunify.md
+    /// 7.4). A read must not state that; a seal must, because it produces the
+    /// position's final stored type and that row is what the residual denotes.
+    pub fn sealingTypeForCheckedPosition(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        under_callee: bool,
+    ) ?Type.TypeId {
+        if (self.disabled) return null;
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return null;
+        var env: ?*const direct_translate.BindingEnvironment = null;
+        var owner_node = checked.checked_residual_disposition_module_body_owner;
+        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
+        if (callee) |level| {
+            env = level.chain.innermost();
+            owner_node = level.owner_node;
+        } else if (self.frameForModule(address.module_bytes)) |frame| {
+            env = frame.environment();
+            owner_node = frame.owner_node;
+        }
+        var reason: direct_translate.SkipReason = undefined;
+        return self.translator.eagerWalkDisposing(
+            cursor,
+            env,
+            owner_node,
+            @enumFromInt(address.type_id),
+            &reason,
+            true,
+        ) catch null;
+    }
+
     pub fn typeForCheckedPositionWithEdge(
         self: *Rehearsal,
         address: CheckedAddress,
@@ -7688,7 +7767,22 @@ pub const Rehearsal = struct {
             @enumFromInt(address.type_id),
             &reason,
         ) catch |err| switch (err) {
-            error.Skip => null,
+            error.Skip => {
+                // Name why the position states nothing, so the declining set is
+                // a per-reason list rather than a bulk (reunify.md 13.2 2a).
+                if (comptime census.enabled) switch (reason) {
+                    .recursive_cycle => census.bump("position_skip_recursive_cycle"),
+                    .pending_or_err => census.bump("position_skip_pending_or_err"),
+                    .numeric_default_unresolved => census.bump("position_skip_numeric_default"),
+                    .open_row => census.bump("position_skip_open_row"),
+                    .malformed_builtin_arity => census.bump("position_skip_builtin_arity"),
+                    .binder_not_found => census.bump("position_skip_binder_not_found"),
+                    .missing_backing => census.bump("position_skip_missing_backing"),
+                    .engine_input_needed => census.bump("position_skip_engine_input"),
+                    .undisposed_residual => census.bump("position_skip_undisposed_residual"),
+                };
+                return null;
+            },
             else => |other| other,
         };
     }

@@ -994,6 +994,20 @@ pub const Translator = struct {
         root: checked.CheckedTypeId,
         skip_reason: *SkipReason,
     ) WalkError!TypeId {
+        return self.eagerWalkDisposing(cursor, binding_env, scheme_owner_node, root, skip_reason, false);
+    }
+
+    /// `eagerWalk` with the residual disposition a seal applies; see
+    /// `Walk.dispose_residual_as_uninhabited`.
+    pub fn eagerWalkDisposing(
+        self: *Translator,
+        cursor: ModuleCursor,
+        binding_env: ?*const BindingEnvironment,
+        scheme_owner_node: u32,
+        root: checked.CheckedTypeId,
+        skip_reason: *SkipReason,
+        dispose_residuals: bool,
+    ) WalkError!TypeId {
         var walk = Walk{
             .owner = self,
             .cursor = cursor,
@@ -1005,6 +1019,7 @@ pub const Translator = struct {
             .slot_journal = null,
             .nominal_instances = null,
             .skip_reason = skip_reason,
+            .dispose_residual_as_uninhabited = dispose_residuals,
         };
         defer walk.active.deinit();
         return try walk.node(root);
@@ -1400,6 +1415,14 @@ const Walk = struct {
     /// keyed by declaration and translated arguments. Null in eager mode.
     nominal_instances: ?*NominalInstances,
     skip_reason: *SkipReason,
+    /// Whether a residual variable that no disposition or default answers
+    /// materializes as the uninhabited row instead of declining. A READ must
+    /// decline: emitting there would state knowledge the checked module does
+    /// not hold, and the uninhabited row is indistinguishable from a genuinely
+    /// uninhabited position. A SEAL is not a read — it produces the position's
+    /// final stored type, and the uninhabited row is what an undisposed
+    /// residual denotes (reunify.md 7.4).
+    dispose_residual_as_uninhabited: bool = false,
     /// Set when a reserve-fill node left the subset. The recursive-group builder
     /// (`Store.addRecursive`) cannot carry `error.Skip` out of its fill callback,
     /// so the skip is recorded here and re-raised once the reserved slot returns.
@@ -1692,6 +1715,9 @@ const Walk = struct {
                 .empty_record => try self.build_store.internRecord(self.owner.target_names, &.{}),
                 .empty_tag_union => try self.build_store.internTagUnion(self.owner.target_names, &.{}),
             };
+        }
+        if (self.dispose_residual_as_uninhabited) {
+            return try self.build_store.internTagUnion(self.owner.target_names, &.{});
         }
         return self.skip(.undisposed_residual);
     }
