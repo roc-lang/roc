@@ -54,6 +54,7 @@ pub const Tag = enum {
     statement_import,
     statement_alias_decl,
     statement_nominal_decl,
+    statement_where_alias_decl,
     statement_type_anno,
     statement_type_var_alias,
     // Expressions
@@ -219,6 +220,7 @@ pub const Tag = enum {
     diag_malformed_type_annotation,
     diag_malformed_where_clause,
     diag_where_clause_not_allowed_in_type_decl,
+    diag_where_alias_constraint_not_on_receiver,
     diag_open_ext_not_allowed_in_type_decl,
     diag_unnamed_field_not_allowed_in_structural_record,
     diag_type_module_missing_matching_type,
@@ -229,6 +231,7 @@ pub const Tag = enum {
     diag_execution_requires_app_or_default_app,
     diag_type_name_case_mismatch,
     diag_module_header_deprecated,
+    diag_roc_version_mismatch,
     diag_redundant_expose_main_type,
     diag_invalid_main_type_rename_in_exposing,
     diag_var_across_function_boundary,
@@ -305,6 +308,7 @@ pub const Payload = extern union {
     statement_import: StatementImport,
     statement_alias_decl: StatementAliasDecl,
     statement_nominal_decl: StatementNominalDecl,
+    statement_where_alias_decl: StatementWhereAliasDecl,
     statement_type_anno: StatementTypeAnno,
     statement_type_var_alias: StatementTypeVarAlias,
 
@@ -500,6 +504,13 @@ pub const Payload = extern union {
         header: u32,
         anno: u32,
         is_opaque: u32, // 0 or 1
+    };
+
+    /// statement_where_alias_decl: header + receiver + where clause
+    pub const StatementWhereAliasDecl = extern struct {
+        header: u32,
+        receiver: u32,
+        where_span_idx: u32, // index into span_with_node_data
     };
 
     /// statement_type_anno: annotation + name + optional where clause
@@ -1040,10 +1051,10 @@ pub const Payload = extern union {
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
-    /// where_alias: type variable alias in where clause
+    /// where_alias: a where alias applied to a type variable in a where clause
     pub const WhereAlias = extern struct {
         var_idx: u32,
-        alias_name: u32,
+        alias_idx: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 

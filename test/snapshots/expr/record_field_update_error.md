@@ -76,7 +76,7 @@ EndOfFile,
 ~~~roc
 {
 	person
-		age : 
+		age :
 }
 ~~~
 # CANONICALIZE

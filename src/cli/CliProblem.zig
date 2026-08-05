@@ -216,6 +216,11 @@ pub const CliProblem = union(enum) {
         app_path: []const u8,
     },
 
+    /// The builtin platform cannot satisfy this target's runtime contract.
+    unsupported_default_platform_target: struct {
+        target: []const u8,
+    },
+
     /// The requested optimization level is not implemented for this command
     unsupported_opt_level: struct {
         command: []const u8,
@@ -226,6 +231,13 @@ pub const CliProblem = union(enum) {
     compilation_failed: struct {
         path: []const u8,
         error_count: usize,
+    },
+
+    /// A command failed without reporting anything. Recorded by the top level
+    /// so the process never exits non-zero having printed nothing, which is
+    /// indistinguishable to the user from a crash.
+    unreported_error: struct {
+        err_name: []const u8,
     },
 
     /// Linker failed
@@ -386,8 +398,10 @@ pub const CliProblem = union(enum) {
             .platform_not_found,
             .no_platform_found,
             .build_not_supported_for_headerless,
+            .unsupported_default_platform_target,
             .unsupported_opt_level,
             .compilation_failed,
+            .unreported_error,
             .linker_failed,
             .missing_host_symbols,
             => .fatal,
@@ -452,8 +466,10 @@ pub const CliProblem = union(enum) {
             .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
             .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
+            .unsupported_default_platform_target => |info| try createUnsupportedDefaultPlatformTargetReport(allocator, info),
             .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
+            .unreported_error => |info| try createUnreportedErrorReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
@@ -721,6 +737,20 @@ fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytyp
     return report;
 }
 
+fn createUnsupportedDefaultPlatformTargetReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The builtin platform cannot build executables for {s}.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unsupported Default Platform Target", headline, .fatal);
+
+    try report.document.addText(
+        "OpenBSD requires its system C runtime for process startup and kernel calls. " ++
+            "Roc does not ship an OpenBSD sysroot, so the builtin platform cannot cross-link this target. " ++
+            "Use an app with an OpenBSD platform and build it natively on OpenBSD.",
+    );
+
+    return report;
+}
+
 fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     const headline = try std.fmt.allocPrint(allocator, "The optimization mode {s} is not implemented for {s} yet.", .{ info.opt, info.command });
     defer allocator.free(headline);
@@ -745,6 +775,23 @@ fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.
     try report.document.addText("Found ");
     try report.document.addAnnotated(count_str, .error_highlight);
     try report.document.addText(" error(s). See above for details.");
+
+    return report;
+}
+
+fn createUnreportedErrorReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(
+        allocator,
+        "The compiler stopped with the error {s} but did not say why.",
+        .{info.err_name},
+    );
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unreported Error", headline, .fatal);
+
+    try report.document.addText(
+        "This is a bug in the compiler: whatever failed should have explained itself. " ++
+            "Please report it at https://github.com/roc-lang/roc/issues, including the command you ran.",
+    );
 
     return report;
 }

@@ -1919,11 +1919,7 @@ expect {
 	(s-expect
 		(e-block
 			(s-expr
-				(e-method-eq (negated "false")
-					(lhs
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(rhs
-						(e-num (value "1")))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(e-method-eq (negated "false")
 				(lhs
 					(e-runtime-error (tag "ident_not_in_scope")))
@@ -1945,14 +1941,14 @@ expect {
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
-		(alias (type "Map(a, b)")
+		(alias (type "Error")
 			(ty-header (name "Map")
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "MapML")
+		(alias (type "Error")
 			(ty-header (name "MapML")))
-		(alias (type "Som")
+		(alias (type "Error")
 			(ty-header (name "Som")))
 		(alias (type "Ml(a)")
 			(ty-header (name "Ml")

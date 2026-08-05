@@ -52,6 +52,7 @@ pub const Capture = struct {
     symbol: Common.Symbol,
     binder: ?check.CheckedModule.PatternBinderId,
     capture_id: ?check.CheckedModule.CaptureId = null,
+    checked_capture_id: ?check.CheckedModule.CaptureId = null,
     ty: TypeVarId,
 };
 
@@ -83,6 +84,7 @@ pub const Content = union(enum) {
         backing: ?struct {
             ty: TypeVarId,
             use: MonoType.BackingUse,
+            authority: MonoType.BackingAuthority = .checked_public,
         } = null,
         /// Declared field order for a nominal/opaque record backing; empty
         /// otherwise.
@@ -104,7 +106,42 @@ pub const Content = union(enum) {
         members: Span = .empty(),
     },
     zst,
+    /// Lazy leaf: this var's type is the referenced lifted Monotype, not yet
+    /// materialized in this store. The solver expands a leaf one level the
+    /// first time unification or a shape read touches it, and end-of-solve
+    /// finalization replaces every surviving leaf with a link to a
+    /// materialized clone, so program views never observe one. Each use still
+    /// gets its own leaf var: unification rewrites var contents in place, so
+    /// clones that can reach `unify` must own their vars.
+    mono: struct {
+        id: MonoType.TypeId,
+        /// Clone context tying recursive back-references within one lazily
+        /// materialized tree to their existing vars, exactly as an eager
+        /// clone's memo map did. `no_leaf_context` until first expansion.
+        ctx: u32 = no_leaf_context,
+    },
 };
+
+/// Sentinel for a lazy leaf that has not been reached by any expansion yet.
+pub const no_leaf_context: u32 = std.math.maxInt(u32);
+
+test "lambda solved named backing preserves generated-private authority" {
+    const content = Content{ .named = .{
+        .named_type = undefined,
+        .def = undefined,
+        .kind = .@"opaque",
+        .args = Span.empty(),
+        .backing = .{
+            .ty = @enumFromInt(1),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } };
+    try std.testing.expectEqual(
+        MonoType.BackingAuthority.generated_private,
+        content.named.backing.?.authority,
+    );
+}
 
 /// Store for Lambda Solved type variables and their shared spans.
 pub const Store = struct {
@@ -237,17 +274,9 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn span(self: *const Store, span_: Span) []const TypeVarId {
-        return self.spans.items[span_.start..][0..span_.len];
-    }
-
     pub fn spanItem(self: *const Store, span_: Span, index: usize) TypeVarId {
         if (index >= span_.count()) Common.invariant("Lambda Solved type span index out of bounds");
         return self.spans.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn fieldSpan(self: *const Store, span_: Span) []const Field {
-        return self.fields.items[span_.start..][0..span_.len];
     }
 
     pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
@@ -257,17 +286,14 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
-        return self.declared_fields.items[span_.start..][0..span_.len];
-    }
-
     pub fn fieldItem(self: *const Store, span_: Span, index: usize) Field {
         if (index >= span_.count()) Common.invariant("Lambda Solved field span index out of bounds");
         return self.fields.items[@as(usize, span_.start) + index];
     }
 
-    pub fn tagSpan(self: *const Store, span_: Span) []const Tag {
-        return self.tags.items[span_.start..][0..span_.len];
+    pub fn declaredFieldItem(self: *const Store, span_: Span, index: usize) DeclaredField {
+        if (index >= span_.count()) Common.invariant("Lambda Solved declared-field span index out of bounds");
+        return self.declared_fields.items[@as(usize, span_.start) + index];
     }
 
     pub fn tagItem(self: *const Store, span_: Span, index: usize) Tag {
@@ -275,17 +301,9 @@ pub const Store = struct {
         return self.tags.items[@as(usize, span_.start) + index];
     }
 
-    pub fn captureSpan(self: *const Store, span_: Span) []const Capture {
-        return self.captures.items[span_.start..][0..span_.len];
-    }
-
     pub fn captureItem(self: *const Store, span_: Span, index: usize) Capture {
         if (index >= span_.count()) Common.invariant("Lambda Solved capture span index out of bounds");
         return self.captures.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn memberSpan(self: *const Store, span_: Span) []const FnMember {
-        return self.fn_members.items[span_.start..][0..span_.len];
     }
 
     pub fn memberItem(self: *const Store, span_: Span, index: usize) FnMember {
@@ -379,7 +397,7 @@ test "lambda solved function types carry callable variables" {
     const function = store.get(fn_ty).func;
     try std.testing.expectEqual(callable, function.callable);
     try std.testing.expectEqual(ret, function.ret);
-    try std.testing.expectEqual(arg, store.span(function.args)[0]);
+    try std.testing.expectEqual(arg, store.spanItem(function.args, 0));
 }
 
 test "lambda solved type variable order uses the typed id helper" {

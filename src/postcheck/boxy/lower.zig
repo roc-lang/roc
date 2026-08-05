@@ -4578,6 +4578,7 @@ const ProcedureBuilder = struct {
         const worker_function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("boxy erased worker representation was not callable");
         const erased_arg_desc_params = try proc.bindErasedArgumentDescriptorParams(worker_function);
+        const erased_reuse_arg = try proc.addArgLocal(try self.result.layouts.insertErasedCallable());
         try proc.bindLambdaArgDescriptors();
         const ret_local = try proc.addWorkerReturnLocal(true);
         const ret_layout = proc.workerReturnLayout();
@@ -4588,6 +4589,7 @@ const ProcedureBuilder = struct {
             .body = null,
             .ret_layout = ret_layout,
             .abi = .erased_callable,
+            .erased_reuse_arg = erased_reuse_arg,
             .boxy_runtime_entry = true,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         });
@@ -4844,13 +4846,13 @@ const ProcedureBuilder = struct {
                 } };
             },
             .structural_eq => boxyLowerInvariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
-            .parse_tag_union_spec_parse,
+            .parse_tag_union,
             .field_names_rename_fields,
             .field_names_shortest_name,
             .field_names_longest_name,
             .field_names_iter,
             .field_names_for_size,
-            .field_name_name,
+            .field_name,
             => {
                 const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
                 if (function.args.len != worker_args.len) {
@@ -4904,13 +4906,13 @@ const ProcedureBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         return switch (intrinsic) {
-            .field_name_name => try proc.lowerGeneratedFieldNameNameInto(target, next),
+            .field_name => try proc.lowerGeneratedFieldNameNameInto(target, next),
             .field_names_shortest_name => try proc.lowerGeneratedFieldNamesBoundInto(target, 1, next),
             .field_names_longest_name => try proc.lowerGeneratedFieldNamesBoundInto(target, 2, next),
             .field_names_iter => try self.lowerGeneratedFieldIteratorIntrinsicInto(proc, .all, target, next),
             .field_names_for_size => try self.lowerGeneratedFieldIteratorIntrinsicInto(proc, .for_size, target, next),
             .field_names_rename_fields => try self.lowerGeneratedFieldNamesRenameFieldsInto(proc, target, next),
-            .parse_tag_union_spec_parse => try self.lowerGeneratedParseTagUnionIntrinsicInto(proc, target, next),
+            .parse_tag_union => try self.lowerGeneratedParseTagUnionIntrinsicInto(proc, target, next),
             .str_inspect, .structural_eq => boxyLowerInvariant("non-evidence intrinsic reached generated evidence lowering"),
         };
     }
@@ -12439,12 +12441,7 @@ const ProcBodyBuilder = struct {
                     if (self.parent.result.store.getLocal(arg_local).boxy_desc) |desc| desc.localOrNull() else null
                 else
                     null;
-                const local = if (existing_root_local) |existing| blk: {
-                    if (std.mem.findScalar(LIR.LocalId, self.arg_locals.items, existing) == null) {
-                        try self.arg_locals.append(self.parent.allocator, existing);
-                    }
-                    break :blk existing;
-                } else try self.addArgLocal(.opaque_ptr);
+                const local = existing_root_local orelse try self.addFrameLocal(.opaque_ptr);
                 try self.markReadOnlyDescriptorInput(local);
                 try self.bindDescriptorRequirementLocalForRep(param.desc, param.rep, local, true);
                 if (self.repOwnsDescriptor(param.rep, param.desc)) {
@@ -12829,7 +12826,7 @@ const ProcBodyBuilder = struct {
                 try self.reserveBlockBindings(block.statements);
                 var block_diverges = false;
                 for (block.statements) |statement| {
-                    if (self.module.checked_bodies.statementDiverges(statement)) block_diverges = true;
+                    if (self.module.checked_bodies.statementDiverges(statement, .run)) block_diverges = true;
                 }
                 var continuation = if (block_diverges)
                     try self.parent.result.store.addCFStmt(.runtime_error)
@@ -13392,16 +13389,17 @@ const ProcBodyBuilder = struct {
             else => boxyLowerInvariant("checked method equality used a non-equality dispatch plan"),
         };
         switch (plan.resolution) {
-            .direct => {
+            .direct_closed, .direct_parametric => {
                 if (!checkedTypeUsesBuiltinStructuralEquality(self.module, plan.dispatcher_ty)) {
                     return try self.lowerDispatchCallInto(target, plan.expr, maybe_plan, next);
                 }
             },
-            .constraint,
+            .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
+            .evidence_dependent,
             .structural,
             => return try self.lowerDispatchCallInto(target, plan.expr, maybe_plan, next),
             .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
-            .unreachable_dispatch => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
+            .@"unreachable" => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
         }
 
         if (!eq.structural_allowed) {
@@ -16494,10 +16492,13 @@ const ProcBodyBuilder = struct {
             .closure = callee_local,
             .args = try self.parent.result.store.addLocalSpan(call_args),
             .arg_layouts = try self.appendErasedArgumentLayouts(call_args),
+            .arg_plan = try self.erasedCallArgsPlan(call_args),
             .arg_descs = arg_descs.locals,
             .arg_desc_keys = arg_descs.keys,
             .result_desc = expected_result_desc.desc,
             .out_desc = out_desc,
+            .reuse_closure = false,
+            .reuse_source = null,
             .next = continuation,
         } });
         continuation = try self.prependDescriptorArgMaterializations(arg_desc_initializers.items, continuation);
@@ -16620,10 +16621,13 @@ const ProcBodyBuilder = struct {
             .closure = callee_local,
             .args = try self.parent.result.store.addLocalSpan(call_args),
             .arg_layouts = try self.appendErasedArgumentLayouts(call_args),
+            .arg_plan = try self.erasedCallArgsPlan(call_args),
             .arg_descs = arg_descs.locals,
             .arg_desc_keys = arg_descs.keys,
             .result_desc = expected_result_desc.desc,
             .out_desc = out_desc,
+            .reuse_closure = false,
+            .reuse_source = null,
             .next = continuation,
         } });
         continuation = try self.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
@@ -16660,6 +16664,18 @@ const ProcBodyBuilder = struct {
             .start = @intCast(start),
             .len = @intCast(args.len),
         };
+    }
+
+    fn erasedCallArgsPlan(
+        self: *ProcBodyBuilder,
+        args: []const LIR.LocalId,
+    ) Allocator.Error!LIR.ErasedCallArgsPlanId {
+        const arg_layouts = try self.parent.allocator.alloc(layout.Idx, args.len);
+        defer self.parent.allocator.free(arg_layouts);
+        for (args, arg_layouts) |arg, *arg_layout| {
+            arg_layout.* = self.parent.result.store.getLocal(arg).layout_idx;
+        }
+        return try self.parent.result.store.internErasedCallArgsPlan(&self.parent.result.layouts, arg_layouts);
     }
 
     fn erasedCallArgumentDescriptorRefs(
@@ -16824,12 +16840,13 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const dispatch = self.staticDispatchPlan(maybe_plan);
         switch (dispatch.resolution) {
-            .direct => {},
-            .constraint,
+            .direct_closed, .direct_parametric => {},
+            .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
+            .evidence_dependent,
             .structural,
             => return try self.lowerUnresolvedDispatchCallInto(target, call_expr, dispatch, ret_ty, next),
             .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
-            .unreachable_dispatch => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
+            .@"unreachable" => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
         }
 
         const direct_plan = self.parent.plan.directCallPlanForCall(
@@ -22386,21 +22403,23 @@ const ProcBodyBuilder = struct {
         const iterator_type = if (iter_call_plan) |call_plan|
             call_plan.ret_type
         else switch (plan.iter.resolution) {
-            .direct => boxyLowerInvariant("checked iterator iter dispatch reached boxy lowering without a planned worker"),
-            .constraint,
+            .direct_closed, .direct_parametric => boxyLowerInvariant("checked iterator iter dispatch reached boxy lowering without a planned worker"),
+            .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+            .evidence_dependent,
             .structural,
             .checked_error,
-            .unreachable_dispatch,
+            .@"unreachable",
             => Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = plan.iterator_ty },
         };
         const step_type = if (next_call_plan) |call_plan|
             call_plan.ret_type
         else switch (plan.next.resolution) {
-            .direct => boxyLowerInvariant("checked iterator next dispatch reached boxy lowering without a planned worker"),
-            .constraint,
+            .direct_closed, .direct_parametric => boxyLowerInvariant("checked iterator next dispatch reached boxy lowering without a planned worker"),
+            .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+            .evidence_dependent,
             .structural,
             .checked_error,
-            .unreachable_dispatch,
+            .@"unreachable",
             => Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = plan.step_ty },
         };
         const iterator_rep = self.repForTypeRef(iterator_type);
@@ -22622,11 +22641,12 @@ const ProcBodyBuilder = struct {
         defer self.restoreDescriptorBindings(descriptor_snapshot);
 
         switch (call.resolution) {
-            .direct => {},
-            .constraint => return try self.lowerUnresolvedIteratorDispatchCallInto(target, plan, kind, call, loop_iterator, next),
+            .direct_closed, .direct_parametric => {},
+            .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+            .evidence_dependent => return try self.lowerUnresolvedIteratorDispatchCallInto(target, plan, kind, call, loop_iterator, next),
             .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
             .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
-            .unreachable_dispatch => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
+            .@"unreachable" => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
         }
 
         const call_plan = self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, kind, self.worker_layout.worker) orelse
@@ -28623,6 +28643,7 @@ const ProcBodyBuilder = struct {
             );
         }
         const erased_arg_desc_params = try adapter_proc.bindErasedArgumentDescriptorParams(target_function);
+        const erased_reuse_arg = try adapter_proc.addArgLocal(try self.parent.result.layouts.insertErasedCallable());
 
         const ret_layout = adapter_proc.workerRuntimeLayoutForRep(target_function.ret).layoutIdx();
         const ret_local = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(target_function.ret);
@@ -28633,6 +28654,7 @@ const ProcBodyBuilder = struct {
             .body = null,
             .ret_layout = ret_layout,
             .abi = .erased_callable,
+            .erased_reuse_arg = erased_reuse_arg,
             .boxy_runtime_entry = true,
             .stack_probe = self.parent.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         });
@@ -28703,6 +28725,7 @@ const ProcBodyBuilder = struct {
                 .closure = source_closure,
                 .args = try self.parent.result.store.addLocalSpan(call_args),
                 .arg_layouts = try adapter_proc.appendErasedArgumentLayouts(call_args),
+                .arg_plan = try adapter_proc.erasedCallArgsPlan(call_args),
                 .arg_descs = arg_descs.locals,
                 .arg_desc_keys = arg_descs.keys,
                 // `result_desc` governs materialization into the source
@@ -28710,6 +28733,8 @@ const ProcBodyBuilder = struct {
                 // preserves the exact descriptor returned by the callable.
                 .result_desc = expected_result_desc.desc,
                 .out_desc = out_desc,
+                .reuse_closure = false,
+                .reuse_source = null,
                 .next = continuation,
             },
         });
@@ -35440,6 +35465,7 @@ const ConstPlanBuilder = struct {
                     .slot = @intCast(field_index),
                     .ty = source_capture.ty,
                     .plan = try self.constPlanForRep(capture.rep),
+                    .storage = .value,
                 };
                 slot_count += 1;
             }
@@ -35932,6 +35958,9 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
     };
     checked_module.callable_eval_templates = .{ .templates = &callable_templates };
 
+    const evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
+    };
     const fn_id = try checked_module.const_store.appendFn(.{
         .fn_def = .{ .nested = .{
             .owner = template_ref,
@@ -35940,6 +35969,8 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
         } },
         .source_fn_ty = @enumFromInt(1),
         .source_fn_key = typeKey(1),
+        .evidence_frames = &evidence_frames,
+        .evidence_frame_head = 0,
     });
     var compile_time_roots = [_]checked.CompileTimeRoot{
         .{
@@ -35950,6 +35981,7 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
             .pattern = @enumFromInt(fixtureTableIndex(0)),
             .expr = @enumFromInt(fixtureTableIndex(0)),
             .checked_type = @enumFromInt(1),
+            .request_eligibility = .eligible,
             .payload = .{ .fn_value = fn_id },
         },
     };
@@ -35965,6 +35997,9 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
         .{
             .site = @enumFromInt(fixtureTableIndex(0)),
             .owner_template = template_ref,
+            .lexical_scope = .root,
+            .evidence_source = .inherited,
+            .evidence = .{},
             .path_start = 0,
             .path_len = 0,
             .kind = .local_function,
@@ -35982,6 +36017,8 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
             .checked_fn_scheme = typeSchemeKey(2),
             .checked_fn_root = @enumFromInt(2),
             .static_dispatch_plans = .{},
+            .direct_dispatch_plans = .{},
+            .dispatch_relations = .{},
             .resolved_value_refs = .{},
             .top_level_value_uses = .{},
             .nested_proc_sites = .{},
@@ -36437,6 +36474,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
                 .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @enumFromInt(fixtureTableIndex(0)) } },
                 .source_fn_ty_template = canonicalTypeKey(1),
                 .source_fn_ty_payload = @enumFromInt(1),
+                .runtime_result_provenance = null,
             } },
             .checked_ty = @enumFromInt(1),
             .scope_depth = 0,
@@ -36610,6 +36648,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         .binding = .{ .top_level = .{ .artifact = import_checked_module.key, .binding = @enumFromInt(fixtureTableIndex(0)) } },
         .source_fn_ty_template = canonicalTypeKey(3),
         .source_fn_ty_payload = @enumFromInt(1),
+        .runtime_result_provenance = null,
     };
     var import_resolved_records = [_]checked.ResolvedValueRefRecord{
         .{
@@ -36644,6 +36683,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
                 .proc_value = procedureValueRef(import_template),
                 .template = .{ .checked = import_template },
             } },
+            .runtime_result_provenance = null,
             .template_closure = .{},
         },
     };
@@ -36700,6 +36740,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         .binding = .{ .imported = imported_binding },
         .source_fn_ty_template = canonicalTypeKey(2),
         .source_fn_ty_payload = @enumFromInt(1),
+        .runtime_result_provenance = null,
     };
     var resolved_records = [_]checked.ResolvedValueRefRecord{
         .{
@@ -36883,6 +36924,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
                 .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @enumFromInt(fixtureTableIndex(0)) } },
                 .source_fn_ty_template = canonicalTypeKey(1),
                 .source_fn_ty_payload = @enumFromInt(1),
+                .runtime_result_provenance = null,
             } },
             .checked_ty = @enumFromInt(1),
             .scope_depth = 0,
@@ -41263,6 +41305,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .data = .{ .field_access = .{
             .receiver = @enumFromInt(6),
             .field_name = field_b,
+            .backing_access = .inspectable,
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
@@ -42012,7 +42055,11 @@ test "boxy lowerer emits record field access using layout field index" {
         .id = @enumFromInt(1),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .field_access = .{ .receiver = @enumFromInt(2), .field_name = field_b } },
+        .data = .{ .field_access = .{
+            .receiver = @enumFromInt(2),
+            .field_name = field_b,
+            .backing_access = .inspectable,
+        } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(2),
@@ -44975,6 +45022,8 @@ fn checkedTemplate(
         .checked_fn_scheme = typeSchemeKey(9),
         .checked_fn_root = checked_fn_root,
         .static_dispatch_plans = .{},
+        .direct_dispatch_plans = .{},
+        .dispatch_relations = .{},
         .resolved_value_refs = .{},
         .top_level_value_uses = .{},
         .nested_proc_sites = .{},

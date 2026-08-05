@@ -1,13 +1,13 @@
 //! Bit-exact, target-independent meaning of Roc's 128-bit integer SIMD ops.
 //!
-//! Optimizing backends lower these operations to native vector instructions.
-//! The evaluators and dev-backend helpers use this implementation directly so
-//! every execution path has the same edge-case behavior.
+//! Compiled backends lower these operations to native vector instructions.
+//! The interpreter, compile-time evaluator, and differential tests use this
+//! implementation as their target-independent semantic oracle.
 
 const std = @import("std");
 
-/// Runtime-side SIMD vocabulary. `base.LowLevel.simdOpIndex` is the explicit
-/// compiler-to-runtime mapping and pins this declaration order.
+/// Evaluator-side SIMD vocabulary. `base.LowLevel.simdOpIndex` is the explicit
+/// low-level-to-oracle mapping and pins this declaration order.
 pub const Op = enum(u8) {
     load_16_unchecked,
     store_16_unchecked,

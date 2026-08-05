@@ -79,6 +79,7 @@ pub const LowLevel = enum(u16) {
     list_release_excess_capacity,
     list_split_first,
     list_split_last,
+    list_map_prepare_reuse,
     list_map_can_reuse,
     list_map_cast_unsafe,
     list_map_extract_unsafe,
@@ -182,6 +183,12 @@ pub const LowLevel = enum(u16) {
     num_count_leading_zero_bits,
     num_count_trailing_zero_bits,
 
+    // Read a little-endian integer out of a byte list. The result layout
+    // carries the width, so a single low-level op serves every multi-byte
+    // integer type. The bounds check lives in the Roc wrapper, so this op
+    // requires the caller to have proven the bytes are in range.
+    num_from_le_bytes_unchecked,
+
     // Fixed-width integer SIMD operations. Lane width and signedness are
     // carried by the operand/result layouts; these operations never encode a
     // concrete vector type in their identity.
@@ -252,6 +259,8 @@ pub const LowLevel = enum(u16) {
     u128_from_str,
     i128_from_str,
     dec_from_str,
+    dec_to_attos,
+    dec_from_attos,
     f32_from_str,
     f64_from_str,
 
@@ -562,8 +571,8 @@ pub const LowLevel = enum(u16) {
     crash,
 
     /// Index into `builtins.simd.Op`. The SIMD entries are intentionally one
-    /// contiguous, order-pinned block so compiler artifacts and dependency-
-    /// light runtime payloads share a compact operation identifier without a
+    /// contiguous, order-pinned block so the interpreter and compile-time
+    /// evaluator share the semantic oracle's operation vocabulary without a
     /// module cycle.
     pub fn simdOpIndex(self: LowLevel) ?u8 {
         return switch (self) {
@@ -629,6 +638,54 @@ pub const LowLevel = enum(u16) {
 
     /// Reference-counting behavior exposed by this primitive before LIR ARC
     /// insertion. This is explicit primitive metadata, not backend policy.
+    ///
+    /// ## What a row promises
+    ///
+    /// Every row is a claim about the Zig builtin the op lowers to, and ARC
+    /// generates code that is correct only if the claim is true. Writing a row
+    /// means discharging these obligations for the implementation, not
+    /// pattern-matching a neighboring row:
+    ///
+    /// - `may_allocate`: the op may call `allocateWithRefcount`. A row that
+    ///   omits it promises the op never births an allocation.
+    /// - `may_retain_or_release`: the op may change some allocation's count.
+    ///   A row that omits it promises every count the op can reach is
+    ///   untouched.
+    /// - `may_runtime_uniqueness_check_args`: the op reads those arguments'
+    ///   counts to choose between mutating in place and copying. ARC may prove
+    ///   the check redundant and pass `unique_args`, which lets the builtin
+    ///   take the in-place path unconditionally — so a named position must be
+    ///   one the op consumes, and the in-place path must be sound whenever the
+    ///   argument really is unique.
+    /// - `consume_args`: the op takes one ownership unit of those arguments.
+    ///   ARC stops accounting for them at this statement, so the op must
+    ///   release each one (or move it into the result) on every path.
+    /// - `result_aliases_consumed_args`: the unit taken from those consumed
+    ///   arguments lives on in the result. Only consumed positions may appear.
+    /// - `retain_args`: the op adds one count to those arguments — typically
+    ///   because it stores a handle to them inside the result. ARC emits no
+    ///   retain of its own, so an op that declares this and does not retain
+    ///   leaves the stored handle undercounted.
+    /// - `retain_result`: the result is read out of a structure that stays
+    ///   live (an element, a box payload, a capture), so ARC retains it after
+    ///   the op rather than treating it as freshly owned.
+    /// - `result_borrows_args`: the result points into those arguments'
+    ///   payloads without owning them. ARC keeps the lender live across every
+    ///   use of the result instead of retaining the result.
+    /// - `result_shares_args`: the result is a fresh owned outer value whose
+    ///   interior shares those arguments' allocations (seamless slices, byte
+    ///   reinterpretations). Host-visibility analysis links result and
+    ///   argument in both directions.
+    /// - `result_unique`: the result's outermost allocation has count 1 on
+    ///   return, so ARC records a birth. A result that shares an argument's
+    ///   outer allocation is never unique; interior sharing is irrelevant.
+    ///
+    /// ## What checks the claims
+    ///
+    /// - `base/rc_effect_rules.zig` rejects rows whose fields contradict each
+    ///   other, over the whole table, at comptime.
+    /// - `eval/rc_conformance.zig` runs each op through the interpreter and
+    ///   compares the refcount traffic it actually produces against the row.
     pub const RcEffect = struct {
         may_allocate: bool = false,
         may_retain_or_release: bool = false,
@@ -760,14 +817,6 @@ pub const LowLevel = enum(u16) {
             };
         }
 
-        pub fn allocatesSharingArgs(mask: u64) RcEffect {
-            return .{
-                .may_allocate = true,
-                .result_shares_args = mask,
-                .result_unique = true,
-            };
-        }
-
         pub fn allocatesAndRetainsOrReleasesSharingArgs(mask: u64) RcEffect {
             return .{
                 .may_allocate = true,
@@ -793,6 +842,16 @@ pub const LowLevel = enum(u16) {
                 .result_unique = true,
             };
         }
+
+        /// Move consumed ownership units into the result without claiming that
+        /// their allocations are unique.
+        pub fn consumesArgsReturningConsumedArgs(mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = mask != 0,
+                .consume_args = mask,
+                .result_aliases_consumed_args = mask,
+            };
+        }
     };
 
     /// Return the explicit RC metadata for this primitive. The masks identify
@@ -800,9 +859,16 @@ pub const LowLevel = enum(u16) {
     pub fn rcEffect(self: LowLevel) RcEffect {
         return switch (self) {
             .str_concat => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
+            // Trimming a shared string returns a seamless slice of it rather
+            // than copying, so the result's outermost allocation is the
+            // argument's and its count is whatever the argument's was. Same
+            // regime as the list slice ops below.
             .str_trim,
             .str_trim_start,
             .str_trim_end,
+            => RcEffect.runtimeUniquenessMaybeSharedResult(argMask(&.{0})),
+
             .str_with_ascii_lowercased,
             .str_with_ascii_uppercased,
             .str_reserve,
@@ -848,7 +914,12 @@ pub const LowLevel = enum(u16) {
 
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
-            // Reads the list's refcount (and slice bit) without changing it.
+            // Moves the list's ownership unit into a new local before the
+            // reuse query, forcing ARC to preserve every later use first.
+            .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
+
+            // Reads the prepared list's refcount (and slice bit) without
+            // changing it.
             .list_map_can_reuse => RcEffect.none(),
 
             // Retypes a unique non-slice list to the output element type,
@@ -878,7 +949,9 @@ pub const LowLevel = enum(u16) {
             .list_get_unsafe,
             => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
-            .str_split_on => RcEffect.allocatesSharingArgs(argMask(&.{0})),
+            // Allocates the list of segments, and counts the source string
+            // once per segment it slices out of it.
+            .str_split_on => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_repeat,
             .str_from_utf8_lossy,
@@ -1007,6 +1080,8 @@ pub const LowLevel = enum(u16) {
             .f32_from_bits,
             .f64_to_bits,
             .f64_from_bits,
+            .dec_to_attos,
+            .dec_from_attos,
             .num_shift_left_by,
             .num_shift_right_by,
             .num_shift_right_zf_by,
@@ -1017,6 +1092,7 @@ pub const LowLevel = enum(u16) {
             .num_count_one_bits,
             .num_count_leading_zero_bits,
             .num_count_trailing_zero_bits,
+            .num_from_le_bytes_unchecked,
             .simd_load_16_unchecked,
             .simd_splat,
             .simd_get_lane_unchecked,

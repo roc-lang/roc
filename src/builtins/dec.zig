@@ -726,52 +726,33 @@ pub const RocDec = extern struct {
         // it in terms of positives can cause bugs when one is zero.
         const is_answer_negative = (numerator_i128 < 0) != (denominator_i128 < 0);
 
-        // Break the two i128s into two { hi: u64, lo: u64 } tuples, discarding
-        // the sign for now.
-        //
-        // We'll multiply all 4 combinations of these (hi1 x lo1, hi2 x lo2,
-        // hi1 x lo2, hi2 x lo1) and add them as appropriate, then apply the
-        // appropriate sign at the very end.
-        //
-        // We do checked_abs because if we had -i128::MAX before, this will overflow.
-
+        // Keep the sign separate while calculating with unsigned magnitudes.
+        // The magnitude of minInt(i128) is 2^127, which fits in u128 even though
+        // it does not fit in a positive i128.
         const numerator_u128 = @abs(numerator_i128);
-        if (numerator_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
-            // Currently, if you try to do multiplication on i64::MIN, panic
-            // unless you're specifically multiplying by 0 or 1.
-            //
-            // Maybe we could support more cases in the future
-            if (denominator_i128 == one_point_zero_i128) {
-                return self;
-            } else {
-                roc_ops.crash("Decimal division overflow in numerator!");
-            }
-        }
-
         const denominator_u128 = @abs(denominator_i128);
-        if (denominator_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
-            // Currently, if you try to do multiplication on i64::MIN, panic
-            // unless you're specifically multiplying by 0 or 1.
-            //
-            // Maybe we could support more cases in the future
-            if (numerator_i128 == one_point_zero_i128) {
-                return other;
-            } else {
-                roc_ops.crash("Decimal division overflow in denominator!");
-            }
-        }
 
         const numerator_u256: U256 = mul_u128(numerator_u128, comptime math.pow(u128, 10, decimal_places));
         const answer = div_u256_by_u128(numerator_u256, denominator_u128);
 
-        var unsigned_answer: i128 = undefined;
-        if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
-            unsigned_answer = @as(i128, @intCast(answer.lo));
-        } else {
+        if (answer.hi != 0) {
             roc_ops.crash("Decimal division overflow!");
         }
 
-        return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
+        if (is_answer_negative) {
+            const negative_limit = i128h.shl(@as(u128, 1), 127);
+            if (answer.lo > negative_limit) {
+                roc_ops.crash("Decimal division overflow!");
+            }
+
+            return RocDec{ .num = @bitCast(0 -% answer.lo) };
+        } else {
+            if (answer.lo > @as(u128, @intCast(math.maxInt(i128)))) {
+                roc_ops.crash("Decimal division overflow!");
+            }
+
+            return RocDec{ .num = @intCast(answer.lo) };
+        }
     }
 
     pub fn log(self: RocDec, roc_ops: *RocOps) RocDec {
@@ -2129,6 +2110,10 @@ test "sub: 0" {
     try std.testing.expectEqual(RocDec{ .num = 1 }, dec.sub(.{ .num = 0 }, test_env.getOps()));
 }
 
+test "abs: Dec.lowest is out of range" {
+    try std.testing.expectError(error.OutOfRange, RocDec.min.abs());
+}
+
 test "mul: by 0" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2154,6 +2139,34 @@ test "div: 0 / 2" {
     var dec: RocDec = RocDec.fromU64(0);
 
     try std.testing.expectEqual(RocDec.fromU64(0), dec.div(RocDec.fromU64(2), test_env.getOps()));
+}
+
+// https://github.com/roc-lang/roc/issues/10563
+test "div: Dec.lowest / 2" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    try expectRocDecConstant(
+        RocDec.min.div(RocDec.fromU64(2), test_env.getOps()),
+        "-85070591730234615865.843651857942052864",
+    );
+}
+
+test "div: Dec.lowest boundary operands" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    try std.testing.expectEqual(RocDec.min, RocDec.min.div(RocDec.one_point_zero, test_env.getOps()));
+    try std.testing.expectEqual(RocDec.one_point_zero, RocDec.min.div(RocDec.min, test_env.getOps()));
+    try std.testing.expectEqual(RocDec{ .num = 0 }, RocDec.one_point_zero.div(RocDec.min, test_env.getOps()));
+    try expectRocDecConstant(
+        RocDec.min.div(RocDec.fromWholeInt(-2).?, test_env.getOps()),
+        "85070591730234615865.843651857942052864",
+    );
+    try expectRocDecConstant(
+        RocDec.max.div(RocDec.min, test_env.getOps()),
+        "-0.999999999999999999",
+    );
 }
 
 test "div: 8 / 5" {

@@ -71,6 +71,7 @@ const Decision = union(enum) {
 const WrapperAnalyzer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
+    solved_types: SolvedType.Store.View,
     decisions: []Decision,
     stack: std.ArrayList(Lifted.FnId),
 
@@ -85,6 +86,7 @@ const WrapperAnalyzer = struct {
         var analyzer = WrapperAnalyzer{
             .allocator = allocator,
             .solved = solved,
+            .solved_types = solved.types.view(),
             .decisions = decisions,
             .stack = .empty,
         };
@@ -176,7 +178,7 @@ const WrapperAnalyzer = struct {
 
     fn solvedCaptureCount(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) usize {
         const captures = self.solvedCapturesForFn(fn_id);
-        return self.solved.types.captureSpan(captures).len;
+        return self.solved_types.captureSpan(captures).len;
     }
 
     fn solvedCapturesForFn(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
@@ -190,7 +192,7 @@ const WrapperAnalyzer = struct {
             .erased => |erased| erased.members,
             else => Common.invariant("callable value did not have a resolved callable slot"),
         };
-        for (self.solved.types.memberSpan(callable)) |member| {
+        for (self.solved_types.memberSpan(callable)) |member| {
             if (member.lambda == fn_symbol) return member.captures;
         }
         return .empty();
@@ -205,6 +207,7 @@ const WrapperAnalyzer = struct {
         const expr = self.solved.lifted.getExpr(expr_id);
         return switch (expr.data) {
             .local => |local| localIsArg(local, args),
+            .@"unreachable",
             .unit,
             .int_lit,
             .frac_f32_lit,
@@ -220,6 +223,15 @@ const WrapperAnalyzer = struct {
             => |items| self.exprSpanReadsOnlyArgs(items, args),
             .record => |fields| {
                 const field_exprs = self.solved.lifted.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| {
+                    const field = GuardedList.at(field_exprs, index);
+                    if (!self.exprReadsOnlyArgs(field.value, args)) return false;
+                }
+                return true;
+            },
+            .record_update => |update| {
+                if (!self.exprReadsOnlyArgs(update.base, args)) return false;
+                const field_exprs = self.solved.lifted.fieldExprSpan(update.fields);
                 for (0..field_exprs.len) |index| {
                     const field = GuardedList.at(field_exprs, index);
                     if (!self.exprReadsOnlyArgs(field.value, args)) return false;
@@ -309,6 +321,7 @@ const WrapperAnalyzer = struct {
     fn visitBodyCallees(self: *WrapperAnalyzer, expr_id: Lifted.ExprId) std.mem.Allocator.Error!void {
         const expr = self.solved.lifted.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -325,6 +338,14 @@ const WrapperAnalyzer = struct {
             => |items| try self.visitSpanCallees(items),
             .record => |fields| {
                 const field_exprs = self.solved.lifted.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| {
+                    const field = GuardedList.at(field_exprs, index);
+                    try self.visitBodyCallees(field.value);
+                }
+            },
+            .record_update => |update| {
+                try self.visitBodyCallees(update.base);
+                const field_exprs = self.solved.lifted.fieldExprSpan(update.fields);
                 for (0..field_exprs.len) |index| {
                     const field = GuardedList.at(field_exprs, index);
                     try self.visitBodyCallees(field.value);

@@ -3848,6 +3848,9 @@ const Builder = struct {
                     .kind = .{ .primitive = primitive },
                 },
                 .bool_tag_union => return .{ .source_type = source_type, .kind = .bool_tag_union },
+                .try_nominal,
+                .iterator,
+                => {},
                 .list => return try self.builtinUnaryNominalRepresentation(view, source_type, .list, .list_elem, nominal),
                 .box => return try self.builtinUnaryNominalRepresentation(view, source_type, .box, .box_payload, nominal),
                 .parse_tag_union_spec => return try self.generatedEvidenceRepresentation(
@@ -4497,7 +4500,7 @@ const Builder = struct {
             while (index < reachable.items.len) : (index += 1) {
                 const worker = reachable.items[index];
                 if (self.intrinsicForWorker(worker)) |intrinsic| {
-                    if (intrinsic == .parse_tag_union_spec_parse) {
+                    if (intrinsic == .parse_tag_union) {
                         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
                         if (arg_types.len != 3) {
                             boxyPlanInvariant("generated parse_tag_union call had an unexpected argument count");
@@ -4842,7 +4845,7 @@ const Builder = struct {
             .nested_expr => |expr_ref| blk: {
                 const view = self.moduleForId(expr_ref.module);
                 const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
-                const params = view.checked_procedure_templates.evidenceParamsForExpr(site_expr) orelse break :blk null;
+                const params = self.nestedExprEvidenceParams(view, site_expr) orelse break :blk null;
                 break :blk .{ .view = view, .params = params };
             },
             .generated_codec,
@@ -4862,6 +4865,25 @@ const Builder = struct {
             .view = view,
             .params = view.checked_procedure_templates.evidenceParams(template),
         };
+    }
+
+    fn nestedExprEvidenceParams(
+        _: *Builder,
+        view: ModuleView,
+        expr: checked.CheckedExprId,
+    ) ?[]const static_dispatch.EvidenceParamRecord {
+        for (view.checked_procedure_templates.dispatch_scopes) |scope| {
+            if (scope.checked_expr != expr) continue;
+            const start: usize = scope.evidence_params.start;
+            const len: usize = scope.evidence_params.len;
+            if (start > view.checked_procedure_templates.evidence_params_pool.len or
+                len > view.checked_procedure_templates.evidence_params_pool.len - start)
+            {
+                boxyPlanInvariant("nested procedure evidence span was outside the checked parameter pool");
+            }
+            return view.checked_procedure_templates.evidence_params_pool[start..][0..len];
+        }
+        return null;
     }
 
     fn bindingEvidenceParams(
@@ -5680,11 +5702,12 @@ const Builder = struct {
             boxyPlanInvariant("direct dispatch call referenced a missing checked dispatch plan");
         }
         return switch (view.static_dispatch_plans.plans[raw].resolution) {
-            .direct => |node_id| view.static_dispatch_plans.nestedEvidence(view.static_dispatch_plans.evidenceNode(node_id)),
-            .constraint,
+            .direct_closed, .direct_parametric => |direct| view.static_dispatch_plans.nestedEvidence(view.static_dispatch_plans.evidenceNode(direct.evidence)),
+            .direct_pending => boxyPlanInvariant("unfinalized direct call reached Boxy planning"),
+            .evidence_dependent,
             .structural,
             .checked_error,
-            .unreachable_dispatch,
+            .@"unreachable",
             => null,
         };
     }
@@ -6828,10 +6851,10 @@ const Builder = struct {
                         .procedure => |procedure| self.moduleForCheckedModuleId(procedure.template.artifact),
                         .local_proc, .structural => view,
                     };
-                    const callable_type = if (node.callable_ty) |callable_ty|
-                        typeRef(view, callable_ty)
-                    else
-                        typeRef(target_view, node.target.callable_ty);
+                    const callable_type = switch (node.instantiation) {
+                        .callable => |callable_ty| typeRef(view, callable_ty),
+                        .monomorphic => typeRef(target_view, node.target.callable_ty),
+                    };
                     const source = self.workerSourceForMethodTarget(.{
                         .view = target_view,
                         .target = node.target,
@@ -6893,7 +6916,7 @@ const Builder = struct {
                         .resolution = resolution,
                     };
                 },
-                .constraint => .{
+                .constraint, .from_callable => .{
                     .requirement_type = requirement.fn_ty,
                     .callable_type = requirement.fn_ty,
                     .resolution = .constraint,
@@ -8173,11 +8196,11 @@ const Builder = struct {
                 _ = try self.analyzeType(view, function.ret);
                 try self.planGeneratedFieldIterator(.for_size);
             },
-            .parse_tag_union_spec_parse,
+            .parse_tag_union,
             .field_names_rename_fields,
             .field_names_shortest_name,
             .field_names_longest_name,
-            .field_name_name,
+            .field_name,
             => {
                 for (function.args) |arg| _ = try self.analyzeType(view, arg);
                 _ = try self.analyzeType(view, function.ret);
@@ -9448,6 +9471,7 @@ const Builder = struct {
             .nominal_decl,
             .type_anno,
             .type_var_alias,
+            .where_alias_decl,
             .runtime_error,
             => {},
             .dbg,
@@ -10404,14 +10428,15 @@ fn methodOwnerInNames(
 
 fn directDispatchTarget(
     plans: *const static_dispatch.StaticDispatchPlanTable,
-    resolution: static_dispatch.StaticDispatchResolution,
+    resolution: static_dispatch.CheckedCallResolution,
 ) ?static_dispatch.MethodTarget {
     return switch (resolution) {
-        .direct => |node_id| plans.evidenceNode(node_id).target,
-        .constraint,
+        .direct_closed, .direct_parametric => |direct| plans.evidenceNode(direct.evidence).target,
+        .direct_pending => boxyPlanInvariant("unfinalized direct call reached Boxy planning"),
+        .evidence_dependent,
         .structural,
         .checked_error,
-        .unreachable_dispatch,
+        .@"unreachable",
         => null,
     };
 }
@@ -10542,6 +10567,9 @@ test "boxy planner walks callable eval finalized const function bodies" {
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .value = capture_value,
     }};
+    const evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
+    };
     const fn_id = try const_store.appendFn(.{
         .fn_def = .{ .nested = .{
             .owner = template_ref,
@@ -10551,6 +10579,8 @@ test "boxy planner walks callable eval finalized const function bodies" {
         .source_fn_ty = @enumFromInt(1),
         .source_fn_key = typeKey(1),
         .captures = &captures,
+        .evidence_frames = &evidence_frames,
+        .evidence_frame_head = 0,
     });
     var compile_time_roots = [_]checked.CompileTimeRoot{
         .{
@@ -10561,6 +10591,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
             .pattern = @enumFromInt(fixtureTableIndex(0)),
             .expr = @enumFromInt(fixtureTableIndex(0)),
             .checked_type = @enumFromInt(1),
+            .request_eligibility = .eligible,
             .payload = .{ .fn_value = fn_id },
         },
     };
@@ -10569,6 +10600,9 @@ test "boxy planner walks callable eval finalized const function bodies" {
         .{
             .site = @enumFromInt(fixtureTableIndex(0)),
             .owner_template = template_ref,
+            .lexical_scope = .root,
+            .evidence_source = .inherited,
+            .evidence = .{},
             .path_start = 0,
             .path_len = 0,
             .kind = .local_function,
@@ -10717,6 +10751,7 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
                 .proc_value = procedureValueRef(import_template),
                 .template = .{ .checked = import_template },
             } },
+            .runtime_result_provenance = null,
             .template_closure = .{},
         },
     };
@@ -10797,6 +10832,7 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
         .binding = .{ .imported = imported_binding },
         .source_fn_ty_template = typeKey(2),
         .source_fn_ty_payload = @enumFromInt(2),
+        .runtime_result_provenance = null,
     };
     var resolved_records = [_]checked.ResolvedValueRefRecord{
         .{
@@ -10978,6 +11014,7 @@ test "boxy planner records relation-owned source type for platform-required dire
         .binding = .{ .platform_required = required },
         .source_fn_ty_template = typeKey(5),
         .source_fn_ty_payload = @enumFromInt(2),
+        .runtime_result_provenance = null,
     };
     var resolved_records = [_]checked.ResolvedValueRefRecord{
         .{
@@ -11969,6 +12006,8 @@ fn checkedTemplate(
         .checked_fn_scheme = typeSchemeKey(9),
         .checked_fn_root = checked_fn_root,
         .static_dispatch_plans = .{},
+        .direct_dispatch_plans = .{},
+        .dispatch_relations = .{},
         .resolved_value_refs = .{},
         .top_level_value_uses = .{},
         .nested_proc_sites = .{},

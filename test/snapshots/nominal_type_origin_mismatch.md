@@ -82,7 +82,7 @@ import Data exposing [Person]
 expectsPerson : Person -> Str
 expectsPerson = |p| "Got a person"
 
-main = 
+main =
 # This will cause a type mismatch
 	expectsPerson("not a person")
 ~~~
@@ -102,7 +102,7 @@ main =
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 250)
+		(e-call (constraint-fn-var 238)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-string
 				(e-literal (string "not a person")))))

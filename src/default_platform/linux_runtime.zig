@@ -5,9 +5,12 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const default_platform_options = @import("default_platform_options");
 const linux = std.os.linux;
 
 const RocStr = @import("roc_str_view").RocStr;
+const roc_args = @import("roc_args");
+const RocList = @import("roc_str_view").RocList;
 const shim_symbols = @import("shim_symbols");
 
 pub const panic = std.debug.no_panic;
@@ -33,6 +36,15 @@ const BacktraceEntry = extern struct {
     column: u32,
 };
 
+const SourceFrame = extern struct {
+    name_ptr: [*]const u8,
+    name_len: usize,
+    file_ptr: [*]const u8,
+    file_len: usize,
+    line: u32,
+    column: u32,
+};
+
 const roc_default_backtrace_table = @extern(*const [*]const BacktraceEntry, .{
     .name = shim_symbols.roc_default_backtrace_table,
     .linkage = .weak,
@@ -41,6 +53,9 @@ const roc_default_backtrace_count = @extern(*const usize, .{
     .name = shim_symbols.roc_default_backtrace_count,
     .linkage = .weak,
 });
+
+const roc_default_start_main: *const fn (RocList) callconv(.c) i32 =
+    @extern(*const fn (RocList) callconv(.c) i32, .{ .name = shim_symbols.roc_default_start_main });
 
 comptime {
     if (builtin.os.tag != .linux) {
@@ -56,17 +71,64 @@ comptime {
     @export(&rocDbg, .{ .name = shim_symbols.roc_dbg });
     @export(&rocExpectFailed, .{ .name = shim_symbols.roc_expect_failed });
     @export(&rocCrashed, .{ .name = shim_symbols.roc_crashed });
+    @export(&rocDefaultCrashedWithFrames, .{ .name = shim_symbols.roc_default_crashed_with_frames });
     @export(&defaultEchoLine, .{ .name = shim_symbols.roc_default_echo_line });
     @export(&defaultExit, .{ .name = shim_symbols.roc_default_exit });
     @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
     @export(&rocRealloc, .{ .name = shim_symbols.roc_realloc });
     @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
+
+    if (default_platform_options.include_process_entrypoint) {
+        switch (builtin.cpu.arch) {
+            .x86_64 => {
+                @export(&linuxStartX86_64, .{ .name = "_start" });
+                @export(&linuxStartMain, .{ .name = "roc_default_linux_start_main", .visibility = .hidden });
+            },
+            .aarch64 => {
+                @export(&linuxStartAarch64, .{ .name = "_start" });
+                @export(&linuxStartMain, .{ .name = "roc_default_linux_start_main", .visibility = .hidden });
+            },
+            else => @compileError("unsupported default-platform Linux architecture"),
+        }
+    }
 }
 
 /// Set when an inline `expect` fails. A failed inline expect reports and lets
 /// the program continue; `roc_default_exit` turns an otherwise-successful exit
 /// into status 1, matching the interpreter's default-app behavior.
 var inline_expect_failed: bool = false;
+
+fn linuxStartMain(argc: usize, argv: [*][*:0]u8) callconv(.c) noreturn {
+    runtimeInit();
+    const args = roc_args.fromPosixArgv(argc, argv, &rocAlloc) orelse {
+        writeLiteral(stderr_fd, "Unable to allocate command-line arguments\n");
+        exitFailure();
+    };
+    const status = roc_default_start_main(args);
+    if (status == 0 and inline_expect_failed) linux.exit_group(1);
+    linux.exit_group(status);
+}
+
+fn linuxStartX86_64() callconv(.naked) noreturn {
+    asm volatile (
+        \\movq %%rsp, %%rbx
+        \\andq $-16, %%rsp
+        \\movq (%%rbx), %%rdi
+        \\leaq 8(%%rbx), %%rsi
+        \\call roc_default_linux_start_main
+        \\ud2
+    );
+}
+
+fn linuxStartAarch64() callconv(.naked) noreturn {
+    asm volatile (
+        \\mov x19, sp
+        \\ldr x0, [x19]
+        \\add x1, x19, #8
+        \\bl roc_default_linux_start_main
+        \\brk #0
+    );
+}
 
 fn runtimeInit() callconv(.c) void {
     installSignalHandlers();
@@ -90,6 +152,19 @@ fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) noreturn {
     writeAll(stderr_fd, bytes[0..len]);
     writeLiteral(stderr_fd, "\n\n");
     printBacktrace(@returnAddress(), @frameAddress());
+    exitFailure();
+}
+
+fn rocDefaultCrashedWithFrames(
+    bytes: [*]const u8,
+    len: usize,
+    source_frames: [*]const SourceFrame,
+    source_frame_count: usize,
+) callconv(.c) noreturn {
+    writeLiteral(stderr_fd, "Roc application crashed with this message:\n\n\t");
+    writeAll(stderr_fd, bytes[0..len]);
+    writeLiteral(stderr_fd, "\n\n");
+    printBacktraceWithSourceFrames(source_frames[0..source_frame_count], @returnAddress(), @frameAddress());
     exitFailure();
 }
 
@@ -265,6 +340,41 @@ fn printBacktrace(first_ip: usize, first_frame_addr: usize) void {
     if (!hasMappedBacktraceFrame(first_ip, first_frame_addr)) return;
 
     writeLiteral(stderr_fd, "Backtrace:\n");
+    printMappedBacktraceFrames(first_ip, first_frame_addr);
+}
+
+fn printBacktraceWithSourceFrames(source_frames: []const SourceFrame, first_ip: usize, first_frame_addr: usize) void {
+    if (source_frames.len == 0) {
+        printBacktrace(first_ip, first_frame_addr);
+        return;
+    }
+
+    writeLiteral(stderr_fd, "Backtrace:\n");
+    for (source_frames) |frame| printSourceFrame(frame);
+    printMappedBacktraceFrames(first_ip, first_frame_addr);
+}
+
+fn printSourceFrame(frame: SourceFrame) void {
+    writeLiteral(stderr_fd, "  ");
+    writeLiteral(stderr_fd, ansi_function_name);
+    writeAll(stderr_fd, frame.name_ptr[0..frame.name_len]);
+    writeLiteral(stderr_fd, ansi_reset);
+    if (frame.file_len != 0) {
+        writeLiteral(stderr_fd, " ");
+        writeAll(stderr_fd, frame.file_ptr[0..frame.file_len]);
+        if (frame.line != 0) {
+            writeLiteral(stderr_fd, ":");
+            writeUnsigned(stderr_fd, frame.line);
+            if (frame.column != 0) {
+                writeLiteral(stderr_fd, ":");
+                writeUnsigned(stderr_fd, frame.column);
+            }
+        }
+    }
+    writeLiteral(stderr_fd, "\n");
+}
+
+fn printMappedBacktraceFrames(first_ip: usize, first_frame_addr: usize) void {
     printMappedInstructionPointer(first_ip);
     var frame_addr = firstFrameFromAddress(first_frame_addr);
     var frames: usize = 0;
@@ -438,9 +548,10 @@ fn defaultMemmove(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 
 
 fn defaultMemset(dest: [*]u8, value: c_int, len: usize) callconv(.c) [*]u8 {
     const byte: u8 = @bitCast(@as(i8, @truncate(value)));
+    const volatile_dest: [*]volatile u8 = dest;
     var i: usize = 0;
     while (i < len) : (i += 1) {
-        dest[i] = byte;
+        volatile_dest[i] = byte;
     }
     return dest;
 }

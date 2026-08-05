@@ -60,6 +60,12 @@ pub const VTable = struct {
     /// Caller owns the returned slice and every `.path` string in it.
     listDir: *const fn (?*anyopaque, std.Io, []const u8, Allocator) ListError![]FileEntry,
 
+    /// List only the immediate children of `path`, without descending into
+    /// them. Caller owns the returned slice and every `.path` string in it.
+    /// Defaults to an error so backends with no real directory to scan
+    /// need not implement it.
+    listDirTop: *const fn (?*anyopaque, std.Io, []const u8, Allocator) ListError![]FileEntry = &missingListDirTop,
+
     /// Return the directory portion of a path, or `null` if there is none.
     /// No allocation — returns a slice into the input.
     dirName: *const fn (?*anyopaque, std.Io, []const u8) ?[]const u8,
@@ -212,6 +218,13 @@ pub fn getFileInfo(self: Self, path: []const u8) StatError!FileInfo {
 /// and every `.path` string in it (free with `allocator`).
 pub fn listDir(self: Self, path: []const u8, allocator: Allocator) ListError![]FileEntry {
     return self.vtable.listDir(self.ctx, self.std_io, path, allocator);
+}
+
+/// List only the immediate children of `path`, without descending into them.
+/// Caller owns the returned slice and every `.path` string in it (free with
+/// `allocator`).
+pub fn listDirTop(self: Self, path: []const u8, allocator: Allocator) ListError![]FileEntry {
+    return self.vtable.listDirTop(self.ctx, self.std_io, path, allocator);
 }
 
 /// Return the directory portion of a path (no allocation).
@@ -505,6 +518,7 @@ const os_vtable = VTable{
     .fileExists = &osFileExists,
     .stat = &osStat,
     .listDir = &osListDir,
+    .listDirTop = &osListDirTop,
     .dirName = &osDirName,
     .baseName = &osBaseName,
     .joinPath = &osJoinPath,
@@ -535,6 +549,7 @@ const testing_vtable = VTable{
     .fileExists = &testingFileExists,
     .stat = &testingStat,
     .listDir = &testingListDir,
+    .listDirTop = &testingListDirTop,
     .dirName = &testingDirName,
     .baseName = &testingBaseName,
     .joinPath = &testingJoinPath,
@@ -720,6 +735,39 @@ fn osListDir(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Alloca
     return entries.toOwnedSlice(allocator) catch return error.OutOfMemory;
 }
 
+fn osListDirTop(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ListError![]FileEntry {
+    var dir = std.Io.Dir.cwd().openDir(std_io, path, .{ .iterate = true }) catch |err| return switch (err) {
+        error.FileNotFound => error.FileNotFound,
+        error.AccessDenied => error.AccessDenied,
+        else => error.IoError,
+    };
+    defer dir.close(std_io);
+
+    var entries: std.ArrayList(FileEntry) = .empty;
+    errdefer {
+        for (entries.items) |entry| allocator.free(entry.path);
+        entries.deinit(allocator);
+    }
+
+    var it = dir.iterate();
+    while (true) {
+        const next = it.next(std_io) catch return error.IoError;
+        const entry = next orelse break;
+        const kind: FileKind = switch (entry.kind) {
+            .file => .file,
+            .directory => .directory,
+            else => .other,
+        };
+        const owned_path = std.fs.path.join(allocator, &.{ path, entry.name }) catch return error.OutOfMemory;
+        entries.append(allocator, .{ .path = owned_path, .kind = kind }) catch {
+            allocator.free(owned_path);
+            return error.OutOfMemory;
+        };
+    }
+
+    return entries.toOwnedSlice(allocator) catch return error.OutOfMemory;
+}
+
 fn osDirName(_: ?*anyopaque, _: std.Io, path: []const u8) ?[]const u8 {
     return std.fs.path.dirname(path);
 }
@@ -804,6 +852,10 @@ fn osQueryEnvVar(_: ?*anyopaque, _: std.Io, key: [:0]const u8, query: EnvVarQuer
 
 fn missingEnvVarQuery(_: ?*anyopaque, _: std.Io, _: [:0]const u8, _: EnvVarQuery) bool {
     return false;
+}
+
+fn missingListDirTop(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) ListError![]FileEntry {
+    return error.FileNotFound;
 }
 
 /// fetchUrl is intentionally a stub in the default OS vtable.
@@ -930,6 +982,10 @@ fn testingStat(_: ?*anyopaque, _: std.Io, _: []const u8) StatError!FileInfo {
 
 fn testingListDir(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) ListError![]FileEntry {
     @panic("listDir should not be called in this test");
+}
+
+fn testingListDirTop(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) ListError![]FileEntry {
+    @panic("listDirTop should not be called in this test");
 }
 
 fn testingDirName(_: ?*anyopaque, _: std.Io, path: []const u8) ?[]const u8 {

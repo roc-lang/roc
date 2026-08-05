@@ -1050,11 +1050,15 @@ fn processSnapshotContent(
         );
         defer graph.deinit();
 
+        var demand_dependencies = try DependencyGraph.collectDependencies(&graph, can_ir.gpa);
+        errdefer demand_dependencies.deinit(can_ir.gpa);
         const eval_order = try DependencyGraph.computeSCCs(&graph, allocator);
         // IMPORTANT: Use can_ir.gpa here, not allocator, because ModuleEnv.deinit()
         // will free this with self.gpa. They must match to avoid memory leaks.
         const eval_order_ptr = try can_ir.gpa.create(DependencyGraph.EvaluationOrder);
         eval_order_ptr.* = eval_order;
+        can_ir.setTopLevelDemandDependencies(demand_dependencies);
+        demand_dependencies = .{};
         can_ir.evaluation_order = eval_order_ptr;
     }
 
@@ -1130,7 +1134,7 @@ fn processSnapshotContent(
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
             const roc_ctx_for_check = CoreCtx.default(allocator, allocator, app_io);
-            const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+            const checker = try compile.package.canonicalizeAndTypeCheckModule(
                 roc_ctx_for_check,
                 allocator,
                 can_ir,
@@ -4467,7 +4471,7 @@ fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) Alloca
         },
         .import => |import| .{
             .kind = .import,
-            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes),
+            .name = ast.resolveImportTarget(import.target),
         },
         .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
         else => null,

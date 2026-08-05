@@ -11,8 +11,6 @@ const builtins = @import("builtins");
 const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
-const wasm32_boxy_runtime = @import("wasm32_boxy_runtime");
-const wasm32_builtins = @import("wasm32_builtins");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
 const reporting = @import("reporting");
@@ -25,6 +23,7 @@ const EvalDynLib = @import("dynlib.zig").DynLib;
 const boxy_abi = @import("boxy_abi.zig");
 const boxy_runtime = @import("boxy_runtime.zig");
 const BoxyNativeFnTable = boxy_abi.BoxyNativeFnTable;
+const InspectedRun = @import("inspected_run.zig");
 
 const Allocator = std.mem.Allocator;
 const CoreCtx = @import("ctx").CoreCtx;
@@ -63,7 +62,7 @@ pub const TestHelperError = Allocator.Error || std.Thread.SpawnError || std.DynL
     UnsupportedTarget,
     UnsupportedPlatform,
     UnwindRegistrationFailed,
-    SysctlFailed,
+    PageSizeQueryFailed,
     CreateFileMappingFailed,
     OpenFileMappingFailed,
     MapViewOfFileFailed,
@@ -81,6 +80,11 @@ pub const TestHelperError = Allocator.Error || std.Thread.SpawnError || std.DynL
     InvalidHandle,
     WindowsSDKNotFound,
     CompilationFailed,
+    NoBitcodeModules,
+    UnsupportedLlvmTriple,
+    MissingBuiltinBitcode,
+    LlvmModuleVerificationFailed,
+    LlvmObjectEmitFailed,
     BitcodeParseError,
     ModuleLinkFailed,
     TempFileError,
@@ -136,6 +140,10 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
 
     fn getUsedSize(self: *const @This()) usize {
         return self.fixed_buffer.end_index;
+    }
+
+    fn getAvailableSize(self: *const @This()) usize {
+        return self.buffer.len - self.fixed_buffer.end_index;
     }
 
     fn updateHeader(_: *@This()) void {}
@@ -334,9 +342,10 @@ else if (builtin.os.tag == .windows)
 else
     2 * 1024 * 1024 * 1024 * 1024;
 
-// Floor for the retry loop. The exhaustive SIMD module needs more than 256 MB,
-// so every 64-bit target must retain the same tested 1 GB minimum as Windows.
-// The allocator clamps this down to `EVAL_SHARED_MEMORY_SIZE` for 32-bit and
+// Floor for the retry loop. Eval tests place only finalized LIR into this
+// image, but the exhaustive SIMD module needs more than 256 MB, so every
+// 64-bit target retains the same tested 1 GB minimum as Windows. The
+// allocator clamps this down to `EVAL_SHARED_MEMORY_SIZE` for 32-bit and
 // freestanding targets whose preferred reservation is smaller.
 const EVAL_SHARED_MEMORY_MIN_SIZE: usize = 1024 * 1024 * 1024;
 
@@ -1007,6 +1016,10 @@ fn compileInspectedProgramForTargetImpl(
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
+    if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) {
+        return error.TypeCheckError;
+    }
+
     const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
     errdefer {
         var owned = lowered;
@@ -1502,8 +1515,7 @@ pub fn parseCheckModule(
         .checked_artifact => try czer.validateForExplicitRoots(),
     }
     if (hosted_transform) {
-        var modified_defs = try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
-        defer modified_defs.deinit(module_env.gpa);
+        try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
     }
     const can_elapsed = can_timer.read();
 
@@ -1656,8 +1668,8 @@ fn lowerCheckedRootWithViews(
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(LirImage.Header);
 
-    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-        shm_allocator,
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
         .{
             .root = check.CheckedArtifact.loweringView(root_module),
             .imports = import_views,
@@ -1672,14 +1684,16 @@ fn lowerCheckedRootWithViews(
             .debug_materialized_out = options.debug_materialized_out,
         },
     );
+    defer lowered.deinit();
 
-    try LirImage.fillHeaderInSharedMemory(
-        image_header,
+    const copied = try LirImage.copyProgramIntoBuffer(
+        shm_allocator,
         shm.base_ptr,
-        shm.getUsedSize(),
+        shm.getUsedSize() + shm.getAvailableSize(),
         &lowered.lir_result,
         &.{},
     );
+    try copied.fillHeader(image_header, shm.getUsedSize());
     shm.updateHeader();
 
     const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize(), lowered.target_usize);
@@ -1897,6 +1911,61 @@ pub fn renderProblemsWithConfig(
 /// List(U8)` statements so re-canonicalizing to render diagnostics can read the
 /// file again; the REPL passes its real `CoreCtx`. Pass `null` when no file
 /// imports are involved.
+/// Whether any diagnostic across the parsed program's modules is
+/// error-severity. Severity lives on the rendered report (the same
+/// classification `Coordinator.hasUserErrors` uses), so each diagnostic
+/// builds its report to ask; info and warning reports never count.
+pub fn parsedResourcesHaveErrorDiagnostics(
+    allocator: Allocator,
+    parsed: *const ParsedResources,
+) Allocator.Error!bool {
+    if (try moduleDiagnosticsHaveErrors(allocator, parsed.module_env, parsed.checker)) return true;
+    for (parsed.extra_modules) |*module| {
+        if (try moduleDiagnosticsHaveErrors(allocator, module.module_env, module.checker)) return true;
+    }
+    return false;
+}
+
+fn moduleDiagnosticsHaveErrors(
+    allocator: Allocator,
+    module_env: *ModuleEnv,
+    checker: *Check,
+) Allocator.Error!bool {
+    const diagnostics = try module_env.getDiagnostics();
+    defer module_env.gpa.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        var report = try module_env.diagnosticToReport(diagnostic, allocator, "repl");
+        defer report.deinit();
+        switch (report.severity) {
+            .info, .warning => {},
+            .runtime_error, .fatal => return true,
+        }
+    }
+    for (checker.problems.problems.items) |problem| {
+        var report_builder = try check.ReportBuilder.init(
+            allocator,
+            module_env,
+            module_env,
+            &checker.snapshots,
+            &checker.problems,
+            "repl",
+            &.{},
+            &checker.import_mapping,
+            &checker.regions,
+            null,
+        );
+        defer report_builder.deinit();
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+        switch (report.severity) {
+            .info, .warning => {},
+            .runtime_error, .fatal => return true,
+        }
+    }
+    return false;
+}
+
+/// Render reported problems for a source string checked with explicit import modules.
 pub fn renderProblemsWithConfigAndImports(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -2306,6 +2375,7 @@ pub fn devEvalBoolRoots(
             tables.erased_arg_desc_offsets,
             tables.erased_arg_desc_params,
             .preserve,
+            roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         var native_fns = boxyNativeFnTable();
@@ -2361,7 +2431,9 @@ const OwnedLlvmCompileOptions = struct {
 
 fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsize, opt: LlvmTestOpt) TestHelperError!OwnedLlvmCompileOptions {
     const llvm_compile = @import("llvm_compile");
-    const native_roc_target = roc_target.RocTarget.detectNative();
+    // This code is compiled to run in this process, so the CPU floor is the
+    // one this machine executes rather than the native target's default.
+    const native_roc_target = roc_target.host_cpu.nativeTarget();
     const resolved_target = std.zig.system.resolveTargetQuery(std.Options.debug_io, native_roc_target.llvmTargetQuery()) catch
         return error.UnsupportedTarget;
     const cpu = try allocator.dupeZ(u8, roc_target.llvmCpuName(resolved_target));
@@ -2751,6 +2823,27 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
     return runLlvmBoolRootCalls(allocator, calls, longjmp_on_crash, max_workers, completion_callback, event_callback);
 }
 
+fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
+    const result = try InspectedRun.run(allocator, backend_kind, .{
+        .store = &lowered.view.store,
+        .layouts = &lowered.view.layouts,
+        .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
+        .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
+        .main_proc = lowered.mainProc(),
+    });
+    return switch (result.outcome) {
+        .returned => |output| .{
+            .output = output,
+            .allocation_count = result.allocation_count,
+        },
+        .crashed => |message| {
+            allocator.free(message);
+            return error.Crash;
+        },
+    };
+}
+
 /// Evaluate a lowered program via the LIR interpreter and return the output string.
 pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError![]u8 {
     const result = try lirInterpreterStrWithStats(allocator, lowered);
@@ -2759,42 +2852,7 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
 
 /// Evaluate via the LIR interpreter, returning output string and allocation count.
 pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
-
-    var interp = try Interpreter.initWithBoxyTables(
-        allocator,
-        &lowered.view.store,
-        &lowered.view.layouts,
-        Interpreter.BoxyTables.fromImageView(&lowered.view),
-        runtime_env.get_ops(),
-        .preserve,
-    );
-    defer interp.deinit();
-
-    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
-    defer allocator.free(arg_layouts);
-
-    const result = interp.eval(.{
-        .proc_id = lowered.mainProc(),
-        .arg_layouts = arg_layouts,
-    }) catch |err| switch (err) {
-        error.RuntimeError => return error.Crash,
-        error.Crash => return error.Crash,
-        else => return err,
-    };
-    const ret_layout = lowered.view.store.getProcSpec(lowered.mainProc()).ret_layout;
-    const output = try copyReturnedRocStr(
-        allocator,
-        &lowered.view.layouts,
-        ret_layout,
-        result.value.ptr,
-        null,
-    );
-    return .{
-        .output = output,
-        .allocation_count = runtime_env.allocationCallCount(),
-    };
+    return legacyInspectedRun(allocator, .interpreter, lowered);
 }
 
 /// Abort classification for a differential interpreter run.
@@ -2838,10 +2896,11 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interp = try Interpreter.init(
+    var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
+        boxy_runtime.BoxyTables.fromImageView(&lowered.view),
         runtime_env.get_ops(),
         .preserve,
     );
@@ -2923,195 +2982,13 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
 
 /// Evaluate via the dev JIT backend, returning output string and allocation count.
 pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
-    if (comptime !backend.host_lir_codegen_available) {
-        return error.DevBackendUnavailable;
-    } else {
-        var static_strings = try backend.StaticStringData.build(
-            allocator,
-            &lowered.view.store,
-            backend.dev.LirCodeGenMod.host_lir_codegen_target,
-        );
-        defer static_strings.deinit();
-
-        var codegen = try HostLirCodeGen.initWithBoxyMetadata(
-            allocator,
-            &lowered.view.store,
-            &lowered.view.layouts,
-            static_strings.entries,
-            lowered.view.boxy_erased_arg_desc_offsets,
-            lowered.view.boxy_erased_arg_desc_params,
-            .preserve,
-        );
-        defer codegen.deinit();
-        var native_fns = boxyNativeFnTable();
-        codegen.boxy_native_fns = &native_fns;
-        try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
-
-        const proc = lowered.view.store.getProcSpec(lowered.mainProc());
-        const arg_layouts = try mainProcArgLayouts(allocator, lowered);
-        defer allocator.free(arg_layouts);
-        const entrypoint = try codegen.generateEntrypointWrapper(
-            "roc_eval_test_main",
-            lowered.mainProc(),
-            arg_layouts,
-            proc.ret_layout,
-        );
-        var exec_mem = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
-            codegen.getGeneratedCode(),
-            entrypoint.offset,
-            codegen.getUnwindFunctions(),
-        );
-        defer exec_mem.deinit();
-
-        var runtime_env = RuntimeHostEnv.init(allocator);
-        defer runtime_env.deinit();
-
-        const boxy_installed = try installBoxyGlobal(
-            allocator,
-            &lowered.view.store,
-            &lowered.view.layouts,
-            boxy_runtime.BoxyTables.fromImageView(&lowered.view),
-            runtime_env.get_ops(),
-        );
-        defer if (boxy_installed) boxy_abi.deinitGlobal();
-
-        const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
-        defer if (arg_buffer) |buf| allocator.free(buf);
-
-        const ret_layout = proc.ret_layout;
-        const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
-        const alloc_len = @max(size_align.size, 1);
-        const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
-        defer allocator.free(ret_buf);
-        @memset(ret_buf, 0);
-
-        var crash_boundary = runtime_env.enterCrashBoundary();
-        defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
-
-        exec_mem.callRocABI(
-            @ptrCast(runtime_env.get_ops()),
-            @ptrCast(ret_buf.ptr),
-            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-        );
-        switch (runtime_env.crashState()) {
-            .did_not_crash => {},
-            .crashed => return error.Crash,
-        }
-
-        const output = try copyReturnedRocStr(
-            allocator,
-            &lowered.view.layouts,
-            ret_layout,
-            ret_buf.ptr,
-            runtime_env.get_ops(),
-        );
-        return .{
-            .output = output,
-            .allocation_count = runtime_env.allocationCallCount(),
-        };
-    }
+    return legacyInspectedRun(allocator, .dev, lowered);
 }
 
 /// Evaluate a lowered program via the LLVM backend and return the output string.
 pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError![]u8 {
-    if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
-
-    const llvm_compile = @import("llvm_compile");
-    var codegen = llvm_compile.MonoLlvmCodeGen.init(
-        allocator,
-        &lowered.view.store,
-        lowered.view.boxy_erased_arg_desc_offsets,
-        lowered.view.boxy_erased_arg_desc_params,
-    );
-    codegen.layout_store = &lowered.view.layouts;
-    defer codegen.deinit();
-
-    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
-    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
-    defer allocator.free(arg_layouts);
-
-    const llvm_entrypoints = [_]llvm_compile.MonoLlvmCodeGen.Entrypoint{.{
-        .symbol_name = "roc_eval_test_main",
-        .proc = lowered.mainProc(),
-        .arg_layouts = arg_layouts,
-        .ret_layout = proc.ret_layout,
-    }};
-    const bitcode = try codegen.generateEntrypointModule("roc_eval_test_module", llvm_entrypoints[0..]);
-    defer {
-        var owned = bitcode;
-        owned.deinit();
-    }
-
-    var compile_options = try llvmCompileOptions(allocator, lowered.view.layouts.targetUsize(), .speed);
-    defer compile_options.deinit(allocator);
-    const dylib_path = try llvm_compile.compileToSharedLibrary(
-        allocator,
-        std.Options.debug_io,
-        bitcode.bitcode,
-        compile_options.options,
-    );
-    defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
-        allocator.free(dylib_path);
-    }
-
-    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
-    defer lib.close();
-
-    const EntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque, *const BoxyNativeFnTable) callconv(.c) void;
-    const entry = lib.lookup(EntryFn, "roc_eval_test_main") orelse return error.LlvmBackendUnavailable;
-
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
-    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
-        runtime_env.setLongjmpOnCrash(false);
-    }
-    const boxy_installed = try installBoxyGlobal(
-        allocator,
-        &lowered.view.store,
-        &lowered.view.layouts,
-        boxy_runtime.BoxyTables.fromImageView(&lowered.view),
-        runtime_env.get_ops(),
-    );
-    defer if (boxy_installed) boxy_abi.deinitGlobal();
-
-    const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
-    defer if (arg_buffer) |buf| allocator.free(buf);
-
-    const ret_layout = proc.ret_layout;
-    const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
-    const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
-    defer allocator.free(ret_buf);
-    @memset(ret_buf, 0);
-
-    var crash_boundary = runtime_env.enterCrashBoundary();
-    defer crash_boundary.deinit();
-    const sj = crash_boundary.set();
-    if (sj != 0) return error.Crash;
-
-    const boxy_fns = boxyNativeFnTable();
-    var test_context: TestInvocationContext = .{};
-    entry(
-        runtime_env.get_ops(),
-        &test_context,
-        ret_buf.ptr,
-        if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-        &boxy_fns,
-    );
-    switch (runtime_env.crashState()) {
-        .did_not_crash => {},
-        .crashed => return error.Crash,
-    }
-
-    return copyReturnedRocStr(
-        allocator,
-        &lowered.view.layouts,
-        ret_layout,
-        ret_buf.ptr,
-        runtime_env.get_ops(),
-    );
+    const result = try legacyInspectedRun(allocator, .llvm, lowered);
+    return result.output;
 }
 
 /// Evaluate a lowered program via the wasm backend and return the output string.
@@ -3122,33 +2999,7 @@ pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
 
 /// Evaluate via the wasm backend, returning output string and allocation count.
 pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
-    if (@import("builtin").target.os.tag == .freestanding) return error.WasmExecFailed;
-    var codegen = backend.wasm.WasmCodeGen.init(
-        allocator,
-        &lowered.view.store,
-        &lowered.view.layouts,
-        lowered.view.boxy_erased_arg_desc_offsets,
-        lowered.view.boxy_erased_arg_desc_params,
-    );
-    defer codegen.deinit();
-
-    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
-    const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (boxy_runtime.imageNeedsRuntime(&lowered.view)) .{
-        .runtime_object = wasm32_boxy_runtime.bytes[0..],
-        .sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
-        .sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
-    } else null;
-    const wasm_result = codegen.generateModule(lowered.mainProc(), proc.ret_layout, wasm32_builtins.bytes, runtime_input) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.HostedFunctionTypeMismatch => return error.Internal,
-    };
-    defer allocator.free(wasm_result.wasm_bytes);
-
-    const result = try @import("wasm_runner.zig").runWasmStrWithStats(allocator, wasm_result.wasm_bytes, wasm_result.heap_base, wasm_result.has_imports);
-    return .{
-        .output = result.output,
-        .allocation_count = result.allocation_count,
-    };
+    return legacyInspectedRun(allocator, .wasm, lowered);
 }
 
 fn copyReturnedRocStr(

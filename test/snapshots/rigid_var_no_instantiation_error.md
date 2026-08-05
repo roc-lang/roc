@@ -193,7 +193,7 @@ main! = |_| {
 	# This would fail if 'a' and 'b' from the first call were reused
 	result2 = swap((Bool.true, [1, 2, 3]))
 
-	# Third use: swap (Str, Str) 
+	# Third use: swap (Str, Str)
 	# This shows even when both types are the same, we still need fresh vars
 	result3 = swap(("foo", "bar"))
 

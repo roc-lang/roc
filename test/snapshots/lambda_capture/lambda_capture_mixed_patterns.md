@@ -52,7 +52,7 @@ EndOfFile,
 	|base| {
 		simple = |x| base + x + 1
 		simple(1)
-	},
+	}
 )(1)
 ~~~
 # CANONICALIZE

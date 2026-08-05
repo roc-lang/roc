@@ -573,17 +573,39 @@ pub const MethodBinding = extern struct {
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
 
-/// Checked dispatch metadata for one source `for` loop.
-///
-/// Checking writes this when it creates the loop's required `iter` and `next`
-/// static-dispatch constraints. Checked artifact publication consumes it to
-/// publish an explicit iterator-for plan for mono lowering.
+/// A definition whose implementation was authored by the compiler as one
+/// exact low-level operation. Canonicalization publishes this alongside CIR so
+/// every later stage can consume the producer-owned runtime identity without
+/// inspecting the generated lambda body.
+pub const ProvidedLowLevelDef = extern struct {
+    def_idx: u32,
+    op: base.LowLevel,
+    _padding: u16 = 0,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// Exact checker-owned shape of an iterator step result.
+pub const IteratorStepTopology = extern struct {
+    done_tag_ident: u32,
+    one_tag_ident: u32,
+    skip_tag_ident: u32,
+    item_field_ident: u32,
+    rest_field_ident: u32,
+    one_payload_var: u32,
+    skip_payload_var: u32,
+};
+
+/// Checked dispatch and topology metadata for one source `for` loop.
+/// Later stages consume these exact identities instead of inferring the
+/// iterator protocol from names or row shapes.
 pub const ForLoopDispatchPlan = extern struct {
     node_idx: u32,
     pattern_idx: u32,
     iterable_idx: u32,
     iter_fn_var: u32,
     next_fn_var: u32,
+    step_topology: IteratorStepTopology,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -723,6 +745,19 @@ pub const GeneratedCodecCall = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// One static-dispatch obligation checking rejected. The raw constraint
+/// function variable is the obligation identity used by dispatch expressions,
+/// instantiated scheme evidence, and checked-artifact publication.
+pub const RejectedStaticDispatch = extern struct {
+    constraint_fn_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub fn fnVar(self: RejectedStaticDispatch) TypeVar {
+        return @enumFromInt(self.constraint_fn_var);
+    }
+};
+
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
@@ -781,6 +816,8 @@ all_defs: CIR.Def.Span,
 /// Module-global value definitions: top-level values, associated items, and
 /// compiler-created hosted globals. Local block definitions are not included.
 global_value_defs: CIR.Def.Span,
+/// Exact definitions rewritten from annotation-only declarations to hosted lambdas.
+hosted_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
 /// All canonical type-declaration statements in the module.
@@ -843,6 +880,12 @@ store: NodeStore,
 /// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
+/// Exact strict-demand edges between top-level definitions. Canonicalization
+/// produces this data and serialization preserves it for checked-artifact
+/// publication; unlike `evaluation_order`, it is not a transient traversal aid.
+top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
+top_level_demand_dependencies_ready: bool,
+
 /// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
 /// checked-artifact consumption. Serialized user modules intentionally do not
 /// preserve this flag; the baked builtin module does, because its static env is
@@ -864,6 +907,8 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 method_idents: MethodIdents,
 /// Mapping from (owner declaration, method_ident) pairs to defining def indices.
 method_defs: MethodDefs,
+/// Compiler-authored low-level implementations, ordered by definition index.
+provided_low_level_defs: ProvidedLowLevelDef.SafeList,
 
 /// Dispatch plans attached by checking to source `for` loop nodes.
 for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
@@ -883,6 +928,9 @@ scheme_use_pairs: SchemeUsePair.SafeList,
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
 /// Flat pool backing `generated_codec_derivations.calls_start/calls_len`.
 generated_codec_calls: GeneratedCodecCall.SafeList,
+/// Static-dispatch obligations explicitly rejected by checking. Publication
+/// consumes these records instead of inferring rejection from erroneous types.
+rejected_static_dispatches: RejectedStaticDispatch.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -920,12 +968,23 @@ pub const ProvidesEntry = struct {
 /// entry with module_ident="Stdout", func_ident="line!", and symbol pointing to
 /// the interned string "roc_stdout_line".
 pub const HostedEntry = struct {
+    pub const TargetStatus = enum(u8) {
+        unresolved,
+        resolved,
+        missing_module,
+        missing_value,
+    };
+
     /// The type module name (e.g., "Stdout"); null for unqualified functions
     module_ident: ?Ident.Idx,
     /// The hosted function name (e.g., "line!")
     func_ident: Ident.Idx,
     /// The literal linker symbol (e.g., "roc_stdout_line")
     symbol: StringLiteral.Idx,
+    /// Exact imported definition selected by this entry after canonicalization.
+    target_import: ?CIR.Import.Idx,
+    target_def: ?CIR.Def.Idx,
+    target_status: TargetStatus,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -985,9 +1044,12 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.file_dependencies.relocate(offset);
     self.store.relocate(offset);
+    self.top_level_demand_dependencies.relocate(offset);
     self.method_idents.relocate(offset);
     self.method_defs.relocate(offset);
+    self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
+    self.rejected_static_dispatches.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1003,6 +1065,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.module_role = .user;
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.global_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
+    self.hosted_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.type_decls = .{ .span = .{ .start = 0, .len = 0 } };
     self.forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } };
@@ -1016,6 +1079,8 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
+    self.top_level_demand_dependencies = .{};
+    self.top_level_demand_dependencies_ready = false;
     self.runtime_prepared = false;
 }
 
@@ -1043,6 +1108,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_role = .user,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .global_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .hosted_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .type_decls = .{ .span = .{ .start = 0, .len = 0 } },
         .forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1064,11 +1130,14 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
+        .top_level_demand_dependencies = .{},
+        .top_level_demand_dependencies_ready = false,
         .runtime_prepared = false,
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
         .method_defs = MethodDefs.init(),
+        .provided_low_level_defs = try ProvidedLowLevelDef.SafeList.initCapacity(gpa, 4),
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
@@ -1077,6 +1146,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
+        .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
     };
 }
 
@@ -1096,6 +1166,7 @@ pub fn deinit(self: *Self) void {
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
     self.method_defs.deinit(self.gpa);
+    self.provided_low_level_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
@@ -1104,6 +1175,8 @@ pub fn deinit(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
+    self.rejected_static_dispatches.deinit(self.gpa);
+    self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1111,6 +1184,61 @@ pub fn deinit(self: *Self) void {
         eval_order.deinit();
         self.gpa.destroy(eval_order);
     }
+}
+
+/// Replace the module's exact strict-demand relation with freshly produced
+/// canonical dependency data. Ownership of `dependencies` transfers here.
+pub fn setTopLevelDemandDependencies(
+    self: *Self,
+    dependencies: DependencyGraph.Dependency.SafeList,
+) void {
+    self.top_level_demand_dependencies.deinit(self.gpa);
+    self.top_level_demand_dependencies = dependencies;
+    self.top_level_demand_dependencies_ready = true;
+}
+
+/// Return the producer-authored low-level implementation for `def_idx`.
+pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.LowLevel {
+    const entries = self.provided_low_level_defs.items.items;
+    const wanted: u32 = @intFromEnum(def_idx);
+    var low: usize = 0;
+    var high: usize = entries.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const candidate = entries[mid];
+        if (candidate.def_idx < wanted) {
+            low = mid + 1;
+        } else if (candidate.def_idx > wanted) {
+            high = mid;
+        } else {
+            return candidate.op;
+        }
+    }
+    return null;
+}
+
+/// Return the exact strict-demand relation produced by canonicalization.
+pub fn topLevelDemandDependencies(self: *const Self) []const DependencyGraph.Dependency {
+    std.debug.assert(self.top_level_demand_dependencies_ready);
+    return self.top_level_demand_dependencies.items.items;
+}
+
+/// Whether canonicalization has produced the exact strict-demand relation.
+pub fn topLevelDemandDependenciesReady(self: *const Self) bool {
+    return self.top_level_demand_dependencies_ready;
+}
+
+/// Whether one exact strict-demand edge was produced by canonicalization.
+pub fn hasTopLevelDemandDependency(
+    self: *const Self,
+    dependent: CIR.Def.Idx,
+    dependency: CIR.Def.Idx,
+) bool {
+    return DependencyGraph.hasDependency(
+        self.topLevelDemandDependencies(),
+        dependent,
+        dependency,
+    );
 }
 
 /// Deinitialize a cached module environment.
@@ -1139,6 +1267,7 @@ pub fn deinitCachedModule(self: *Self) void {
     // import_mapping is initialized empty during deserialization and may have
     // items added later, so we need to free it
     self.import_mapping.deinit();
+    self.provided_low_level_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
@@ -1147,6 +1276,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
+    self.rejected_static_dispatches.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -1634,8 +1764,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .underscore_in_type_declaration => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            const kind = if (data.is_alias) "alias" else "opaque type";
-            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{kind});
+            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{data.declared.label()});
             defer allocator.free(headline);
             var report = try Report.init(allocator, "Underscore In Type Alias", headline, .runtime_error);
 
@@ -2673,6 +2802,27 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .where_alias_constraint_not_on_receiver => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Where Alias Constrains Another Type", "", .runtime_error);
+            try report.headline.addReflowingText("A where alias constrains only its receiver, but this constraint is on a different type variable.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Write this constraint against ");
+            try report.document.addInlineCode(self.getIdent(data.receiver_name));
+            try report.document.addReflowingText(", or declare a separate where alias for the other type variable and apply it alongside this one.");
+
+            break :blk report;
+        },
         .open_ext_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2994,6 +3144,37 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Remove the ");
             try report.document.addInlineCode("module");
             try report.document.addReflowingText(" header and ensure your file defines a type that matches the filename.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .roc_version_mismatch => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            const pinned_bytes = self.getIdent(data.pinned);
+            const running_bytes = self.getIdent(data.running);
+
+            var report = try Report.init(allocator, "Roc Version Mismatch", "", .warning);
+            const pinned = try report.addOwnedString(pinned_bytes);
+            const running = try report.addOwnedString(running_bytes);
+            try report.headline.addReflowingText("This header pins Roc version ");
+            try report.headline.addInlineCode(pinned);
+            try report.headline.addReflowingText(", but you are running ");
+            try report.headline.addInlineCode(running);
+            try report.headline.addReflowingText(".");
+
+            try report.document.addReflowingText("Run ");
+            try report.document.addInlineCode("roc fmt");
+            try report.document.addReflowingText(" to update the pin, or switch to the pinned version of the compiler.");
             try report.document.addLineBreak();
 
             const owned_filename = try report.addOwnedString(filename);
@@ -3351,6 +3532,7 @@ pub const Serialized = extern struct {
     module_role: ModuleRole,
     all_defs: CIR.Def.Span,
     global_value_defs: CIR.Def.Span,
+    hosted_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     type_decls: CIR.Statement.Span,
     forward_type_decls: CIR.Statement.Span,
@@ -3373,13 +3555,16 @@ pub const Serialized = extern struct {
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
+    top_level_demand_dependencies: DependencyGraph.Dependency.SafeList.Serialized,
+    top_level_demand_dependencies_ready: bool,
     runtime_prepared: bool,
-    runtime_prepared_padding: [7]u8,
+    runtime_prepared_padding: [6]u8,
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
     method_defs: MethodDefs.Serialized,
+    provided_low_level_defs: ProvidedLowLevelDef.SafeList.Serialized,
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
@@ -3388,6 +3573,7 @@ pub const Serialized = extern struct {
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
+    rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3436,6 +3622,7 @@ pub const Serialized = extern struct {
         self.module_role = env.module_role;
         self.all_defs = env.all_defs;
         self.global_value_defs = env.global_value_defs;
+        self.hosted_defs = env.hosted_defs;
         self.all_statements = env.all_statements;
         self.type_decls = env.type_decls;
         self.forward_type_decls = env.forward_type_decls;
@@ -3455,6 +3642,12 @@ pub const Serialized = extern struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
+        try self.top_level_demand_dependencies.serialize(
+            &env.top_level_demand_dependencies,
+            allocator,
+            writer,
+        );
+
         // Set gpa, module_name, evaluation_order_reserved to zeros;
         // these are runtime-only and will be set during deserialization.
         // Preserve display_module_name_idx since the ident store is also serialized and indices remain valid.
@@ -3467,8 +3660,9 @@ pub const Serialized = extern struct {
         self.self_module_identity_reserved = @intFromEnum(env.self_module_identity);
         self.self_module_identity_padding = 0;
         self.evaluation_order_reserved = 0;
+        self.top_level_demand_dependencies_ready = env.top_level_demand_dependencies_ready;
         self.runtime_prepared = env.module_role == .builtin and env.runtime_prepared;
-        self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0, 0 };
+        self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
@@ -3481,6 +3675,7 @@ pub const Serialized = extern struct {
         }
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
         try self.method_defs.serialize(&env.method_defs, allocator, writer);
+        try self.provided_low_level_defs.serialize(&env.provided_low_level_defs, allocator, writer);
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
@@ -3489,6 +3684,7 @@ pub const Serialized = extern struct {
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
+        try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3516,6 +3712,7 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3537,11 +3734,14 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
+            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = self.provided_low_level_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
@@ -3550,6 +3750,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
+            .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
         };
 
         return env;
@@ -3577,6 +3778,7 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3598,11 +3800,14 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null,
+            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = self.provided_low_level_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
@@ -3611,6 +3816,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
+            .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
         };
     }
 
@@ -3638,6 +3844,7 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3661,11 +3868,14 @@ pub const Serialized = extern struct {
             // Use deserializeWithCopy for NodeStore so regions can be extended
             .store = try self.store.deserializeWithCopy(base_addr, gpa),
             .evaluation_order = null,
+            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
@@ -3674,6 +3884,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
+            .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -3698,6 +3909,7 @@ pub fn recordForLoopDispatchPlan(
     iterable_idx: Node.Idx,
     iter_fn_var: TypeVar,
     next_fn_var: TypeVar,
+    step_topology: IteratorStepTopology,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
     const raw_pattern: u32 = @intFromEnum(pattern_idx);
@@ -3710,6 +3922,7 @@ pub fn recordForLoopDispatchPlan(
             .iterable_idx = raw_iterable,
             .iter_fn_var = @intFromEnum(iter_fn_var),
             .next_fn_var = @intFromEnum(next_fn_var),
+            .step_topology = step_topology,
         };
         return;
     }
@@ -3719,6 +3932,7 @@ pub fn recordForLoopDispatchPlan(
         .iterable_idx = raw_iterable,
         .iter_fn_var = @intFromEnum(iter_fn_var),
         .next_fn_var = @intFromEnum(next_fn_var),
+        .step_topology = step_topology,
     });
 }
 
@@ -3858,6 +4072,15 @@ pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeSt
     return if (plan.dispatchKind() == .numeral) plan else null;
 }
 
+/// Commit checking's exact resolution for a live numeral or quote literal.
+pub fn finalizeLiteralDispatchResolution(
+    self: *Self,
+    node_idx: Node.Idx,
+    resolution: NodeStore.LiteralDispatchPlan.Resolution,
+) void {
+    self.store.finalizeLiteralDispatchResolution(node_idx, resolution);
+}
+
 /// Record the checked `from_quote` function for a string literal node.
 pub fn recordQuoteDispatchPlan(
     self: *Self,
@@ -3952,6 +4175,18 @@ pub fn recordGeneratedCodecDerivation(
         return;
     }
     _ = try self.generated_codec_derivations.append(self.gpa, derivation);
+}
+
+/// Persist one checker-rejected static-dispatch obligation.
+pub fn recordRejectedStaticDispatch(self: *Self, constraint_fn_var: TypeVar) std.mem.Allocator.Error!void {
+    _ = try self.rejected_static_dispatches.append(self.gpa, .{
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    });
+}
+
+/// Checker-rejected static-dispatch obligations in production order.
+pub fn rejectedStaticDispatches(self: *const Self) []const RejectedStaticDispatch {
+    return self.rejected_static_dispatches.items.items;
 }
 
 /// Return the checked `from_quote` function for a string literal node.
@@ -4410,7 +4645,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         for (all_stmts) |stmt_idx| {
             const stmt = self.store.getStatement(stmt_idx);
             switch (stmt) {
-                .s_alias_decl, .s_nominal_decl => {
+                .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
                     has_type_decl = true;
                     break;
                 },
@@ -4450,6 +4685,21 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         const header = self.store.getTypeHeader(alias.header);
                         try header.pushToSExprTree(self, tree, alias.header);
 
+                        try tree.endNode(stmt_begin, stmt_attrs);
+                    },
+                    .s_where_alias_decl => |where_alias| {
+                        const stmt_begin = tree.beginNode();
+                        try tree.pushStaticAtom("where-alias");
+
+                        const stmt_region = self.store.getStatementRegion(stmt_idx);
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, stmt_region);
+
+                        try type_writer.write(varFrom(stmt_idx), .one_line);
+                        try tree.pushStringPair("type", type_writer.get());
+
+                        const stmt_attrs = tree.beginNode();
+                        const header = self.store.getTypeHeader(where_alias.header);
+                        try header.pushToSExprTree(self, tree, where_alias.header);
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
                     .s_nominal_decl => |nominal| {

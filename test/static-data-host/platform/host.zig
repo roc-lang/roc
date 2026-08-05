@@ -340,6 +340,7 @@ fn expectBoxedAddOne(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostCheckF
         @ptrCast(&result),
         @ptrCast(&args),
         builtins.erased_callable.capturePtr(ptr),
+        null,
         &ret_desc,
     );
     try expectEqualI64(result, 42, "boxed_add_one call");
@@ -364,6 +365,7 @@ fn expectBoxedStaticLabel(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostC
         @ptrCast(&result),
         @ptrCast(&args),
         builtins.erased_callable.capturePtr(ptr),
+        null,
         &ret_desc,
     );
     try expectStr(result, expected, roc_ops, "boxed_static_label call");

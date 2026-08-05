@@ -80,6 +80,11 @@ pub const ProcedureTemplateRef = struct {
 /// Short name for a checked procedure template reference.
 pub const ProcTemplate = ProcedureTemplateRef;
 
+/// Return the checked module digest that owns a procedure value.
+pub fn procedureValueModuleDigest(procedure: ProcedureValueRef) CheckedModuleDigest {
+    return procedure.artifact;
+}
+
 /// Return the checked module digest that owns a procedure template.
 pub fn procTemplateModuleDigest(template: ProcTemplate) CheckedModuleDigest {
     return template.artifact;

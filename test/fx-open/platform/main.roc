@@ -1,10 +1,11 @@
 platform ""
     requires {} { main! : List(Str) => Try({}, [Exit(I32), ..]) }
-    exposes [Stdout, Stderr, Stdin, Fallible]
+    exposes [Stdout, Stderr, Stdin, Fallible, FallibleChannels, FallibleHostStrErr]
     packages {}
     provides { "roc_main": main_for_host! }
     hosted {
         "roc_fallible_str_ok": FallibleHost.str_ok!,
+        "roc_fallible_str_ok_str_err": FallibleHostStrErr.str_ok!,
         "roc_stderr_line": Stderr.line!,
         "roc_stdin_line": Stdin.line!,
         "roc_stdout_line": Stdout.line!,
@@ -23,7 +24,9 @@ import Stdout
 import Stderr
 import Stdin
 import FallibleHost
+import FallibleHostStrErr
 import Fallible
+import FallibleChannels
 
 main_for_host! : List(Str) => I32
 main_for_host! = |args|

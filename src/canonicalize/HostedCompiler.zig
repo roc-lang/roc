@@ -13,10 +13,10 @@ const CIR = @import("CIR.zig");
 /// Compiler-derived associated methods have their own CIR tag and are not host declarations.
 /// This transforms standalone annotations into hosted lambda operations that will be
 /// provided by the host application at runtime.
-/// Returns a list of def indices that were modified.
-pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!std.ArrayList(CIR.Def.Idx) {
+/// Records the rewritten definitions as explicit output for later compiler stages.
+pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
     const gpa = env.gpa;
-    var modified_def_indices = std.ArrayList(CIR.Def.Idx).empty;
+    const hosted_defs_start = env.store.scratchDefTop();
 
     // Ensure types array has entries for all existing nodes
     // This is necessary because varFrom(node_idx) assumes type_var index == node index
@@ -118,12 +118,11 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!std.ArrayList(
 
             env.store.def_data.items.items[def_data_idx].expr = @intFromEnum(expr_idx);
 
-            // Track this modified def index
-            try modified_def_indices.append(gpa, def_idx);
+            try env.store.addScratchDef(def_idx);
         }
     }
 
-    return modified_def_indices;
+    env.hosted_defs = try env.store.defSpanFrom(hosted_defs_start);
 }
 
 /// Information about a hosted function for sorting and indexing

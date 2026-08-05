@@ -7,7 +7,7 @@ type=file
 ~~~roc
 import Basics.Try
 import Color
-import ModA.ModB exposing [TypeC]
+import ModA/ModB exposing [TypeC]
 import ExternalMod as ExtMod
 
 # Simple qualified type
@@ -53,7 +53,7 @@ MOD NOT FOUND - qualified_type_canonicalization.md:7:24:7:28
 MOD NOT FOUND - qualified_type_canonicalization.md:8:19:8:24
 MOD NOT FOUND - qualified_type_canonicalization.md:11:26:11:35
 MOD NOT FOUND - qualified_type_canonicalization.md:12:26:12:35
-MOD NOT FOUND - qualified_type_canonicalization.md:15:32:15:38
+MOD NOT IMPORTED - qualified_type_canonicalization.md:15:23:15:38
 DOES NOT EXIST - qualified_type_canonicalization.md:16:23:16:32
 MISSING NESTED TYPE - qualified_type_canonicalization.md:19:14:19:21
 MOD NOT FOUND - qualified_type_canonicalization.md:23:23:23:27
@@ -63,7 +63,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:28:17:28:22
 MISSING NESTED TYPE - qualified_type_canonicalization.md:32:13:32:20
 MOD NOT FOUND - qualified_type_canonicalization.md:32:26:32:30
 MOD NOT FOUND - qualified_type_canonicalization.md:32:38:32:44
-MOD NOT FOUND - qualified_type_canonicalization.md:32:58:32:64
+MOD NOT IMPORTED - qualified_type_canonicalization.md:32:49:32:64
 DOES NOT EXIST - qualified_type_canonicalization.md:35:24:35:39
 DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
@@ -105,10 +105,10 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `ModA` was not found in this Roc project. ───┐
-└┬─────────────────┘                                                          │
+│ MOD NOT FOUND ├─ The mod `ModA/ModB` was not found in this Roc ───────┐
+└┬─────────────────┘  project.                                                │
  │                                                                            │
- │  import ModA.ModB exposing [TypeC]                                         │
+ │  import ModA/ModB exposing [TypeC]                                         │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └──────────────────────────────────── qualified_type_canonicalization.md:3:1 ┘
 
@@ -164,13 +164,13 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `ModB.TypeC` type is declared to be in `ModA`, ────┐
-└┬─────────────────┘  which does not exist.                                   │
+┌─────────────────────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `ModA.ModB` ────────┐
+└┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  multiLevelQualified : ModA.ModB.TypeC                                     │
- │                                 ‾‾‾‾‾‾                                     │
- └────────────────────────────────── qualified_type_canonicalization.md:15:32 ┘
+ │                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
+ └────────────────────────────────── qualified_type_canonicalization.md:15:23 ┘
 
 
 
@@ -266,13 +266,13 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `ModB.TypeC` type is declared to be in `ModA`, ────┐
-└┬─────────────────┘  which does not exist.                                   │
+┌─────────────────────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `ModA.ModB` ────────┐
+└┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC           │
- │                                                           ‾‾‾‾‾‾           │
- └────────────────────────────────── qualified_type_canonicalization.md:32:58 ┘
+ │                                                  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾           │
+ └────────────────────────────────── qualified_type_canonicalization.md:32:49 ┘
 
 
 
@@ -311,7 +311,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 ~~~zig
 KwImport,UpperIdent,NoSpaceDotUpperIdent,
 KwImport,UpperIdent,
-KwImport,UpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
+KwImport,UpperIdent,OpSlash,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
 KwImport,UpperIdent,KwAs,UpperIdent,
 LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseRound,
@@ -339,11 +339,9 @@ EndOfFile,
 (file
 	(type-mod)
 	(statements
-		(s-import (raw "Basics")
-			(exposing
-				(exposed-upper-ident (text "Try"))))
+		(s-import (raw "Basics.Try"))
 		(s-import (raw "Color"))
-		(s-import (raw "ModA.ModB")
+		(s-import (raw "ModA/ModB")
 			(exposing
 				(exposed-upper-ident (text "TypeC"))))
 		(s-import (raw "ExternalMod") (alias "ExtMod"))
@@ -437,9 +435,9 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import Basics exposing [Try]
+import Basics.Try
 import Color
-import ModA.ModB exposing [TypeC]
+import ModA/ModB exposing [TypeC]
 import ExternalMod as ExtMod
 
 # Simple qualified type
@@ -535,10 +533,10 @@ transform = |result|
 				(ty-malformed))))
 	(s-import (mod "Basics")
 		(exposes
-			(exposed (name "Try") (wildcard false))))
+			(exposed (name "Try") (alias "Try") (wildcard false))))
 	(s-import (mod "Color")
 		(exposes))
-	(s-import (mod "ModA")
+	(s-import (mod "ModA/ModB")
 		(exposes
 			(exposed (name "TypeC") (wildcard false))))
 	(s-import (mod "ExternalMod")

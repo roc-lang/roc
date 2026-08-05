@@ -108,6 +108,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\}
         \\
         \\top_add_five = |n| n + 5.I64
+        \\top_add_five_alias = top_add_five
         \\
         \\indirect_top_helper = |n| {
         \\    indirect_local = 123.I64
@@ -126,6 +127,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\    y = x + 1.I64
         \\    called = top_callable(41.I64)
         \\    called_unique = top_add_five(72.I64)
+        \\    called_alias = top_add_five_alias(73.I64)
         \\    dispatched = DispatchBox.Val(89.I64).add(2.I64).unwrap()
         \\    block_value = {
         \\        block_x = 52.I64
@@ -155,6 +157,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\    _ = y + List.len(args).to_i64_wrap()
         \\    _ = called + List.len(args).to_i64_wrap()
         \\    _ = called_unique + List.len(args).to_i64_wrap()
+        \\    _ = called_alias + List.len(args).to_i64_wrap()
         \\    _ = dispatched + List.len(args).to_i64_wrap()
         \\    _ = indirect_top_value + List.len(args).to_i64_wrap()
         \\    _ = block_value + List.len(args).to_i64_wrap()
@@ -181,9 +184,11 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\
         \\import Echo
         \\
+        \\main_alias! = main!
+        \\
         \\main_for_host! : List(Str) => I8
         \\main_for_host! = |args|
-        \\    match main!(args) {
+        \\    match main_alias!(args) {
         \\        Ok({}) => 0
         \\        Err(Exit(code)) => code
         \\        Err(other) => {
@@ -253,6 +258,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectCompileTimeRootKindsPresent(app);
     try expectCompileTimeRootKindsPresent(app_view);
     try expectExportedRuntimeEntrypoint(app_artifact);
+    try expectPendingProcedureAliasRoot(root, "main_alias!");
 
     const top_a = findStoredCompileTimeRootI64(app_view, .constant, 40) orelse return error.TopLevelFortyNotFound;
     const top_b = findStoredCompileTimeRootI64(app_view, .constant, 41) orelse return error.TopLevelFortyOneNotFound;
@@ -270,6 +276,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     _ = findStoredI64(app_view, 91) orelse return error.HoistedStaticDispatchCallNotFound;
     try std.testing.expect(countStoredHoistedI64(app_view, 42) >= 2);
     try std.testing.expect(countCompileTimeRootKind(app_artifact, .callable_binding) >= 1);
+    try expectPendingProcedureAliasRoot(app_artifact, "top_add_five_alias");
     try std.testing.expect(countHoistedMatchRoots(app_artifact) >= 1);
 
     try expectRootRequestBefore(app_artifact, top_a.id, top_b.id);
@@ -1494,6 +1501,25 @@ fn expectCompileTimeRootKindsPresent(
     try std.testing.expect(saw_top_level_constant);
     try std.testing.expect(saw_top_level_callable);
     try std.testing.expect(saw_hoisted_constant);
+}
+
+fn expectPendingProcedureAliasRoot(
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    source_name: []const u8,
+) HoistedConstantsTestError!void {
+    for (artifact.top_level_values.entries) |entry| {
+        if (!std.mem.eql(u8, artifact.canonical_names.exportNameText(entry.source_name), source_name)) continue;
+        const root_id = artifact.compile_time_roots.lookupIdByPattern(entry.pattern) orelse {
+            try std.testing.expect(false);
+            return;
+        };
+        const root = artifact.compile_time_roots.root(root_id);
+        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootKind.callable_binding, root.kind);
+        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.pending, root.payload);
+        try std.testing.expect(compileTimeRequestIndexForRoot(artifact, root.id) == null);
+        return;
+    }
+    try std.testing.expect(false);
 }
 
 fn expectExportedRuntimeEntrypoint(

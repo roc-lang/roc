@@ -175,6 +175,7 @@ fn getOps() *RocOps {
 
 comptime {
     @export(&hostedFallibleStrOk, .{ .name = "roc_fallible_str_ok", .visibility = .hidden });
+    @export(&hostedFallibleStrOk, .{ .name = "roc_fallible_str_ok_str_err", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
     @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });

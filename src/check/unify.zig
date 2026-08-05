@@ -98,8 +98,9 @@ pub const Result = union(enum) {
     ok,
     /// A mismatch that WAS recorded as a diagnostic (the poison_to_err path).
     problem: Problem.Idx,
-    /// A mismatch detected under `write_no_report`: nothing recorded, nothing
-    /// poisoned. The caller decides whether/how to report it.
+    /// A mismatch detected under `write_no_report`: nothing recorded and the
+    /// top-level operands are not poisoned. Successful child unifications that
+    /// completed before the mismatch remain committed.
     mismatch,
 
     pub fn isOk(self: Self) bool {
@@ -136,17 +137,29 @@ pub const MismatchBehavior = enum {
     /// stops the now-erroneous vars from producing cascading downstream errors
     /// (anything unifies OK against `.err`).
     poison_to_err,
-    /// Merge on success exactly like a normal unify, but on a top-level mismatch
-    /// record NOTHING and poison NOTHING — return `Result.mismatch`. The caller
-    /// owns the diagnostic (with correct expected/actual roles) and any
-    /// rollback. Used by the branch-vs-expected check.
+    /// Merge on success exactly like a normal unify. On a top-level mismatch,
+    /// keep successful child unifications, record nothing, and do not poison the
+    /// top-level operands; return `Result.mismatch`. The caller owns the
+    /// diagnostic (with correct expected/actual roles) and may wrap the call in a
+    /// savepoint when it explicitly needs rollback.
     write_no_report,
 };
 
-/// Per-call options. Both axes default to the common case.
+/// The semantic relation applied to the initial pair of a unification call.
+/// Child pairs always use ordinary unification.
+pub const RootRelation = enum {
+    ordinary,
+    /// An explicit nominal constructor has already chosen its wrapper. Its
+    /// outer backing pair cannot be satisfied by lifting an already-nominal
+    /// actual value through an anonymous expected backing.
+    nominal_constructor_backing,
+};
+
+/// Per-call options. All axes default to the common case.
 pub const Options = struct {
     context: Context = .none,
     on_mismatch: MismatchBehavior = .poison_to_err,
+    root_relation: RootRelation = .ordinary,
 };
 
 /// Unify two type variables.
@@ -163,7 +176,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
 
     // Unify
     var unifier = Unifier.init(env.ident_store, env.self_module_identity, env.types, env.unify_scratch, env.occurs_scratch);
-    unifier.scheduleGuardedPair(a, b, .abort) catch |err| switch (err) {
+    unifier.scheduleRootPair(a, b, opts.root_relation, .abort) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
     unifier.runWorkLoop() catch |err| {
@@ -172,7 +185,8 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             error.TypeMismatch => {},
         }
 
-        // write_no_report: no record, no poison — the caller owns it.
+        // write_no_report: keep completed child writes, but do not record or
+        // poison the top-level operands. The caller owns the mismatch.
         if (opts.on_mismatch == .write_no_report) return Result.mismatch;
 
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
@@ -187,7 +201,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             .context = opts.context,
         } });
         // Only `poison_to_err` reaches here (`write_no_report` returned above).
-        try env.types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
+        try env.types.poisonOnMismatch(a, b);
         return Result{ .problem = problem_idx };
     };
 
@@ -377,6 +391,21 @@ const Unifier = struct {
         } });
     }
 
+    fn scheduleRootPair(
+        self: *Self,
+        a_var: Var,
+        b_var: Var,
+        relation: RootRelation,
+        on_mismatch: MismatchHandling,
+    ) std.mem.Allocator.Error!void {
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .mismatch_handler = on_mismatch });
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .root_pair = .{
+            .a = a_var,
+            .b = b_var,
+            .relation = relation,
+        } });
+    }
+
     fn scheduleMerge(self: *Self, vars: ResolvedVarDescs, content: Content) std.mem.Allocator.Error!void {
         _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge = .{
             .vars = vars,
@@ -402,6 +431,7 @@ const Unifier = struct {
     fn processFrame(self: *Self, frame: WorkFrame) Error!void {
         switch (frame) {
             .mismatch_handler => {},
+            .root_pair => |pair| try self.processRootPair(pair.a, pair.b, pair.relation),
             .guarded_pair => |pair| try self.processGuardedPair(pair.a, pair.b),
             .guard_handler => |handler| {
                 self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
@@ -414,6 +444,46 @@ const Unifier = struct {
             .shared_fields_after_children => |post| try self.processSharedFieldsAfterChildren(post),
             .shared_tags_after_children => |post| try self.processSharedTagsAfterChildren(post),
         }
+    }
+
+    fn processRootPair(self: *Self, a_var: Var, b_var: Var, relation: RootRelation) Error!void {
+        if (relation == .nominal_constructor_backing and try self.constructorBackingWouldInverseLift(a_var, b_var)) {
+            return error.TypeMismatch;
+        }
+        try self.processGuardedPair(a_var, b_var);
+    }
+
+    fn contentThroughAliases(self: *Self, start: Var) Error!Content {
+        var current = start;
+        var remaining = self.types_store.len();
+        while (remaining > 0) : (remaining -= 1) {
+            const content = self.types_store.resolveVar(current).desc.content;
+            switch (content) {
+                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
+                else => return content,
+            }
+        }
+        return error.TypeMismatch;
+    }
+
+    /// Whether the root constructor-backing pair would use ordinary
+    /// structural-to-nominal lifting in the inverse direction: an anonymous
+    /// expected backing accepting an already-nominal actual operand.
+    fn constructorBackingWouldInverseLift(self: *Self, expected: Var, actual: Var) Error!bool {
+        const actual_content = try self.contentThroughAliases(actual);
+        const actual_nominal = switch (actual_content) {
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| nominal,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (self.types_store.nominalDeclIsInvalid(actual_nominal)) return false;
+
+        return switch (try self.contentThroughAliases(expected)) {
+            .structure => |flat| flat != .nominal_type,
+            else => false,
+        };
     }
 
     fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
@@ -2817,6 +2887,9 @@ fn mergeFromNumeralLiteralInfo(
 pub const DeferredConstraintCheck = struct {
     var_: Var,
     constraints: StaticDispatchConstraint.SafeList.Range,
+    /// The expression whose instantiation created this obligation. Ordinary
+    /// definition-site constraints have no owner and report at their provenance.
+    failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx = .none,
     /// True when the constraint's method target resolved to an unchecked,
     /// unannotated local def and the checker re-deferred it for resolution at
     /// the enclosing binding group's generalization boundary. Such an entry is
@@ -2861,6 +2934,11 @@ const SharedTagsAfterChildren = struct {
 
 const WorkFrame = union(enum) {
     mismatch_handler: MismatchHandling,
+    root_pair: struct {
+        a: Var,
+        b: Var,
+        relation: RootRelation,
+    },
     guarded_pair: struct {
         a: Var,
         b: Var,

@@ -12,9 +12,9 @@ const Allocator = std.mem.Allocator;
 
 const LineEntry = @import("LirCodeGen.zig").LineEntry;
 
-/// One pointer-sized address field inside a debug section that must be
-/// relocated to `text section start + addend`.
-pub const AddressReloc = @import("object/mod.zig").DebugReloc;
+/// One field inside a debug section that must be relocated to another object
+/// section plus an explicit addend.
+pub const Reloc = @import("object/mod.zig").DebugReloc;
 
 /// One subprogram entry for `.debug_info`.
 pub const ProcEntry = struct {
@@ -29,8 +29,8 @@ pub const Sections = struct {
     debug_line: []u8,
     debug_abbrev: []u8,
     debug_info: []u8,
-    line_relocs: []AddressReloc,
-    info_relocs: []AddressReloc,
+    line_relocs: []Reloc,
+    info_relocs: []Reloc,
 
     pub fn deinit(self: *Sections, gpa: Allocator) void {
         gpa.free(self.debug_line);
@@ -78,9 +78,9 @@ pub fn build(
     procs: []const ProcEntry,
     code_size: u64,
 ) Allocator.Error!Sections {
-    var line_relocs: std.ArrayList(AddressReloc) = .empty;
+    var line_relocs: std.ArrayList(Reloc) = .empty;
     errdefer line_relocs.deinit(gpa);
-    var info_relocs: std.ArrayList(AddressReloc) = .empty;
+    var info_relocs: std.ArrayList(Reloc) = .empty;
     errdefer info_relocs.deinit(gpa);
 
     const debug_line = try buildLineSection(gpa, source_files, line_entries, code_size, &line_relocs);
@@ -139,7 +139,7 @@ fn buildLineSection(
     source_files: []const []const u8,
     line_entries: []const LineEntry,
     code_size: u64,
-    relocs: *std.ArrayList(AddressReloc),
+    relocs: *std.ArrayList(Reloc),
 ) Allocator.Error![]u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(gpa);
@@ -173,7 +173,12 @@ fn buildLineSection(
     try buf.append(gpa, 0); // extended opcode
     try appendUleb(&buf, gpa, 9);
     try buf.append(gpa, DW_LNE_set_address);
-    try relocs.append(gpa, .{ .section_offset = @intCast(buf.items.len), .addend = 0 });
+    try relocs.append(gpa, .{
+        .section_offset = @intCast(buf.items.len),
+        .target = .text,
+        .width = .eight,
+        .addend = 0,
+    });
     try appendInt(&buf, gpa, u64, 0);
 
     var address: u64 = 0;
@@ -271,13 +276,19 @@ fn buildInfoSection(
     cu_name: []const u8,
     procs: []const ProcEntry,
     code_size: u64,
-    relocs: *std.ArrayList(AddressReloc),
+    relocs: *std.ArrayList(Reloc),
 ) Allocator.Error![]u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(gpa);
 
     try appendInt(&buf, gpa, u32, 0); // unit_length, patched below
     try appendInt(&buf, gpa, u16, 4); // version
+    try relocs.append(gpa, .{
+        .section_offset = @intCast(buf.items.len),
+        .target = .debug_abbrev,
+        .width = .four,
+        .addend = 0,
+    });
     try appendInt(&buf, gpa, u32, 0); // debug_abbrev_offset
     try buf.append(gpa, 8); // address_size
 
@@ -288,16 +299,32 @@ fn buildInfoSection(
     try appendInt(&buf, gpa, u16, DW_LANG_C99);
     try buf.appendSlice(gpa, cu_name);
     try buf.append(gpa, 0);
-    try relocs.append(gpa, .{ .section_offset = @intCast(buf.items.len), .addend = 0 });
+    try relocs.append(gpa, .{
+        .section_offset = @intCast(buf.items.len),
+        .target = .text,
+        .width = .eight,
+        .addend = 0,
+    });
     try appendInt(&buf, gpa, u64, 0); // low_pc
     try appendInt(&buf, gpa, u64, code_size); // high_pc (length form)
+    try relocs.append(gpa, .{
+        .section_offset = @intCast(buf.items.len),
+        .target = .debug_line,
+        .width = .four,
+        .addend = 0,
+    });
     try appendInt(&buf, gpa, u32, 0); // stmt_list
 
     for (procs) |proc| {
         try appendUleb(&buf, gpa, 2);
         try buf.appendSlice(gpa, proc.name);
         try buf.append(gpa, 0);
-        try relocs.append(gpa, .{ .section_offset = @intCast(buf.items.len), .addend = proc.code_start });
+        try relocs.append(gpa, .{
+            .section_offset = @intCast(buf.items.len),
+            .target = .text,
+            .width = .eight,
+            .addend = proc.code_start,
+        });
         try appendInt(&buf, gpa, u64, 0); // low_pc
         try appendInt(&buf, gpa, u64, proc.code_size); // high_pc (length form)
         const decl_file: u64 = if (proc.loc.hasLocation()) @as(u64, proc.loc.file) + 1 else 0;
@@ -312,7 +339,7 @@ fn buildInfoSection(
     return buf.toOwnedSlice(gpa);
 }
 
-test "line section round-trips through std.debug parsing constants" {
+test "DWARF sections expose every linker-owned reference" {
     const gpa = std.testing.allocator;
     const files = [_][]const u8{"main"};
     const entries = [_]LineEntry{
@@ -329,7 +356,21 @@ test "line section round-trips through std.debug parsing constants" {
     try std.testing.expect(sections.debug_abbrev.len > 0);
     try std.testing.expect(sections.debug_info.len > 0);
     try std.testing.expectEqual(@as(usize, 1), sections.line_relocs.len);
-    try std.testing.expectEqual(@as(usize, 2), sections.info_relocs.len);
+    try std.testing.expectEqual(.text, sections.line_relocs[0].target);
+    try std.testing.expectEqual(.eight, sections.line_relocs[0].width);
+    try std.testing.expectEqual(@as(usize, 4), sections.info_relocs.len);
+    try std.testing.expectEqual(Reloc{
+        .section_offset = 6,
+        .target = .debug_abbrev,
+        .width = .four,
+        .addend = 0,
+    }, sections.info_relocs[0]);
+    try std.testing.expectEqual(.text, sections.info_relocs[1].target);
+    try std.testing.expectEqual(.eight, sections.info_relocs[1].width);
+    try std.testing.expectEqual(.debug_line, sections.info_relocs[2].target);
+    try std.testing.expectEqual(.four, sections.info_relocs[2].width);
+    try std.testing.expectEqual(.text, sections.info_relocs[3].target);
+    try std.testing.expectEqual(.eight, sections.info_relocs[3].width);
     // unit_length covers the rest of each section exactly.
     try std.testing.expectEqual(
         sections.debug_line.len - 4,

@@ -191,7 +191,7 @@ processData = |data|
 	"processed"
 
 # In a nested mod scope, redeclare Try
-InnerMod : 
+InnerMod :
 
 ~~~
 # CANONICALIZE
@@ -233,7 +233,7 @@ InnerMod :
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "InnerMod")
+		(alias (type "Error")
 			(ty-header (name "InnerMod"))))
 	(expressions
 		(expr (type "Str -> Str"))))

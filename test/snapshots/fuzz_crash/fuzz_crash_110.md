@@ -9,11 +9,7 @@ R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}
 ~~~
 # EXPECTED
 UNDECLARED TYPE VARIABLE - fuzz_crash_110.md:1:25:1:26
-MISSING METHOD - fuzz_crash_110.md:1:57:1:58
-TYPE MISMATCH - fuzz_crash_110.md:1:57:1:58
-TYPE MISMATCH - fuzz_crash_110.md:1:43:1:44
 MISSING METHOD - fuzz_crash_110.md:1:61:1:62
-NON EXHAUSTIVE MATCH - fuzz_crash_110.md:1:37:1:63
 # PROBLEMS
 
 ┌──────────────────────────┐
@@ -29,53 +25,6 @@ NON EXHAUSTIVE MATCH - fuzz_crash_110.md:1:37:1:63
 
 
 ┌────────────────┐
-│ MISSING METHOD ├─ The value before this `==` operator has a type that ──────┐
-└┬───────────────┘  doesn't have a `is_eq` method.                            │
- │                                                                            │
- │  R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}       │
- │                                                          ‾                 │
- └──────────────────────────────────────────────────── fuzz_crash_110.md:1:57 ┘
-
-    The value's type, which does not have a method named `is_eq`, is:
-
-        R000ee(Error)
-
-    Hint: The `==` operator calls a method named `is_eq` on the value preceding
-    it, passing the value after the operator as the one argument.
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}       │
- │                                                          ‾                 │
- └──────────────────────────────────────────────────── fuzz_crash_110.md:1:57 ┘
-
-    Other code expects this to have the type:
-
-        R000ee(Error)
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}       │
- │                                            ‾                               │
- └──────────────────────────────────────────────────── fuzz_crash_110.md:1:43 ┘
-
-    The type was determined to be non-numeric here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}  │
-      │                                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾           │
-      └─────────────────────────────────────────────── fuzz_crash_110.md:1:45 ┘
-    Other code expects this to have the type:
-
-        R000ee(k)
-
-
-┌────────────────┐
 │ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
 └┬───────────────┘  whose type doesn't have that method.                      │
  │                                                                            │
@@ -86,23 +35,6 @@ NON EXHAUSTIVE MATCH - fuzz_crash_110.md:1:37:1:63
     The value's type, which does not have a method named `from_numeral`, is:
 
         ({}) -> _ret
-
-
-┌──────────────────────┐
-│ NON EXHAUSTIVE MATCH ├─ This match expression doesn't cover all possible ───┐
-└┬─────────────────────┘  cases.                                              │
- │                                                                            │
- │  R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}       │
- │                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾            │
- └──────────────────────────────────────────────────── fuzz_crash_110.md:1:37 ┘
-
-    The value being matched on has type:
-            R000ee(k)
-
-    Missing patterns:
-            No0e _
-
-    Hint: Add branches to handle these cases, or use `_` to match anything.
 
 # TOKENS
 ~~~zig
@@ -163,12 +95,12 @@ R000ee(k) := [No0e(R000ee(o))].{
 		(e-block
 			(e-lambda
 				(args)
-				(e-call (constraint-fn-var 258)
+				(e-call (constraint-fn-var 242)
 					(e-block
 						(e-match
 							(match
 								(cond
-									(e-runtime-error (tag "erroneous_value_expr")))
+									(e-num (value "0")))
 								(branches
 									(branch
 										(patterns
@@ -192,7 +124,7 @@ R000ee(k) := [No0e(R000ee(o))].{
 	(defs
 		(patt (type "({}) -> _ret")))
 	(type_decls
-		(nominal (type "R000ee(k)")
+		(nominal (type "Error")
 			(ty-header (name "R000ee")
 				(ty-args
 					(ty-rigid-var (name "k"))))))

@@ -40,7 +40,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Stdout.line ?? 
+Stdout.line ??
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -124,6 +124,14 @@ pub fn peekNext(self: *Parser) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[next];
 }
 
+/// Peek at an absolute token position
+pub fn peekAt(self: *Parser, pos: Token.Idx) Token.Tag {
+    if (pos >= self.tok_buf.tokens.len) {
+        return .EndOfFile;
+    }
+    return self.tok_buf.tokens.items(.tag)[pos];
+}
+
 /// Peek at `n` tokens forward
 pub fn peekN(self: *Parser, n: u32) Token.Tag {
     if (n == 0) {
@@ -266,6 +274,8 @@ const ExprParentKind = enum(u16) {
     expr_binary_rhs = 0x4b3c,
     expr_collection_item = 0x8375,
     expr_arrow_inner = 0x2edb,
+    expr_pipe_rhs = 0x6c71,
+    expr_pipe_inner = 0x9a24,
     expr_record_ext = 0xf61a,
     expr_record_field = 0x705e,
     expr_string = 0xad09,
@@ -300,6 +310,7 @@ const TypeParentKind = enum(u16) {
     statement_type_after_anno = 0x34c9,
     statement_type_decl_anno = 0xae12,
     where_clause_type = 0x057d,
+    where_clause_alias = 0x9c31,
     type_apply = 0xc6e0,
     type_paren_item = 0x718b,
     type_paren_fn_ret = 0x2d44,
@@ -315,6 +326,7 @@ const TypeParentKind = enum(u16) {
 const WhereParentKind = enum(u16) {
     where_statement_type_anno = 0x3b6d,
     where_statement_type_decl = 0xc028,
+    where_statement_where_alias = 0x6ef4,
 };
 
 const StatementParentKind = enum(u16) {
@@ -431,19 +443,28 @@ fn recordStatementDecl(
             .region = .{ .start = v.region.start, .end = v.region.end },
         },
         .import => |i| blk: {
-            if (self.tok_buf.resolveIdentifier(i.module_name_tok)) |module_name| {
-                try self.decl_index.addImport(.{
-                    .module_name = module_name,
-                    .qualifier = if (i.qualifier_tok) |qualifier_tok| self.tok_buf.resolveIdentifier(qualifier_tok) else null,
-                    .nested = i.nested_import,
-                    .region = .{ .start = i.region.start, .end = i.region.end },
-                });
-            }
+            const module_name = try self.importModulePathIdent(i.target);
+            try self.decl_index.addImport(.{
+                .module_name = module_name,
+                .module_binding = if (i.target.hasNestedTypes()) null else binding_blk: {
+                    if (i.alias_tok) |alias_tok| break :binding_blk self.tok_buf.resolveIdentifier(alias_tok);
+                    break :binding_blk self.tok_buf.resolveIdentifier(i.target.module_name_tok);
+                },
+                .qualifier = if (i.target.qualifier_tok) |qualifier_tok| self.tok_buf.resolveIdentifier(qualifier_tok) else null,
+                .origin = @enumFromInt(@intFromEnum(i.target.origin)),
+                .base = @enumFromInt(@intFromEnum(i.target.base)),
+                .parent_count = i.target.parent_count,
+                .nested_type_path = try self.nestedImportPathIdent(i.target),
+                .region = .{ .start = i.region.start, .end = i.region.end },
+            });
             break :blk DeclIndex.Decl{
                 .scope = scope_idx,
                 .statement = @intFromEnum(statement_idx),
                 .kind = .import,
-                .name_tok = i.alias_tok orelse i.module_name_tok,
+                .name_tok = i.alias_tok orelse if (i.target.nested_start_tok) |nested_start|
+                    nested_start + i.target.nested_len - 1
+                else
+                    i.target.module_name_tok,
                 .pattern = null,
                 .anno = null,
                 .region = .{ .start = i.region.start, .end = i.region.end },
@@ -464,6 +485,7 @@ fn recordStatementDecl(
                 .alias => .type_alias,
                 .nominal => .nominal,
                 .@"opaque" => .@"opaque",
+                .where_alias => .where_alias,
             };
             break :blk DeclIndex.Decl{
                 .scope = scope_idx,
@@ -500,6 +522,16 @@ fn recordStatementDecl(
     }
 
     const decl_idx = try self.decl_index.addDecl(record);
+    switch (statement) {
+        .import => |import_stmt| {
+            if (!import_stmt.target.hasNestedTypes()) {
+                if (record.name_ident) |alias_ident| {
+                    try self.decl_index.addImportAliasDecl(scope_idx, alias_ident, decl_idx);
+                }
+            }
+        },
+        else => {},
+    }
     if (record.kind == .value_anno or record.kind == .var_anno) {
         if (self.currentPendingAnno()) |pending| pending.* = decl_idx;
         return;
@@ -619,6 +651,58 @@ fn addTypeDeclStatement(
 fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
     const region = self.tok_buf.resolve(token);
     return self.tok_buf.env.source[region.start.offset..region.end.offset];
+}
+
+/// Intern the source module target selected by import parsing, excluding nested
+/// types. Package targets retain their qualifier; local targets retain their
+/// explicit base spelling. Building from tokens keeps layout whitespace out of
+/// the stored path.
+fn importModulePathIdent(self: *Parser, target: AST.ImportTarget) std.mem.Allocator.Error!base.Ident.Idx {
+    var path = std.ArrayList(u8).empty;
+    defer path.deinit(self.gpa);
+
+    if (target.origin == .package) {
+        try path.appendSlice(self.gpa, self.tokenText(target.qualifier_tok.?));
+        try path.append(self.gpa, '.');
+        const raw = self.tokenText(target.module_name_tok);
+        try path.appendSlice(self.gpa, if (raw.len > 0 and raw[0] == '.') raw[1..] else raw);
+    } else {
+        switch (target.base) {
+            .importer => if (target.start_tok != target.path_start_tok) try path.appendSlice(self.gpa, "./"),
+            .package_root => try path.append(self.gpa, '/'),
+            .parent => for (0..target.parent_count) |_| try path.appendSlice(self.gpa, "../"),
+        }
+
+        const tags = self.tok_buf.tokens.items(.tag);
+        var tok = target.path_start_tok;
+        var need_separator = false;
+        while (tok <= target.module_name_tok) : (tok += 1) {
+            switch (tags[tok]) {
+                .UpperIdent, .LowerIdent, .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                    if (need_separator) try path.append(self.gpa, '/');
+                    const raw = self.tokenText(tok);
+                    try path.appendSlice(self.gpa, if (raw.len > 0 and raw[0] == '.') raw[1..] else raw);
+                    need_separator = true;
+                },
+                .OpSlash => {},
+                else => {},
+            }
+        }
+    }
+
+    return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(path.items));
+}
+
+fn nestedImportPathIdent(self: *Parser, target: AST.ImportTarget) std.mem.Allocator.Error!?base.Ident.Idx {
+    const start = target.nested_start_tok orelse return null;
+    var path = std.ArrayList(u8).empty;
+    defer path.deinit(self.gpa);
+    for (0..target.nested_len) |offset| {
+        if (offset != 0) try path.append(self.gpa, '.');
+        const raw = self.tokenText(start + @as(Token.Idx, @intCast(offset)));
+        try path.appendSlice(self.gpa, if (raw.len > 0 and raw[0] == '.') raw[1..] else raw);
+    }
+    return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(path.items));
 }
 
 fn recordPackageHeaderModules(self: *Parser, exposes: AST.ExposedItem.Span) std.mem.Allocator.Error!void {
@@ -776,6 +860,7 @@ fn parseExposedItemTokens(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem
             return try self.store.addExposedItem(.{ .lower_ident = .{
                 .region = .{ .start = start, .end = self.pos },
                 .ident = start,
+                .qualifiers = .{ .span = base.DataSpan.empty() },
                 .as = as,
             } });
         },
@@ -784,12 +869,21 @@ fn parseExposedItemTokens(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem
             const qual_result = try self.readQualificationChain(.all_segments);
             self.pos = qual_result.final_token + 1;
             const ident = qual_result.final_token;
+            const is_lower = self.tok_buf.tokens.items(.tag)[ident] == .LowerIdent;
             if (self.peek() == .KwAs) {
                 self.advance();
                 as = self.pos;
-                self.expect(.UpperIdent) catch {
-                    return try self.pushMalformed(AST.ExposedItem.Idx, .expected_upper_name_after_exposed_item_as, start);
-                };
+                if (is_lower) {
+                    if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
+                        self.advance();
+                    } else {
+                        return try self.pushMalformed(AST.ExposedItem.Idx, .expected_lower_name_after_exposed_item_as, start);
+                    }
+                } else {
+                    self.expect(.UpperIdent) catch {
+                        return try self.pushMalformed(AST.ExposedItem.Idx, .expected_upper_name_after_exposed_item_as, start);
+                    };
+                }
             } else if (self.peek() == .DotStar) {
                 self.advance();
                 return try self.store.addExposedItem(.{ .upper_ident_star = .{
@@ -798,11 +892,21 @@ fn parseExposedItemTokens(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem
                     .qualifiers = qual_result.qualifiers,
                 } });
             }
-            return try self.store.addExposedItem(.{ .upper_ident = .{
-                .region = .{ .start = start, .end = self.pos },
-                .ident = ident,
-                .as = as,
-            } });
+            if (is_lower) {
+                return try self.store.addExposedItem(.{ .lower_ident = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .ident = ident,
+                    .qualifiers = qual_result.qualifiers,
+                    .as = as,
+                } });
+            } else {
+                return try self.store.addExposedItem(.{ .upper_ident = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .ident = ident,
+                    .qualifiers = qual_result.qualifiers,
+                    .as = as,
+                } });
+            }
         },
         else => return try self.pushMalformed(AST.ExposedItem.Idx, .exposed_item_unexpected_token, start),
     }
@@ -851,9 +955,41 @@ fn parseTypeIdentToken(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     }
 }
 
-fn parseTypeHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.TypeHeader.Idx {
+/// Whether the tokens at the current position begin a where alias declaration:
+/// a lowercase receiver, a dotted upper name, optional arguments, then `:`.
+/// Nothing else in the language starts this way, so committing here lets the
+/// missing-`where` case report against the declaration rather than the line.
+fn whereAliasDeclFollows(self: *Parser) bool {
+    std.debug.assert(self.peek() == .LowerIdent);
+    if (self.peekNext() != .NoSpaceDotUpperIdent and self.peekNext() != .DotUpperIdent) return false;
+
+    var pos = self.pos + 2;
+    if (self.peekAt(pos) == .NoSpaceOpenRound or self.peekAt(pos) == .OpenRound) {
+        var depth: u32 = 1;
+        pos += 1;
+        while (depth > 0) : (pos += 1) {
+            switch (self.peekAt(pos)) {
+                .OpenRound, .NoSpaceOpenRound => depth += 1,
+                .CloseRound => depth -= 1,
+                .EndOfFile => return false,
+                else => {},
+            }
+        }
+    }
+
+    return self.peekAt(pos) == .OpColon;
+}
+
+/// Which token tag opens the header's name. Where alias headers are named by a
+/// dotted upper ident (`a.Sortable`), every other type header by a bare one.
+const TypeHeaderNameTag = enum { upper_ident, dotted_upper_ident };
+
+fn parseTypeHeaderTokens(self: *Parser, name_tag: TypeHeaderNameTag) std.mem.Allocator.Error!AST.TypeHeader.Idx {
     const start = self.pos;
-    std.debug.assert(self.peek() == .UpperIdent);
+    switch (name_tag) {
+        .upper_ident => std.debug.assert(self.peek() == .UpperIdent),
+        .dotted_upper_ident => std.debug.assert(self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent),
+    }
     self.advance();
     const open_tok = self.peek();
     if (open_tok != .NoSpaceOpenRound and open_tok != .OpenRound) {
@@ -955,90 +1091,138 @@ fn parseImportStatementTokens(self: *Parser) std.mem.Allocator.Error!AST.Stateme
         } });
     }
 
+    const target_start = self.pos;
+    var origin: AST.ImportOrigin = .local;
+    var local_base: AST.LocalImportBase = .importer;
+    var parent_count: u16 = 0;
     var qualifier: ?TokenIdx = null;
     var alias_tok: ?TokenIdx = null;
-    if (self.peek() == .LowerIdent) {
+
+    if (self.peek() == .OpSlash) {
+        local_base = .package_root;
+        self.advance();
+    } else if (self.peek() == .Dot and self.peekN(1) == .OpSlash) {
+        self.advance();
+        self.advance();
+    } else {
+        while (self.peek() == .DoubleDot and self.peekN(1) == .OpSlash) {
+            local_base = .parent;
+            parent_count = std.math.add(u16, parent_count, 1) catch {
+                return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+            };
+            self.advance();
+            self.advance();
+        }
+    }
+
+    const path_start = self.pos;
+    if (local_base == .importer and parent_count == 0 and self.peek() == .LowerIdent and
+        self.peekN(1) != .OpSlash)
+    {
+        origin = .package;
         qualifier = self.pos;
         self.advance();
-    }
-    if (!((qualifier == null and self.peek() == .UpperIdent) or
-        (qualifier != null and (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent))))
-    {
-        return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
     }
 
     var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
     var exposes_layout: AST.CollectionLayout = .compact;
-    var nested_import = false;
-    var last_upper_tok: TokenIdx = self.pos;
-    const module_name_tok = self.pos;
-    self.advance();
+    var module_name_tok: TokenIdx = self.pos;
+    var nested_start_tok: ?TokenIdx = null;
+    var nested_len: u16 = 0;
 
-    while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-        last_upper_tok = self.pos;
+    if (origin == .package) {
+        if (self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
+            return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+        }
+        module_name_tok = self.pos;
         self.advance();
+    } else {
+        if (self.peek() != .UpperIdent and self.peek() != .LowerIdent) {
+            return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+        }
+
+        module_name_tok = self.pos;
+        self.advance();
+        while (self.peek() == .OpSlash) {
+            self.advance();
+            if (self.peek() != .UpperIdent and self.peek() != .LowerIdent) {
+                return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+            }
+            module_name_tok = self.pos;
+            self.advance();
+        }
+
+        if (self.tok_buf.tokens.items(.tag)[module_name_tok] != .UpperIdent) {
+            return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+        }
     }
 
-    const has_explicit_clause = self.peek() == .KwAs or self.peek() == .KwExposing;
-    const has_multiple_segments = last_upper_tok != module_name_tok;
-    if (has_multiple_segments and !has_explicit_clause) {
-        nested_import = true;
-        const scratch_top = self.store.scratchExposedItemTop();
-        const exposed_item = try self.store.addExposedItem(.{ .upper_ident = .{
-            .region = .{ .start = last_upper_tok, .end = last_upper_tok },
-            .ident = last_upper_tok,
-            .as = null,
-        } });
-        try self.store.addScratchExposedItem(exposed_item);
-        exposes = try self.store.exposedItemSpanFrom(scratch_top);
-    } else {
-        if (self.peek() == .KwAs) {
-            self.advance();
-            alias_tok = self.pos;
-            self.expect(.UpperIdent) catch {
-                return try self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
+    if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
+        nested_start_tok = self.pos;
+        while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
+            nested_len = std.math.add(u16, nested_len, 1) catch {
+                return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
             };
+            self.advance();
         }
+    }
 
-        if (self.peek() == .KwExposing) {
-            self.advance();
-            self.expect(.OpenSquare) catch {
-                return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
-            };
-            const scratch_top = self.store.scratchExposedItemTop();
-            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                try self.store.addScratchExposedItem(try self.parseExposedItemTokens());
-                if (!self.consumeComma()) {
-                    break;
-                }
+    if (self.peek() == .KwAs) {
+        self.advance();
+        alias_tok = self.pos;
+        self.expect(.UpperIdent) catch {
+            return try self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
+        };
+    }
+
+    if (self.peek() == .KwExposing) {
+        self.advance();
+        self.expect(.OpenSquare) catch {
+            return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
+        };
+        const scratch_top = self.store.scratchExposedItemTop();
+        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+            try self.store.addScratchExposedItem(try self.parseExposedItemTokens());
+            if (!self.consumeComma()) {
+                break;
             }
-            if (self.peek() != .CloseSquare) {
-                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                    self.advance();
-                }
-                self.expect(.CloseSquare) catch {};
-                self.store.clearScratchExposedItemsFrom(scratch_top);
-                return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
-            }
-            exposes_layout = self.directCollectionLayout();
-            self.advance();
-            exposes = try self.store.exposedItemSpanFrom(scratch_top);
         }
+        if (self.peek() != .CloseSquare) {
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                self.advance();
+            }
+            self.expect(.CloseSquare) catch {};
+            self.store.clearScratchExposedItemsFrom(scratch_top);
+            return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
+        }
+        exposes_layout = self.directCollectionLayout();
+        self.advance();
+        exposes = try self.store.exposedItemSpanFrom(scratch_top);
     }
 
     const statement_idx = try self.addStatement(.{ .import = .{
-        .module_name_tok = module_name_tok,
-        .qualifier_tok = qualifier,
+        .target = .{
+            .origin = origin,
+            .base = local_base,
+            .parent_count = parent_count,
+            .start_tok = target_start,
+            .path_start_tok = if (origin == .package) qualifier.? else path_start,
+            .module_name_tok = module_name_tok,
+            .qualifier_tok = qualifier,
+            .nested_start_tok = nested_start_tok,
+            .nested_len = nested_len,
+        },
         .alias_tok = alias_tok,
         .exposes = exposes,
-        .nested_import = nested_import,
         .region = .{ .start = start, .end = self.pos },
     } });
     self.store.setCollectionLayout(statement_idx, exposes_layout);
-    if (qualifier == null and !nested_import) {
-        if (self.tok_buf.resolveIdentifier(module_name_tok)) |module_ident| {
-            try self.decl_index.addExplicitUnqualifiedImport(module_ident);
-        }
+    if (origin == .local and nested_len == 0) {
+        const introduced_name_tok = alias_tok orelse module_name_tok;
+        const raw_name = self.tokenText(introduced_name_tok);
+        const introduced_name = if (raw_name.len > 0 and raw_name[0] == '.') raw_name[1..] else raw_name;
+        const introduced_ident = try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(introduced_name));
+        try self.decl_index.addExplicitUnqualifiedImport(introduced_ident);
     }
     return statement_idx;
 }
@@ -1139,10 +1323,21 @@ fn parseRecordFieldCollectionTokens(
     open_error: AST.Diagnostic.Tag,
     close_error: AST.Diagnostic.Tag,
 ) std.mem.Allocator.Error!AST.Collection.Idx {
-    const fields_start = self.pos;
-    self.expect(.OpenCurly) catch {
+    if (self.peek() != .OpenCurly) {
         return try self.pushMalformed(AST.Collection.Idx, open_error, start);
-    };
+    }
+    return self.parseOpenedRecordFieldCollectionTokens(start, collection_tag, close_error);
+}
+
+fn parseOpenedRecordFieldCollectionTokens(
+    self: *Parser,
+    start: Token.Idx,
+    collection_tag: Node.Tag,
+    close_error: AST.Diagnostic.Tag,
+) std.mem.Allocator.Error!AST.Collection.Idx {
+    const fields_start = self.pos;
+    std.debug.assert(self.peek() == .OpenCurly);
+    self.advance();
     const scratch_top = self.store.scratchRecordFieldTop();
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         try self.store.addScratchRecordField(try self.parseRecordFieldTokens());
@@ -1202,18 +1397,76 @@ fn parsePackageHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Id
         .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
     try self.recordPackageHeaderModules(exposed.span);
-    const packages = try self.parseRecordFieldCollectionTokens(
-        start,
-        .collection_packages,
-        .expected_package_platform_open_curly,
-        .expected_package_platform_close_curly,
-    );
+    const packages = if (self.peek() == .OpenCurly)
+        try self.parseOpenedRecordFieldCollectionTokens(
+            start,
+            .collection_packages,
+            .expected_package_platform_close_curly,
+        )
+    else
+        try self.store.addCollection(.collection_packages, .{
+            .span = base.DataSpan.empty(),
+            .region = .{ .start = self.pos, .end = self.pos },
+            .layout = .compact,
+        });
 
     return try self.store.addHeader(.{ .package = .{
         .exposes = exposed.collection,
         .packages = packages,
+        .roc_version = try self.takeRocVersionField(packages, null),
         .region = .{ .start = start, .end = self.pos },
     } });
+}
+
+/// The dependency-record key reserved for pinning the compiler version.
+const roc_version_key = "roc";
+
+/// Find the optional `roc: "<version>"` entry in a header's dependency record.
+///
+/// The entry stays in the record alongside the real dependencies — the same way
+/// an app's platform entry does — so that comment attachment and formatting of
+/// the record need no special cases. What this returns is which of those fields
+/// pins the compiler version, so that later phases can tell it apart from a
+/// dependency without re-deriving the rule from field names.
+///
+/// A pin whose value is not a version the compiler recognizes is still reported
+/// as the version field: a malformed pin is a bad pin, not a package named
+/// `roc`, and reporting it as both would be two errors for one mistake.
+fn takeRocVersionField(
+    self: *Parser,
+    packages: AST.Collection.Idx,
+    platform_idx: ?AST.RecordField.Idx,
+) std.mem.Allocator.Error!?AST.RecordField.Idx {
+    const collection = self.store.getCollection(packages);
+    var found: ?AST.RecordField.Idx = null;
+
+    for (self.store.recordFieldSlice(.{ .span = collection.span })) |field_idx| {
+        const field = self.store.getRecordField(field_idx);
+        if (!std.mem.eql(u8, self.tokenText(field.name), roc_version_key)) continue;
+
+        if (platform_idx) |platform| {
+            if (field_idx == platform) {
+                try self.pushDiagnostic(.roc_version_key_is_reserved, field.region);
+                continue;
+            }
+        }
+        if (found != null) {
+            try self.pushDiagnostic(.duplicate_roc_version, field.region);
+            continue;
+        }
+        found = field_idx;
+
+        const version_is_valid = blk: {
+            const value = field.value orelse break :blk false;
+            const token = self.store.singleStringPartToken(value) orelse break :blk false;
+            break :blk base.roc_version.parse(self.tokenText(token)) != null;
+        };
+        if (!version_is_valid) {
+            try self.pushDiagnostic(.invalid_roc_version, field.region);
+        }
+    }
+
+    return found;
 }
 
 fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
@@ -1229,7 +1482,7 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
 
     const packages_start = self.pos;
     self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_open_curly, start);
+        return try self.pushMalformed(AST.Header.Idx, .expected_app_open_curly, start);
     };
     const fields_scratch_top = self.store.scratchRecordFieldTop();
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
@@ -1311,6 +1564,7 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
             .platform_idx = platform_idx,
             .provides = provided.collection,
             .packages = packages,
+            .roc_version = try self.takeRocVersionField(packages, platform_idx),
             .region = .{ .start = start, .end = self.pos },
         } });
     }
@@ -1909,6 +2163,7 @@ fn parsePlatformHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.I
         .requires_entries = requires_entries,
         .exposes = exposes,
         .packages = packages,
+        .roc_version = try self.takeRocVersionField(packages, null),
         .provides = provides,
         .hosted = hosted,
         .targets = targets,
@@ -2161,6 +2416,15 @@ const StatementTypeDeclReadyState = struct {
     type_path: ?DeclIndex.TypePathIdx,
 };
 
+const StatementWhereAliasAfterWhereState = struct {
+    start: Token.Idx,
+    header: AST.TypeHeader.Idx,
+    receiver: AST.TypeAnno.Idx,
+    type_dependencies_start: DeclIndex.TypeDependencyMark,
+    was_collecting_type_dependencies: bool,
+    type_path: ?DeclIndex.TypePathIdx,
+};
+
 const WhereState = struct {
     start: Token.Idx,
     scratch_top: u32,
@@ -2171,6 +2435,11 @@ const WhereClauseTypeState = struct {
     var_tok: Token.Idx,
     name_tok: Token.Idx,
     args_start: Token.Idx,
+};
+
+const WhereClauseAliasState = struct {
+    start: Token.Idx,
+    var_tok: Token.Idx,
 };
 
 const TypeDeclAssociatedState = struct {
@@ -2262,6 +2531,17 @@ const ExprArrowAfterInnerState = struct {
     min_bp: u8,
     left: AST.Expr.Idx,
     operator: Token.Idx,
+};
+
+const ExprPipeAfterRhsState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    left: AST.Expr.Idx,
+    operator: Token.Idx,
+};
+
+const ExprPipeInnerState = struct {
+    start: Token.Idx,
 };
 
 const ExprArrowAppState = struct {
@@ -2410,6 +2690,8 @@ const OpenSyntaxStack = struct {
     associated_kinds: std.ArrayList(AssociatedParentKind) = .empty,
     expr_after_unary: std.ArrayList(ExprAfterUnaryState) = .empty,
     expr_arrow_after_inner: std.ArrayList(ExprArrowAfterInnerState) = .empty,
+    expr_pipe_after_rhs: std.ArrayList(ExprPipeAfterRhsState) = .empty,
+    expr_pipe_inner: std.ArrayList(ExprPipeInnerState) = .empty,
     expr_string: std.ArrayList(ExprStringState) = .empty,
     expr_record_ext: std.ArrayList(ExprRecordExtState) = .empty,
     expr_record_field: std.ArrayList(ExprRecordFieldState) = .empty,
@@ -2434,7 +2716,9 @@ const OpenSyntaxStack = struct {
     statement_type_associated_statement: std.ArrayList(StatementAssociatedStatementState) = .empty,
     where_statement_type_anno: std.ArrayList(StatementTypeAnnoAfterWhereState) = .empty,
     where_statement_type_decl: std.ArrayList(StatementTypeDeclAfterWhereState) = .empty,
+    where_statement_where_alias: std.ArrayList(StatementWhereAliasAfterWhereState) = .empty,
     where_clause_type: std.ArrayList(WhereClauseTypeState) = .empty,
+    where_clause_alias: std.ArrayList(WhereClauseAliasState) = .empty,
     pattern_tag_args: std.ArrayList(PatternTagArgsState) = .empty,
     pattern_list: std.ArrayList(PatternListState) = .empty,
     pattern_tuple: std.ArrayList(PatternTupleState) = .empty,
@@ -2783,6 +3067,35 @@ fn readQualificationChain(self: *Parser, mode: QualificationMode) std.mem.Alloca
         .qualifiers = qualifiers,
         .final_token = final_token,
         .is_upper = is_upper,
+    };
+}
+
+/// Parses the name of a where alias reference (e.g. the `.Json.Decodable` of
+/// `where [a.Json.Decodable]`). Unlike `readQualificationChain` this starts at
+/// the dot segment following the receiving type variable, so the receiver never
+/// becomes a module qualifier.
+fn readWhereAliasQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationResult {
+    std.debug.assert(self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent);
+
+    const scratch_top = self.store.scratchTokenTop();
+    var final_token = self.pos;
+    self.advance();
+
+    while (true) {
+        switch (self.peek()) {
+            .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                try self.store.addScratchToken(final_token);
+                final_token = self.pos;
+                self.advance();
+            },
+            else => break,
+        }
+    }
+
+    return QualificationResult{
+        .qualifiers = try self.store.tokenSpanFrom(scratch_top),
+        .final_token = final_token,
+        .is_upper = true,
     };
 }
 
@@ -3176,7 +3489,15 @@ fn runExprStatementKernel(
                         });
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
-                    } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
+                    } else if (self.peek() == .LowerIdent and
+                        (self.peekNext() == .Comma or
+                            self.peekNext() == .OpColon or
+                            (self.peekNext() == .CloseCurly and open_syntax.peekExpr() == .expr_record_field)))
+                    {
+                        // A punned single-field record is otherwise ambiguous
+                        // with a do-nothing block. When it is directly nested as
+                        // a record field value, the surrounding record provides
+                        // the same unambiguous nesting as `{ { field } }`.
                         var is_block = false;
                         if (self.peekNext() == .OpColon) {
                             var lookahead_pos = self.pos + 2;
@@ -3527,6 +3848,68 @@ fn runExprStatementKernel(
                     });
                     continue :expr_kernel .collection_next;
                 }
+            } else if (tok == .OpPizza) {
+                // A pipe RHS owns its complete postfix chain. Stop before the
+                // next pipe so pipe chains remain left-associative.
+                if (open_syntax.peekExpr() == .expr_pipe_rhs) {
+                    last_expr = expr_finish_state.expr;
+                    continue :expr_kernel .complete;
+                }
+
+                const op_pos = self.pos;
+                self.advance();
+                const first_token_tag = self.peek();
+                switch (first_token_tag) {
+                    .LowerIdent, .UpperIdent, .OpenRound, .NoSpaceOpenRound => {},
+                    else => {
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .expr_pipe_expects_ident, self.pos);
+                        expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                }
+
+                try open_syntax.pushExpr(open_allocator, .expr_pipe_rhs, ExprPipeAfterRhsState, .{
+                    .start = expr_finish_state.start,
+                    .min_bp = expr_finish_state.min_bp,
+                    .left = expr_finish_state.expr,
+                    .operator = op_pos,
+                });
+
+                if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
+                    const ident_start = self.pos;
+                    const qual_result = try self.readQualificationChain(.expression_value_boundary);
+                    self.pos = qual_result.final_token + 1;
+                    const is_tag = if (qual_result.qualifiers.span.len == 0)
+                        first_token_tag == .UpperIdent
+                    else
+                        qual_result.is_upper;
+                    const rhs = if (is_tag)
+                        try self.store.addExpr(.{ .tag = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } })
+                    else
+                        try self.store.addExpr(.{ .ident = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+                    expr_finish_state = .{ .start = ident_start, .min_bp = 100, .expr = rhs };
+                    continue :expr_kernel .suffix;
+                }
+
+                // Like the legacy arrow, parentheses around a pipe target are
+                // grouping syntax rather than a one-element tuple. Once the
+                // grouped target closes, postfix calls and access still belong
+                // to the pipe RHS.
+                const inner_start = self.pos;
+                self.advance();
+                try open_syntax.pushExpr(open_allocator, .expr_pipe_inner, ExprPipeInnerState, .{
+                    .start = inner_start,
+                });
+                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                continue :expr_kernel .prefix;
             } else if (tok_int <= @intFromEnum(Token.Tag.OpEquals)) {
                 const bp = getTokenBPInRange(tok);
                 if (bp.left == 0) {
@@ -3575,6 +3958,12 @@ fn runExprStatementKernel(
                 }
                 // Not an expression suffix.
             } else if (tok_int <= @intFromEnum(Token.Tag.OpFatArrow)) {
+                // Unlike `->`, `|>` parses postfix access/call syntax as part
+                // of its RHS. An arrow after that RHS starts outside the pipe.
+                if (open_syntax.peekExpr() == .expr_pipe_rhs) {
+                    last_expr = expr_finish_state.expr;
+                    continue :expr_kernel .complete;
+                }
                 if (expr_match_guard_depth != 0) {
                     last_expr = expr_finish_state.expr;
                     continue :expr_kernel .complete;
@@ -3684,6 +4073,30 @@ fn runExprStatementKernel(
                             .rhs = completed,
                         };
                         continue :expr_kernel .arrow_app_next;
+                    },
+                    .expr_pipe_rhs => {
+                        const state = open_syntax.popExprPayload(.expr_pipe_rhs, ExprPipeAfterRhsState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .arrow_call = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .operator = state.operator,
+                            .left = state.left,
+                            .right = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_pipe_inner => {
+                        const state = open_syntax.popExprPayload(.expr_pipe_inner, ExprPipeInnerState);
+                        last_expr = null;
+                        if (self.peek() != .CloseRound) {
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
+                            expr_finish_state = .{ .start = state.start, .min_bp = 100, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
+                        self.advance();
+                        expr_finish_state = .{ .start = state.start, .min_bp = 100, .expr = completed };
+                        continue :expr_kernel .suffix;
                     },
                     .expr_record_ext => {
                         const state = open_syntax.popExprPayload(.expr_record_ext, ExprRecordExtState);
@@ -4084,6 +4497,12 @@ fn runExprStatementKernel(
                                 .region = .{ .start = apply_state.start, .end = self.pos },
                             } });
                             self.store.setCollectionLayout(expr, layout);
+                            // A direct target call makes the following `?` apply
+                            // to the completed pipe rather than to its RHS.
+                            if (self.peek() == .NoSpaceOpQuestion and open_syntax.peekExpr() == .expr_pipe_rhs) {
+                                last_expr = expr;
+                                continue :expr_kernel .complete;
+                            }
                             expr_finish_state = .{ .start = apply_state.start, .min_bp = apply_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
@@ -4716,6 +5135,16 @@ fn runExprStatementKernel(
                         } });
                         continue :expr_kernel .type_complete;
                     },
+                    .where_clause_alias => {
+                        const state = open_syntax.popTypePayload(.where_clause_alias, WhereClauseAliasState);
+                        last_type_anno = null;
+                        try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_alias = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .alias = completed,
+                            .var_tok = state.var_tok,
+                        } }));
+                        continue :expr_kernel .where_after_clause;
+                    },
                     .where_clause_type => {
                         const state = open_syntax.popTypePayload(.where_clause_type, WhereClauseTypeState);
                         last_type_anno = null;
@@ -5114,21 +5543,45 @@ fn runExprStatementKernel(
 
                 const name_tok = self.pos;
                 switch (self.peek()) {
-                    .NoSpaceDotLowerIdent, .DotLowerIdent, .NoSpaceDotUpperIdent, .DotUpperIdent => self.advance(),
+                    .NoSpaceDotLowerIdent, .DotLowerIdent => self.advance(),
+                    .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                        // A where alias reference. Its name is read as an
+                        // ordinary type name so that module qualification and
+                        // arguments resolve the way they do everywhere else.
+                        const qual_result = try self.readWhereAliasQualificationChain();
+                        self.pos = qual_result.final_token + 1;
+                        const alias_anno = try self.store.addTypeAnno(.{ .ty = .{
+                            .region = .{ .start = name_tok, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+                        if (self.collect_type_dependencies) {
+                            try self.recordTypeDependencyFromQualifiedTokens(qual_result.qualifiers, qual_result.final_token);
+                        }
+
+                        if (self.peek() == .NoSpaceOpenRound) {
+                            self.advance();
+                            const scratch_top = self.store.scratchTypeAnnoTop();
+                            try self.store.addScratchTypeAnno(alias_anno);
+                            try open_syntax.pushType(open_allocator, .where_clause_alias, WhereClauseAliasState, .{
+                                .start = start,
+                                .var_tok = var_tok,
+                            });
+                            type_apply_state = .{ .start = name_tok, .scratch_top = scratch_top, .looking_for_args = .looking_for_args };
+                            continue :expr_kernel .type_apply_next;
+                        }
+
+                        try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_alias = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .alias = alias_anno,
+                            .var_tok = var_tok,
+                        } }));
+                        continue :expr_kernel .where_after_clause;
+                    },
                     else => {
                         try self.store.addScratchWhereClause(try self.pushMalformed(AST.WhereClause.Idx, .where_expected_method_or_alias_name, start));
                         continue :expr_kernel .where_after_clause;
                     },
-                }
-
-                const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
-                if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
-                    try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_alias = .{
-                        .region = .{ .start = start, .end = self.pos },
-                        .name_tok = name_tok,
-                        .var_tok = var_tok,
-                    } }));
-                    continue :expr_kernel .where_after_clause;
                 }
 
                 if (self.peek() != .OpColon) {
@@ -5220,6 +5673,21 @@ fn runExprStatementKernel(
                         };
                         continue :expr_kernel .statement_type_decl_finish;
                     },
+                    .where_statement_where_alias => {
+                        const state = open_syntax.popWherePayload(.where_statement_where_alias, StatementWhereAliasAfterWhereState);
+                        const type_dependencies = self.decl_index.typeDependencySpanFrom(state.type_dependencies_start);
+                        self.collect_type_dependencies = state.was_collecting_type_dependencies;
+                        statement_type_decl_ready_state = .{
+                            .start = state.start,
+                            .header = state.header,
+                            .anno = state.receiver,
+                            .kind = .where_alias,
+                            .where_clause = completed,
+                            .type_dependencies = type_dependencies,
+                            .type_path = state.type_path,
+                        };
+                        continue :expr_kernel .statement_type_decl_finish;
+                    },
                 }
             }
             unreachable;
@@ -5281,6 +5749,56 @@ fn runExprStatementKernel(
                 if (tok == .LowerIdent or tok == .NamedUnderscore) {
                     const start = self.pos;
                     const next_tok = self.peekNext();
+                    if (tok == .LowerIdent and self.whereAliasDeclFollows()) {
+                        const var_tok = self.pos;
+                        self.advance();
+                        const header = try self.parseTypeHeaderTokens(.dotted_upper_ident);
+                        const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
+                        if (header_node.tag == .malformed) {
+                            self.recoverMalformedTypeDeclLine(start);
+                            const reason: AST.Diagnostic.Tag = @enumFromInt(header_node.data.lhs);
+                            last_statement = try self.store.addMalformed(AST.Statement.Idx, reason, .{ .start = start, .end = self.pos });
+                            continue :expr_kernel .statement_complete;
+                        }
+
+                        const type_path = blk_path: {
+                            const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
+                            const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
+                            const scope_idx = self.decl_index.currentScope() orelse break :blk_path null;
+                            break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
+                        };
+
+                        // `whereAliasDeclFollows` already checked for the colon.
+                        std.debug.assert(self.peek() == .OpColon);
+                        self.advance();
+                        if (self.peek() != .KwWhere) {
+                            last_statement = try self.pushMalformed(AST.Statement.Idx, .where_alias_expected_where, self.pos);
+                            continue :expr_kernel .statement_complete;
+                        }
+
+                        // The receiver is the type the constraints are declared
+                        // against, so it stands in as the declaration's type.
+                        const receiver = try self.store.addTypeAnno(.{ .ty_var = .{
+                            .tok = var_tok,
+                            .region = .{ .start = var_tok, .end = var_tok + 1 },
+                        } });
+
+                        const type_dependencies_start = self.decl_index.typeDependencyTop();
+                        const was_collecting_type_dependencies = self.collect_type_dependencies;
+                        self.collect_type_dependencies = true;
+                        const where_start = self.pos;
+                        self.advance();
+                        try open_syntax.pushWhere(open_allocator, .where_statement_where_alias, StatementWhereAliasAfterWhereState, .{
+                            .start = start,
+                            .header = header,
+                            .receiver = receiver,
+                            .type_dependencies_start = type_dependencies_start,
+                            .was_collecting_type_dependencies = was_collecting_type_dependencies,
+                            .type_path = type_path,
+                        });
+                        where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
+                        continue :expr_kernel .where_start;
+                    }
                     if (next_tok == .OpAssign) {
                         self.advance();
                         const patt_idx = try self.store.addPattern(.{ .ident = .{
@@ -5366,7 +5884,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     }
 
-                    const header = try self.parseTypeHeaderTokens();
+                    const header = try self.parseTypeHeaderTokens(.upper_ident);
                     const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
                     if (header_node.tag == .malformed) {
                         self.recoverMalformedTypeDeclLine(start);
@@ -5634,11 +6152,16 @@ fn runExprStatementKernel(
                 }
 
                 const type_decl_state = open_syntax.popAssociatedPayload(.statement_type_decl_associated, TypeDeclAssociatedState);
-                if (type_decl_state.kind == .alias) {
-                    try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
+                switch (type_decl_state.kind) {
+                    .alias => try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
                         .start = type_decl_state.dot_pos,
                         .end = type_decl_state.dot_pos + 1,
-                    });
+                    }),
+                    .where_alias => try self.pushDiagnostic(.where_alias_cannot_have_associated, .{
+                        .start = type_decl_state.dot_pos,
+                        .end = type_decl_state.dot_pos + 1,
+                    }),
+                    .nominal, .@"opaque" => {},
                 }
                 const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
                     .header = type_decl_state.header,

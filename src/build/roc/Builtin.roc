@@ -1,4 +1,62 @@
 Builtin :: [].{
+	# A format implements the container protocol below to be usable with derived
+	# parsers and encoders. Every method is resolved per encoding type, so a
+	# format only needs the methods the shapes its users parse actually reach:
+	# a format with no tuple syntax simply omits parse_tuple_*, and using a
+	# tuple with it is a compile-time error rather than a runtime one.
+	#
+	# Containers come in two kinds.
+	#
+	# Fixed-arity sequences (tuples, and the payloads of a tag) have an arity
+	# the shape already fixes, so the format never decides when they end. It
+	# receives the count and returns plain states:
+	#
+	#     parse_tuple_start : encoding, state, U64 -> Try(state, err)
+	#     parse_tuple_next  : encoding, state, U64, U64 -> Try(state, err)
+	#     parse_tuple_end   : encoding, state, U64 -> Try(state, err)
+	#
+	# parse_tuple_next runs before every item after the first and receives
+	# that item's zero-based index along with the total. Because the format
+	# knows the expected arity, it is the one that reports an arity mismatch,
+	# at the position where it can say what it actually found.
+	#
+	# Variable-length containers (lists, sets, records, dicts) begin with a
+	# start method that reports whether the format knows the entry count up
+	# front:
+	#
+	#     parse_list_start : encoding, state
+	#         -> Try([Counted({ len : U64, rest : state }), Uncounted(state)], err)
+	#
+	# Counted means the driver reads exactly len entries and preallocates,
+	# calling nothing between one entry and the next. It still calls whatever
+	# reads an entry itself: parse_record_field for a record's name, and
+	# parse_dict_after_key for whatever sits between a key and its value. A
+	# length-prefixed binary format returns Counted and needs no state of its
+	# own to track where it is. A format that is both length-prefixed and
+	# separated must return Uncounted and count in its own state, which keeps
+	# the counted path free of between-entry calls.
+	#
+	# Uncounted drives an event loop instead. For lists:
+	#
+	#     parse_list_next       : encoding, state -> Try([Item(state), Done(state)], err)
+	#     parse_list_after_item : encoding, state -> Try([Continue(state), Done(state)], err)
+	#
+	# Records use parse_record_start, then parse_record_field to read a field
+	# name, then parse_record_after_field. A field event may also be Continue,
+	# which means the format consumed an entry itself and the cursor is already
+	# at the next boundary; that is how a format skips entries it can rule out
+	# without tokenizing them. Dicts use parse_dict_start, parse_dict_next,
+	# parse_dict_after_key between a key and its value, and
+	# parse_dict_after_entry.
+	#
+	# A dict key that the format renders as a key string — a Str, a Bool, a
+	# number, or a tag union whose tags all lack payloads — is read and written
+	# by the parse_key_* and encode_key_* methods. Any other key is read and
+	# written by the key type's own codec, after parse_key_start or
+	# encode_key_start opens the key position. A format whose key position only
+	# holds strings, as JSON's does, implements the key-string methods and not
+	# those two, so a dict keyed by a record is rejected against that format
+	# rather than by a rule every format shares.
 	Encoding :: {}.{
 		# Compiler-generated structural record field-name metadata used by derived
 		# parsers. The phantom _shape ties a FieldName handle to the exact
@@ -89,14 +147,23 @@ Builtin :: [].{
 			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
 			parse_null = |encoding, state| JsonEncoding.parse_null(encoding, state)
 
-			parse_array_start : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
-			parse_array_start = |encoding, state| JsonEncoding.parse_array_start(encoding, state)
+			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
+			parse_list_start = |encoding, state| JsonEncoding.parse_list_start(encoding, state)
 
-			parse_array_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str)])
-			parse_array_next = |encoding, state| JsonEncoding.parse_array_next(encoding, state)
+			parse_list_next : JsonEncoding, JsonState -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_next = |encoding, state| JsonEncoding.parse_list_next(encoding, state)
 
-			parse_array_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
-			parse_array_after_element = |encoding, state| JsonEncoding.parse_array_after_element(encoding, state)
+			parse_list_after_item : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_after_item = |encoding, state| JsonEncoding.parse_list_after_item(encoding, state)
+
+			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_start = |encoding, state, len| JsonEncoding.parse_tuple_start(encoding, state, len)
+
+			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_next = |encoding, state, index, len| JsonEncoding.parse_tuple_next(encoding, state, index, len)
+
+			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_end = |encoding, state, len| JsonEncoding.parse_tuple_end(encoding, state, len)
 
 			encode_str : JsonEncoding, Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_str = |_, value, state| JsonEncoding.encode_str(value, state)
@@ -154,10 +221,13 @@ Builtin :: [].{
 			encode_record = |_, state, count, write_fields| JsonEncoding.encode_record(state, count, write_fields)
 
 			encode_tuple : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
-			encode_tuple = |_, state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
+			encode_tuple = |_, state, count, write_items| JsonEncoding.encode_tuple(state, count, write_items)
 
 			encode_list : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
-			encode_list = |_, state, count, write_elements| JsonEncoding.encode_list(state, count, write_elements)
+			encode_list = |_, state, count, write_items| JsonEncoding.encode_list(state, count, write_items)
+
+			encode_dict : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_dict = |_, state, count, write_entries| JsonEncoding.encode_dict(state, count, write_entries)
 
 			to_str : a -> Str
 				where [
@@ -276,30 +346,32 @@ Builtin :: [].{
 				}
 			}
 
-			parse_array_start_from_json : Str -> Try(JsonState, [InvalidJson(Str), ..])
-			parse_array_start_from_json = |raw| {
+			## A JSON array never declares its item count up front, so list
+			## parsing always runs in Uncounted mode.
+			parse_list_start_from_json : Str -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_list_start_from_json = |raw| {
 				trimmed = json_trim_start(raw)
 
 				if Str.starts_with(trimmed, "[") {
-					Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "["))))
+					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "[")))))
 				} else {
 					Err(Json.invalid_json)
 				}
 			}
 
-			parse_array_next_from_json : Str -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_array_next_from_json = |raw| {
+			parse_list_next_from_json : Str -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_next_from_json = |raw| {
 				trimmed = json_trim_start(raw)
 
 				if Str.starts_with(trimmed, "]") {
 					Ok(Done(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "]")))))
 				} else {
-					Ok(Element(JsonState.Input(trimmed)))
+					Ok(Item(JsonState.Input(trimmed)))
 				}
 			}
 
-			parse_array_after_element_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_array_after_element_from_json = |encoding, raw| {
+			parse_list_after_item_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_after_item_from_json = |encoding, raw| {
 				trimmed = json_trim_start(raw)
 
 				if Str.starts_with(trimmed, "]") {
@@ -319,6 +391,66 @@ Builtin :: [].{
 				} else {
 					Err(Json.invalid_json)
 				}
+			}
+
+			## JSON writes tuples as arrays. Because the arity is known, a
+			## mismatch is detected here rather than by the driver, so the error
+			## can point at the item position that actually disagreed.
+			parse_tuple_start_from_json : Str, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_start_from_json = |raw, len| {
+				trimmed = json_trim_start(raw)
+
+				if !Str.starts_with(trimmed, "[") {
+					return Err(Json.invalid_json)
+				}
+
+				after_open = json_trim_start(Str.drop_prefix(trimmed, "["))
+
+				if len == 0 {
+					if Str.starts_with(after_open, "]") {
+						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_open, "]"))))
+					} else {
+						Err(Json.invalid_json)
+					}
+				} else if Str.starts_with(after_open, "]") {
+					Err(Json.invalid_json)
+				} else {
+					Ok(JsonState.Input(after_open))
+				}
+			}
+
+			parse_tuple_next_from_json : Str -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_next_from_json = |raw| {
+				trimmed = json_trim_start(raw)
+
+				if !Str.starts_with(trimmed, ",") {
+					return Err(Json.invalid_json)
+				}
+
+				Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ","))))
+			}
+
+			parse_tuple_end_from_json : JsonEncoding, Str, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_end_from_json = |encoding, raw, len| {
+				trimmed = json_trim_start(raw)
+
+				if len == 0 {
+					return Ok(JsonState.Input(trimmed))
+				}
+
+				if Str.starts_with(trimmed, "]") {
+					return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "]"))))
+				}
+
+				if Str.starts_with(trimmed, ",") and JsonEncoding.allows_trailing_commas(encoding) {
+					after_comma = json_trim_start(Str.drop_prefix(trimmed, ","))
+
+					if Str.starts_with(after_comma, "]") {
+						return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "]"))))
+					}
+				}
+
+				Err(Json.invalid_json)
 			}
 
 			parse_json_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
@@ -421,7 +553,7 @@ Builtin :: [].{
 					if trimmed.point > 21 or trimmed.point < -18 {
 						Err(BadNumStr)
 					} else {
-						normalized = Json.normalize_json_dec_digits(negative, trimmed.digits, trimmed.digits_len, trimmed.point)?
+						normalized = Json.normalize_json_dec_digits(negative, trimmed.digits, trimmed.point)?
 						dec_from_str(normalized)
 					}
 				}
@@ -429,9 +561,7 @@ Builtin :: [].{
 
 			json_dec_digits_are_zero : Str -> Bool
 			json_dec_digits_are_zero = |digits| {
-				bytes = Str.to_utf8(digits)
-
-				for byte in bytes {
+				for byte in Str.iter_utf8(digits) {
 					if byte != 48 {
 						return False
 					}
@@ -440,25 +570,24 @@ Builtin :: [].{
 				True
 			}
 
-			trim_json_dec_leading_zeros : Str, I64 -> { digits : Str, digits_len : U64, point : I64 }
+			trim_json_dec_leading_zeros : Str, I64 -> { digits : Str, point : I64 }
 			trim_json_dec_leading_zeros = |digits, point| {
-				bytes = Str.to_utf8(digits)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(digits)
 				var $index = 0
 
-				while $index < len and list_get_unsafe(bytes, $index) == 48 {
+				while $index < len and str_get_utf8_byte_unsafe(digits, $index) == 48 {
 					$index = $index + 1
 				}
 
 				{
-					digits: Str.from_utf8_lossy(List.drop_first(bytes, $index)),
-					digits_len: len - $index,
+					# the dropped prefix is ASCII zeros, so the cut is a UTF-8 boundary
+					digits: str_drop_first_bytes_unsafe(digits, $index),
 					point: point - $index.to_i64_wrap(),
 				}
 			}
 
-			normalize_json_dec_digits : Bool, Str, U64, I64 -> Try(Str, [BadNumStr])
-			normalize_json_dec_digits = |negative, digits, digits_len, point| {
+			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr])
+			normalize_json_dec_digits = |negative, digits, point| {
 				sign = if negative "-" else ""
 
 				if point <= 0 {
@@ -472,52 +601,77 @@ Builtin :: [].{
 					)
 				} else {
 					point_u64 = point.to_u64_wrap()
+					digits_len = Str.count_utf8_bytes(digits)
 
 					if point_u64 >= digits_len {
 						zero_count = point_u64 - digits_len
 						Ok(Str.concat(sign, Str.concat(digits, Str.repeat("0", zero_count))))
 					} else {
-						bytes = Str.to_utf8(digits)
-						before = Str.from_utf8_lossy(List.take_first(bytes, point_u64))
-						after = Str.from_utf8_lossy(List.drop_first(bytes, point_u64))
+						# digits holds only ASCII digits, so any cut is a UTF-8 boundary
+						before = str_substring_unsafe(digits, 0, point_u64)
+						after = str_drop_first_bytes_unsafe(digits, point_u64)
 
 						Ok(Str.concat(sign, Str.concat(before, Str.concat(".", after))))
 					}
 				}
 			}
 
-			parse_json_key_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try(a, [InvalidJson(Str), ..])
-			parse_json_key_unsigned_int = |key, parse_num|
-				if Json.is_json_unsigned_int_literal(key) {
-					match parse_num(key) {
-						Ok(value) => Ok(value)
-						Err(_) => Err(Json.invalid_json)
-					}
-				} else {
-					Err(Json.invalid_json)
+			## Read one quoted object key at the cursor, leaving the cursor
+			## just past the closing quote.
+			take_json_key : Str -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			take_json_key = |raw| {
+				trimmed = json_trim_start(raw)
+
+				if !Str.starts_with(trimmed, "\"") {
+					return Err(Json.invalid_json)
 				}
 
-			parse_json_key_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try(a, [InvalidJson(Str), ..])
-			parse_json_key_signed_int = |key, parse_num|
-				if Json.is_json_signed_int_literal(key) {
-					match parse_num(key) {
-						Ok(value) => Ok(value)
-						Err(_) => Err(Json.invalid_json)
-					}
-				} else {
-					Err(Json.invalid_json)
-				}
+				parts = Json.split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
 
-			parse_json_key_number : Str, (Str -> Try(a, [BadNumStr])) -> Try(a, [InvalidJson(Str), ..])
-			parse_json_key_number = |key, parse_num|
-				if Json.is_json_number(key) {
-					match parse_num(key) {
-						Ok(value) => Ok(value)
+				Ok({ value: parts.value, rest: JsonState.Input(json_trim_start(parts.after)) })
+			}
+
+			parse_json_key_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_unsigned_int = |raw, parse_num| {
+				parts = Json.take_json_key(raw)?
+
+				if Json.is_json_unsigned_int_literal(parts.value) {
+					match parse_num(parts.value) {
+						Ok(value) => Ok({ value, rest: parts.rest })
 						Err(_) => Err(Json.invalid_json)
 					}
 				} else {
 					Err(Json.invalid_json)
 				}
+			}
+
+			parse_json_key_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_signed_int = |raw, parse_num| {
+				parts = Json.take_json_key(raw)?
+
+				if Json.is_json_signed_int_literal(parts.value) {
+					match parse_num(parts.value) {
+						Ok(value) => Ok({ value, rest: parts.rest })
+						Err(_) => Err(Json.invalid_json)
+					}
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
+
+			parse_json_key_number : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_number = |raw, parse_num| {
+				parts = Json.take_json_key(raw)?
+
+				if Json.is_json_number(parts.value) {
+					match parse_num(parts.value) {
+						Ok(value) => Ok({ value, rest: parts.rest })
+						Err(_) => Err(Json.invalid_json)
+					}
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
 
 			encode_json_number : Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_json_number = |value, state|
@@ -545,8 +699,26 @@ Builtin :: [].{
 				)
 			}
 
-			write_sequence_element : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
-			write_sequence_element = |state, write_value| {
+			write_dict_entry : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
+			write_dict_entry = |state, write_key, write_value| {
+				with_comma = if state.needs_comma {
+					u8_append(state.output, 44)
+				} else {
+					state.output
+				}
+
+				keyed = write_key(JsonEncodeState.{ output: with_comma })?
+				encoded = write_value(JsonEncodeState.{ output: u8_append(keyed.output, 58) })?
+				Ok(
+					JsonContainerEncodeState.{
+						output: encoded.output,
+						needs_comma: True,
+					},
+				)
+			}
+
+			write_sequence_item : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
+			write_sequence_item = |state, write_value| {
 				output = if state.needs_comma {
 					u8_append(state.output, 44)
 				} else {
@@ -564,13 +736,12 @@ Builtin :: [].{
 
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 				var $out = u8_list_reserve(out, len)
 				var $index = 0
 
 				while $index < len {
-					$out = u8_append($out, list_get_unsafe(bytes, $index))
+					$out = u8_append($out, str_get_utf8_byte_unsafe(value, $index))
 					$index = $index + 1
 				}
 
@@ -579,15 +750,14 @@ Builtin :: [].{
 
 			append_json_quoted_string : List(U8), Str -> List(U8)
 			append_json_quoted_string = |out, value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 				var $out = u8_list_reserve(out, len + 2)
 				var $index = 0
 
 				$out = u8_append($out, 34)
 
 				while $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 					$out = Json.append_json_string_byte($out, byte)
 					$index = $index + 1
 				}
@@ -649,65 +819,70 @@ Builtin :: [].{
 					value + 87
 				}
 
-			parse_record_field_from_object : JsonEncoding,
-			Str -> Try(
+			parse_record_start_from_json : Str -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_record_start_from_json = |raw| {
+				trimmed = json_trim_start(raw)
+
+				if Str.starts_with(trimmed, "{") {
+					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "{")))))
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
+
+			## Called with the input at an entry boundary: either at a field name
+			## or at the closing brace.
+			parse_record_field_from_json : Str -> Try(
 				[
 					Field({ field : FieldName(_shape), rest : JsonState }),
 					TryField({ name : Str, rest : JsonState }),
 					TryFieldCaseless({ name : Str, rest : JsonState }),
-					Continue({ rest : JsonState }),
-					Done({ rest : JsonState }),
+					Continue(JsonState),
+					Done(JsonState),
 				],
 				[InvalidJson(Str), ..],
 			)
-			parse_record_field_from_object = |encoding, raw| {
+			parse_record_field_from_json = |raw| {
 				remaining = json_trim_start(raw)
 
-				if Str.starts_with(remaining, "{") {
-					return Json.parse_record_field_after_object_start(encoding, json_trim_start(Str.drop_prefix(remaining, "{")))
-				}
-
-				Json.parse_record_field_after_value(encoding, remaining)
-			}
-
-			parse_record_field_after_object_start = |encoding, remaining| {
 				if Str.starts_with(remaining, "}") {
 					after_record = json_trim_start(Str.drop_prefix(remaining, "}"))
-					return Ok(Done({ rest: JsonState.Input(after_record) }))
+					return Ok(Done(JsonState.Input(after_record)))
 				}
 
-				if Str.starts_with(remaining, ",") {
+				key_parts = Json.parse_json_object_key(remaining)?
+				Ok(TryField({ name: key_parts.name, rest: key_parts.rest }))
+			}
+
+			parse_record_after_field_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_record_after_field_from_json = |encoding, raw| {
+				trimmed = json_trim_start(raw)
+
+				if Str.starts_with(trimmed, "}") {
+					after_record = json_trim_start(Str.drop_prefix(trimmed, "}"))
+					return Ok(Done(JsonState.Input(after_record)))
+				}
+
+				if !Str.starts_with(trimmed, ",") {
 					return Err(Json.invalid_json)
 				}
 
-				Json.parse_record_field_start(encoding, remaining)
-			}
-
-			parse_record_field_after_value = |encoding, remaining| {
-				if Str.starts_with(remaining, "}") {
-					after_record = json_trim_start(Str.drop_prefix(remaining, "}"))
-					return Ok(Done({ rest: JsonState.Input(after_record) }))
-				}
-
-				if !Str.starts_with(remaining, ",") {
-					return Err(Json.invalid_json)
-				}
-
-				after_comma = json_trim_start(Str.drop_prefix(remaining, ","))
+				after_comma = json_trim_start(Str.drop_prefix(trimmed, ","))
 
 				if Str.starts_with(after_comma, "}") {
 					if JsonEncoding.allows_trailing_commas(encoding) {
 						after_record = json_trim_start(Str.drop_prefix(after_comma, "}"))
-						return Ok(Done({ rest: JsonState.Input(after_record) }))
+						return Ok(Done(JsonState.Input(after_record)))
 					} else {
 						return Err(Json.invalid_json)
 					}
 				}
 
-				Json.parse_record_field_start(encoding, after_comma)
+				Ok(Continue(JsonState.Input(after_comma)))
 			}
 
-			parse_record_field_start = |_, remaining| {
+			parse_json_object_key : Str -> Try({ name : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_object_key = |remaining| {
 				if !Str.starts_with(remaining, "\"") {
 					return Err(Json.invalid_json)
 				}
@@ -721,9 +896,8 @@ Builtin :: [].{
 				}
 
 				after_colon = json_trim_start(Str.drop_prefix(after_key, ":"))
-				rest = JsonState.Input(after_colon)
 
-				Ok(TryField({ name: key, rest }))
+				Ok({ name: key, rest: JsonState.Input(after_colon) })
 			}
 
 			snake_to_camel : Str -> Str
@@ -971,6 +1145,10 @@ Builtin :: [].{
 			finish_string_tag_payloads = |state, count|
 				if count == 0 Ok(state) else Err(Json.invalid_json)
 
+			## A multi-payload tag writes its payloads as a JSON array, which is
+			## a fixed-arity sequence, so it reads back through the tuple
+			## methods. A single payload is written bare, and a payload-free tag
+			## is written as an empty object.
 			start_object_tag_payloads : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			start_object_tag_payloads = |encoding, state, count|
 				if count == 0 {
@@ -983,26 +1161,15 @@ Builtin :: [].{
 				} else if count == 1 {
 					Ok(state)
 				} else {
-					started = JsonEncoding.parse_array_start(encoding, state)?
-					match JsonEncoding.parse_array_next(encoding, started)? {
-						Element(payload_state) => Ok(payload_state)
-						Done(_) => Err(Json.invalid_json)
-					}
+					JsonEncoding.parse_tuple_start(encoding, state, count)
 				}
 
 			next_object_tag_payload : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str), ..])
-			next_object_tag_payload = |encoding, state, _, count|
+			next_object_tag_payload = |encoding, state, index, count|
 				if count <= 1 {
 					Err(Json.invalid_json)
 				} else {
-					match JsonEncoding.parse_array_after_element(encoding, state)? {
-						Continue(next_state) =>
-							match JsonEncoding.parse_array_next(encoding, next_state)? {
-								Element(payload_state) => Ok(payload_state)
-								Done(_) => Err(Json.invalid_json)
-							}
-						Done(_) => Err(Json.invalid_json)
-					}
+					JsonEncoding.parse_tuple_next(encoding, state, index, count)
 				}
 
 			finish_object_tag_payloads : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
@@ -1010,10 +1177,7 @@ Builtin :: [].{
 				if count <= 1 {
 					Ok(state)
 				} else {
-					match JsonEncoding.parse_array_after_element(encoding, state)? {
-						Done(done_state) => Ok(done_state)
-						Continue(_) => Err(Json.invalid_json)
-					}
+					JsonEncoding.parse_tuple_end(encoding, state, count)
 				}
 
 			finish_tag_payload : JsonEncoding, a, Str -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
@@ -1072,8 +1236,7 @@ Builtin :: [].{
 
 			is_json_number : Str -> Bool
 			is_json_number = |value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 
 				if len == 0 {
 					return False
@@ -1081,7 +1244,7 @@ Builtin :: [].{
 
 				var $index = 0
 
-				first = list_get_unsafe(bytes, $index)
+				first = str_get_utf8_byte_unsafe(value, $index)
 
 				if first == 45 {
 					$index = $index + 1
@@ -1091,7 +1254,7 @@ Builtin :: [].{
 					}
 				}
 
-				int_first = list_get_unsafe(bytes, $index)
+				int_first = str_get_utf8_byte_unsafe(value, $index)
 
 				if int_first == 48 {
 					$index = $index + 1
@@ -1099,7 +1262,7 @@ Builtin :: [].{
 					$index = $index + 1
 
 					while $index < len {
-						byte = list_get_unsafe(bytes, $index)
+						byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if Json.is_json_digit(byte) {
 							$index = $index + 1
@@ -1112,7 +1275,7 @@ Builtin :: [].{
 				}
 
 				if $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if byte == 46 {
 						$index = $index + 1
@@ -1121,14 +1284,14 @@ Builtin :: [].{
 							return False
 						}
 
-						first_fraction_byte = list_get_unsafe(bytes, $index)
+						first_fraction_byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if !Json.is_json_digit(first_fraction_byte) {
 							return False
 						}
 
 						while $index < len {
-							fraction_byte = list_get_unsafe(bytes, $index)
+							fraction_byte = str_get_utf8_byte_unsafe(value, $index)
 
 							if Json.is_json_digit(fraction_byte) {
 								$index = $index + 1
@@ -1140,7 +1303,7 @@ Builtin :: [].{
 				}
 
 				if $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if Json.is_json_exponent_marker(byte) {
 						$index = $index + 1
@@ -1149,7 +1312,7 @@ Builtin :: [].{
 							return False
 						}
 
-						exponent_first_byte = list_get_unsafe(bytes, $index)
+						exponent_first_byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if Json.is_json_sign(exponent_first_byte) {
 							$index = $index + 1
@@ -1159,14 +1322,14 @@ Builtin :: [].{
 							}
 						}
 
-						first_exponent_digit = list_get_unsafe(bytes, $index)
+						first_exponent_digit = str_get_utf8_byte_unsafe(value, $index)
 
 						if !Json.is_json_digit(first_exponent_digit) {
 							return False
 						}
 
 						while $index < len {
-							exponent_byte = list_get_unsafe(bytes, $index)
+							exponent_byte = str_get_utf8_byte_unsafe(value, $index)
 
 							if Json.is_json_digit(exponent_byte) {
 								$index = $index + 1
@@ -1300,12 +1463,8 @@ Builtin :: [].{
 								crash "Json scalar splitter invariant violated: ASCII delimiter was not a UTF-8 boundary"
 							}
 						}
-						after = match Str.drop_first_bytes(raw, $index) {
-							Ok(v) => v
-							Err(BadUtf8) => {
-								crash "Json scalar splitter invariant violated: ASCII delimiter was not a UTF-8 boundary"
-							}
-						}
+						# the cut is at an ASCII delimiter, so it is a UTF-8 boundary
+						after = str_drop_first_bytes_unsafe(raw, $index)
 						Ok({ value, after })
 					}
 				} else if $index == 0 {
@@ -1438,22 +1597,49 @@ Builtin :: [].{
 					Input(raw) => Json.parse_json_null(raw)
 				}
 
-			parse_array_start : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
-			parse_array_start = |_, state|
+			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_list_start = |_, state|
 				match state {
-					Input(raw) => Json.parse_array_start_from_json(raw)
+					Input(raw) => Json.parse_list_start_from_json(raw)
 				}
 
-			parse_array_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_array_next = |_, state|
+			parse_list_next : JsonEncoding, JsonState -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_next = |_, state|
 				match state {
-					Input(raw) => Json.parse_array_next_from_json(raw)
+					Input(raw) => Json.parse_list_next_from_json(raw)
 				}
 
-			parse_array_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_array_after_element = |encoding, state|
+			parse_list_after_item : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_after_item = |encoding, state|
 				match state {
-					Input(raw) => Json.parse_array_after_element_from_json(encoding, raw)
+					Input(raw) => Json.parse_list_after_item_from_json(encoding, raw)
+				}
+
+			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_start = |_, state, len|
+				match state {
+					Input(raw) => Json.parse_tuple_start_from_json(raw, len)
+				}
+
+			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_next = |_, state, _, _|
+				match state {
+					Input(raw) => Json.parse_tuple_next_from_json(raw)
+				}
+
+			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_end = |encoding, state, len|
+				match state {
+					Input(raw) => Json.parse_tuple_end_from_json(encoding, raw, len)
+				}
+
+			## A JSON object never declares its entry count up front, so record
+			## parsing always runs in Uncounted mode: the driver learns the end
+			## of the record from parse_record_field or parse_record_after_field.
+			parse_record_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_record_start = |_, state|
+				match state {
+					Input(raw) => Json.parse_record_start_from_json(raw)
 				}
 
 			parse_record_field : JsonEncoding,
@@ -1463,29 +1649,63 @@ Builtin :: [].{
 					Field({ field : FieldName(_shape), rest : JsonState }),
 					TryField({ name : Str, rest : JsonState }),
 					TryFieldCaseless({ name : Str, rest : JsonState }),
-					Continue({ rest : JsonState }),
-					Done({ rest : JsonState }),
+					Continue(JsonState),
+					Done(JsonState),
 				],
 				[InvalidJson(Str), ..],
 			)
-			parse_record_field = |encoding, _, state|
+			parse_record_field = |_, _, state|
 				match state {
-					Input(raw) => Json.parse_record_field_from_object(encoding, raw)
+					Input(raw) => Json.parse_record_field_from_json(raw)
 				}
 
-			parse_object_next : JsonEncoding, JsonState -> Try([Entry({ key : Str, rest : JsonState }), Done({ rest : JsonState })], [InvalidJson(Str), ..])
-			parse_object_next = |encoding, state|
+			parse_record_after_field : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_record_after_field = |encoding, state|
 				match state {
-					Input(raw) =>
-						match Json.parse_record_field_from_object(encoding, raw) {
-							Ok(Field({ field, rest })) => Ok(Entry({ key: FieldName.name(field), rest }))
-							Ok(TryField({ name, rest })) => Ok(Entry({ key: name, rest }))
-							Ok(TryFieldCaseless({ name, rest })) => Ok(Entry({ key: name, rest }))
-							Ok(Continue(_)) => Err(Json.invalid_json)
-							Ok(Done({ rest })) => Ok(Done({ rest: rest }))
-							Err(err) => Err(err)
+					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
+				}
+
+			## A JSON object never declares its entry count up front, so dict
+			## parsing always runs in Uncounted mode.
+			parse_dict_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_start = |_, state|
+				match state {
+					Input(raw) => Json.parse_record_start_from_json(raw)
+				}
+
+			parse_dict_next : JsonEncoding, JsonState -> Try([Entry(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_next = |_, state|
+				match state {
+					Input(raw) => {
+						trimmed = json_trim_start(raw)
+
+						if Str.starts_with(trimmed, "}") {
+							Ok(Done(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "}")))))
+						} else {
+							Ok(Entry(JsonState.Input(trimmed)))
 						}
 					}
+				}
+
+			parse_dict_after_key : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_dict_after_key = |_, state|
+				match state {
+					Input(raw) => {
+						trimmed = json_trim_start(raw)
+
+						if !Str.starts_with(trimmed, ":") {
+							return Err(Json.invalid_json)
+						}
+
+						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ":"))))
+					}
+				}
+
+			parse_dict_after_entry : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_after_entry = |encoding, state|
+				match state {
+					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
+				}
 
 			skip_record_field : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
 			skip_record_field = |encoding, state| Json.skip_json_value(encoding, state)
@@ -1536,14 +1756,23 @@ Builtin :: [].{
 			}
 
 			encode_tuple : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
-			encode_tuple = |state, _, write_elements| {
+			encode_tuple = |state, _, write_items| {
 				started = JsonContainerEncodeState.{ output: u8_append(state.output, 91), needs_comma: False }
-				finished = write_elements(started, Json.write_sequence_element)?
+				finished = write_items(started, Json.write_sequence_item)?
 				Ok(JsonEncodeState.{ output: u8_append(finished.output, 93) })
 			}
 
 			encode_list : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
-			encode_list = |state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
+			encode_list = |state, count, write_items| JsonEncoding.encode_tuple(state, count, write_items)
+
+			## A dict writes as a JSON object. The key is written by its own
+			## thunk, which the key encoders always render as a quoted string.
+			encode_dict : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_dict = |state, _, write_entries| {
+				started = JsonContainerEncodeState.{ output: u8_append(state.output, 123), needs_comma: False }
+				finished = write_entries(started, Json.write_dict_entry)?
+				Ok(JsonEncodeState.{ output: u8_append(finished.output, 125) })
+			}
 
 			encode_str : Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_str = |value, state|
@@ -1637,99 +1866,151 @@ Builtin :: [].{
 					},
 				)
 
-			parse_key_str : JsonEncoding, Str -> Try(Str, [InvalidJson(Str), ..])
-			parse_key_str = |_, key| Ok(key)
-
-			parse_key_bool : JsonEncoding, Str -> Try(Bool, [InvalidJson(Str), ..])
-			parse_key_bool = |_, key|
-				if Str.is_eq(key, "true") {
-					Ok(True)
-				} else if Str.is_eq(key, "false") {
-					Ok(False)
-				} else {
-					Err(Json.invalid_json)
+			## Dict keys arrive as JSON strings, so each key parser reads the
+			## quoted text at the cursor and converts it to the key type.
+			parse_key_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_str = |_, state|
+				match state {
+					Input(raw) => Json.take_json_key(raw)
 				}
 
-			parse_key_u8 : JsonEncoding, Str -> Try(U8, [InvalidJson(Str), ..])
-			parse_key_u8 = |_, key| Json.parse_json_key_unsigned_int(key, u8_from_str)
+			parse_key_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_bool = |_, state|
+				match state {
+					Input(raw) => {
+						parts = Json.take_json_key(raw)?
 
-			parse_key_i8 : JsonEncoding, Str -> Try(I8, [InvalidJson(Str), ..])
-			parse_key_i8 = |_, key| Json.parse_json_key_signed_int(key, i8_from_str)
+						if Str.is_eq(parts.value, "true") {
+							Ok({ value: True, rest: parts.rest })
+						} else if Str.is_eq(parts.value, "false") {
+							Ok({ value: False, rest: parts.rest })
+						} else {
+							Err(Json.invalid_json)
+						}
+					}
+				}
 
-			parse_key_u16 : JsonEncoding, Str -> Try(U16, [InvalidJson(Str), ..])
-			parse_key_u16 = |_, key| Json.parse_json_key_unsigned_int(key, u16_from_str)
+			parse_key_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u8 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u8_from_str)
+				}
 
-			parse_key_i16 : JsonEncoding, Str -> Try(I16, [InvalidJson(Str), ..])
-			parse_key_i16 = |_, key| Json.parse_json_key_signed_int(key, i16_from_str)
+			parse_key_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i8 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i8_from_str)
+				}
 
-			parse_key_u32 : JsonEncoding, Str -> Try(U32, [InvalidJson(Str), ..])
-			parse_key_u32 = |_, key| Json.parse_json_key_unsigned_int(key, u32_from_str)
+			parse_key_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u16 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u16_from_str)
+				}
 
-			parse_key_i32 : JsonEncoding, Str -> Try(I32, [InvalidJson(Str), ..])
-			parse_key_i32 = |_, key| Json.parse_json_key_signed_int(key, i32_from_str)
+			parse_key_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i16 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i16_from_str)
+				}
 
-			parse_key_u64 : JsonEncoding, Str -> Try(U64, [InvalidJson(Str), ..])
-			parse_key_u64 = |_, key| Json.parse_json_key_unsigned_int(key, u64_from_str)
+			parse_key_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u32 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u32_from_str)
+				}
 
-			parse_key_i64 : JsonEncoding, Str -> Try(I64, [InvalidJson(Str), ..])
-			parse_key_i64 = |_, key| Json.parse_json_key_signed_int(key, i64_from_str)
+			parse_key_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i32 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i32_from_str)
+				}
 
-			parse_key_u128 : JsonEncoding, Str -> Try(U128, [InvalidJson(Str), ..])
-			parse_key_u128 = |_, key| Json.parse_json_key_unsigned_int(key, u128_from_str)
+			parse_key_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u64 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u64_from_str)
+				}
 
-			parse_key_i128 : JsonEncoding, Str -> Try(I128, [InvalidJson(Str), ..])
-			parse_key_i128 = |_, key| Json.parse_json_key_signed_int(key, i128_from_str)
+			parse_key_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i64 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i64_from_str)
+				}
 
-			parse_key_dec : JsonEncoding, Str -> Try(Dec, [InvalidJson(Str), ..])
-			parse_key_dec = |_, key| Json.parse_json_key_number(key, Json.dec_from_json_number)
+			parse_key_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u128 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u128_from_str)
+				}
 
-			parse_key_f32 : JsonEncoding, Str -> Try(F32, [InvalidJson(Str), ..])
-			parse_key_f32 = |_, key| Json.parse_json_key_number(key, f32_from_str)
+			parse_key_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i128 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i128_from_str)
+				}
 
-			parse_key_f64 : JsonEncoding, Str -> Try(F64, [InvalidJson(Str), ..])
-			parse_key_f64 = |_, key| Json.parse_json_key_number(key, f64_from_str)
+			parse_key_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_dec = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_number(raw, Json.dec_from_json_number)
+				}
 
-			encode_key_str : JsonEncoding, Str -> Try(Str, _never_fails)
-			encode_key_str = |_, key| Ok(key)
+			parse_key_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_f32 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_number(raw, f32_from_str)
+				}
 
-			encode_key_bool : JsonEncoding, Bool -> Try(Str, _never_fails)
-			encode_key_bool = |_, key| Ok(if key "true" else "false")
+			parse_key_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_f64 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_number(raw, f64_from_str)
+				}
 
-			encode_key_u8 : JsonEncoding, U8 -> Try(Str, _never_fails)
-			encode_key_u8 = |_, key| Ok(json_u8_to_str(key))
+			## A JSON object key is always quoted text, so each key encoder
+			## renders its value and writes it as a JSON string.
+			encode_key_str : JsonEncoding, Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_str = |_, key, state| JsonEncoding.encode_str(key, state)
 
-			encode_key_i8 : JsonEncoding, I8 -> Try(Str, _never_fails)
-			encode_key_i8 = |_, key| Ok(json_i8_to_str(key))
+			encode_key_bool : JsonEncoding, Bool, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_bool = |_, key, state| JsonEncoding.encode_str(if key "true" else "false", state)
 
-			encode_key_u16 : JsonEncoding, U16 -> Try(Str, _never_fails)
-			encode_key_u16 = |_, key| Ok(json_u16_to_str(key))
+			encode_key_u8 : JsonEncoding, U8, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u8 = |_, key, state| JsonEncoding.encode_str(json_u8_to_str(key), state)
 
-			encode_key_i16 : JsonEncoding, I16 -> Try(Str, _never_fails)
-			encode_key_i16 = |_, key| Ok(json_i16_to_str(key))
+			encode_key_i8 : JsonEncoding, I8, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i8 = |_, key, state| JsonEncoding.encode_str(json_i8_to_str(key), state)
 
-			encode_key_u32 : JsonEncoding, U32 -> Try(Str, _never_fails)
-			encode_key_u32 = |_, key| Ok(json_u32_to_str(key))
+			encode_key_u16 : JsonEncoding, U16, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u16 = |_, key, state| JsonEncoding.encode_str(json_u16_to_str(key), state)
 
-			encode_key_i32 : JsonEncoding, I32 -> Try(Str, _never_fails)
-			encode_key_i32 = |_, key| Ok(json_i32_to_str(key))
+			encode_key_i16 : JsonEncoding, I16, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i16 = |_, key, state| JsonEncoding.encode_str(json_i16_to_str(key), state)
 
-			encode_key_u64 : JsonEncoding, U64 -> Try(Str, _never_fails)
-			encode_key_u64 = |_, key| Ok(json_u64_to_str(key))
+			encode_key_u32 : JsonEncoding, U32, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u32 = |_, key, state| JsonEncoding.encode_str(json_u32_to_str(key), state)
 
-			encode_key_i64 : JsonEncoding, I64 -> Try(Str, _never_fails)
-			encode_key_i64 = |_, key| Ok(json_i64_to_str(key))
+			encode_key_i32 : JsonEncoding, I32, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i32 = |_, key, state| JsonEncoding.encode_str(json_i32_to_str(key), state)
 
-			encode_key_u128 : JsonEncoding, U128 -> Try(Str, _never_fails)
-			encode_key_u128 = |_, key| Ok(json_u128_to_str(key))
+			encode_key_u64 : JsonEncoding, U64, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u64 = |_, key, state| JsonEncoding.encode_str(json_u64_to_str(key), state)
 
-			encode_key_i128 : JsonEncoding, I128 -> Try(Str, _never_fails)
-			encode_key_i128 = |_, key| Ok(json_i128_to_str(key))
+			encode_key_i64 : JsonEncoding, I64, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i64 = |_, key, state| JsonEncoding.encode_str(json_i64_to_str(key), state)
 
-			encode_key_dec : JsonEncoding, Dec -> Try(Str, _never_fails)
-			encode_key_dec = |_, key| Ok(json_dec_to_str(key))
+			encode_key_u128 : JsonEncoding, U128, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u128 = |_, key, state| JsonEncoding.encode_str(json_u128_to_str(key), state)
 
-			encode_key_f32 : JsonEncoding, F32 -> Try(Str, [Infinity, NaN, NegativeInfinity])
-			encode_key_f32 = |_, key| {
+			encode_key_i128 : JsonEncoding, I128, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i128 = |_, key, state| JsonEncoding.encode_str(json_i128_to_str(key), state)
+
+			encode_key_dec : JsonEncoding, Dec, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_dec = |_, key, state| JsonEncoding.encode_str(json_dec_to_str(key), state)
+
+			encode_key_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f32 = |_, key, state| {
 				if json_f32_is_nan(key) {
 					Err(NaN)
 				} else if json_f32_is_infinite(key) {
@@ -1739,12 +2020,12 @@ Builtin :: [].{
 						Err(Infinity)
 					}
 				} else {
-					Ok(json_f32_to_str(key))
+					JsonEncoding.encode_str(json_f32_to_str(key), state)
 				}
 			}
 
-			encode_key_f64 : JsonEncoding, F64 -> Try(Str, [Infinity, NaN, NegativeInfinity])
-			encode_key_f64 = |_, key| {
+			encode_key_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f64 = |_, key, state| {
 				if json_f64_is_nan(key) {
 					Err(NaN)
 				} else if json_f64_is_infinite(key) {
@@ -1754,9 +2035,10 @@ Builtin :: [].{
 						Err(Infinity)
 					}
 				} else {
-					Ok(json_f64_to_str(key))
+					JsonEncoding.encode_str(json_f64_to_str(key), state)
 				}
 			}
+
 		}
 
 		HttpHeaderState :: { raw : Str }
@@ -1781,6 +2063,12 @@ Builtin :: [].{
 				}
 			}
 
+			## Header sequences have no opening delimiter and no way to declare a
+			## header count up front, so parsing always starts in Uncounted mode
+			## on the unchanged input.
+			parse_record_start : HttpHeaderEncoding, HttpHeaderState -> Try([Counted({ len : U64, rest : HttpHeaderState }), Uncounted(HttpHeaderState)], [BadHeader, ..])
+			parse_record_start = |_, state| Ok(Uncounted(state))
+
 			parse_record_field : HttpHeaderEncoding,
 			FieldName.FieldNames(_shape),
 			HttpHeaderState -> Try(
@@ -1788,13 +2076,18 @@ Builtin :: [].{
 					Field({ field : FieldName(_shape), rest : HttpHeaderState }),
 					TryField({ name : Str, rest : HttpHeaderState }),
 					TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
-					Continue({ rest : HttpHeaderState }),
-					Done({ rest : HttpHeaderState }),
+					Continue(HttpHeaderState),
+					Done(HttpHeaderState),
 				],
 				[BadHeader, ..],
 			)
 			parse_record_field = |_, fields, state|
 				HttpHeader.parse_record_field_from_headers(fields, state.raw)
+
+			## Each header value consumes its own CRLF terminator, so the cursor
+			## is already at the next entry boundary after every field.
+			parse_record_after_field : HttpHeaderEncoding, HttpHeaderState -> Try([Continue(HttpHeaderState), Done(HttpHeaderState)], [BadHeader, ..])
+			parse_record_after_field = |_, state| Ok(Continue(state))
 
 			skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, [BadHeader, ..])
 			skip_record_field = |_, state| {
@@ -1844,14 +2137,14 @@ Builtin :: [].{
 					Field({ field : FieldName(_shape), rest : HttpHeaderState }),
 					TryField({ name : Str, rest : HttpHeaderState }),
 					TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
-					Continue({ rest : HttpHeaderState }),
-					Done({ rest : HttpHeaderState }),
+					Continue(HttpHeaderState),
+					Done(HttpHeaderState),
 				],
 				[BadHeader, ..],
 			)
 			parse_record_field_from_headers = |fields, headers|
 				if Str.is_empty(headers) {
-					Ok(Done({ rest: HttpHeaderState.{ raw: "" } }))
+					Ok(Done(HttpHeaderState.{ raw: "" }))
 				} else {
 					line_parts = match Str.split_first(headers, "\r\n") {
 						Ok(parts) => parts
@@ -1859,7 +2152,7 @@ Builtin :: [].{
 					}
 
 					if Str.is_empty(line_parts.before) {
-						Ok(Done({ rest: HttpHeaderState.{ raw: line_parts.after } }))
+						Ok(Done(HttpHeaderState.{ raw: line_parts.after }))
 					} else {
 						match Str.split_first(headers, ":") {
 							Ok({ before: name, after: value_start }) => {
@@ -1870,10 +2163,10 @@ Builtin :: [].{
 									Err(BadHeader)
 								} else {
 									if name_len < FieldName.FieldNames.shortest_name(fields) {
-										Ok(Continue({ rest: HttpHeaderState.{ raw: line_parts.after } }))
+										Ok(Continue(HttpHeaderState.{ raw: line_parts.after }))
 									} else {
 										if name_len > FieldName.FieldNames.longest_name(fields) {
-											Ok(Continue({ rest: HttpHeaderState.{ raw: line_parts.after } }))
+											Ok(Continue(HttpHeaderState.{ raw: line_parts.after }))
 										} else {
 											Ok(
 												TryFieldCaseless({
@@ -2234,17 +2527,13 @@ Builtin :: [].{
 		## returns `Err(BadUtf8)`. Valid slices do not allocate.
 		drop_first_bytes : Str, U64 -> Try(Str, [BadUtf8, ..])
 		drop_first_bytes = |str, count| {
-			len = Str.count_utf8_bytes(str)
-			if count >= len {
-				Ok("")
-			} else {
+			if count < Str.count_utf8_bytes(str) {
 				byte = str_get_utf8_byte_unsafe(str, count)
 				if byte >= 128 and byte < 192 {
-					Err(BadUtf8)
-				} else {
-					Ok(str_substring_unsafe(str, count, len - count))
+					return Err(BadUtf8)
 				}
 			}
+			Ok(str_drop_first_bytes_unsafe(str, count))
 		}
 
 		## Drop a byte count from the end of a string. Counts at or beyond the byte
@@ -3035,6 +3324,87 @@ Builtin :: [].{
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
 
+		## Sum the items of an iterator, without collecting them into a list first.
+		## Works for any type that implements `plus` and `default` methods, such as the
+		## numeric types.
+		##
+		## `default` is called only when the iterator is empty; otherwise it is never
+		## called at all. Summing begins at the first item and uses `plus` to combine
+		## the rest, so a single-item iterator returns that item without calling
+		## either method, and `default` does not need to be an identity value for `plus`.
+		## ```roc
+		## expect (1..=4).sum() == 10
+		##
+		## expect [42.I64].iter().sum() == 42
+		##
+		## expect [].iter().sum() == 0.I64
+		## ```
+		sum : Iter(item) -> item
+			where [item.plus : item, item -> item, item.default : item]
+		sum = |iterator| {
+			Item : item
+			match Iter.next(iterator) {
+				Done => Item.default()
+				Skip({ rest }) => Iter.sum(rest)
+				One({ item: first, rest }) => Iter.fold(rest, first, |acc, item| acc + item)
+			}
+		}
+
+		## Multiply the items of an iterator together, or `Err(IterWasEmpty)` if the
+		## iterator is empty. Works for any type that implements `times`.
+		##
+		## Unlike [Iter.sum], this reports an empty iterator instead of answering it.
+		## `default` is zero for the numeric types, which is the identity for `plus` but
+		## not for `times`, so there is no value it could return for an empty iterator
+		## that would keep `product` consistent with multiplication.
+		## ```roc
+		## expect (1..=4).product() == Ok(24)
+		##
+		## expect [42.I64].iter().product() == Ok(42)
+		##
+		## expect [7.I64].iter().drop_first(1).product() == Err(IterWasEmpty)
+		## ```
+		product : Iter(item) -> Try(item, [IterWasEmpty])
+			where [item.times : item, item -> item]
+		product = |iterator|
+			match Iter.next(iterator) {
+				Done => Err(IterWasEmpty)
+				Skip({ rest }) => Iter.product(rest)
+				One({ item: first, rest }) => Ok(Iter.fold(rest, first, |acc, item| acc * item))
+			}
+
+		## Find the minimum item of an iterator, or `Err(IterWasEmpty)` if the
+		## iterator is empty. Works for any type that implements `min`.
+		## ```roc
+		## expect [3.I64, 1, 2].iter().min() == Ok(1)
+		##
+		## expect [7.I64].iter().drop_first(1).min() == Err(IterWasEmpty)
+		## ```
+		min : Iter(item) -> Try(item, [IterWasEmpty])
+			where [item.min : item, item -> item]
+		min = |iterator|
+			match Iter.next(iterator) {
+				Done => Err(IterWasEmpty)
+				Skip({ rest }) => Iter.min(rest)
+				One({ item: first, rest }) => Ok(Iter.fold(rest, first, |best_so_far, item| best_so_far.min(item)))
+			}
+
+		## Find the maximum item of an iterator, or `Err(IterWasEmpty)` if the
+		## iterator is empty. Works for any type that implements `max`.
+		## ```roc
+		## expect [3.I64, 1, 2].iter().max() == Ok(3)
+		##
+		## expect [7.I64].iter().drop_first(1).max() == Err(IterWasEmpty)
+		## ```
+		max : Iter(item) -> Try(item, [IterWasEmpty])
+			where [item.max : item, item -> item]
+		max = |iterator|
+			match Iter.next(iterator) {
+				Done => Err(IterWasEmpty)
+				Skip({ rest }) => Iter.max(rest)
+				One({ item: first, rest }) => Ok(Iter.fold(rest, first, |best_so_far, item| best_so_far.max(item)))
+			}
+
 		## Returns the iterator's length if it is known up front, so collections
 		## can pre-size their allocation.
 		size_hint : Iter(item) -> [Known(U64), Unknown]
@@ -3239,7 +3609,7 @@ Builtin :: [].{
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
-	## effectful, so combinators like [Stream.map!] can run effects per element while
+	## effectful, so combinators like [Stream.map!] can run effects per item while
 	## staying lazy. Produced from an [Iter] via [Iter.map!] and driven by [Stream.collect!].
 	Stream(item) :: {
 		len_if_known : [Known(U64), Unknown],
@@ -3344,9 +3714,9 @@ Builtin :: [].{
 	List(_item) :: [ProvidedByCompiler].{
 		parser_for : _
 
-		## Returns the length of the list, which is equal to the number of elements it contains.
+		## Returns the length of the list, which is equal to the number of items it contains.
 		##
-		## One [List] can store up to [I64.highest] elements on 64-bit targets and [I32.highest] on 32-bit targets like wasm.
+		## One [List] can store up to [I64.highest] items on 64-bit targets and [I32.highest] on 32-bit targets like wasm.
 		## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target.
 		len : List(_item) -> U64
 
@@ -3439,7 +3809,7 @@ Builtin :: [].{
 		## ```
 		join : List(List(item)) -> List(item)
 		join = |lists| {
-			# `$total` counts exactly the elements appended below, so every
+			# `$total` counts exactly the items appended below, so every
 			# unchecked append stays in bounds.
 			var $total = 0
 			for inner in lists {
@@ -3448,18 +3818,57 @@ Builtin :: [].{
 
 			var $joined = List.with_capacity($total)
 			for inner in lists {
-				for elem in inner {
-					$joined = list_append_unsafe($joined, elem)
+				for item in inner {
+					$joined = list_append_unsafe($joined, item)
 				}
 			}
 
 			$joined
 		}
 
-		## Create a list with space for at least capacity elements
+		## Map each item to a list and concatenate the results, preserving order.
+		##
+		## You may know a similar function named `flat_map` or `concat_map` in other languages.
+		## ```roc
+		## expect [1.I64, 2, 3].join_map(|n| [n, n * 10]) == [1, 10, 2, 20, 3, 30]
+		##
+		## expect ["a", "b"].join_map(|s| [s, s]) == ["a", "a", "b", "b"]
+		## ```
+		join_map : List(a), (a -> List(b)) -> List(b)
+		join_map = |list, transform| List.join(List.map(list, transform))
+
+		## Insert a separator between every pair of items in a list.
+		## ```roc
+		## expect [1.I64, 2, 3].intersperse(0) == [1, 0, 2, 0, 3]
+		##
+		## expect [1.I64].intersperse(0) == [1]
+		## ```
+		intersperse : List(a), a -> List(a)
+		intersperse = |list, separator| {
+			len = List.len(list)
+
+			if len < 2 {
+				list
+			} else {
+				# `2 * len - 1` counts exactly the items appended below, so every
+				# unchecked append stays in bounds.
+				var $new_list = List.with_capacity(2 * len - 1)
+				var $index = 0
+				for item in list {
+					if $index > 0 {
+						$new_list = list_append_unsafe($new_list, separator)
+					}
+					$new_list = list_append_unsafe($new_list, item)
+					$index = $index + 1
+				}
+				$new_list
+			}
+		}
+
+		## Create a list with space for at least capacity items
 		with_capacity : U64 -> List(item)
 
-		## Ensure this list has room for at least spare additional elements.
+		## Ensure this list has room for at least spare additional items.
 		reserve : List(item), U64 -> List(item)
 		reserve = |list, spare| list_reserve(list, spare)
 
@@ -3468,7 +3877,7 @@ Builtin :: [].{
 		release_excess_capacity = |list| list_release_excess_capacity(list)
 
 		## Sort a list using a custom comparison function. The comparator receives two
-		## elements and returns `LT`, `EQ`, or `GT` to indicate their relative order.
+		## items and returns `LT`, `EQ`, or `GT` to indicate their relative order.
 		## ```roc
 		## expect [3, 1, 2].sort_with(|a, b| if a < b LT else if a > b GT else EQ) == [1, 2, 3]
 		##
@@ -3485,7 +3894,7 @@ Builtin :: [].{
 				match List.first(list) {
 					Ok(pivot) => {
 						rest = List.drop_first(list, 1)
-						less_or_equal = 
+						less_or_equal =
 							List.keep_if(
 								rest,
 								|item|
@@ -3495,7 +3904,7 @@ Builtin :: [].{
 										GT => False
 									},
 							)
-						greater = 
+						greater =
 							List.keep_if(
 								rest,
 								|item|
@@ -3517,7 +3926,7 @@ Builtin :: [].{
 			}
 		}
 
-		## Returns `True` if the two lists have the same length and their elements are pairwise equal.
+		## Returns `True` if the two lists have the same length and their items are pairwise equal.
 		is_eq : List(item), List(item) -> Bool
 			where [item.is_eq : item, item -> Bool]
 		is_eq = |self, other| {
@@ -3550,7 +3959,7 @@ Builtin :: [].{
 			$next
 		}
 
-		## Add a single element to the end of a list.
+		## Add a single item to the end of a list.
 		## ```roc
 		## [1.I64, 2, 3].append(4)
 		##
@@ -3572,7 +3981,17 @@ Builtin :: [].{
 		append_if_ok : List(a), Try(a, err) -> List(a)
 		append_if_ok = |list, maybe_item| list_append_if_ok(list, maybe_item)
 
-		## Add a single element to the beginning of a list.
+		## Add the `Ok` payload to the beginning of a list, or leave the list unchanged
+		## if the value is `Err`.
+		## ```roc
+		## expect List.prepend_if_ok([2, 3], Ok(1)) == [1, 2, 3]
+		##
+		## expect List.prepend_if_ok([2, 3], Err(NotFound)) == [2, 3]
+		## ```
+		prepend_if_ok : List(a), Try(a, err) -> List(a)
+		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
+
+		## Add a single item to the beginning of a list.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
 		##
@@ -3580,7 +3999,7 @@ Builtin :: [].{
 		## ```
 		prepend : List(a), a -> List(a)
 
-		## Returns the first element in the list, or `ListWasEmpty` if it was empty.
+		## Returns the first item in the list, or `ListWasEmpty` if it was empty.
 		## ```roc
 		## expect [1, 2, 3].first() == Ok(1)
 		## expect [].first() == Err(ListWasEmpty)
@@ -3592,7 +4011,7 @@ Builtin :: [].{
 			Try.Ok(list_get_unsafe(list, 0))
 		}
 
-		## Returns an element from a list at the given index.
+		## Returns an item from a list at the given index.
 		##
 		## Returns `Err OutOfBounds` if the given index exceeds the List's length
 		## ```roc
@@ -3607,7 +4026,7 @@ Builtin :: [].{
 		}
 
 		## Alias for [List.get], enabling the future `list[index]` subscript operator.
-		## Returns an element from a list at the given index.
+		## Returns an item from a list at the given index.
 		##
 		## Returns `Err OutOfBounds` if the given index exceeds the List's length
 		## ```roc
@@ -3617,7 +4036,7 @@ Builtin :: [].{
 		subscript : List(item), U64 -> Try(item, [OutOfBounds, ..])
 		subscript = |list, index| List.get(list, index)
 
-		## Returns the element at the given index, wrapping back to the start when the
+		## Returns the item at the given index, wrapping back to the start when the
 		## index is past the end (the index is taken modulo the length).
 		##
 		## You may know a similar function named `getWrap`, or indexing that wraps a
@@ -3637,7 +4056,7 @@ Builtin :: [].{
 			}
 		}
 
-		## Replaces the element at the given index with a new value.
+		## Replaces the item at the given index with a new value.
 		## ```roc
 		## expect [10, 20, 30].set(1, 99) == Ok([10, 99, 30])
 		##
@@ -3651,7 +4070,7 @@ Builtin :: [].{
 				Err(OutOfBounds)
 			}
 
-		## Replaces the element at the given index, returning both the updated list
+		## Replaces the item at the given index, returning both the updated list
 		## and the value that was replaced.
 		## ```roc
 		## expect [10, 20, 30].replace(1, 99) == Ok({ list: [10, 99, 30], prev: 20 })
@@ -3665,7 +4084,7 @@ Builtin :: [].{
 				Err(OutOfBounds)
 			}
 
-		## Updates the element at the given index by applying a function to it.
+		## Updates the item at the given index by applying a function to it.
 		## ```roc
 		## expect [10, 20, 30].update(1, |x| x + 5) == Ok([10, 25, 30])
 		##
@@ -3678,7 +4097,7 @@ Builtin :: [].{
 			Err(OutOfBounds)
 		}
 
-		## Exchanges the elements at the two given indices.
+		## Exchanges the items at the two given indices.
 		## ```roc
 		## expect [10, 20, 30, 40].swap(0, 3) == Ok([40, 20, 30, 10])
 		##
@@ -3691,6 +4110,36 @@ Builtin :: [].{
 				Ok(list_swap_unsafe(list, index_1, index_2))
 			} else {
 				Err(OutOfBounds)
+			}
+		}
+
+		## Inserts an item at the given index, shifting later items toward the end.
+		## An index equal to the length appends the item; a greater index is out of bounds.
+		## ```roc
+		## expect [1.I64, 2, 3].insert(1, 9) == Ok([1, 9, 2, 3])
+		##
+		## expect [1.I64, 2, 3].insert(5, 9) == Err(OutOfBounds)
+		## ```
+		insert : List(a), U64, a -> Try(List(a), [OutOfBounds, ..])
+		insert = |list, index, item| {
+			len = List.len(list)
+			if index > len {
+				Err(OutOfBounds)
+			} else {
+				# The two loops append exactly `index` then `len - index` items plus
+				# the inserted one, so every unchecked append stays within `len + 1`.
+				var $result = List.with_capacity(len + 1)
+				var $i = 0
+				while $i < index {
+					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
+					$i = $i + 1
+				}
+				$result = list_append_unsafe($result, item)
+				while $i < len {
+					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
+					$i = $i + 1
+				}
+				Ok($result)
 			}
 		}
 
@@ -3711,7 +4160,7 @@ Builtin :: [].{
 			fun!(item)
 		}
 
-		## Convert each element in the list to something new, by calling a conversion
+		## Convert each item in the list to something new, by calling a conversion
 		## function on each of them. Then return a new list of the converted values.
 		## ```roc
 		## expect [1, 2, 3].map(|num| num + 1) == [2, 3, 4]
@@ -3720,10 +4169,11 @@ Builtin :: [].{
 		## ```
 		map : List(a), (a -> b) -> List(b)
 		map = |list, transform| {
-			match list_map_can_reuse(list, transform) {
+			prepared_list = list_map_prepare_reuse(list)
+			match list_map_can_reuse(prepared_list, transform) {
 				1 => {
-					len = list.len()
-					var $out = list_map_cast_unsafe(list)
+					len = prepared_list.len()
+					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
 					while $index < len {
 						item = list_map_extract_unsafe($out, $index)
@@ -3733,8 +4183,8 @@ Builtin :: [].{
 					$out
 				}
 				_ => {
-					var $new_list = List.with_capacity(list.len())
-					for item in list {
+					var $new_list = List.with_capacity(prepared_list.len())
+					for item in prepared_list {
 						$new_list = list_append_unsafe($new_list, transform(item))
 					}
 					$new_list
@@ -3743,7 +4193,7 @@ Builtin :: [].{
 		}
 
 		## This works like [List.map], except it also passes the index
-		## of the element to the conversion function.
+		## of the item to the conversion function.
 		## ```roc
 		## expect List.map_with_index([10, 20, 30], (|num, index| num + index)) == [10, 21, 32]
 		## ```
@@ -3758,7 +4208,7 @@ Builtin :: [].{
 			$new_list
 		}
 
-		## Apply a binary function to pairs of elements from two lists, returning a list of results.
+		## Apply a binary function to pairs of items from two lists, returning a list of results.
 		## The result's length is the length of the shorter input list.
 		## ```
 		## expect [1, 2, 3].map2([10, 20, 30], |a, b| a + b) == [11, 22, 33]
@@ -3782,8 +4232,56 @@ Builtin :: [].{
 			$result
 		}
 
-		## Run the given function on each element of a list, and return all the
-		## elements for which the function returned `Bool.True`.
+		## Apply a ternary function to triples of items from three lists, returning a list of results.
+		## The result's length is the length of the shortest input list.
+		## ```
+		## expect [1, 2, 3].map3([10, 20, 30], [100, 200, 300], |a, b, c| a + b + c) == [111, 222, 333]
+		## expect [1, 2, 3, 4, 5].map3([10, 20], [100, 200, 300], |a, b, c| a + b + c) == [111, 222]
+		## ```
+		map3 : List(a), List(b), List(c), (a, b, c -> d) -> List(d)
+		map3 = |a_list, b_list, c_list, transform| {
+			var $result = []
+			var $index = 0
+			while ($index < a_list.len() and $index < b_list.len() and $index < c_list.len()) {
+				match (a_list.get($index), b_list.get($index), c_list.get($index)) {
+					(Ok(a), Ok(b), Ok(c)) => {
+						$result = $result.append(transform(a, b, c))
+					}
+					_ => {
+						break
+					}
+				}
+				$index = $index + 1
+			}
+			$result
+		}
+
+		## Apply a quaternary function to groups of items from four lists, returning a list of results.
+		## The result's length is the length of the shortest input list.
+		## ```
+		## expect [1, 2, 3].map4([10, 20, 30], [100, 200, 300], [1000, 2000, 3000], |a, b, c, d| a + b + c + d) == [1111, 2222, 3333]
+		## expect [1, 2, 3, 4, 5].map4([10, 20], [100, 200, 300], [1000, 2000, 3000, 4000], |a, b, c, d| a + b + c + d) == [1111, 2222]
+		## ```
+		map4 : List(a), List(b), List(c), List(d), (a, b, c, d -> e) -> List(e)
+		map4 = |a_list, b_list, c_list, d_list, transform| {
+			var $result = []
+			var $index = 0
+			while ($index < a_list.len() and $index < b_list.len() and $index < c_list.len() and $index < d_list.len()) {
+				match (a_list.get($index), b_list.get($index), c_list.get($index), d_list.get($index)) {
+					(Ok(a), Ok(b), Ok(c), Ok(d)) => {
+						$result = $result.append(transform(a, b, c, d))
+					}
+					_ => {
+						break
+					}
+				}
+				$index = $index + 1
+			}
+			$result
+		}
+
+		## Run the given function on each item of a list, and return all the
+		## items for which the function returned `Bool.True`.
 		## ```roc
 		## [1.I64, 2, 3, 4].keep_if(|num| num > 2)
 		## ```
@@ -3800,7 +4298,7 @@ Builtin :: [].{
 		##
 		## If given a unique list, [List.keep_if] will mutate it in place to assemble the appropriate list.
 		## If that happens, this function will not allocate any new memory on the heap.
-		## If all elements in the list end up being kept, Roc will return the original
+		## If all items in the list end up being kept, Roc will return the original
 		## list unaltered.
 		##
 		keep_if : List(a), (a -> Bool) -> List(a)
@@ -3808,16 +4306,16 @@ Builtin :: [].{
 			List.fold(
 				list,
 				[],
-				|acc, elem|
-					if predicate(elem) {
-						List.concat(acc, [elem])
+				|acc, item|
+					if predicate(item) {
+						List.concat(acc, [item])
 					} else {
 						acc
 					},
 			)
 
-		## Run the given function on each element of a list, and return all the
-		## elements for which the function returned `Bool.False`.
+		## Run the given function on each item of a list, and return all the
+		## items for which the function returned `Bool.False`.
 		## ```roc
 		## [1.I64, 2, 3, 4].drop_if(|num| num > 2)
 		## ```
@@ -3830,16 +4328,16 @@ Builtin :: [].{
 			List.fold(
 				list,
 				[],
-				|acc, elem|
-					if predicate(elem) {
+				|acc, item|
+					if predicate(item) {
 						acc
 					} else {
-						List.concat(acc, [elem])
+						List.concat(acc, [item])
 					},
 			)
 
-		## Run the given function on each element of a list, and return a list of
-		## the values it wrapped in `Ok`. Elements the function maps to `Err` are
+		## Run the given function on each item of a list, and return a list of
+		## the values it wrapped in `Ok`. Items the function maps to `Err` are
 		## dropped. Use [List.keep_errs] to keep the `Err` values instead.
 		## ```roc
 		## expect [1.I64, 2, 3, 4].keep_oks(|n| if n.is_even() { Ok(n) } else { Err({}) }) == [2, 4]
@@ -3849,15 +4347,15 @@ Builtin :: [].{
 			List.fold(
 				list,
 				[],
-				|acc, elem|
-					match transform(elem) {
+				|acc, item|
+					match transform(item) {
 						Ok(after) => List.concat(acc, [after])
 						Err(_) => acc
 					},
 			)
 
-		## Run the given function on each element of a list, and return a list of
-		## the values it wrapped in `Err`. Elements the function maps to `Ok` are
+		## Run the given function on each item of a list, and return a list of
+		## the values it wrapped in `Err`. Items the function maps to `Ok` are
 		## dropped. Use [List.keep_oks] to keep the `Ok` values instead.
 		## ```roc
 		## expect [1.I64, 2, 3, 4].keep_errs(|n| if n.is_even() { Ok(n) } else { Err(n) }) == [1, 3]
@@ -3867,15 +4365,15 @@ Builtin :: [].{
 			List.fold(
 				list,
 				[],
-				|acc, elem|
-					match transform(elem) {
+				|acc, item|
+					match transform(item) {
 						Err(after) => List.concat(acc, [after])
 						Ok(_) => acc
 					},
 			)
 
-		## Run the given function on each element of a list, and return the
-		## number of elements for which the function returned `Bool.True`.
+		## Run the given function on each item of a list, and return the
+		## number of items for which the function returned `Bool.True`.
 		## ```roc
 		## expect [1, -2, -3].count_if(I64.is_negative) == 2
 		## expect [1, 2, 3].count_if(|num| num > 1) == 2
@@ -3885,8 +4383,8 @@ Builtin :: [].{
 			List.fold(
 				list,
 				0,
-				|acc, elem|
-					if predicate(elem) {
+				|acc, item|
+					if predicate(item) {
 						acc + 1
 					} else {
 						acc
@@ -3894,7 +4392,7 @@ Builtin :: [].{
 			)
 
 		## Like [List.map], but the transform can fail. Runs a `Try`-returning
-		## function on each element and collects the `Ok` values. Stops at the first
+		## function on each item and collects the `Ok` values. Stops at the first
 		## `Err` and returns it, so the result is either all the transformed values
 		## or the first failure.
 		## ```roc
@@ -3903,28 +4401,28 @@ Builtin :: [].{
 		map_try : List(a), (a -> Try(b, err)) -> Try(List(b), err)
 		map_try = |list, transform| {
 			var $out = List.with_capacity(list.len())
-			for elem in list {
-				$out = list_append_unsafe($out, transform(elem)?)
+			for item in list {
+				$out = list_append_unsafe($out, transform(item)?)
 			}
 			Ok($out)
 		}
 
 		## Like [List.map_try], but the transform is effectful. It runs on each
-		## element until one returns `Err`, then stops.
+		## item until one returns `Err`, then stops.
 		## ```roc
 		## rows.map_try!(|row| SQL.insert!("INSERT INTO t VALUES (?)", [row]))
 		## ```
 		map_try! : List(a), (a => Try(b, err)) => Try(List(b), err)
 		map_try! = |list, transform!| {
 			var $out = List.with_capacity(list.len())
-			for elem in list {
-				$out = list_append_unsafe($out, transform!(elem)?)
+			for item in list {
+				$out = list_append_unsafe($out, transform!(item)?)
 			}
 			Ok($out)
 		}
 
 		## Like [List.keep_if], but the predicate can fail. Runs a `Try`-returning
-		## predicate on each element, keeping the ones it maps to `Ok(Bool.True)`.
+		## predicate on each item, keeping the ones it maps to `Ok(Bool.True)`.
 		## Stops at the first `Err` and returns it.
 		## ```roc
 		## expect [1.I64, 2, 3].keep_if_try(|n| Ok(n > 1)) == Ok([2, 3])
@@ -3932,25 +4430,25 @@ Builtin :: [].{
 		keep_if_try : List(a), (a -> Try(Bool, err)) -> Try(List(a), err)
 		keep_if_try = |list, predicate| {
 			var $out = []
-			for elem in list {
-				if predicate(elem)? {
-					$out = List.concat($out, [elem])
+			for item in list {
+				if predicate(item)? {
+					$out = List.concat($out, [item])
 				}
 			}
 			Ok($out)
 		}
 
 		## Like [List.keep_if_try], but the predicate is effectful. It runs on each
-		## element until one returns `Err`, then stops.
+		## item until one returns `Err`, then stops.
 		## ```roc
 		## users.keep_if_try!(|user| SQL.query_bool!("SELECT is_active FROM users WHERE id = ?", [user.id]))
 		## ```
 		keep_if_try! : List(a), (a => Try(Bool, err)) => Try(List(a), err)
 		keep_if_try! = |list, predicate!| {
 			var $out = []
-			for elem in list {
-				if predicate!(elem)? {
-					$out = List.concat($out, [elem])
+			for item in list {
+				if predicate!(item)? {
+					$out = List.concat($out, [item])
 				}
 			}
 			Ok($out)
@@ -3964,42 +4462,42 @@ Builtin :: [].{
 		fold_try : List(item), state, (state, item -> Try(state, err)) -> Try(state, err)
 		fold_try = |list, initial, step| {
 			var $state = initial
-			for elem in list {
-				$state = step($state, elem)?
+			for item in list {
+				$state = step($state, item)?
 			}
 			Ok($state)
 		}
 
 		## Like [List.fold_try], but the step function is effectful. It runs on each
-		## element until one returns `Err`, then stops.
+		## item until one returns `Err`, then stops.
 		## ```roc
 		## events.fold_try!(State.init, |state, event| Store.apply!(state, event))
 		## ```
 		fold_try! : List(item), state, (state, item => Try(state, err)) => Try(state, err)
 		fold_try! = |list, initial, step!| {
 			var $state = initial
-			for elem in list {
-				$state = step!($state, elem)?
+			for item in list {
+				$state = step!($state, item)?
 			}
 			Ok($state)
 		}
 
-		## Build a value using each element in the list.
+		## Build a value using each item in the list.
 		##
-		## Starting with a given `state` value, this folds through each element in the
-		## list from first to last, running a given `step` function on that element
+		## Starting with a given `state` value, this folds through each item in the
+		## list from first to last, running a given `step` function on that item
 		## which updates the `state`. It returns the final `state` at the end.
 		## ```roc
 		## [2, 4, 8].fold(0, U64.plus)
 		## ```
 		## This returns 14 because:
 		## * `state` starts at 0
-		## * Each `step` runs `state.plus(elem)`, and the return value becomes the new `state`.
+		## * Each `step` runs `state.plus(item)`, and the return value becomes the new `state`.
 		##
-		## Here is a table of how `state` changes as [List.fold] folds over the elements
+		## Here is a table of how `state` changes as [List.fold] folds over the items
 		## `[2, 4, 8]` using [U64.plus] as its `step` function to determine the next `state`.
 		##
-		## state | elem  | U64.plus(state, elem)
+		## state | item  | U64.plus(state, item)
 		## :---: | :---: | :----------------:
 		## 0     |       |
 		## 0     | 2     | 2
@@ -4023,7 +4521,7 @@ Builtin :: [].{
 			$state
 		}
 
-		## Like [List.fold], but at each step the function also receives the index of the current element.
+		## Like [List.fold], but at each step the function also receives the index of the current item.
 		fold_with_index : List(item), state, (state, item, U64 -> state) -> state
 		fold_with_index = |list, init, step| {
 			var $state = init
@@ -4041,13 +4539,13 @@ Builtin :: [].{
 		##
 		## ## Performance Details
 		##
-		## Compared to [List.fold], this can potentially visit fewer elements (which can
+		## Compared to [List.fold], this can potentially visit fewer items (which can
 		## improve performance) at the cost of making each step take longer.
 		## However, the added cost to each step is extremely small, and can easily
-		## be outweighed if it results in skipping even a small number of elements.
+		## be outweighed if it results in skipping even a small number of items.
 		##
 		## As such, it is typically better for performance to use this over [List.fold]
-		## if returning `Break` earlier than the last element is expected to be common.
+		## if returning `Break` earlier than the last item is expected to be common.
 		fold_until : List(item), state, (state, item -> [Continue(state), Break(state)]) -> state
 		fold_until = |list, init, step| {
 			var $state = init
@@ -4090,16 +4588,16 @@ Builtin :: [].{
 		}
 
 		## Like [List.fold], but walks the list from last to first. The `step` function
-		## receives the element first and the current `state` second.
+		## receives the item first and the current `state` second.
 		##
 		## ```roc
 		## expect [1, 2, 3].fold_rev(0, I64.minus) == 2
 		## ```
 		##
 		## Here is a table of how `state` changes as [List.fold_rev] folds over the
-		## elements `[1, 2, 3]` using [I64.minus] as its `step` function.
+		## items `[1, 2, 3]` using [I64.minus] as its `step` function.
 		##
-		## state | elem  | I64.minus(elem, state)
+		## state | item  | I64.minus(item, state)
 		## :---: | :---: | :-------------------:
 		## 0     |       |
 		## 0     | 3     | 3
@@ -4142,8 +4640,8 @@ Builtin :: [].{
 		ends_with = |list, suffix|
 			suffix == List.take_last(list, List.len(suffix))
 
-		## Run the given predicate on each element of the list, returning `Bool.True` if
-		## any of the elements satisfy it.
+		## Run the given predicate on each item of the list, returning `Bool.True` if
+		## any of the items satisfy it.
 		## ```roc
 		## expect [1, 2, 3].any(|n| n % 2 == 0)
 		##
@@ -4159,7 +4657,7 @@ Builtin :: [].{
 			False
 		}
 
-		## Returns `Bool.True` if the list contains an element equal to the given value.
+		## Returns `Bool.True` if the list contains an item equal to the given value.
 		## ```roc
 		## expect [1, 2, 3].contains(2)
 		##
@@ -4170,8 +4668,8 @@ Builtin :: [].{
 			List.any(list, |x| x == elt)
 		}
 
-		## Run the given predicate on each element of the list, returning `Bool.True` if
-		## all of the elements satisfy it.
+		## Run the given predicate on each item of the list, returning `Bool.True` if
+		## all of the items satisfy it.
 		## ```roc
 		## expect [2, 4, 6].all(|n| n % 2 == 0)
 		##
@@ -4187,7 +4685,7 @@ Builtin :: [].{
 			True
 		}
 
-		## Returns the last element in the list, or `ListWasEmpty` if it was empty.
+		## Returns the last item in the list, or `ListWasEmpty` if it was empty.
 		## ```roc
 		## expect [1, 2, 3].last() == Ok(3.0)
 		## expect [].last() == Err(ListWasEmpty)
@@ -4199,7 +4697,7 @@ Builtin :: [].{
 			Try.Ok(list_get_unsafe(list, List.len(list) - 1))
 		}
 
-		## Create a list with a single element in it.
+		## Create a list with a single item in it.
 		##
 		## ```roc
 		## expect List.single(42) == [42.0]
@@ -4207,7 +4705,7 @@ Builtin :: [].{
 		single : item -> List(item)
 		single = |x| [x]
 
-		## Remove the element at the given index. If the index is out of bounds, the
+		## Remove the item at the given index. If the index is out of bounds, the
 		## list is returned unchanged.
 		## ```roc
 		## expect [10, 20, 30, 40].drop_at(1) == [10, 30, 40]
@@ -4216,9 +4714,9 @@ Builtin :: [].{
 		## ```
 		drop_at : List(a), U64 -> List(a)
 
-		## Removes the element at the given index by moving the last element into its
-		## place, so the order of the remaining elements is not preserved. This is O(1),
-		## unlike `drop_at`, which shifts every later element down.
+		## Removes the item at the given index by moving the last item into its
+		## place, so the order of the remaining items is not preserved. This is O(1),
+		## unlike `drop_at`, which shifts every later item down.
 		##
 		## Returns the list unchanged if the index is out of bounds.
 		## ```roc
@@ -4235,7 +4733,7 @@ Builtin :: [].{
 		}
 
 		## Return a sublist of the list starting at `start` and containing up to `len`
-		## elements. Out-of-bounds ranges are clamped, producing a shorter or empty list.
+		## items. Out-of-bounds ranges are clamped, producing a shorter or empty list.
 		## ```roc
 		## expect [1, 2, 3, 4, 5].sublist({ start: 1, len: 3 }) == [2, 3, 4]
 		##
@@ -4245,8 +4743,36 @@ Builtin :: [].{
 		## ```
 		sublist : List(a), { start : U64, len : U64 } -> List(a)
 
-		## Return the first `n` elements of the list. If the list has fewer than `n`
-		## elements, the entire list is returned.
+		## Split a list into chunks of at most `chunk_size` items, in order. The
+		## final chunk is shorter when the length is not a multiple of `chunk_size`,
+		## and a `chunk_size` of 0 produces an empty list.
+		## ```roc
+		## expect [1.I64, 2, 3, 4, 5].chunks_of(2) == [[1, 2], [3, 4], [5]]
+		##
+		## expect [1.I64, 2, 3].chunks_of(10) == [[1, 2, 3]]
+		## ```
+		chunks_of : List(a), U64 -> List(List(a))
+		chunks_of = |list, chunk_size| {
+			len = List.len(list)
+
+			if chunk_size == 0 or len == 0 {
+				[]
+			} else {
+				# `(len - 1) / chunk_size + 1` is an overflow-safe ceil of `len / chunk_size`,
+				# counting exactly the chunks appended below so every unchecked append stays
+				# in bounds.
+				var $chunks = List.with_capacity((len - 1) / chunk_size + 1)
+				var $start = 0
+				while ($start < len) {
+					$chunks = list_append_unsafe($chunks, List.sublist(list, { start: $start, len: chunk_size }))
+					$start = $start + chunk_size
+				}
+				$chunks
+			}
+		}
+
+		## Return the first `n` items of the list. If the list has fewer than `n`
+		## items, the entire list is returned.
 		## ```roc
 		## expect [1, 2, 3, 4, 5].take_first(3) == [1, 2, 3]
 		##
@@ -4257,7 +4783,7 @@ Builtin :: [].{
 			List.sublist(list, { len: n, start: 0 })
 		}
 
-		## Removes every element while preserving the current capacity.
+		## Removes every item while preserving the current capacity.
 		## ```roc
 		## expect [1.I64, 2, 3].clear() == []
 		## ```
@@ -4266,18 +4792,18 @@ Builtin :: [].{
 			List.take_first(list, 0)
 		}
 
-		## Returns the given number of elements from the end of the list.
+		## Returns the given number of items from the end of the list.
 		## ```roc
 		## expect [1, 2, 3, 4, 5, 6, 7, 8].take_last(4) == [5, 6, 7, 8]
 		## ```
-		## If there are fewer elements in the list than the requested number,
+		## If there are fewer items in the list than the requested number,
 		## the entire list is returned.
 		## ```roc
 		## expect [1, 2].take_last(5) == [1, 2]
 		## ```
-		## To *remove* elements from the end of the list, use `List.take_first`.
+		## To *remove* items from the end of the list, use `List.take_first`.
 		##
-		## To remove elements from both the beginning and end of the list,
+		## To remove items from both the beginning and end of the list,
 		## use `List.sublist`.
 		##
 		take_last : List(a), U64 -> List(a)
@@ -4287,7 +4813,7 @@ Builtin :: [].{
 			List.sublist(list, { start: start, len: len })
 		}
 
-		## Drops n elements from the beginning of the list. If `n` is larger than the
+		## Drops n items from the beginning of the list. If `n` is larger than the
 		## list length, an empty list is returned.
 		## ```roc
 		## expect [1, 2, 3, 4, 5].drop_first(2) == [3, 4, 5]
@@ -4300,7 +4826,7 @@ Builtin :: [].{
 			List.sublist(list, { start: n, len: len })
 		}
 
-		## Drops n elements from the end of the list. If `n` is larger than the
+		## Drops n items from the end of the list. If `n` is larger than the
 		## list length, an empty list is returned.
 		## ```roc
 		## expect [1, 2, 3, 4, 5].drop_last(2) == [1, 2, 3]
@@ -4314,7 +4840,7 @@ Builtin :: [].{
 			List.sublist(list, { start: 0, len: take_len })
 		}
 
-		## Find the first element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## Find the first item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
 		## ```
 		## expect [1, 2, 3, 4].find_first(|x| x % 2 == 0) == Ok(2)
 		## ```
@@ -4326,7 +4852,7 @@ Builtin :: [].{
 			return Err(NotFound)
 		}
 
-		## Find the last element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## Find the last item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
 		## ```
 		## expect [1, 2, 3, 4].find_last(|x| x % 2 == 0) == Ok(4)
 		## ```
@@ -4338,7 +4864,7 @@ Builtin :: [].{
 			return Err(NotFound)
 		}
 
-		## Find the index of the first element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## Find the index of the first item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
 		## ```
 		## expect [1, 2, 3, 4].find_first_index(|x| x > 1) == Ok(1)
 		## ```
@@ -4354,7 +4880,7 @@ Builtin :: [].{
 			return Err(NotFound)
 		}
 
-		## Find the index of the last element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## Find the index of the last item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
 		## ```
 		## expect [1, 2, 3, 4].find_last_index(|x| x < 4) == Ok(2)
 		## ```
@@ -4387,7 +4913,7 @@ Builtin :: [].{
 			{ before, others }
 		}
 
-		## Split a list into sublists using a specified delimiter element.
+		## Split a list into sublists using a specified delimiter item.
 		##
 		## Consecutive delimiters and delimiters at the start or end of the list
 		## produce empty sublists at the corresponding positions.
@@ -4396,7 +4922,7 @@ Builtin :: [].{
 		## expect [1, 1, 2].split_on(1) == [[], [], [2]]
 		## ```
 		split_on : List(a), a -> List(List(a)) where [a.is_eq : a, a -> Bool]
-		split_on = |list, delim| list->split_if(|x| x == delim)
+		split_on = |list, delim| list |> split_if(|x| x == delim)
 
 		## Split a list into sublists using a predicate function to identify delimiters.
 		##
@@ -4439,7 +4965,7 @@ Builtin :: [].{
 			var $skip = 0
 			var $i = 0
 
-			for elem in list {
+			for item in list {
 				if $skip > 0 {
 					$skip = $skip - 1
 				} else if $i + delim_len <= list_len
@@ -4448,7 +4974,7 @@ Builtin :: [].{
 					$current = []
 					$skip = delim_len - 1
 				} else {
-					$current = $current.append(elem)
+					$current = $current.append(item)
 				}
 				$i = $i + 1
 			}
@@ -4456,14 +4982,14 @@ Builtin :: [].{
 			$lists.append($current)
 		}
 
-		## Split a list into two parts at the first occurrence of a specified delimiter element, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
+		## Split a list into two parts at the first occurrence of a specified delimiter item, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
 		## ```
 		## expect [0, 1, 2, 1, 2].split_first(2) == Ok({ before: [0, 1], after: [1, 2] })
 		## ```
 		split_first : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
 			where [a.is_eq : a, a -> Bool]
 		split_first = |list, delim|
-			match list->find_first_index(|x| x == delim) {
+			match list |> find_first_index(|x| x == delim) {
 				Ok(index) => Ok({
 					before: list.sublist({ start: 0, len: index }),
 					after: list.drop_first(index + 1),
@@ -4471,14 +4997,14 @@ Builtin :: [].{
 				Err(NotFound) => Err(NotFound)
 			}
 
-		## Split a list into two parts at the last occurrence of a specified delimiter element, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
+		## Split a list into two parts at the last occurrence of a specified delimiter item, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
 		## ```
 		## expect [0, 1, 2, 1, 2].split_last(1) == Ok({ before: [0, 1, 2], after: [2] })
 		## ```
 		split_last : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
 			where [a.is_eq : a, a -> Bool]
 		split_last = |list, delim|
-			match list->find_last_index(|x| x == delim) {
+			match list |> find_last_index(|x| x == delim) {
 				Ok(index) => Ok({
 					before: list.sublist({ start: 0, len: index }),
 					after: list.drop_first(index + 1),
@@ -4503,21 +5029,25 @@ Builtin :: [].{
 			$list
 		}
 
-		## Sum the elements of a list. Works for any type that implements `plus` and
+		## Sum the items of a list. Works for any type that implements `plus` and
 		## `default` methods, such as the numeric types.
+		##
+		## `default` is called only when the list is empty; otherwise it is never called
+		## at all. Summing begins at the first item and uses `plus` to combine the
+		## rest, so a single-item list returns that item without calling either
+		## method, and `default` does not need to be an identity value for `plus`.
 		## ```roc
 		## expect List.sum([1.I64, 2, 3, 4]) == 10
+		##
+		## expect List.sum([42.I64]) == 42
 		##
 		## expect List.sum([]) == 0.I64
 		## ```
 		sum : List(item) -> item
 			where [item.plus : item, item -> item, item.default : item]
-		sum = |list| {
-			Item : item
-			List.fold(list, Item.default(), |acc, elem| acc + elem)
-		}
+		sum = |list| list.iter().sum()
 
-		## Find the minimum element in a list, or `Err(ListWasEmpty)` if the list is empty.
+		## Find the minimum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `min`.
 		min : List(a) -> Try(a, [ListWasEmpty])
 			where [a.min : a, a -> a]
@@ -4528,7 +5058,7 @@ Builtin :: [].{
 						List.fold(
 							list,
 							initial,
-							|best_so_far, elem| best_so_far.min(elem),
+							|best_so_far, item| best_so_far.min(item),
 						),
 					)
 
@@ -4536,7 +5066,7 @@ Builtin :: [].{
 					Err(ListWasEmpty)
 				}
 
-		## Find the maximum element in a list, or `Err(ListWasEmpty)` if the list is empty.
+		## Find the maximum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `max`.
 		max : List(a) -> Try(a, [ListWasEmpty])
 			where [a.max : a, a -> a]
@@ -4547,7 +5077,7 @@ Builtin :: [].{
 						List.fold(
 							list,
 							initial,
-							|best_so_far, elem| best_so_far.max(elem),
+							|best_so_far, item| best_so_far.max(item),
 						),
 					)
 
@@ -4570,14 +5100,14 @@ Builtin :: [].{
 				Encoding.encode_list(
 					state,
 					List.len(self),
-					|current, element|
+					|current, write_item|
 						List.fold(
 							self,
 							Ok(current),
-							|state_result, elem|
+							|state_result, item|
 								match state_result {
-									Ok(element_state) =>
-										element(element_state, |value_state| encode_item(elem, value_state))
+									Ok(item_state) =>
+										write_item(item_state, |value_state| encode_item(item, value_state))
 
 									Err(err) => Err(err)
 								},
@@ -5530,8 +6060,8 @@ Builtin :: [].{
 				state = List.fold(
 					list_a,
 					{ all_found: Bool.True, check: list_b },
-					|st, elem|
-						if List.contains(st.check, elem) {
+					|st, item|
+						if List.contains(st.check, item) {
 							st
 						} else {
 							{ all_found: Bool.False, check: st.check }
@@ -5566,7 +6096,7 @@ Builtin :: [].{
 		## Set.single(42.I64)
 		## ```
 		single : item -> Set(item)
-		single = |elem| Items([elem])
+		single = |item| Items([item])
 
 		## Counts the number of values in a given `Set`.
 		## ```roc
@@ -5586,18 +6116,18 @@ Builtin :: [].{
 		## Test if a value is in the `Set`.
 		contains : Set(a), a -> Bool
 			where [a.is_eq : a, a -> Bool]
-		contains = |set, elem| match set {
-			Items(list) => List.contains(list, elem)
+		contains = |set, item| match set {
+			Items(list) => List.contains(list, item)
 		}
 
 		## Insert a value into a `Set`.
 		insert : Set(a), a -> Set(a)
 			where [a.is_eq : a, a -> Bool]
-		insert = |set, elem| match set {
+		insert = |set, item| match set {
 			Items(list) => Items(
 				List.append(
-					List.keep_if(list, |x| x != elem),
-					elem,
+					List.keep_if(list, |x| x != item),
+					item,
 				),
 			)
 		}
@@ -5605,8 +6135,8 @@ Builtin :: [].{
 		## Removes the value from the given `Set`.
 		remove : Set(a), a -> Set(a)
 			where [a.is_eq : a, a -> Bool]
-		remove = |set, elem| match set {
-			Items(list) => Items(List.keep_if(list, |x| x != elem))
+		remove = |set, item| match set {
+			Items(list) => Items(List.keep_if(list, |x| x != item))
 		}
 
 		## Retrieve the values in a `Set` as a `List`.
@@ -5623,18 +6153,18 @@ Builtin :: [].{
 				List.fold(
 					list,
 					[],
-					|acc, elem|
-						if List.contains(acc, elem) {
+					|acc, item|
+						if List.contains(acc, item) {
 							acc
 						} else {
-							List.append(acc, elem)
+							List.append(acc, item)
 						},
 				),
 			)
 		}
 
-		## Run the given function on each element in the `Set`, and return
-		## a `Set` with just the elements for which the function returned `Bool.True`.
+		## Run the given function on each item in the `Set`, and return
+		## a `Set` with just the items for which the function returned `Bool.True`.
 		## ```roc
 		## expect Set.from_list([1, 2, 3, 4]).keep_if(|num| num > 2) == Set.from_list([3, 4])
 		## ```
@@ -5643,8 +6173,8 @@ Builtin :: [].{
 			Items(list) => Items(List.keep_if(list, predicate))
 		}
 
-		## Run the given function on each element in the `Set`, and return
-		## a `Set` with just the elements for which the function returned `Bool.False`.
+		## Run the given function on each item in the `Set`, and return
+		## a `Set` with just the items for which the function returned `Bool.False`.
 		## ```roc
 		## expect Set.from_list([1, 2, 3, 4]).drop_if(|num| num > 2) == Set.from_list([1, 2])
 		## ```
@@ -5666,7 +6196,7 @@ Builtin :: [].{
 		union : Set(a), Set(a) -> Set(a)
 			where [a.is_eq : a, a -> Bool]
 		union = |set_a, set_b|
-			List.fold(Set.to_list(set_b), set_a, |acc, elem| Set.insert(acc, elem))
+			List.fold(Set.to_list(set_b), set_a, |acc, item| Set.insert(acc, item))
 
 		## Combine two `Set`s by keeping the
 		## [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
@@ -5687,9 +6217,9 @@ Builtin :: [].{
 			state = List.fold(
 				list_a,
 				{ result: [], check: list_b },
-				|st, elem|
-					if List.contains(st.check, elem) {
-						{ result: List.append(st.result, elem), check: st.check }
+				|st, item|
+					if List.contains(st.check, item) {
+						{ result: List.append(st.result, item), check: st.check }
 					} else {
 						st
 					},
@@ -5715,11 +6245,11 @@ Builtin :: [].{
 			state = List.fold(
 				list_a,
 				{ result: [], check: list_b },
-				|st, elem|
-					if List.contains(st.check, elem) {
+				|st, item|
+					if List.contains(st.check, item) {
 						st
 					} else {
-						{ result: List.append(st.result, elem), check: st.check }
+						{ result: List.append(st.result, item), check: st.check }
 					},
 			)
 			Items(state.result)
@@ -5742,12 +6272,12 @@ Builtin :: [].{
 					List.fold(
 						list,
 						[],
-						|acc, elem| {
-							new_elem = transform(elem)
-							if List.contains(acc, new_elem) {
+						|acc, item| {
+							new_item = transform(item)
+							if List.contains(acc, new_item) {
 								acc
 							} else {
-								List.append(acc, new_elem)
+								List.append(acc, new_item)
 							}
 						},
 					),
@@ -6255,9 +6785,9 @@ Builtin :: [].{
 			count_one_bits : U8 -> U8
 
 			## Build a [U8] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [U8] (`0` to `255`), or if any element is not a valid digit.
+			## [U8] (`0` to `255`), or if any item is not a valid digit.
 			## ```roc
 			## expect U8.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -6328,27 +6858,21 @@ Builtin :: [].{
 			## ```
 			until : U8, U8 -> Iter(U8)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(U8.to_u64(end) - U8.to_u64(start))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U8.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U8.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -7037,34 +7561,28 @@ Builtin :: [].{
 			## ```
 			until : I8, I8 -> Iter(I8)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I8.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I8.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
 			## Build an [I8] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [I8] (`-128` to `127`), or if any element is not a valid digit. The
+			## [I8] (`-128` to `127`), or if any item is not a valid digit. The
 			## result is always non-negative; to build a negative value, [I8.negate]
 			## the result.
 			## ```roc
@@ -7706,6 +8224,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : U16 -> U8
 
+			## Read a little-endian [U16] from the two bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 2 <= List.len(bytes)`.
+			## ```roc
+			## expect U16.from_le_bytes([0x34, 0x12], 0) == Ok(0x1234)
+			##
+			## expect U16.from_le_bytes([0x34], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U16, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 2` and `len - 2` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 2` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 2`.
+				if len < 2 or index > len.minus_wrap(2) {
+					Err(OutOfBounds)
+				} else {
+					Ok(u16_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
 			## Returns an empty iterator if this `U16` is greater than the other.
@@ -7754,34 +8298,28 @@ Builtin :: [].{
 			## ```
 			until : U16, U16 -> Iter(U16)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(U16.to_u64(end) - U16.to_u64(start))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U16.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U16.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
 			## Build a [U16] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [U16] (`0` to `65535`), or if any element is not a valid digit.
+			## [U16] (`0` to `65535`), or if any item is not a valid digit.
 			## ```roc
 			## expect U16.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -8474,6 +9012,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I16 -> U8
 
+			## Read a little-endian [I16] from the two bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 2 <= List.len(bytes)`.
+			## ```roc
+			## expect I16.from_le_bytes([0x00, 0x80], 0) == Ok(I16.lowest)
+			##
+			## expect I16.from_le_bytes([0x00], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I16, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 2` and `len - 2` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 2` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 2`.
+				if len < 2 or index > len.minus_wrap(2) {
+					Err(OutOfBounds)
+				} else {
+					Ok(i16_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
 			## Returns an empty iterator if this `I16` is greater than the other.
@@ -8522,34 +9086,28 @@ Builtin :: [].{
 			## ```
 			until : I16, I16 -> Iter(I16)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I16.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I16.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
 			## Build an [I16] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [I16] (`-32768` to `32767`), or if any element is not a valid digit.
+			## [I16] (`-32768` to `32767`), or if any item is not a valid digit.
 			## The result is always non-negative; to build a negative value, [I16.negate]
 			## the result.
 			## ```roc
@@ -9206,6 +9764,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : U32 -> U8
 
+			## Read a little-endian [U32] from the four bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 4 <= List.len(bytes)`.
+			## ```roc
+			## expect U32.from_le_bytes([0x78, 0x56, 0x34, 0x12], 0) == Ok(0x12345678)
+			##
+			## expect U32.from_le_bytes([0x78, 0x56, 0x34], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U32, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 4` and `len - 4` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 4` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 4`.
+				if len < 4 or index > len.minus_wrap(4) {
+					Err(OutOfBounds)
+				} else {
+					Ok(u32_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
 			## Returns an empty iterator if this `U32` is greater than the other.
@@ -9254,34 +9838,28 @@ Builtin :: [].{
 			## ```
 			until : U32, U32 -> Iter(U32)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(U32.to_u64(end) - U32.to_u64(start))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U32.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U32.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
 			## Build a [U32] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [U32] (`0` to `4294967295`), or if any element is not a valid digit.
+			## [U32] (`0` to `4294967295`), or if any item is not a valid digit.
 			## ```roc
 			## expect U32.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -10006,6 +10584,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I32 -> U8
 
+			## Read a little-endian [I32] from the four bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 4 <= List.len(bytes)`.
+			## ```roc
+			## expect I32.from_le_bytes([0x00, 0x00, 0x00, 0x80], 0) == Ok(I32.lowest)
+			##
+			## expect I32.from_le_bytes([0x00, 0x00, 0x00], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I32, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 4` and `len - 4` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 4` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 4`.
+				if len < 4 or index > len.minus_wrap(4) {
+					Err(OutOfBounds)
+				} else {
+					Ok(i32_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
 			## Returns an empty iterator if this `I32` is greater than the other.
@@ -10054,34 +10658,28 @@ Builtin :: [].{
 			## ```
 			until : I32, I32 -> Iter(I32)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I32.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I32.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
 			## Build an [I32] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [I32] (`-2147483648` to `2147483647`), or if any element is not a valid digit.
+			## [I32] (`-2147483648` to `2147483647`), or if any item is not a valid digit.
 			## The result is always non-negative; to build a negative value, [I32.negate]
 			## the result.
 			## ```roc
@@ -10758,6 +11356,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : U64 -> U8
 
+			## Read a little-endian [U64] from the eight bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 8 <= List.len(bytes)`.
+			## ```roc
+			## expect U64.from_le_bytes([1, 0, 0, 0, 0, 0, 0, 0], 0) == Ok(1)
+			##
+			## expect U64.from_le_bytes([1, 0, 0, 0, 0, 0, 0], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U64, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 8` and `len - 8` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 8` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 8`.
+				if len < 8 or index > len.minus_wrap(8) {
+					Err(OutOfBounds)
+				} else {
+					Ok(u64_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
 			## Returns an empty iterator if this `U64` is greater than the other.
@@ -10809,34 +11433,28 @@ Builtin :: [].{
 			## ```
 			until : U64, U64 -> Iter(U64)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(end - start)
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U64.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U64.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
 			## Build a [U64] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [U64] (`0` to `18446744073709551615`), or if any element is not a valid digit.
+			## [U64] (`0` to `18446744073709551615`), or if any item is not a valid digit.
 			## ```roc
 			## expect U64.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -11600,6 +12218,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I64 -> U8
 
+			## Read a little-endian [I64] from the eight bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 8 <= List.len(bytes)`.
+			## ```roc
+			## expect I64.from_le_bytes([0, 0, 0, 0, 0, 0, 0, 0x80], 0) == Ok(I64.lowest)
+			##
+			## expect I64.from_le_bytes([0, 0, 0, 0, 0, 0, 0], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I64, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 8` and `len - 8` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 8` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 8`.
+				if len < 8 or index > len.minus_wrap(8) {
+					Err(OutOfBounds)
+				} else {
+					Ok(i64_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
 			## Returns an empty iterator if this `I64` is greater than the other.
@@ -11654,7 +12298,8 @@ Builtin :: [].{
 			## ```
 			until : I64, I64 -> Iter(I64)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
@@ -11663,29 +12308,22 @@ Builtin :: [].{
 							Err(Overflow) => Unknown
 						}
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I64.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I64.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
 			## Build an [I64] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [I64] (`-9223372036854775808` to `9223372036854775807`), or if any
-			## element is not a valid digit. The result is always non-negative; to
+			## item is not a valid digit. The result is always non-negative; to
 			## build a negative value, [I64.negate] the result.
 			## ```roc
 			## expect I64.from_int_digits([1, 2, 3]) == Ok(123)
@@ -12380,6 +13018,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : U128 -> U8
 
+			## Read a little-endian [U128] from the sixteen bytes at the given
+			## byte index. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			## ```roc
+			## expect U128.from_le_bytes(List.repeat(0.U8, 16), 0) == Ok(0)
+			##
+			## expect U128.from_le_bytes(List.repeat(0.U8, 15), 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U128, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
+					Err(OutOfBounds)
+				} else {
+					Ok(u128_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
 			## Returns an empty iterator if this `U128` is greater than the other.
@@ -12434,7 +13098,8 @@ Builtin :: [].{
 			## ```
 			until : U128, U128 -> Iter(U128)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
@@ -12443,29 +13108,22 @@ Builtin :: [].{
 							Err(OutOfRange) => Unknown
 						}
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U128.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U128.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
 			## Build a [U128] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
 			## [U128] (`0` to `340282366920938463463374607431768211455`), or if any
-			## element is not a valid digit.
+			## item is not a valid digit.
 			## ```roc
 			## expect U128.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -13267,6 +13925,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I128 -> U8
 
+			## Read a little-endian [I128] from the sixteen bytes at the given
+			## byte index. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			## ```roc
+			## expect I128.from_le_bytes(List.repeat(0.U8, 16), 0) == Ok(0)
+			##
+			## expect I128.from_le_bytes(List.repeat(0.U8, 15), 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I128, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
+					Err(OutOfBounds)
+				} else {
+					Ok(i128_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
 			## Returns an empty iterator if this `I128` is greater than the other.
@@ -13324,7 +14008,8 @@ Builtin :: [].{
 			## ```
 			until : I128, I128 -> Iter(I128)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
@@ -13336,29 +14021,22 @@ Builtin :: [].{
 							Err(Overflow) => Unknown
 						}
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I128.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I128.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
 			## Build an [I128] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [I128] (`-170141183460469231731687303715884105728` to
-			## `170141183460469231731687303715884105727`), or if any element is not
+			## `170141183460469231731687303715884105727`), or if any item is not
 			## a valid digit. The result is always non-negative; to build a negative
 			## value, [I128.negate] the result.
 			## ```roc
@@ -13589,7 +14267,9 @@ Builtin :: [].{
 			to_f64 : I128 -> F64
 
 			## Convert an [I128] to a [Dec], returning `Err(OutOfRange)` if the
-			## integer value does not fit in [Dec]'s fixed-point range.
+			## integer value does not fit in [Dec]'s fixed-point range. See
+			## [Dec.from_attos] to read an [I128] already scaled by 10^18, matching
+			## [Dec]'s internal representation.
 			to_dec_try : I128 -> Try(Dec, [OutOfRange])
 			to_dec_try = |num| out_of_range_try(i128_to_dec_try_unsafe(num))
 
@@ -13654,6 +14334,26 @@ Builtin :: [].{
 			## decimal places.
 			tau : Dec
 			tau = 6.283185307179586476
+
+			## Convert a [Dec] to a count of attos (units of 10^-18). This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.to_attos(1.5) == 1500000000000000000
+			##
+			## expect Dec.to_attos(Dec.highest) == I128.highest
+			## ```
+			to_attos : Dec -> I128
+
+			## Convert a count of attos (units of 10^-18) to a [Dec]. This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.from_attos(1500000000000000000) == 1.5
+			##
+			## expect Dec.from_attos(Dec.to_attos(-0.25)) == -0.25
+			## ```
+			from_attos : I128 -> Dec
 
 			## Convert a [Dec] to its decimal string representation.
 			## ```roc
@@ -13779,7 +14479,8 @@ Builtin :: [].{
 			## ```
 			negate : Dec -> Dec
 
-			## Return the absolute value of a [Dec].
+			## Return the absolute value of a [Dec]. Crashes on [Dec.lowest], since
+			## its positive magnitude does not fit in a [Dec].
 			## ```roc
 			## expect Dec.abs(3.5) == 3.5
 			##
@@ -13984,220 +14685,220 @@ Builtin :: [].{
 			## ```
 			abs_diff : Dec, Dec -> Dec
 
-			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i8(3.4) == 3
+			## expect Dec.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8 : Dec -> I8
-			round_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_round_to_whole(self)))
+			round_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			round_to_i8_try = |self| I128.to_i8_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i16(3.4) == 3
+			## expect Dec.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16 : Dec -> I16
-			round_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_round_to_whole(self)))
+			round_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			round_to_i16_try = |self| I128.to_i16_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i32(-3.6) == -4
+			## expect Dec.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32 : Dec -> I32
-			round_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_round_to_whole(self)))
+			round_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			round_to_i32_try = |self| I128.to_i32_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i64(7.2) == 7
+			## expect Dec.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64 : Dec -> I64
-			round_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_round_to_whole(self)))
+			round_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			round_to_i64_try = |self| I128.to_i64_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i128(7.2) == 7
+			## expect Dec.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128 : Dec -> I128
-			round_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_round_to_whole(self)))
+			round_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			round_to_i128_try = |self| Ok(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u8(3.4) == 3
+			## expect Dec.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8 : Dec -> U8
-			round_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_round_to_whole(self)))
+			round_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			round_to_u8_try = |self| I128.to_u8_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u16(3.4) == 3
+			## expect Dec.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16 : Dec -> U16
-			round_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_round_to_whole(self)))
+			round_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			round_to_u16_try = |self| I128.to_u16_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u32(7.2) == 7
+			## expect Dec.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32 : Dec -> U32
-			round_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_round_to_whole(self)))
+			round_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			round_to_u32_try = |self| I128.to_u32_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u64(7.2) == 7
+			## expect Dec.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64 : Dec -> U64
-			round_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_round_to_whole(self)))
+			round_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			round_to_u64_try = |self| I128.to_u64_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u128(7.2) == 7
+			## expect Dec.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128 : Dec -> U128
-			round_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_round_to_whole(self)))
+			round_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			round_to_u128_try = |self| I128.to_u128_try(dec_round_to_i128(self))
 
-			## Round a [Dec] down to an [I8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i8(-3.2) == -4
+			## expect Dec.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8 : Dec -> I8
-			floor_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_floor_to_whole(self)))
+			floor_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			floor_to_i8_try = |self| I128.to_i8_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to an [I16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i16(-3.2) == -4
+			## expect Dec.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16 : Dec -> I16
-			floor_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_floor_to_whole(self)))
+			floor_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			floor_to_i16_try = |self| I128.to_i16_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to an [I32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i32(3.8) == 3
+			## expect Dec.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32 : Dec -> I32
-			floor_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_floor_to_whole(self)))
+			floor_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			floor_to_i32_try = |self| I128.to_i32_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to an [I64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i64(3.8) == 3
+			## expect Dec.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64 : Dec -> I64
-			floor_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_floor_to_whole(self)))
+			floor_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			floor_to_i64_try = |self| I128.to_i64_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to an [I128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i128(3.8) == 3
+			## expect Dec.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128 : Dec -> I128
-			floor_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_floor_to_whole(self)))
+			floor_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			floor_to_i128_try = |self| Ok(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to a [U8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u8(3.8) == 3
+			## expect Dec.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8 : Dec -> U8
-			floor_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_floor_to_whole(self)))
+			floor_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			floor_to_u8_try = |self| I128.to_u8_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to a [U16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u16(3.8) == 3
+			## expect Dec.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16 : Dec -> U16
-			floor_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_floor_to_whole(self)))
+			floor_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			floor_to_u16_try = |self| I128.to_u16_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to a [U32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u32(3.8) == 3
+			## expect Dec.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32 : Dec -> U32
-			floor_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_floor_to_whole(self)))
+			floor_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			floor_to_u32_try = |self| I128.to_u32_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to a [U64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u64(3.8) == 3
+			## expect Dec.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64 : Dec -> U64
-			floor_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_floor_to_whole(self)))
+			floor_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			floor_to_u64_try = |self| I128.to_u64_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to a [U128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u128(3.8) == 3
+			## expect Dec.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128 : Dec -> U128
-			floor_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_floor_to_whole(self)))
+			floor_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			floor_to_u128_try = |self| I128.to_u128_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] up to an [I8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i8(-3.2) == -3
+			## expect Dec.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8 : Dec -> I8
-			ceiling_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try = |self| I128.to_i8_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to an [I16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i16(-3.2) == -3
+			## expect Dec.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16 : Dec -> I16
-			ceiling_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try = |self| I128.to_i16_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to an [I32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i32(3.2) == 4
+			## expect Dec.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32 : Dec -> I32
-			ceiling_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try = |self| I128.to_i32_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to an [I64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i64(3.2) == 4
+			## expect Dec.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64 : Dec -> I64
-			ceiling_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try = |self| I128.to_i64_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to an [I128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i128(3.2) == 4
+			## expect Dec.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128 : Dec -> I128
-			ceiling_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try = |self| Ok(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to a [U8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u8(3.2) == 4
+			## expect Dec.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8 : Dec -> U8
-			ceiling_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try = |self| I128.to_u8_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to a [U16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u16(3.2) == 4
+			## expect Dec.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16 : Dec -> U16
-			ceiling_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try = |self| I128.to_u16_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to a [U32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u32(3.2) == 4
+			## expect Dec.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32 : Dec -> U32
-			ceiling_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try = |self| I128.to_u32_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to a [U64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u64(3.2) == 4
+			## expect Dec.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64 : Dec -> U64
-			ceiling_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try = |self| I128.to_u64_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to a [U128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u128(3.2) == 4
+			## expect Dec.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128 : Dec -> U128
-			ceiling_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try = |self| I128.to_u128_try(dec_ceiling_to_i128(self))
 
 			## Build a [Dec] from a list of base-10 digits, most significant
-			## first. Each element of the list must be a digit in the range `0`
+			## first. Each item of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
-			## fit in a [Dec], or if any element is not a valid digit. The result is always
+			## fit in a [Dec], or if any item is not a valid digit. The result is always
 			## non-negative; to build a negative value, [Dec.negate] the result.
 			## ```roc
 			## expect Dec.from_int_digits([1, 2, 3]) == Ok(123.0)
@@ -14207,9 +14908,9 @@ Builtin :: [].{
 
 			## Build a [Dec] from a tuple of (integer digits, fractional digits),
 			## each as a list of base-10 digits most significant first. Each
-			## element of both lists must be a digit in the range `0` to `9`.
+			## item of both lists must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [Dec], or if any element is not a valid digit. The result is
+			## [Dec], or if any item is not a valid digit. The result is
 			## always non-negative; to build a negative value, [Dec.negate] the
 			## result.
 			## ```roc
@@ -14331,7 +15032,8 @@ Builtin :: [].{
 
 			## Convert a [Dec] to an [I128]. The fractional part is truncated
 			## toward zero. The entire integer part of any [Dec] fits in an
-			## [I128], so no wrapping occurs in practice.
+			## [I128], so no wrapping occurs in practice. See [Dec.to_attos] to get
+			## the exact value (scaled by 10^18) instead.
 			## ```roc
 			## expect Dec.to_i128_wrap(42.5) == 42
 			## ```
@@ -14339,7 +15041,8 @@ Builtin :: [].{
 
 			## Convert a [Dec] to an [I128], returning `Err(OutOfRange)` if the
 			## integer part does not fit. The fractional part is truncated toward
-			## zero.
+			## zero. See [Dec.to_attos] to get the exact value (scaled by 10^18)
+			## instead.
 			## ```roc
 			## expect Dec.to_i128_try(42.5) == Ok(42)
 			## ```
@@ -14534,23 +15237,17 @@ Builtin :: [].{
 			## ```
 			until : Dec, Dec -> Iter(Dec)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					Unknown,
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match Dec.plus_try(start, 1.0) {
-									Ok(next) => if next < end {
-										Dec.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match Dec.plus_try(current, 1.0) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -14991,220 +15688,220 @@ Builtin :: [].{
 			## ```
 			abs_diff : F32, F32 -> F32
 
-			## Round an [F32] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i8(3.4) == 3
+			## expect F32.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8 : F32 -> I8
-			round_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_round_to_whole(self)))
+			round_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			round_to_i8_try = |self| F32.to_i8_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i16(3.4) == 3
+			## expect F32.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16 : F32 -> I16
-			round_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_round_to_whole(self)))
+			round_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			round_to_i16_try = |self| F32.to_i16_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i32(-3.6) == -4
+			## expect F32.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32 : F32 -> I32
-			round_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_round_to_whole(self)))
+			round_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			round_to_i32_try = |self| F32.to_i32_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i64(7.2) == 7
+			## expect F32.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64 : F32 -> I64
-			round_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_round_to_whole(self)))
+			round_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			round_to_i64_try = |self| F32.to_i64_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i128(7.2) == 7
+			## expect F32.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128 : F32 -> I128
-			round_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_round_to_whole(self)))
+			round_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			round_to_i128_try = |self| F32.to_i128_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u8(3.4) == 3
+			## expect F32.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8 : F32 -> U8
-			round_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_round_to_whole(self)))
+			round_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			round_to_u8_try = |self| F32.to_u8_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u16(3.4) == 3
+			## expect F32.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16 : F32 -> U16
-			round_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_round_to_whole(self)))
+			round_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			round_to_u16_try = |self| F32.to_u16_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u32(7.2) == 7
+			## expect F32.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32 : F32 -> U32
-			round_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_round_to_whole(self)))
+			round_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			round_to_u32_try = |self| F32.to_u32_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u64(7.2) == 7
+			## expect F32.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64 : F32 -> U64
-			round_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_round_to_whole(self)))
+			round_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			round_to_u64_try = |self| F32.to_u64_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u128(7.2) == 7
+			## expect F32.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128 : F32 -> U128
-			round_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_round_to_whole(self)))
+			round_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			round_to_u128_try = |self| F32.to_u128_try(f32_round_to_whole(self))
 
-			## Round an [F32] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i8(-3.2) == -4
+			## expect F32.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8 : F32 -> I8
-			floor_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_floor_unsafe(self)))
+			floor_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			floor_to_i8_try = |self| F32.to_i8_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i16(-3.2) == -4
+			## expect F32.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16 : F32 -> I16
-			floor_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_floor_unsafe(self)))
+			floor_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			floor_to_i16_try = |self| F32.to_i16_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i32(3.8) == 3
+			## expect F32.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32 : F32 -> I32
-			floor_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_floor_unsafe(self)))
+			floor_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			floor_to_i32_try = |self| F32.to_i32_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i64(3.8) == 3
+			## expect F32.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64 : F32 -> I64
-			floor_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_floor_unsafe(self)))
+			floor_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			floor_to_i64_try = |self| F32.to_i64_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i128(3.8) == 3
+			## expect F32.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128 : F32 -> I128
-			floor_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_floor_unsafe(self)))
+			floor_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			floor_to_i128_try = |self| F32.to_i128_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u8(3.8) == 3
+			## expect F32.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8 : F32 -> U8
-			floor_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_floor_unsafe(self)))
+			floor_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			floor_to_u8_try = |self| F32.to_u8_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u16(3.8) == 3
+			## expect F32.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16 : F32 -> U16
-			floor_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_floor_unsafe(self)))
+			floor_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			floor_to_u16_try = |self| F32.to_u16_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u32(3.8) == 3
+			## expect F32.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32 : F32 -> U32
-			floor_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_floor_unsafe(self)))
+			floor_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			floor_to_u32_try = |self| F32.to_u32_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u64(3.8) == 3
+			## expect F32.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64 : F32 -> U64
-			floor_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_floor_unsafe(self)))
+			floor_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			floor_to_u64_try = |self| F32.to_u64_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u128(3.8) == 3
+			## expect F32.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128 : F32 -> U128
-			floor_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_floor_unsafe(self)))
+			floor_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			floor_to_u128_try = |self| F32.to_u128_try(f32_floor_unsafe(self))
 
-			## Round an [F32] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i8(-3.2) == -3
+			## expect F32.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8 : F32 -> I8
-			ceiling_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try = |self| F32.to_i8_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i16(-3.2) == -3
+			## expect F32.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16 : F32 -> I16
-			ceiling_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try = |self| F32.to_i16_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i32(3.2) == 4
+			## expect F32.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32 : F32 -> I32
-			ceiling_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try = |self| F32.to_i32_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i64(3.2) == 4
+			## expect F32.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64 : F32 -> I64
-			ceiling_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try = |self| F32.to_i64_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i128(3.2) == 4
+			## expect F32.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128 : F32 -> I128
-			ceiling_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try = |self| F32.to_i128_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u8(3.2) == 4
+			## expect F32.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8 : F32 -> U8
-			ceiling_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try = |self| F32.to_u8_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u16(3.2) == 4
+			## expect F32.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16 : F32 -> U16
-			ceiling_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try = |self| F32.to_u16_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u32(3.2) == 4
+			## expect F32.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32 : F32 -> U32
-			ceiling_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try = |self| F32.to_u32_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u64(3.2) == 4
+			## expect F32.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64 : F32 -> U64
-			ceiling_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try = |self| F32.to_u64_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u128(3.2) == 4
+			## expect F32.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128 : F32 -> U128
-			ceiling_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try = |self| F32.to_u128_try(f32_ceiling_unsafe(self))
 
 			## Build an [F32] from a list of base-10 digits, most significant
-			## first. Each element of the list must be a digit in the range `0`
+			## first. Each item of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
-			## fit in an [F32], or if any element is not a valid digit. The
+			## fit in an [F32], or if any item is not a valid digit. The
 			## result is always non-negative; to build a negative value, [F32.negate]
 			## the result.
 			## ```roc
@@ -15215,9 +15912,9 @@ Builtin :: [].{
 
 			## Build an [F32] from a tuple of (integer digits, fractional digits),
 			## each as a list of base-10 digits most significant first. Each
-			## element of both lists must be a digit in the range `0` to `9`.
+			## item of both lists must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [F32], or if any element is not a valid digit. The result is
+			## [F32], or if any item is not a valid digit. The result is
 			## always non-negative; to build a negative value, [F32.negate] the
 			## result.
 			## ```roc
@@ -15938,220 +16635,220 @@ Builtin :: [].{
 			## ```
 			abs_diff : F64, F64 -> F64
 
-			## Round an [F64] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i8(3.4) == 3
+			## expect F64.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8 : F64 -> I8
-			round_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_round_to_whole(self)))
+			round_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			round_to_i8_try = |self| F64.to_i8_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i16(3.4) == 3
+			## expect F64.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16 : F64 -> I16
-			round_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_round_to_whole(self)))
+			round_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			round_to_i16_try = |self| F64.to_i16_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i32(-3.6) == -4
+			## expect F64.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32 : F64 -> I32
-			round_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_round_to_whole(self)))
+			round_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			round_to_i32_try = |self| F64.to_i32_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i64(7.2) == 7
+			## expect F64.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64 : F64 -> I64
-			round_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_round_to_whole(self)))
+			round_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			round_to_i64_try = |self| F64.to_i64_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i128(7.2) == 7
+			## expect F64.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128 : F64 -> I128
-			round_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_round_to_whole(self)))
+			round_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			round_to_i128_try = |self| F64.to_i128_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u8(3.4) == 3
+			## expect F64.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8 : F64 -> U8
-			round_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_round_to_whole(self)))
+			round_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			round_to_u8_try = |self| F64.to_u8_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u16(3.4) == 3
+			## expect F64.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16 : F64 -> U16
-			round_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_round_to_whole(self)))
+			round_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			round_to_u16_try = |self| F64.to_u16_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u32(7.2) == 7
+			## expect F64.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32 : F64 -> U32
-			round_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_round_to_whole(self)))
+			round_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			round_to_u32_try = |self| F64.to_u32_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u64(7.2) == 7
+			## expect F64.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64 : F64 -> U64
-			round_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_round_to_whole(self)))
+			round_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			round_to_u64_try = |self| F64.to_u64_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u128(7.2) == 7
+			## expect F64.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128 : F64 -> U128
-			round_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_round_to_whole(self)))
+			round_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			round_to_u128_try = |self| F64.to_u128_try(f64_round_to_whole(self))
 
-			## Round an [F64] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i8(-3.2) == -4
+			## expect F64.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8 : F64 -> I8
-			floor_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_floor_unsafe(self)))
+			floor_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			floor_to_i8_try = |self| F64.to_i8_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i16(-3.2) == -4
+			## expect F64.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16 : F64 -> I16
-			floor_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_floor_unsafe(self)))
+			floor_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			floor_to_i16_try = |self| F64.to_i16_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i32(3.8) == 3
+			## expect F64.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32 : F64 -> I32
-			floor_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_floor_unsafe(self)))
+			floor_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			floor_to_i32_try = |self| F64.to_i32_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i64(3.8) == 3
+			## expect F64.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64 : F64 -> I64
-			floor_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_floor_unsafe(self)))
+			floor_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			floor_to_i64_try = |self| F64.to_i64_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i128(3.8) == 3
+			## expect F64.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128 : F64 -> I128
-			floor_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_floor_unsafe(self)))
+			floor_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			floor_to_i128_try = |self| F64.to_i128_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u8(3.8) == 3
+			## expect F64.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8 : F64 -> U8
-			floor_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_floor_unsafe(self)))
+			floor_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			floor_to_u8_try = |self| F64.to_u8_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u16(3.8) == 3
+			## expect F64.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16 : F64 -> U16
-			floor_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_floor_unsafe(self)))
+			floor_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			floor_to_u16_try = |self| F64.to_u16_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u32(3.8) == 3
+			## expect F64.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32 : F64 -> U32
-			floor_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_floor_unsafe(self)))
+			floor_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			floor_to_u32_try = |self| F64.to_u32_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u64(3.8) == 3
+			## expect F64.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64 : F64 -> U64
-			floor_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_floor_unsafe(self)))
+			floor_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			floor_to_u64_try = |self| F64.to_u64_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u128(3.8) == 3
+			## expect F64.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128 : F64 -> U128
-			floor_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_floor_unsafe(self)))
+			floor_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			floor_to_u128_try = |self| F64.to_u128_try(f64_floor_unsafe(self))
 
-			## Round an [F64] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i8(-3.2) == -3
+			## expect F64.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8 : F64 -> I8
-			ceiling_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try = |self| F64.to_i8_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i16(-3.2) == -3
+			## expect F64.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16 : F64 -> I16
-			ceiling_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try = |self| F64.to_i16_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i32(3.2) == 4
+			## expect F64.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32 : F64 -> I32
-			ceiling_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try = |self| F64.to_i32_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i64(3.2) == 4
+			## expect F64.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64 : F64 -> I64
-			ceiling_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try = |self| F64.to_i64_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i128(3.2) == 4
+			## expect F64.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128 : F64 -> I128
-			ceiling_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try = |self| F64.to_i128_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u8(3.2) == 4
+			## expect F64.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8 : F64 -> U8
-			ceiling_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try = |self| F64.to_u8_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u16(3.2) == 4
+			## expect F64.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16 : F64 -> U16
-			ceiling_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try = |self| F64.to_u16_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u32(3.2) == 4
+			## expect F64.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32 : F64 -> U32
-			ceiling_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try = |self| F64.to_u32_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u64(3.2) == 4
+			## expect F64.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64 : F64 -> U64
-			ceiling_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try = |self| F64.to_u64_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u128(3.2) == 4
+			## expect F64.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128 : F64 -> U128
-			ceiling_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try = |self| F64.to_u128_try(f64_ceiling_unsafe(self))
 
 			## Build an [F64] from a list of base-10 digits, most significant
-			## first. Each element of the list must be a digit in the range `0`
+			## first. Each item of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
-			## fit in an [F64], or if any element is not a valid digit. The
+			## fit in an [F64], or if any item is not a valid digit. The
 			## result is always non-negative; to build a negative value, [F64.negate]
 			## the result.
 			## ```roc
@@ -16162,9 +16859,9 @@ Builtin :: [].{
 
 			## Build an [F64] from a tuple of (integer digits, fractional digits),
 			## each as a list of base-10 digits most significant first. Each
-			## element of both lists must be a digit in the range `0` to `9`.
+			## item of both lists must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [F64], or if any element is not a valid digit. The result is
+			## [F64], or if any item is not a valid digit. The result is
 			## always non-negative; to build a negative value, [F64.negate] the
 			## result.
 			## ```roc
@@ -16857,7 +17554,8 @@ Builtin :: [].{
 			## For each lane of `indices`: the lane of `table` it names, or 0
 			## if the index is 16 or greater. This dynamic byte shuffle powers
 			## palette lookups, nibble-table tricks, and byte rearrangement
-			## with runtime patterns.
+			## with runtime patterns. Other libraries call this operation a
+			## swizzle, a shuffle, or a permute.
 			##
 			## Lowers to `pshufb` plus a one-instruction fixup on x86-64
 			## (`pshufb` alone wraps indices 16-127), `tbl` on AArch64 NEON,
@@ -16948,9 +17646,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U8x16, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_load_16_unchecked(bytes, index))
@@ -16967,9 +17671,15 @@ Builtin :: [].{
 			store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_store_16_unchecked(vector, bytes, index))
@@ -16991,7 +17701,15 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start|
-						if len - start >= 16 {
+					# Compare the index against a limit rather than subtracting from it.
+					# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+					# reads repeatedly hoists them out and keeps just the one comparison of
+					# `start` against a precomputed bound. Subtracting the other way round --
+					# `len - start < 16` -- reads the same but depends on `start`, so all of it
+					# stays in the loop.
+					#
+					# Wrapping is safe because the first check has already ruled out `len < 16`.
+						if len >= 16 and start <= len.minus_wrap(16) {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
 							Err(NoMore)
@@ -17436,9 +18154,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I8x16, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_load_16_unchecked(bytes, index))
@@ -17455,9 +18179,15 @@ Builtin :: [].{
 			store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_store_16_unchecked(vector, bytes, index))
@@ -17916,9 +18646,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U16x8, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_load_16_unchecked(bytes, index))
@@ -17935,9 +18671,15 @@ Builtin :: [].{
 			store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_store_16_unchecked(vector, bytes, index))
@@ -18442,9 +19184,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I16x8, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_load_16_unchecked(bytes, index))
@@ -18461,9 +19209,15 @@ Builtin :: [].{
 			store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_store_16_unchecked(vector, bytes, index))
@@ -18868,9 +19622,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U32x4, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_load_16_unchecked(bytes, index))
@@ -18887,9 +19647,15 @@ Builtin :: [].{
 			store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_store_16_unchecked(vector, bytes, index))
@@ -19322,9 +20088,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I32x4, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_load_16_unchecked(bytes, index))
@@ -19341,9 +20113,15 @@ Builtin :: [].{
 			store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_store_16_unchecked(vector, bytes, index))
@@ -19676,9 +20454,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U64x2, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_load_16_unchecked(bytes, index))
@@ -19695,9 +20479,15 @@ Builtin :: [].{
 			store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_store_16_unchecked(vector, bytes, index))
@@ -20039,9 +20829,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I64x2, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_load_16_unchecked(bytes, index))
@@ -20058,9 +20854,15 @@ Builtin :: [].{
 			store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_store_16_unchecked(vector, bytes, index))
@@ -20864,6 +21666,25 @@ u8_list_with_capacity : U64 -> List(U8)
 
 u8_list_get_unsafe : List(U8), U64 -> U8
 
+# Little-endian integer loads out of a byte list. Each requires the caller to
+# have already proven that the full width is in range; the bounds check lives
+# in the `from_le_bytes` wrapper on each numeric type.
+u16_from_le_bytes_unchecked : List(U8), U64 -> U16
+
+i16_from_le_bytes_unchecked : List(U8), U64 -> I16
+
+u32_from_le_bytes_unchecked : List(U8), U64 -> U32
+
+i32_from_le_bytes_unchecked : List(U8), U64 -> I32
+
+u64_from_le_bytes_unchecked : List(U8), U64 -> U64
+
+i64_from_le_bytes_unchecked : List(U8), U64 -> I64
+
+u128_from_le_bytes_unchecked : List(U8), U64 -> U128
+
+i128_from_le_bytes_unchecked : List(U8), U64 -> I128
+
 u8_list_append_unsafe : List(U8), U8 -> List(U8)
 
 u8_list_reserve : List(U8), U64 -> List(U8)
@@ -20892,43 +21713,34 @@ out_of_range_try = |answer|
 		Err(OutOfRange)
 	}
 
-out_of_range_or_crash : Try(item, [OutOfRange]) -> item
-out_of_range_or_crash = |answer|
-	match answer {
-		Ok(value) => value
-		Err(OutOfRange) => {
-			crash "number is out of range"
-		}
-	}
+dec_attos_per_whole : I128
+dec_attos_per_whole = 1000000000000000000
 
-dec_round_to_whole : Dec -> Dec
-dec_round_to_whole = |self| {
-	truncated = Dec.div_trunc_by(self, 1.0)
-	remainder = self - truncated
-	if remainder >= 0.5 {
-		truncated + 1.0
-	} else if remainder <= -0.5 {
-		truncated - 1.0
+dec_round_to_i128 : Dec -> I128
+dec_round_to_i128 = |self| {
+	attos = Dec.to_attos(self)
+	truncated = I128.div_trunc_by(attos, dec_attos_per_whole)
+	remainder = I128.rem_by(attos, dec_attos_per_whole)
+	if remainder >= 500000000000000000 {
+		truncated + 1
+	} else if remainder <= -500000000000000000 {
+		truncated - 1
 	} else {
 		truncated
 	}
 }
+
+dec_floor_to_i128 : Dec -> I128
+dec_floor_to_i128 = |self| I128.div_floor_by(Dec.to_attos(self), dec_attos_per_whole)
+
+dec_ceiling_to_i128 : Dec -> I128
+dec_ceiling_to_i128 = |self| I128.div_ceil_by(Dec.to_attos(self), dec_attos_per_whole)
 
 dec_floor_to_whole : Dec -> Dec
 dec_floor_to_whole = |self| {
 	truncated = Dec.div_trunc_by(self, 1.0)
 	if self < truncated {
 		truncated - 1.0
-	} else {
-		truncated
-	}
-}
-
-dec_ceiling_to_whole : Dec -> Dec
-dec_ceiling_to_whole = |self| {
-	truncated = Dec.div_trunc_by(self, 1.0)
-	if self > truncated {
-		truncated + 1.0
 	} else {
 		truncated
 	}
@@ -21338,6 +22150,13 @@ list_append_if_ok = |list, maybe_item|
 		Err(_) => list
 	}
 
+list_prepend_if_ok : List(a), Try(a, err) -> List(a)
+list_prepend_if_ok = |list, maybe_item|
+	match maybe_item {
+		Ok(item) => List.prepend(list, item)
+		Err(_) => list
+	}
+
 unsigned_minus_saturated : item, item, item -> item
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
 unsigned_minus_saturated = |zero, a, b|
@@ -21436,11 +22255,10 @@ range_done = || iter_from_step(
 	|| Done,
 )
 
-# Shared step loop behind the numeric types' `range_exclusive` methods. Each
-# caller supplies `len_if_known` computed from its own representation; when it
-# is `Known`, it must be the exact yield count (`Iter.take_last`/`drop_last`
-# rely on that). The construction is `Iter.exclusive_range`, whose flat
-# self-recursive shape keeps a range's state unboxed when an adapter wraps it.
+# Shared state machine behind the numeric types' `range_exclusive` methods.
+# Each caller supplies `len_if_known` computed from its own representation;
+# when it is `Known`, it must be the exact yield count
+# (`Iter.take_last`/`drop_last` rely on that).
 range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_lt : num, num -> Bool,
@@ -21448,7 +22266,19 @@ range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 	]
 range_exclusive_with_len = |start, end, len_if_known|
-	Iter.exclusive_range(start, end, len_if_known)
+	Iter.custom(
+		start,
+		len_if_known,
+		|current|
+			if current < end {
+				match current.plus_try(1) {
+					Ok(next) => Ok((current, next))
+					Err(Overflow) => Ok((current, end))
+				}
+			} else {
+				Err(NoMore)
+			},
+	)
 
 # Shared step loop behind the numeric types' `range_inclusive` methods; same
 # `len_if_known` contract as `range_exclusive_with_len`. The construction is
@@ -21473,32 +22303,23 @@ ScannedJsonString : { after : Str, body : [NoEscapes(Str), HasEscapes(Str)] }
 ## along the way.
 scan_json_string_tail : Str -> Try(ScannedJsonString, [InvalidJson(Str), ..])
 scan_json_string_tail = |tail| {
-	bytes = Str.to_utf8(tail)
-	len = List.len(bytes)
+	len = Str.count_utf8_bytes(tail)
 	var $index = 0
 	var $had_escape = False
 
-	# Walk the bytes, consuming each escape atomically, until the closing quote.
-	# Every escape must be validated so that invalid escapes are rejected as invalid JSON
-	# (even inside skipped strings).
+	# Walk the string's bytes in place, consuming each escape atomically, until the
+	# closing quote. Every escape must be validated so that invalid escapes are
+	# rejected as invalid JSON (even inside skipped strings).
 	while $index < len {
-		byte = list_get_unsafe(bytes, $index)
+		byte = str_get_utf8_byte_unsafe(tail, $index)
 		match byte {
 			# Because we consume escapes atomically, if we hit a quote we know that it's the end
 			# of the string.
 			'"' => {
-				raw = match Str.from_utf8(List.take_first(bytes, $index)) {
-					Ok(body) => body
-					# unreachable: the split point is an ASCII quote, so the prefix is always valid UTF-8
-					Err(_) => {
-						crash "Json scanner invariant violated: split at a quote was not valid UTF-8"
-					}
-				}
-
-				# Str has no index-based slicing, so recover `after` by dropping the
-				# body (a content-matched prefix of `tail`) and then the closing
-				# quote — both zero-copy slice operations.
-				after = Str.drop_prefix(Str.drop_prefix(tail, raw), "\"")
+				# The quote is ASCII, so both cut points are UTF-8 boundaries and the
+				# slices are valid strings; slicing past the quote also skips it.
+				raw = str_substring_unsafe(tail, 0, $index)
+				after = str_drop_first_bytes_unsafe(tail, $index + 1)
 
 				return Ok({ after, body: if $had_escape HasEscapes(raw) else NoEscapes(raw) })
 			}
@@ -21506,14 +22327,14 @@ scan_json_string_tail = |tail| {
 			# escape sequence atomically
 			'\\' => {
 				$had_escape = True
-				escape = parse_json_escape_sequence(List.drop_first(bytes, $index + 1))?
-				$index = $index + 1 + escape.consumed
+				escape = parse_json_escaped_code_point(tail, $index)?
+				$index = $index + escape.consumed
 			}
-			# For any other character besides a quote or a backslash, we continue.
+			# For any other byte besides a quote or a backslash, we continue.
 			_ => {
 				# JSON requires U+0000 through U+001F to be escaped inside strings.
 				if byte < 32 {
-					return Err(Json.invalid_json)
+					return Err(InvalidJson("unescaped control character in string"))
 				} else {
 					$index = $index + 1
 				}
@@ -21522,7 +22343,7 @@ scan_json_string_tail = |tail| {
 	}
 
 	# no unescaped closing quote anywhere: the string is unterminated
-	Err(Json.invalid_json)
+	Err(InvalidJson("unterminated string"))
 }
 
 ## Find the end of a JSON string, for skipped values whose content is discarded.
@@ -21536,20 +22357,23 @@ skip_json_string_tail = |tail| {
 
 ## Decode a JSON string body: walk it, mapping each escape sequence to its code point and
 ## copying everything else.
+##
+## The scan already validated every escape, so decoding re-parses them. This double
+## parse is deliberate: it keeps scanning allocation-free, and skipped strings and
+## clean strings never decode at all.
 decode_json_string_body : Str -> Try(Str, [InvalidJson(Str), ..])
 decode_json_string_body = |raw| {
-	bytes = Str.to_utf8(raw)
-	len = List.len(bytes)
+	len = Str.count_utf8_bytes(raw)
 	var $out = u8_list_reserve([], len)
 	var $index = 0
 
 	while $index < len {
-		byte = list_get_unsafe(bytes, $index)
+		byte = str_get_utf8_byte_unsafe(raw, $index)
 		match byte {
 			'\\' => {
-				escape = parse_json_escape_sequence(List.drop_first(bytes, $index + 1))?
+				escape = parse_json_escaped_code_point(raw, $index)?
 				$out = append_utf8_code_point($out, escape.code_point)
-				$index = $index + 1 + escape.consumed
+				$index = $index + escape.consumed
 			}
 			_ => {
 				$out = u8_append($out, byte)
@@ -21568,49 +22392,84 @@ decode_json_string_body = |raw| {
 	}
 }
 
-## Parse one JSON escape sequence. `rest` is expected to hold the bytes after a backslash.
-## Every JSON escape denotes exactly one code point (surrogate pairs combine into one), so
-## this returns that code point plus the number of bytes consumed from `rest`.
-parse_json_escape_sequence : List(U8) -> Try({ code_point : U64, consumed : U64 }, [InvalidJson(Str), ..])
-parse_json_escape_sequence = |rest| match rest {
-	['"', ..] => Ok({ code_point: '"', consumed: 1 })
-	['\\', ..] => Ok({ code_point: '\\', consumed: 1 })
-	['/', ..] => Ok({ code_point: '/', consumed: 1 })
-	# backspace
-	['b', ..] => Ok({ code_point: 8, consumed: 1 })
-	# form feed
-	['f', ..] => Ok({ code_point: 12, consumed: 1 })
-	# newline
-	['n', ..] => Ok({ code_point: 10, consumed: 1 })
-	# carriage return
-	['r', ..] => Ok({ code_point: 13, consumed: 1 })
-	# tab
-	['t', ..] => Ok({ code_point: 9, consumed: 1 })
-	# \uXXXX names a UTF-16 code unit, not a code point, so surrogates may need pairing
-	['u', h0, h1, h2, h3, .. as tail] => {
-		unit = decode_json_hex4(h0, h1, h2, h3)?
-		if unit >= 55296 and unit <= 56319 {
-			# high surrogate (U+D800..U+DBFF): a \uDC00..\uDFFF escape must follow
-			match tail {
-				['\\', 'u', h4, h5, h6, h7, ..] => {
-					low = decode_json_hex4(h4, h5, h6, h7)?
-					if low >= 56320 and low <= 57343 {
-						Ok({ code_point: 65536 + (unit - 55296) * 1024 + (low - 56320), consumed: 11 })
-					} else {
-						Err(Json.invalid_json)
-					}
-				}
-				_ => Err(Json.invalid_json)
-			}
-		} else if unit >= 56320 and unit <= 57343 {
-			# unpaired low surrogate (U+DC00..U+DFFF)
-			Err(Json.invalid_json)
-		} else {
-			Ok({ code_point: unit, consumed: 5 })
-		}
+## Parse one escaped character from string `s`, starting at byte `index`.
+##
+## `index` is expected (but not verified) to be the index of the `\` character that starts
+## the escape. (Note that we index into `s`, rather than taking a slice and starting at 0,
+## because the latter was found to be slower empirically.)
+##
+## Returns the character's code point and the number of bytes consumed, which could be:
+##   2, for simple sequences like `\n`
+##   6, for characters represented by a single UTF-16 code unit, like `\u00E9` (é)
+##  12, for characters represented by a pair of UTF-16 code units, like `\uD83D\uDE00` (😀)
+##
+## Each branch checks the length before reading; the three checks mirror the three sizes
+## above.
+parse_json_escaped_code_point : Str, U64 -> Try({ code_point : U64, consumed : U64 }, [InvalidJson(Str), ..])
+parse_json_escaped_code_point = |s, index| {
+	len = Str.count_utf8_bytes(s)
+	if index + 2 > len {
+		# the backslash ends the input: a truncated escape
+		return Err(InvalidJson("truncated escape"))
 	}
-	# truncated or unknown escape
-	_ => Err(Json.invalid_json)
+
+	match str_get_utf8_byte_unsafe(s, index + 1) {
+		'"' => Ok({ code_point: '"', consumed: 2 })
+		'\\' => Ok({ code_point: '\\', consumed: 2 })
+		'/' => Ok({ code_point: '/', consumed: 2 })
+		# backspace
+		'b' => Ok({ code_point: 8, consumed: 2 })
+		# form feed
+		'f' => Ok({ code_point: 12, consumed: 2 })
+		# newline
+		'n' => Ok({ code_point: 10, consumed: 2 })
+		# carriage return
+		'r' => Ok({ code_point: 13, consumed: 2 })
+		# tab
+		't' => Ok({ code_point: 9, consumed: 2 })
+		# the four hex digits name a UTF-16 code unit
+		'u' => {
+			if index + 6 > len {
+				# truncated \uXXXX escape
+				return Err(InvalidJson("truncated \\uXXXX escape"))
+			}
+			unit = decode_json_hex4(
+				str_get_utf8_byte_unsafe(s, index + 2),
+				str_get_utf8_byte_unsafe(s, index + 3),
+				str_get_utf8_byte_unsafe(s, index + 4),
+				str_get_utf8_byte_unsafe(s, index + 5),
+			)?
+			if unit >= 0xD800 and unit <= 0xDBFF {
+				# a high surrogate (U+D800..U+DBFF) merges with the low
+				# surrogate escape that must follow
+				if index + 12 > len {
+					return Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
+				}
+				if str_get_utf8_byte_unsafe(s, index + 6) != '\\' or str_get_utf8_byte_unsafe(s, index + 7) != 'u' {
+					return Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
+				}
+				low = decode_json_hex4(
+					str_get_utf8_byte_unsafe(s, index + 8),
+					str_get_utf8_byte_unsafe(s, index + 9),
+					str_get_utf8_byte_unsafe(s, index + 10),
+					str_get_utf8_byte_unsafe(s, index + 11),
+				)?
+				if low >= 0xDC00 and low <= 0xDFFF {
+					Ok({ code_point: 0x10000 + (unit - 0xD800) * 0x400 + (low - 0xDC00), consumed: 12 })
+				} else {
+					Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
+				}
+			} else if unit >= 0xDC00 and unit <= 0xDFFF {
+				# unpaired low surrogate (U+DC00..U+DFFF)
+				Err(InvalidJson("unpaired low surrogate escape"))
+			} else {
+				# a BMP code unit already is the code point
+				Ok({ code_point: unit, consumed: 6 })
+			}
+		}
+		# unknown escape
+		_ => Err(InvalidJson("unknown escape character"))
+	}
 }
 
 ## Combine 4 hex-digit bytes (as in \uXXXX) into their numeric value.
@@ -21625,7 +22484,9 @@ decode_json_hex4 = |b0, b1, b2, b3| {
 
 decode_json_hex_digit : U8 -> Try(U64, [InvalidJson(Str), ..])
 decode_json_hex_digit = |byte|
-	hex_digit_value(byte).map_ok(|value| value.to_u64()).map_err(|_| Json.invalid_json)
+	hex_digit_value(byte)
+		.map_ok(|value| value.to_u64())
+		.map_err(|_| InvalidJson("invalid hex digit in \\uXXXX escape"))
 
 ## JSON whitespace per RFC 8259: space, tab, `\n`, or `\r`.
 is_json_whitespace : U8 -> Bool
@@ -21654,12 +22515,8 @@ json_trim_start = |s| {
 	if $index == 0 {
 		s
 	} else {
-		match Str.drop_first_bytes(s, $index) {
-			Ok(trimmed) => trimmed
-			Err(BadUtf8) => {
-				crash "json_trim_start invariant violated: ASCII whitespace ended inside UTF-8"
-			}
-		}
+		# the dropped prefix is ASCII whitespace, so the cut is a UTF-8 boundary
+		str_drop_first_bytes_unsafe(s, $index)
 	}
 }
 
@@ -21726,8 +22583,26 @@ str_get_utf8_byte_unsafe : Str, U64 -> U8
 # The result shares the source string's allocation.
 str_substring_unsafe : Str, U64, U64 -> Str
 
+## Drop `count` bytes from the front of a string as a zero-copy slice ("" when
+## `count` is at or past the end). Bounds are handled; what is NOT checked is
+## that `count` falls on a UTF-8 boundary — the caller guarantees that, so the
+## slice is a valid string. (`Str.drop_first_bytes` is the checked version.)
+str_drop_first_bytes_unsafe : Str, U64 -> Str
+str_drop_first_bytes_unsafe = |s, count| {
+	len = Str.count_utf8_bytes(s)
+	if count >= len {
+		""
+	} else {
+		str_substring_unsafe(s, count, len - count)
+	}
+}
+
+# Implemented by the compiler. Moves the input list's ownership into the
+# returned list before List.map tests whether it can reuse the allocation.
+list_map_prepare_reuse : List(input) -> List(input)
+
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
-# the input list's allocation for its output: the input and output element
+# the prepared list's allocation for its output: the input and output item
 # layouts are interchangeable, and at runtime the list is uniquely owned and
 # not a seamless slice. Lowered to a constant 0 when the layouts are not
 # interchangeable, which lets lowering drop the in-place branch entirely.
@@ -21735,21 +22610,21 @@ str_substring_unsafe : Str, U64, U64 -> Str
 list_map_can_reuse : List(input), (input -> output) -> U8
 
 # Implemented by the compiler. Retypes a unique, non-slice list in place so
-# List.map can overwrite its elements without allocating a new list. Must only
+# List.map can overwrite its items without allocating a new list. Must only
 # be called on a list for which list_map_can_reuse returned 1.
 list_map_cast_unsafe : List(input) -> List(output)
 
-# Implemented by the compiler. Moves ownership of the element at the given
+# Implemented by the compiler. Moves ownership of the item at the given
 # index out of the list's buffer; the slot keeps stale bytes until
 # list_map_write_unsafe stores its replacement. No bounds checks.
 list_map_extract_unsafe : List(output), U64 -> input
 
-# Implemented by the compiler. Stores an owned element into the slot at the
+# Implemented by the compiler. Stores an owned item into the slot at the
 # given index, which must have been vacated by list_map_extract_unsafe.
 # No bounds checks.
 list_map_write_unsafe : List(output), U64, output -> List(output)
 
-# Implemented by the compiler, ensures at least spare additional elements of capacity
+# Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
 
 # Implemented by the compiler, trims unused list capacity

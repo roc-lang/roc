@@ -357,6 +357,50 @@ pub fn createValidationReport(
                 try report.document.addLineBreak();
             }
 
+            // A baseline target and its default twin are separate entries on
+            // purpose. Linking a host built at the default CPU level into a
+            // binary that promises to run on the oldest CPUs would put those
+            // instructions back, so the platform has to build and declare a
+            // host for the baseline target of its own accord.
+            if (info.requested_target.cpuLevel() == .v1) {
+                const default_target = info.requested_target.defaultCpuTarget();
+
+                // Nothing asks for a baseline target more often than this
+                // machine does: when the CPU running the compiler is below the
+                // default level's floor, every command that compiles for the
+                // host asks for the baseline spelling of the host's target.
+                if (info.requested_target == target_mod.host_cpu.nativeTarget()) {
+                    try report.document.addText("This machine's CPU does not run the instructions ");
+                    try report.document.addAnnotated(@tagName(default_target), .emphasized);
+                    try report.document.addText(" uses,");
+                    try report.document.addLineBreak();
+                    try report.document.addText("so compiling for this machine means compiling for ");
+                    try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
+                    try report.document.addText(".");
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+                }
+
+                for (info.supported_targets) |spec| {
+                    if (spec.target != default_target) continue;
+
+                    try report.document.addText("This platform supports ");
+                    try report.document.addAnnotated(@tagName(default_target), .emphasized);
+                    try report.document.addText(", whose code requires a newer CPU.");
+                    try report.document.addLineBreak();
+                    try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
+                    try report.document.addText(" needs its own entry, built for the oldest CPUs");
+                    try report.document.addLineBreak();
+                    try report.document.addText("of this architecture, because a host built for ");
+                    try report.document.addAnnotated(@tagName(default_target), .emphasized);
+                    try report.document.addLineBreak();
+                    try report.document.addText("would reintroduce the instructions this target avoids.");
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+                    break;
+                }
+            }
+
             try report.document.addText("To add support, update the targets section in the platform header.");
             try report.document.addLineBreak();
 
@@ -442,6 +486,19 @@ pub fn createValidationReport(
             try report.document.addText("  x64mac, arm64mac      - macOS");
             try report.document.addLineBreak();
             try report.document.addText("  x64win, arm64win      - Windows");
+            try report.document.addLineBreak();
+            try report.document.addText("  wasm32                - WebAssembly");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Adding v1 after the architecture (");
+            try report.document.addAnnotated("x64v1musl", .emphasized);
+            try report.document.addText(", ");
+            try report.document.addAnnotated("arm64v1musl", .emphasized);
+            try report.document.addText(", ");
+            try report.document.addAnnotated("wasm32v1", .emphasized);
+            try report.document.addText(")");
+            try report.document.addLineBreak();
+            try report.document.addText("builds for the oldest CPUs of that architecture.");
             try report.document.addLineBreak();
 
             return report;

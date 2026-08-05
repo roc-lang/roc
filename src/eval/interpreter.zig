@@ -19,6 +19,7 @@ const LirProgram = lir.Program;
 const GuardedList = LirStore.GuardedList;
 const CheckedArithmetic = lir.CheckedArithmetic;
 const lir_value = @import("value.zig");
+const rc_conformance = @import("rc_conformance.zig");
 const backend = @import("backend");
 const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
@@ -68,6 +69,7 @@ const Allocator = std.mem.Allocator;
 const LirProcSpecId = LIR.LirProcSpecId;
 const LirProcSpec = LIR.LirProcSpec;
 const CFStmtId = LIR.CFStmtId;
+const InlineScopeId = LIR.InlineScopeId;
 const LocalId = LIR.LocalId;
 const LocalSpan = LIR.LocalSpan;
 const Layout = layout_mod.Layout;
@@ -340,6 +342,13 @@ pub const Interpreter = struct {
     /// Descriptor-guided boxy value machinery, bound to this interpreter's live
     /// descriptor tables by `bindBoxyRuntime` before each evaluation.
     boxy_runtime: BoxyRuntime,
+    rc_presence: []RcPresence,
+    rc_plans: std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan) = .{},
+    struct_field_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan) = .{},
+    tag_variant_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey) = .{},
+    /// Debug-only validation state for `box_alloc_zeroed` cells while their
+    /// payload is intentionally zero-filled during recursive value construction.
+    inflight_zeroed_box_payloads: std.AutoHashMapUnmanaged(usize, void) = .{},
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
@@ -353,12 +362,24 @@ pub const Interpreter = struct {
     active_stmt_region: base.Region = base.Region.zero(),
     active_proc_id: ?LirProcSpecId = null,
     active_stmt_id: ?CFStmtId = null,
+    /// Exact virtual source frame of the LIR statement currently being
+    /// interpreted. This is independent of the physical proc call stack.
+    active_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// Source location captured when the current evaluation first failed.
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region captured when the current evaluation first failed.
     failed_stmt_region: base.Region = base.Region.zero(),
+    /// Virtual source frame captured with the failed statement location.
+    failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
     comptime_failed_site: ?LIR.ComptimeSiteId = null,
+
+    const RcPresence = enum(u2) {
+        unknown,
+        active,
+        no,
+        yes,
+    };
 
     pub const Error = boxy_runtime.Error;
 
@@ -535,6 +556,11 @@ pub const Interpreter = struct {
         layout: layout_mod.Idx,
     };
 
+    const EvalDescriptorBinding = struct {
+        local: LocalId,
+        desc: *const LirProgram.BoxyTypeDesc,
+    };
+
     pub const EvalResult = union(enum) {
         value: Value,
     };
@@ -569,6 +595,18 @@ pub const Interpreter = struct {
     ) Allocator.Error!LirInterpreter {
         const frame_plans = try buildFramePlans(allocator, store);
         errdefer deinitFramePlans(allocator, frame_plans);
+
+        const rc_presence = try allocator.alloc(RcPresence, layout_store.layoutCount());
+        errdefer allocator.free(rc_presence);
+        @memset(rc_presence, .unknown);
+
+        var rc_plans: std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan) = .{};
+        errdefer rc_plans.deinit(allocator);
+        var struct_field_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan) = .{};
+        errdefer struct_field_plans.deinit(allocator);
+        var tag_variant_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey) = .{};
+        errdefer tag_variant_plans.deinit(allocator);
+        try reserveRcCaches(allocator, layout_store, &rc_plans, &struct_field_plans, &tag_variant_plans);
 
         const roc_env = try allocator.create(InterpreterRocEnv);
         roc_env.* = InterpreterRocEnv.init(allocator, caller_roc_ops);
@@ -627,6 +665,10 @@ pub const Interpreter = struct {
                 .descriptor_arena = undefined,
                 .eval_arena = undefined,
             },
+            .rc_presence = rc_presence,
+            .rc_plans = rc_plans,
+            .struct_field_plans = struct_field_plans,
+            .tag_variant_plans = tag_variant_plans,
             .call_stack = .empty,
             .failed_call_stack = .empty,
             .comptime_branch_hits = .empty,
@@ -648,6 +690,11 @@ pub const Interpreter = struct {
         self.allocator.destroy(self.roc_env);
         self.static_strings.deinit();
         self.arena.deinit();
+        self.tag_variant_plans.deinit(self.allocator);
+        self.struct_field_plans.deinit(self.allocator);
+        self.rc_plans.deinit(self.allocator);
+        self.inflight_zeroed_box_payloads.deinit(self.allocator);
+        self.allocator.free(self.rc_presence);
         deinitFramePlans(self.allocator, self.frame_plans);
     }
 
@@ -711,6 +758,40 @@ pub const Interpreter = struct {
         };
     }
 
+    fn reserveRcCaches(
+        allocator: Allocator,
+        layout_store: *const layout_mod.Store,
+        rc_plans: *std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan),
+        struct_field_plans: *std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan),
+        tag_variant_plans: *std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey),
+    ) Allocator.Error!void {
+        const layout_count = layout_store.layoutCount();
+        try rc_plans.ensureTotalCapacity(allocator, try cacheCapacity(layout_count));
+
+        var struct_field_count: usize = 0;
+        var tag_variant_count: usize = 0;
+        for (0..layout_count) |raw| {
+            const layout_idx: layout_mod.Idx = @enumFromInt(raw);
+            const layout_val = layout_store.getLayout(layout_idx);
+            switch (layout_val.tag) {
+                .struct_ => struct_field_count += layout_store.getStructData(layout_val.getStruct().idx).fields.count,
+                .tag_union => {
+                    const data = layout_store.getTagUnionData(layout_val.getTagUnion().idx);
+                    tag_variant_count += layout_store.getTagUnionVariants(data).len;
+                },
+                else => {},
+            }
+        }
+
+        try struct_field_plans.ensureTotalCapacity(allocator, try cacheCapacity(struct_field_count));
+        try tag_variant_plans.ensureTotalCapacity(allocator, try cacheCapacity(tag_variant_count));
+    }
+
+    fn cacheCapacity(count: usize) Allocator.Error!u32 {
+        const capacity = std.math.mul(usize, count, 3) catch return error.OutOfMemory;
+        return std.math.cast(u32, capacity) orelse error.OutOfMemory;
+    }
+
     fn evalAllocator(self: *LirInterpreter) Allocator {
         return self.arena.allocator();
     }
@@ -759,6 +840,14 @@ pub const Interpreter = struct {
         return null;
     }
 
+    /// The innermost virtual source frame of the failed statement. Callers can
+    /// walk `LirStore.inlineScope(id).parent` to expand the complete inlined
+    /// source stack without inferring it from physical procedures.
+    pub fn getFailedInlineScope(self: *const LirInterpreter) ?InlineScopeId {
+        if (self.failed_stmt_inline_scope != InlineScopeId.none) return self.failed_stmt_inline_scope;
+        return null;
+    }
+
     pub fn getComptimeFailedSite(self: *const LirInterpreter) ?LIR.ComptimeSiteId {
         return self.comptime_failed_site;
     }
@@ -777,6 +866,7 @@ pub const Interpreter = struct {
         if (self.active_stmt_loc.hasLocation()) {
             self.failed_stmt_loc = self.active_stmt_loc;
             self.failed_stmt_region = self.active_stmt_region;
+            self.failed_stmt_inline_scope = self.active_stmt_inline_scope;
         }
     }
 
@@ -784,11 +874,13 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         call_loc: base.SourceLoc,
         call_region: base.Region,
+        call_inline_scope: InlineScopeId,
     ) void {
         if (!call_loc.hasLocation()) return;
         if (!self.failed_stmt_loc.hasLocation()) {
             self.failed_stmt_loc = call_loc;
             self.failed_stmt_region = call_region;
+            self.failed_stmt_inline_scope = call_inline_scope;
         }
     }
 
@@ -796,13 +888,14 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         call_loc: base.SourceLoc,
         call_region: base.Region,
+        call_inline_scope: InlineScopeId,
         err: Error,
     ) void {
         switch (err) {
             error.Crash,
             error.DivisionByZero,
             error.RuntimeError,
-            => self.recordCallerFailureLocForSourcelessCallee(call_loc, call_region),
+            => self.recordCallerFailureLocForSourcelessCallee(call_loc, call_region, call_inline_scope),
             error.OutOfMemory,
             error.ComptimeExhaustiveness,
             error.ExpectErr,
@@ -1160,10 +1253,13 @@ pub const Interpreter = struct {
         self.failed_call_stack.clearRetainingCapacity();
         self.active_stmt_loc = base.SourceLoc.none;
         self.active_stmt_region = base.Region.zero();
+        self.active_stmt_inline_scope = InlineScopeId.none;
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
+        self.failed_stmt_inline_scope = InlineScopeId.none;
         self.comptime_branch_hits.clearRetainingCapacity();
         self.comptime_failed_site = null;
+        if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
 
         if (sljmp.supported) {
             var eval_jmp_buf: JmpBuf = undefined;
@@ -1200,7 +1296,18 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
     ) Error!EvalProcResult {
         const proc_spec = self.store.getProcSpec(proc_id);
-        return self.evalProcSpec(proc_id, proc_spec, args, arg_layouts);
+        return self.evalProcSpec(proc_id, proc_spec, args, arg_layouts, &.{});
+    }
+
+    fn evalProcByIdWithDescriptors(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        descriptor_bindings: []const EvalDescriptorBinding,
+    ) Error!EvalProcResult {
+        const proc_spec = self.store.getProcSpec(proc_id);
+        return self.evalProcSpec(proc_id, proc_spec, args, arg_layouts, descriptor_bindings);
     }
 
     const DebugVisitedValue = struct {
@@ -1231,6 +1338,7 @@ pub const Interpreter = struct {
         stmt_id: ?CFStmtId,
         local_id: LocalId,
         value: Value,
+        allow_zeroed_box_payload_holes: bool,
     ) Error!void {
         const layout_idx = self.store.getLocal(local_id).layout_idx;
         const normalized_value = try self.normalizeFloatNanValue(value, layout_idx);
@@ -1238,7 +1346,7 @@ pub const Interpreter = struct {
         if (builtin.mode == .Debug) {
             var visited = std.ArrayList(DebugVisitedValue).empty;
             defer visited.deinit(self.evalAllocator());
-            self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, normalized_value, layout_idx, &visited);
+            self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, normalized_value, layout_idx, &visited, allow_zeroed_box_payload_holes);
         }
 
         frame.setLocal(local_id, normalized_value);
@@ -1324,9 +1432,10 @@ pub const Interpreter = struct {
         value: Value,
         layout_idx: layout_mod.Idx,
         visited: *std.ArrayList(DebugVisitedValue),
+        allow_zeroed_box_payload_holes: bool,
     ) void {
         var path_buf: [96]DebugValuePathStep = undefined;
-        self.debugAssertValueMatchesLayoutAt(proc_id, stmt_id, local_id, value, layout_idx, visited, &path_buf, 0);
+        self.debugAssertValueMatchesLayoutAt(proc_id, stmt_id, local_id, value, layout_idx, visited, &path_buf, 0, allow_zeroed_box_payload_holes);
     }
 
     fn debugAssertValueMatchesLayoutAt(
@@ -1339,6 +1448,7 @@ pub const Interpreter = struct {
         visited: *std.ArrayList(DebugVisitedValue),
         path_buf: []DebugValuePathStep,
         path_len: usize,
+        allow_zeroed_box_payload_holes: bool,
     ) void {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
@@ -1376,6 +1486,7 @@ pub const Interpreter = struct {
                     // legal in-flight hole (zero-filled cells await their child
                     // value); everywhere else it is a real bug.
                     if (self.store.getProcSpec(proc_id).tail_transform == .trmc) return;
+                    if (allow_zeroed_box_payload_holes and path_len > 0) return;
                     self.debugValueShapePanicAt(
                         proc_id,
                         stmt_id,
@@ -1396,6 +1507,9 @@ pub const Interpreter = struct {
                 visited.append(self.evalAllocator(), key) catch {
                     self.invariantFailed("LIR/interpreter invariant violated: out of memory while validating value shape", .{});
                 };
+                const allow_nested_zeroed_box_payload_holes =
+                    allow_zeroed_box_payload_holes or
+                    self.inflight_zeroed_box_payloads.contains(@intFromPtr(data_ptr));
                 var next_len = path_len;
                 if (next_len < path_buf.len) {
                     path_buf[next_len] = .{ .box_payload = layout_val.getIdx() };
@@ -1410,6 +1524,7 @@ pub const Interpreter = struct {
                     visited,
                     path_buf,
                     next_len,
+                    allow_nested_zeroed_box_payload_holes,
                 );
             },
             .erased_callable => {
@@ -1471,6 +1586,7 @@ pub const Interpreter = struct {
                         visited,
                         path_buf,
                         next_len,
+                        allow_zeroed_box_payload_holes,
                     );
                 }
             },
@@ -1512,6 +1628,7 @@ pub const Interpreter = struct {
                         visited,
                         path_buf,
                         next_len,
+                        allow_zeroed_box_payload_holes,
                     );
                 }
             },
@@ -1559,6 +1676,7 @@ pub const Interpreter = struct {
                     visited,
                     path_buf,
                     next_len,
+                    allow_zeroed_box_payload_holes,
                 );
             },
             .closure => {
@@ -1583,91 +1701,35 @@ pub const Interpreter = struct {
         path: []const DebugValuePathStep,
         comptime reason: []const u8,
     ) noreturn {
-        if (comptime builtin.target.os.tag != .freestanding) {
-            debugPrint("LIR/interpreter value path:", .{});
-            for (path) |step| {
-                switch (step) {
-                    .box_payload => |payload_layout| debugPrint(" .box(layout={d})", .{@intFromEnum(payload_layout)}),
-                    .list_elem => |list| debugPrint(" [{d}:layout={d}]", .{ list.index, @intFromEnum(list.elem_layout) }),
-                    .struct_field => |field| debugPrint(" .field(sorted={d}, semantic={d}, layout={d})", .{ field.sorted_index, field.semantic_index, @intFromEnum(field.field_layout) }),
-                    .tag_payload => |tag| debugPrint(" .tag_payload(index={d}, layout={d})", .{ tag.tag_index, @intFromEnum(tag.payload_layout) }),
-                }
-            }
-            debugPrint("\n", .{});
-            var visited_layouts = std.ArrayList(u32).empty;
-            defer visited_layouts.deinit(self.evalAllocator());
-            debugPrint("LIR/interpreter local layout tree:\n", .{});
-            self.debugPrintLayoutShapeLines(self.store.getLocal(local_id).layout_idx, 0, &visited_layouts);
-        }
-        self.debugValueShapePanic(proc_id, stmt_id, local_id, layout_idx, reason);
-    }
-
-    fn debugValueShapePanic(
-        self: *LirInterpreter,
-        proc_id: LirProcSpecId,
-        stmt_id: ?CFStmtId,
-        local_id: LocalId,
-        layout_idx: layout_mod.Idx,
-        comptime reason: []const u8,
-    ) noreturn {
         if (comptime builtin.target.os.tag == .freestanding) {
             @trap();
         } else {
             if (stmt_id) |id| {
-                const center = @as(usize, @intFromEnum(id));
-                const stmt_count = self.store.cfStmtCount();
-                const start = center -| 20;
-                const end = @min(stmt_count, center + 21);
-                debugPrint("LIR/interpreter stmt window around failing stmt {d}:\n", .{@intFromEnum(id)});
-                for (start..end) |i| {
-                    const window_id: CFStmtId = @enumFromInt(@as(u32, @intCast(i)));
-                    debugPrint("  stmt {d}: {any}\n", .{ i, self.store.getCFStmt(window_id) });
-                }
-
-                switch (self.store.getCFStmt(id)) {
-                    .assign_call => |assign| {
-                        const callee_proc = self.store.getProcSpec(assign.proc);
-                        debugPrint(
-                            "LIR/interpreter failing assign_call callee proc {d}: name={d} body={any} ret_layout={d} hosted={any}\n",
-                            .{
-                                @intFromEnum(assign.proc),
-                                callee_proc.name.raw(),
-                                callee_proc.body,
-                                @intFromEnum(callee_proc.ret_layout),
-                                callee_proc.hosted,
-                            },
-                        );
-                        if (callee_proc.body) |body| {
-                            self.debugPrintStmtChain(body, 20);
-                        }
-                    },
-                    else => {},
-                }
-
                 self.invariantFailed(
-                    "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape: {s}",
+                    "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape at path {any}: {s}",
                     .{
                         @intFromEnum(proc_id),
                         @intFromEnum(id),
                         self.store.getCFStmt(id),
                         @intFromEnum(local_id),
                         @intFromEnum(layout_idx),
+                        path,
                         reason,
                     },
                 );
             }
 
             self.invariantFailed(
-                "LIR/interpreter invariant violated: proc {d} assigned local {d} layout {d} invalid value shape: {s}",
+                "LIR/interpreter invariant violated: proc {d} assigned local {d} layout {d} invalid value shape at path {any}: {s}",
                 .{
                     @intFromEnum(proc_id),
                     @intFromEnum(local_id),
                     @intFromEnum(layout_idx),
+                    path,
                     reason,
                 },
             );
         }
-        unreachable;
     }
 
     fn debugPrintStmtChain(self: *LirInterpreter, start_stmt: CFStmtId, limit: usize) void {
@@ -1979,6 +2041,7 @@ pub const Interpreter = struct {
         proc_spec: LirProcSpec,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
+        descriptor_bindings: []const EvalDescriptorBinding,
     ) Error!EvalProcResult {
         try self.call_stack.append(self.evalAllocator(), proc_id);
         defer _ = self.call_stack.pop();
@@ -2062,7 +2125,8 @@ pub const Interpreter = struct {
             const arg = args[i];
             const arg_layout = arg_layouts[i];
             const param_layout = self.store.getLocal(param).layout_idx;
-            if (proc_spec.abi == .erased_callable and i + 1 == params.len) {
+            const is_erased_reuse_arg = proc_spec.erased_reuse_arg == param;
+            if (proc_spec.abi == .erased_callable and i + 2 == params.len) {
                 if (param_layout != .opaque_ptr or arg_layout != .opaque_ptr) {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: erased callable proc {d} hidden capture parameter was not opaque_ptr",
@@ -2107,11 +2171,28 @@ pub const Interpreter = struct {
                 arg_layout,
                 param_layout,
             );
+            const materialized = try self.materializeLocalValue(coerced, param_layout);
+            if (is_erased_reuse_arg and self.readBoxedDataPointer(materialized) == null) {
+                // Null is valid only for this explicitly marked ABI ownership
+                // input: it means the caller declined destination reuse.
+                if (self.layout_store.getLayout(param_layout).tag != .erased_callable) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: erased reuse parameter in proc {d} did not have erased_callable layout",
+                        .{@intFromEnum(proc_id)},
+                    );
+                }
+                frame.setLocal(param, materialized);
+            } else {
+                try self.setLocalChecked(&frame, null, param, materialized, false);
+            }
+        }
+        for (descriptor_bindings) |binding| {
             try self.setLocalChecked(
                 &frame,
                 null,
-                param,
-                try self.materializeLocalValue(coerced, param_layout),
+                binding.local,
+                try self.allocPointerIntValue(@intFromPtr(binding.desc)),
+                false,
             );
         }
         const body = self.requireProcBody(proc_id, proc_spec);
@@ -2135,7 +2216,7 @@ pub const Interpreter = struct {
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
-                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited);
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited, false);
                 }
                 const raw_layout_val = self.layout_store.getLayout(raw_layout);
                 const coercion_unwraps = raw_layout != proc_spec.ret_layout and switch (raw_layout_val.tag) {
@@ -2151,7 +2232,7 @@ pub const Interpreter = struct {
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
-                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited);
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited, false);
                 }
                 // When the declared return layout merely relabels the returned
                 // local's bytes, keep the local's own layout so the descriptor
@@ -2222,11 +2303,12 @@ pub const Interpreter = struct {
             self.active_stmt_region = self.store.stmtRegion(current);
             self.active_proc_id = frame.proc_id;
             self.active_stmt_id = current;
+            self.active_stmt_inline_scope = self.store.stmtInlineScope(current);
             switch (stmt) {
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const value = try self.evalAssignRef(frame, assign.op, target_layout);
-                    try self.setLocalChecked(frame, current, assign.target, value);
+                    try self.setLocalChecked(frame, current, assign.target, value, false);
                     switch (assign.op) {
                         .local => |source| {
                             const source_desc = frame.localDesc(source) orelse if (self.store.getLocal(source).boxy_desc) |desc_ref|
@@ -2246,11 +2328,11 @@ pub const Interpreter = struct {
                         const target_layout = self.store.getLocal(assign.target).layout_idx;
                         desc = try self.effectiveBoxyScalarLiteralDesc(desc, lit.default_layout);
                         const boxed = try self.evalBoxyDynamicNumLiteral(lit.value, desc, target_layout);
-                        try self.setLocalChecked(frame, current, assign.target, boxed);
+                        try self.setLocalChecked(frame, current, assign.target, boxed, false);
                         frame.setLocalDesc(assign.target, desc);
                         if (self.store.getLocal(assign.target).boxy_desc) |target_desc| {
                             if (target_desc.localOrNull()) |desc_local| {
-                                try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)));
+                                try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                             }
                         }
                         current = assign.next;
@@ -2262,17 +2344,17 @@ pub const Interpreter = struct {
                         const target_layout = self.store.getLocal(assign.target).layout_idx;
                         desc = try self.effectiveBoxyScalarLiteralDesc(desc, lit.default_layout);
                         const boxed = try self.evalBoxyDynamicFracLiteral(lit.dec_bits, desc, target_layout);
-                        try self.setLocalChecked(frame, current, assign.target, boxed);
+                        try self.setLocalChecked(frame, current, assign.target, boxed, false);
                         frame.setLocalDesc(assign.target, desc);
                         if (self.store.getLocal(assign.target).boxy_desc) |target_desc| {
                             if (target_desc.localOrNull()) |desc_local| {
-                                try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)));
+                                try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                             }
                         }
                         current = assign.next;
                         continue;
                     }
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value, self.store.getLocal(assign.target).layout_idx));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value, self.store.getLocal(assign.target).layout_idx), false);
                     current = assign.next;
                 },
                 .init_uninitialized => |uninit| {
@@ -2288,8 +2370,9 @@ pub const Interpreter = struct {
                     const arg_layouts = try self.localLayouts(arg_locals);
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
+                    const call_inline_scope = self.active_stmt_inline_scope;
                     const result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
-                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
+                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
                     const materialized_result = self.materializeCallResultToLayout(
@@ -2320,6 +2403,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         materialized_result.value,
+                        false,
                     );
                     frame.setLocalDesc(assign.target, materialized_result.desc);
                     if (assign.out_desc) |out_desc| {
@@ -2329,7 +2413,7 @@ pub const Interpreter = struct {
                                 .{},
                             );
                         };
-                        try self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)));
+                        try self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                     }
                     current = assign.next;
                 },
@@ -2371,6 +2455,7 @@ pub const Interpreter = struct {
                     }
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
+                    const call_inline_scope = self.active_stmt_inline_scope;
                     const result = self.evalErasedCall(
                         frame,
                         assign.closure,
@@ -2378,9 +2463,11 @@ pub const Interpreter = struct {
                         arg_layouts,
                         arg_descs,
                         arg_desc_keys,
+                        assign.arg_plan,
                         self.store.getLocal(assign.target).layout_idx,
+                        assign.reuse_closure,
                     ) catch |err| {
-                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
+                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
                     const materialized_result = try self.materializeCallResultToLayout(
@@ -2396,6 +2483,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         materialized_result.value,
+                        false,
                     );
                     frame.setLocalDesc(assign.target, materialized_result.desc);
                     if (assign.out_desc) |out_desc| {
@@ -2405,7 +2493,7 @@ pub const Interpreter = struct {
                                 .{},
                             );
                         };
-                        try self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)));
+                        try self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                     }
                     current = assign.next;
                 },
@@ -2415,6 +2503,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         try self.evalPackedErasedFn(frame, assign, self.store.getLocal(assign.target).layout_idx),
+                        false,
                     );
                     current = assign.next;
                 },
@@ -2475,13 +2564,14 @@ pub const Interpreter = struct {
                             for (call_args) |arg| {
                                 try self.performBoxyLayoutDrop(frame, arg.value, arg.layout, arg.source_desc, .decref, 1, .atomic);
                             }
-                            try self.setLocalChecked(frame, current, assign.target, result);
+                            try self.setLocalChecked(frame, current, assign.target, result, false);
                         },
                         .call => |call| {
                             const call_loc = self.active_stmt_loc;
                             const call_region = self.active_stmt_region;
+                            const call_inline_scope = self.active_stmt_inline_scope;
                             const result = self.evalProcById(call.proc, call.arg_values, call.arg_layouts) catch |err| {
-                                self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
+                                self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                                 return err;
                             };
                             const proc = self.store.getProcSpec(call.proc);
@@ -2505,6 +2595,7 @@ pub const Interpreter = struct {
                                 current,
                                 assign.target,
                                 materialized_result.value,
+                                false,
                             );
                             frame.setLocalDesc(assign.target, materialized_result.desc);
                             if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
@@ -2515,7 +2606,7 @@ pub const Interpreter = struct {
                                             .{},
                                         );
                                     };
-                                    try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)));
+                                    try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                                 }
                             }
                         },
@@ -2533,11 +2624,11 @@ pub const Interpreter = struct {
                         assign.tag_residual_for,
                         assign.captures,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, desc_value);
+                    try self.setLocalChecked(frame, current, assign.target, desc_value, false);
                     current = assign.next;
                 },
                 .assign_boxy_dict_ref => |assign| {
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalBoxyDictRefValue(frame, assign.dict));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalBoxyDictRefValue(frame, assign.dict), false);
                     current = assign.next;
                 },
                 .assign_boxy_box => |assign| {
@@ -2561,7 +2652,7 @@ pub const Interpreter = struct {
                         assign.payload_mode,
                         self.store.getLocal(assign.target).layout_idx,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, boxed.value);
+                    try self.setLocalChecked(frame, current, assign.target, boxed.value, false);
                     frame.setLocalDesc(assign.target, boxed.desc);
                     current = assign.next;
                 },
@@ -2573,6 +2664,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         try self.materializeLocalValue(source_value, self.store.getLocal(assign.target).layout_idx),
+                        false,
                     );
                     current = assign.next;
                 },
@@ -2589,7 +2681,7 @@ pub const Interpreter = struct {
                         assign.target_layout,
                         assign.source_mode,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, unboxed.value);
+                    try self.setLocalChecked(frame, current, assign.target, unboxed.value, false);
                     frame.setLocalDesc(assign.target, unboxed.desc);
                     if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
                         if (desc_ref.localOrNull()) |desc_local| {
@@ -2597,7 +2689,7 @@ pub const Interpreter = struct {
                                 "LIR/interpreter invariant violated: boxy unbox produced no descriptor for descriptor-bearing target",
                                 .{},
                             );
-                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)));
+                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                         }
                     }
                     current = assign.next;
@@ -2623,6 +2715,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         constructed,
+                        false,
                     );
                     frame.setLocalDesc(assign.target, target_desc);
                     current = assign.next;
@@ -2641,7 +2734,7 @@ pub const Interpreter = struct {
                         target_layout,
                         assign.source_mode,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, payload_read.value);
+                    try self.setLocalChecked(frame, current, assign.target, payload_read.value, false);
                     frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, payload_read.desc));
                     if (assign.target_desc) |target_desc| {
                         const payload_desc = payload_read.desc orelse {
@@ -2650,7 +2743,7 @@ pub const Interpreter = struct {
                                 .{ assign.payload_index, self.store.getString(assign.tag_name) },
                             );
                         };
-                        try self.setLocalChecked(frame, current, target_desc, try self.evalBoxyDescRefValue(frame, payload_desc));
+                        try self.setLocalChecked(frame, current, target_desc, try self.evalBoxyDescRefValue(frame, payload_desc), false);
                     }
                     current = assign.next;
                 },
@@ -2662,6 +2755,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         try self.inspectBoxyValue(frame, source_value, self.store.getLocal(assign.source).layout_idx, source_desc),
+                        false,
                     );
                     current = assign.next;
                 },
@@ -2677,7 +2771,7 @@ pub const Interpreter = struct {
                         self.store.getLocal(assign.lhs).layout_idx,
                         source_desc,
                     )) 1 else 0);
-                    try self.setLocalChecked(frame, current, assign.target, result);
+                    try self.setLocalChecked(frame, current, assign.target, result, false);
                     current = assign.next;
                 },
                 .assign_boxy_adapt => |assign| {
@@ -2692,7 +2786,7 @@ pub const Interpreter = struct {
                         assign.adapter,
                         assign.source_mode,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, adapted.value);
+                    try self.setLocalChecked(frame, current, assign.target, adapted.value, false);
                     frame.setLocalDesc(assign.target, adapted.desc);
                     if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
                         if (desc_ref.localOrNull()) |desc_local| {
@@ -2700,7 +2794,7 @@ pub const Interpreter = struct {
                                 "LIR/interpreter invariant violated: boxy adapter produced no descriptor for descriptor-bearing target",
                                 .{},
                             );
-                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)));
+                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                         }
                     }
                     current = assign.next;
@@ -2721,24 +2815,32 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalLowLevel(.{
+                    const ret_layout = self.store.getLocal(assign.target).layout_idx;
+                    const observation = rc_conformance.beginStatement(assign.op, arg_values.len);
+                    if (observation) |obs| self.conformanceSnapshotArgs(obs, arg_values, arg_layouts);
+                    const value = try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
                         .arg_layouts = arg_layouts,
-                        .ret_layout = self.store.getLocal(assign.target).layout_idx,
+                        .ret_layout = ret_layout,
                         .callable_proc = null,
                         .unique_args = assign.unique_args,
                         .interchangeable = assign.interchangeable,
-                    }));
+                    });
+                    if (observation) |obs| {
+                        self.conformanceSnapshotResult(obs, value, ret_layout);
+                        rc_conformance.endStatement(obs);
+                    }
+                    try self.setLocalChecked(frame, current, assign.target, value, assign.op == .box_alloc_zeroed);
                     current = assign.next;
                 },
                 .assign_list => |assign| {
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx), false);
                     frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(assign.target).boxy_desc));
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx), false);
                     const target_desc = assign.contents_desc orelse self.store.getLocal(assign.target).boxy_desc;
                     frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, target_desc));
                     current = assign.next;
@@ -2752,7 +2854,7 @@ pub const Interpreter = struct {
                         assign.payload,
                         self.store.getLocal(assign.target).layout_idx,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, tag_value);
+                    try self.setLocalChecked(frame, current, assign.target, tag_value, false);
                     frame.setLocalDesc(assign.target, target_desc);
                     current = assign.next;
                 },
@@ -2790,6 +2892,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         try self.materializeLocalValue(normalized, target_layout),
+                        false,
                     );
                     frame.setLocalDesc(assign.target, source_desc);
                     current = assign.next;
@@ -3779,40 +3882,16 @@ pub const Interpreter = struct {
         return builtins.erased_callable.capturePtr(data_ptr) + context.capture_value_offset;
     }
 
-    fn argsStructSizeAlign(self: *LirInterpreter, arg_layouts: []const layout_mod.Idx) layout_mod.SizeAlign {
-        var size: u32 = 0;
-        var max_align: usize = 1;
-        for (arg_layouts) |arg_layout| {
-            const size_align = self.helper.sizeAlignOf(arg_layout);
-            const arg_align: u32 = @intCast(@max(size_align.alignment.toByteUnits(), 1));
-            size = std.mem.alignForward(u32, size, arg_align);
-            size += size_align.size;
-            max_align = @max(max_align, size_align.alignment.toByteUnits());
-        }
-        return .{ .size = @intCast(size), .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(max_align)) };
-    }
-
-    fn argsStructOffset(self: *LirInterpreter, arg_layouts: []const layout_mod.Idx, index: usize) u32 {
-        var offset: u32 = 0;
-        for (arg_layouts[0..index]) |arg_layout| {
-            const size_align = self.helper.sizeAlignOf(arg_layout);
-            const arg_align: u32 = @intCast(@max(size_align.alignment.toByteUnits(), 1));
-            offset = std.mem.alignForward(u32, offset, arg_align);
-            offset += size_align.size;
-        }
-        const current = self.helper.sizeAlignOf(arg_layouts[index]);
-        return std.mem.alignForward(u32, offset, @intCast(@max(current.alignment.toByteUnits(), 1)));
-    }
-
     fn interpreterErasedCallableTrampoline(
         ops: *RocOps,
         ret: ?[*]u8,
         args: ?[*]const u8,
         capture: ?[*]u8,
+        reuse: ?[*]u8,
         out_desc: *?*const anyopaque,
     ) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
-        context.interpreter.callInterpreterErasedCallable(context, ops, ret, args, out_desc) catch |err| switch (err) {
+        context.interpreter.callInterpreterErasedCallable(context, ops, ret, args, reuse, out_desc) catch |err| switch (err) {
             error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
             error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
@@ -3860,21 +3939,35 @@ pub const Interpreter = struct {
         _: *RocOps,
         ret: ?[*]u8,
         args: ?[*]const u8,
+        reuse_ptr: ?[*]u8,
         out_desc: *?*const anyopaque,
     ) Error!void {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(context.proc_id);
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
-        if (proc_arg_locals.len == 0) {
+        if (proc_arg_locals.len < 2) {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased callable proc {d} has no hidden capture argument",
+                "LIR/interpreter invariant violated: erased callable proc {d} lacks hidden capture/reuse arguments",
                 .{@intFromEnum(proc_id)},
             );
         }
 
-        const explicit_arg_count = proc_arg_locals.len - 1;
+        const explicit_arg_count = proc_arg_locals.len - 2;
         var proc_args = try self.arena.allocator().alloc(Value, proc_arg_locals.len);
         var proc_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, proc_arg_locals.len);
+        const arg_plan = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args orelse {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable proc {d} has no argument plan",
+                .{@intFromEnum(proc_id)},
+            );
+        });
+        const arg_offsets = self.store.getErasedCallArgOffsets(arg_plan);
+        if (arg_offsets.len != explicit_arg_count) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable proc {d} argument plan had {d} offsets for {d} arguments",
+                .{ @intFromEnum(proc_id), arg_offsets.len, explicit_arg_count },
+            );
+        }
 
         for (0..explicit_arg_count) |i| {
             const local = GuardedList.at(proc_arg_locals, i);
@@ -3890,15 +3983,19 @@ pub const Interpreter = struct {
                         .{@intFromEnum(proc_id)},
                     );
                 };
-                proc_args[i] = .{ .ptr = @constCast(raw_args + self.argsStructOffset(proc_arg_layouts[0..explicit_arg_count], i)) };
+                proc_args[i] = .{ .ptr = @constCast(raw_args + GuardedList.at(arg_offsets, i)) };
             }
         }
 
         const capture_value_ptr: [*]u8 = @ptrCast(@as([*]u8, @ptrCast(context)) + context.capture_value_offset);
         proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(capture_value_ptr));
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
+        const reuse_index = explicit_arg_count + 1;
+        proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_ptr) |ptr| @intFromPtr(ptr) else 0);
+        proc_arg_layouts[reuse_index] = self.store.getLocal(GuardedList.at(proc_arg_locals, reuse_index)).layout_idx;
 
-        const result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
+        const descriptor_bindings = try self.erasedDescriptorBindingsFromCapture(proc_spec, capture_value_ptr);
+        const result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
         out_desc.* = @ptrCast(result.desc orelse context.result_desc);
         const ret_size = self.helper.sizeOf(proc_spec.ret_layout);
         if (ret_size > 0) {
@@ -3912,6 +4009,64 @@ pub const Interpreter = struct {
         }
     }
 
+    fn erasedDescriptorBindingsFromCapture(
+        self: *LirInterpreter,
+        proc_spec: LirProcSpec,
+        capture_ptr: [*]u8,
+    ) Error![]EvalDescriptorBinding {
+        const params = self.boxy_runtime.boxy_tables.erased_arg_desc_params[proc_spec.erased_arg_desc_params.start..][0..proc_spec.erased_arg_desc_params.len];
+        const offsets = self.boxy_runtime.boxy_tables.erased_arg_desc_offsets[proc_spec.erased_arg_desc_offsets.start..][0..proc_spec.erased_arg_desc_offsets.len];
+        const bindings = try self.arena.allocator().alloc(EvalDescriptorBinding, params.len);
+
+        for (params, 0..) |param, param_index| {
+            const desc = if (param.source_nested_index == std.math.maxInt(u16)) direct: {
+                var capture_offset: ?u32 = null;
+                for (offsets) |entry| {
+                    if (!std.meta.eql(entry.key, param.key)) continue;
+                    if (capture_offset != null) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: erased descriptor key had multiple capture offsets",
+                            .{},
+                        );
+                    }
+                    capture_offset = entry.offset;
+                }
+                const offset = capture_offset orelse return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: exact erased descriptor parameter had no capture offset",
+                    .{},
+                );
+                const raw_ptr = self.readPointerInt(.{ .ptr = capture_ptr + offset });
+                if (raw_ptr == 0) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: exact erased descriptor capture was null",
+                        .{},
+                    );
+                }
+                break :direct @as(*const LirProgram.BoxyTypeDesc, @ptrFromInt(raw_ptr));
+            } else projected: {
+                var parent: ?*const LirProgram.BoxyTypeDesc = null;
+                for (params[0..param_index], bindings[0..param_index]) |candidate, binding| {
+                    if (candidate.key.arg_index == param.key.arg_index and
+                        candidate.key.descriptor_index == param.source_descriptor_index)
+                    {
+                        parent = binding.desc;
+                        break;
+                    }
+                }
+                break :projected try self.boxy_runtime.nestedBoxyDesc(
+                    self.boxyFrameHooks(null),
+                    parent orelse return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
+                        .{},
+                    ),
+                    param.source_nested_index,
+                );
+            };
+            bindings[param_index] = .{ .local = param.local, .desc = desc };
+        }
+        return bindings;
+    }
+
     fn evalErasedCall(
         self: *LirInterpreter,
         frame: *Frame,
@@ -3920,7 +4075,9 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
         arg_descs: []const *const LirProgram.BoxyTypeDesc,
         arg_desc_keys: []const LIR.ErasedArgDescKey,
+        arg_plan: LIR.ErasedCallArgsPlanId,
         ret_layout: layout_mod.Idx,
+        reuse_closure: bool,
     ) Error!ErasedCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
         const closure_value = try self.getLocalChecked(frame, closure_local);
@@ -3959,10 +4116,10 @@ pub const Interpreter = struct {
                 );
             };
             const explicit_arg_count = proc_spec.erased_arg_layouts.len;
-            if (proc_params.len < explicit_arg_count + 1) {
+            if (proc_params.len != explicit_arg_count + 2) {
                 return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased callable proc {d} explicit argument metadata exceeded its parameters",
-                    .{@intFromEnum(proc_id)},
+                    "LIR/interpreter invariant violated: erased callable proc {d} had {d} parameters for {d} explicit arguments plus capture/reuse",
+                    .{ @intFromEnum(proc_id), proc_params.len, explicit_arg_count },
                 );
             }
             if (args.len != explicit_arg_count or arg_layouts.len != explicit_arg_count) {
@@ -4033,6 +4190,7 @@ pub const Interpreter = struct {
                 );
             }
             const resolved_descs = try self.arena.allocator().alloc(*const LirProgram.BoxyTypeDesc, desc_params.len);
+            const descriptor_bindings = try self.arena.allocator().alloc(EvalDescriptorBinding, desc_params.len);
             for (desc_params, 0..) |param, desc_param_index| {
                 const desc = if (param.source_nested_index == std.math.maxInt(u16)) direct: {
                     var incoming_desc: ?*const LirProgram.BoxyTypeDesc = null;
@@ -4071,35 +4229,32 @@ pub const Interpreter = struct {
                     );
                 };
                 resolved_descs[desc_param_index] = desc;
-                var param_index: ?usize = null;
-                for (0..proc_params.len) |index| {
-                    if (GuardedList.at(proc_params, index) == param.local) {
-                        param_index = index;
-                        break;
-                    }
-                }
-                const index = param_index orelse return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased descriptor parameter was absent from proc arguments",
+                descriptor_bindings[desc_param_index] = .{ .local = param.local, .desc = desc };
+            }
+            if (GuardedList.at(proc_params, explicit_arg_count) != capture_param) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased capture parameter was not the first hidden argument",
                     .{},
                 );
-                proc_args[index] = try self.allocPointerIntValue(@intFromPtr(desc));
-                proc_arg_layouts[index] = .opaque_ptr;
             }
-            var capture_index: ?usize = null;
-            for (0..proc_params.len) |index| {
-                if (GuardedList.at(proc_params, index) == capture_param) {
-                    capture_index = index;
-                    break;
-                }
-            }
-            const hidden_capture_index = capture_index orelse return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased capture parameter was absent from proc arguments",
+            proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(erasedCallableInterpreterCaptureValuePtr(closure_ptr)));
+            proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
+
+            const reuse_index = explicit_arg_count + 1;
+            const reuse_param = proc_spec.erased_reuse_arg orelse return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable proc had no reuse parameter metadata",
                 .{},
             );
-            proc_args[hidden_capture_index] = try self.allocPointerIntValue(@intFromPtr(erasedCallableInterpreterCaptureValuePtr(closure_ptr)));
-            proc_arg_layouts[hidden_capture_index] = .opaque_ptr;
+            if (GuardedList.at(proc_params, reuse_index) != reuse_param) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased reuse parameter was not the final argument",
+                    .{},
+                );
+            }
+            proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_closure) @intFromPtr(closure_ptr) else 0);
+            proc_arg_layouts[reuse_index] = self.store.getLocal(reuse_param).layout_idx;
 
-            const proc_result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
+            const proc_result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
             return .{
                 .value = proc_result.value,
                 .layout = proc_spec.ret_layout,
@@ -4107,20 +4262,24 @@ pub const Interpreter = struct {
             };
         }
 
-        const arg_size_align = self.argsStructSizeAlign(arg_layouts);
+        const call_plan = self.store.getErasedCallArgsPlan(arg_plan);
+        const arg_offsets = self.store.getErasedCallArgOffsets(call_plan);
+        if (arg_offsets.len != args.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased call argument plan had {d} offsets for {d} arguments",
+                .{ arg_offsets.len, args.len },
+            );
+        }
         const arg_bytes = if (args.len == 0)
             null
         else blk: {
-            const bytes = try self.arena.allocator().alloc(u8, if (arg_size_align.size == 0) 1 else arg_size_align.size);
-            var offset: u32 = 0;
-            for (args, arg_layouts) |arg_value, arg_layout| {
+            const bytes = try self.arena.allocator().alloc(u8, @max(call_plan.size, 1));
+            for (args, arg_layouts, 0..) |arg_value, arg_layout, index| {
                 const size_align = self.helper.sizeAlignOf(arg_layout);
-                const arg_align: u32 = @intCast(@max(size_align.alignment.toByteUnits(), 1));
-                offset = std.mem.alignForward(u32, offset, arg_align);
                 if (size_align.size > 0) {
+                    const offset = GuardedList.at(arg_offsets, index);
                     @memcpy(bytes[offset..][0..size_align.size], arg_value.ptr[0..size_align.size]);
                 }
-                offset += size_align.size;
             }
             break :blk bytes;
         };
@@ -4136,6 +4295,7 @@ pub const Interpreter = struct {
             ret_ptr,
             if (arg_bytes) |bytes| @ptrCast(bytes.ptr) else null,
             builtins.erased_callable.capturePtr(closure_ptr),
+            if (reuse_closure) closure_ptr else null,
             &returned_desc,
         );
 
@@ -4176,24 +4336,26 @@ pub const Interpreter = struct {
         const capture_size = erased_callable_context_capture_offset + capture_value_size;
         const data_ptr = if (assign.reuse) |reuse_local| blk: {
             const reuse_value = try self.getLocalChecked(frame, reuse_local);
-            const reuse_ptr = self.readBoxedDataPointer(reuse_value) orelse {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased callable repack reuse had null payload",
-                    .{},
+            if (self.readBoxedDataPointer(reuse_value)) |reuse_ptr| {
+                if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
+                    self.performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
+                    break :blk reuse_ptr;
+                }
+
+                const fresh = try self.allocRocDataWithRc(
+                    builtins.erased_callable.payloadSize(capture_size),
+                    builtins.erased_callable.payload_alignment,
+                    builtins.erased_callable.allocation_has_refcounted_children,
                 );
-            };
-            if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
-                self.performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
-                break :blk reuse_ptr;
+                builtins.erased_callable.decref(reuse_ptr, &self.roc_ops);
+                break :blk fresh;
             }
 
-            const fresh = try self.allocRocDataWithRc(
+            break :blk try self.allocRocDataWithRc(
                 builtins.erased_callable.payloadSize(capture_size),
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
-            builtins.erased_callable.decref(reuse_ptr, &self.roc_ops);
-            break :blk fresh;
         } else try self.allocRocDataWithRc(
             builtins.erased_callable.payloadSize(capture_size),
             builtins.erased_callable.payload_alignment,
@@ -4791,6 +4953,7 @@ pub const Interpreter = struct {
                         stmt_id,
                         local,
                         try self.makeStrCaptureValue(source_rs, source_bytes, result.capture_start, result.capture_end),
+                        false,
                     );
                 },
             }
@@ -4984,6 +5147,204 @@ pub const Interpreter = struct {
             );
         }
         self.boxy_runtime.performRcPlan(self.boxyFrameHooks(null), plan, val, count, atomicity);
+    }
+
+    fn cachedRcPlan(self: *LirInterpreter, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
+        const id = helper.encode();
+        if (self.rc_plans.get(id)) |plan| return plan;
+        const plan = self.layout_store.rcHelperPlanErasedBox(helper);
+        self.rc_plans.putAssumeCapacity(id, plan);
+        return plan;
+    }
+
+    fn cachedStructFieldPlan(
+        self: *LirInterpreter,
+        struct_plan: layout_mod.RcStructPlan,
+        field_index: u32,
+    ) ?layout_mod.RcFieldPlan {
+        const id = helperChildPlanId(@intCast(struct_plan.struct_idx.int_idx), struct_plan.child_op, field_index);
+        if (self.struct_field_plans.get(id)) |plan| return plan;
+        const plan = self.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, field_index);
+        self.struct_field_plans.putAssumeCapacity(id, plan);
+        return plan;
+    }
+
+    fn cachedTagVariantPlan(
+        self: *LirInterpreter,
+        tag_plan: layout_mod.RcTagUnionPlan,
+        variant_index: u32,
+    ) ?layout_mod.RcHelperKey {
+        const id = helperChildPlanId(@intCast(tag_plan.tag_union_idx.int_idx), tag_plan.child_op, variant_index);
+        if (self.tag_variant_plans.get(id)) |plan| return plan;
+        const plan = self.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_index);
+        self.tag_variant_plans.putAssumeCapacity(id, plan);
+        return plan;
+    }
+
+    fn helperChildPlanId(parent_idx: u32, child_op: layout_mod.RcOp, child_index: u32) u64 {
+        return (@as(u64, parent_idx) << 34) |
+            (@as(u64, @intFromEnum(child_op)) << 32) |
+            @as(u64, child_index);
+    }
+
+    // ── RcEffect conformance observation (debug builds only) ──
+    //
+    // These read the same layout-driven RC plans the retain/release handlers
+    // execute, but only to look: they name the allocations a value owns or
+    // reaches, so `rc_conformance` can compare what a low-level op did to what
+    // its `RcEffect` row says it does. Nothing here adjusts a count.
+
+    /// How deep the reachability walk descends before giving up. Depth only
+    /// limits what the alias rules can see; they fire on allocations found,
+    /// never on ones missed.
+    const rc_conformance_max_depth = 8;
+
+    /// The allocation a value owns directly, if its layout has one.
+    fn conformanceOuterAllocation(
+        self: *LirInterpreter,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+    ) ?rc_conformance.Allocation {
+        return switch (self.conformanceRcPlan(layout_idx)) {
+            .str_decref => blk: {
+                const rs = valueToRocStr(val);
+                if (rs.isSmallStr()) break :blk null;
+                break :blk rc_conformance.allocationAt(rs.getAllocationPtr());
+            },
+            .list_decref => rc_conformance.allocationAt(valueToRocList(val).getAllocationDataPtr(&self.roc_ops)),
+            .box_decref, .erased_callable_decref => rc_conformance.allocationAt(val.read(?[*]u8)),
+            else => null,
+        };
+    }
+
+    fn conformanceRcPlan(self: *LirInterpreter, layout_idx: layout_mod.Idx) layout_mod.RcHelperPlan {
+        return self.cachedRcPlan(.{ .op = .decref, .layout_idx = layout_idx });
+    }
+
+    /// Collect every refcounted allocation reachable from a value.
+    fn conformanceCollectAllocations(
+        self: *LirInterpreter,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+        sink: *rc_conformance.AllocationSet,
+    ) void {
+        self.conformanceCollectPlan(self.conformanceRcPlan(layout_idx), val, sink, 0);
+    }
+
+    fn conformanceCollectPlan(
+        self: *LirInterpreter,
+        plan: layout_mod.RcHelperPlan,
+        val: Value,
+        sink: *rc_conformance.AllocationSet,
+        depth: u32,
+    ) void {
+        if (depth > rc_conformance_max_depth) return;
+        switch (plan) {
+            // The walk always asks for decref plans, so the incref and free
+            // shapes of each plan never reach here.
+            .noop, .str_incref, .list_incref, .box_incref, .erased_callable_incref, .str_free, .list_free, .box_free, .erased_callable_free => {},
+            .str_decref => {
+                const rs = valueToRocStr(val);
+                if (rs.isSmallStr()) return;
+                if (rc_conformance.allocationAt(rs.getAllocationPtr())) |found| sink.add(found.rc_addr);
+            },
+            .list_decref => |list_plan| {
+                const rl = valueToRocList(val);
+                if (rc_conformance.allocationAt(rl.getAllocationDataPtr(&self.roc_ops))) |found| sink.add(found.rc_addr);
+                const child_key = list_plan.child orelse return;
+                const bytes = rl.bytes orelse return;
+                const child_plan = self.cachedRcPlan(child_key);
+                for (0..rl.len()) |index| {
+                    const elem = Value{ .ptr = bytes + index * list_plan.elem_width };
+                    self.conformanceCollectPlan(child_plan, elem, sink, depth + 1);
+                }
+            },
+            .box_decref => |box_plan| {
+                const alloc_ptr = val.read(?[*]u8);
+                if (rc_conformance.allocationAt(alloc_ptr)) |found| sink.add(found.rc_addr);
+                const child_key = box_plan.child orelse return;
+                const data_ptr = self.readBoxedDataPointer(val) orelse return;
+                self.conformanceCollectPlan(self.cachedRcPlan(child_key), .{ .ptr = data_ptr }, sink, depth + 1);
+            },
+            .erased_callable_decref => {
+                if (rc_conformance.allocationAt(val.read(?[*]u8))) |found| sink.add(found.rc_addr);
+            },
+            .struct_ => |struct_plan| {
+                const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
+                var index: u32 = 0;
+                while (index < field_count) : (index += 1) {
+                    const field_plan = self.cachedStructFieldPlan(struct_plan, index) orelse continue;
+                    const field_val = Value{ .ptr = val.ptr + field_plan.offset };
+                    self.conformanceCollectPlan(self.cachedRcPlan(field_plan.child), field_val, sink, depth + 1);
+                }
+            },
+            .tag_union => |tag_plan| {
+                const variant_count = self.layout_store.rcHelperTagUnionVariantCount(tag_plan);
+                if (variant_count == 0) return;
+                const tu_data = self.layout_store.getTagUnionData(tag_plan.tag_union_idx);
+                const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
+                const disc: u32 = switch (tu_data.discriminant_size) {
+                    0 => 0,
+                    1 => val.offset(disc_offset).read(u8),
+                    2 => val.offset(disc_offset).read(u16),
+                    else => return,
+                };
+                if (disc >= variant_count) return;
+                const child_key = self.cachedTagVariantPlan(tag_plan, disc) orelse return;
+                self.conformanceCollectPlan(self.cachedRcPlan(child_key), val, sink, depth + 1);
+            },
+            .closure => |child_key| {
+                self.conformanceCollectPlan(self.cachedRcPlan(child_key), val, sink, depth + 1);
+            },
+        }
+    }
+
+    /// Snapshot the arguments a low-level op is about to receive.
+    fn conformanceSnapshotArgs(
+        self: *LirInterpreter,
+        observation: *rc_conformance.Observation,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+    ) void {
+        const positions = @min(@min(args.len, arg_layouts.len), rc_conformance.max_observed_args);
+        for (0..positions) |index| {
+            observation.args[index] = .{
+                .outer = self.conformanceOuterAllocation(args[index], arg_layouts[index]),
+            };
+        }
+    }
+
+    /// Snapshot what the op left behind, then judge it against its row.
+    fn conformanceSnapshotResult(
+        self: *LirInterpreter,
+        observation: *rc_conformance.Observation,
+        result: Value,
+        ret_layout: layout_mod.Idx,
+    ) void {
+        const window = rc_conformance.endEventWindow();
+        observation.allocated = window.allocated;
+        observation.adjusted_counts = window.adjusted_counts;
+        observation.events_incomplete = window.incomplete;
+
+        const positions = @min(observation.arg_count, rc_conformance.max_observed_args);
+        for (observation.args[0..positions]) |*arg| {
+            const outer = arg.outer orelse continue;
+            if (window.incomplete) {
+                // Without a complete event log there is no way to know whether
+                // reading this count would touch freed memory.
+                arg.count_after = outer.count;
+                continue;
+            }
+            if (rc_conformance.wasFreedInWindow(outer.rc_addr)) {
+                arg.count_after = null;
+                continue;
+            }
+            const rc_ptr: *const isize = @ptrFromInt(outer.rc_addr);
+            arg.count_after = rc_ptr.*;
+        }
+
+        observation.result_outer = self.conformanceOuterAllocation(result, ret_layout);
+        self.conformanceCollectAllocations(result, ret_layout, &observation.result_reachable);
     }
 
     fn performErasedCallableFinalDropIfUnique(
@@ -5610,6 +5971,11 @@ pub const Interpreter = struct {
                 val.write(f64, @bitCast(args[0].read(u64)));
                 break :blk val;
             },
+            .dec_from_attos, .dec_to_attos => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(i128, args[0].read(i128));
+                break :blk val;
+            },
             .num_to_str => blk: {
                 // Generic num_to_str uses arg layout to determine type
                 const size = self.helper.sizeOf(arg_layout);
@@ -5775,6 +6141,7 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
+            .list_map_prepare_reuse => args[0],
             .list_map_can_reuse => blk: {
                 const val = try self.alloc(ll.ret_layout);
                 if (!ll.interchangeable.get(self.layout_store.targetUsize())) {
@@ -6138,6 +6505,7 @@ pub const Interpreter = struct {
             .num_count_trailing_zero_bits => self.numBitCountOp(args[0], ll.ret_layout, arg_layout, .count_trailing_zeros),
 
             // ── Fixed-width integer SIMD ──
+            .num_from_le_bytes_unchecked => self.evalNumFromLeBytes(ll),
             .simd_load_16_unchecked => self.evalSimdLoad(ll),
             .simd_store_16_unchecked => self.evalSimdStore(ll),
             .simd_append_16 => self.evalSimdAppend(ll),
@@ -6815,6 +7183,23 @@ pub const Interpreter = struct {
         return result;
     }
 
+    /// Read a little-endian integer out of a byte list. The result layout gives
+    /// the width; the bounds check already happened in the Roc wrapper. The
+    /// bytes are assembled least-significant-first regardless of host
+    /// endianness, so this agrees with every backend on every target.
+    fn evalNumFromLeBytes(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
+        const list = self.valueToRocListForLayout(ll.args[0], try self.lowLevelArgLayout(ll, 0));
+        const index: usize = @intCast(ll.args[1].read(u64));
+        const result = try self.alloc(ll.ret_layout);
+        const width = self.layout_store.layoutSize(self.layout_store.getLayout(ll.ret_layout));
+        var value: u128 = 0;
+        for (0..width) |byte| {
+            value |= @as(u128, list.bytes.?[index + byte]) << @intCast(byte * 8);
+        }
+        @memcpy(result.ptr[0..width], std.mem.asBytes(&std.mem.nativeToLittle(u128, value))[0..width]);
+        return result;
+    }
+
     fn evalSimdLoad(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
         const list = self.valueToRocListForLayout(ll.args[0], try self.lowLevelArgLayout(ll, 0));
         const index: usize = @intCast(ll.args[1].read(u64));
@@ -6942,7 +7327,7 @@ pub const Interpreter = struct {
                 64 => val.write(f64, floatBinOp(f64, a.read(f64), b.read(f64), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float width {d}", .{bits}),
             },
-            .dec => val.write(i128, try self.decBinOp(a.read(i128), b.read(i128), op)),
+            .dec => val.write(i128, try self.decBinOp(a.read(i128), b.read(i128), op, checked_op)),
         }
         return val;
     }
@@ -7913,12 +8298,18 @@ pub const Interpreter = struct {
     }
 
     /// Dec (fixed-point i128 with 10^18 scale) binary operation.
-    fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp) Error!i128 {
+    fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp, checked_op: ?LIR.LowLevel) Error!i128 {
         return switch (op) {
             .add => av +% bv,
             .sub => av -% bv,
             .negate => -%av,
-            .abs => if (av < 0) -%av else av,
+            .abs => blk: {
+                if (checked_op != null and av == std.math.minInt(i128)) {
+                    const message = CheckedArithmetic.overflowMessageForLayout(checked_op.?, .dec) orelse unreachable;
+                    return self.triggerCrash(message);
+                }
+                break :blk if (av < 0) -%av else av;
+            },
             .abs_diff => if (av > bv) av -% bv else bv -% av,
             .mul => blk: {
                 const result = RocDec.mulWithOverflow(RocDec{ .num = av }, RocDec{ .num = bv });
@@ -8600,6 +8991,9 @@ pub const Interpreter = struct {
         if (box_info.elem_size > 0) {
             @memset(data_ptr[0..box_info.elem_size], 0);
         }
+        if (builtin.mode == .Debug) {
+            try self.inflight_zeroed_box_payloads.put(self.allocator, @intFromPtr(data_ptr), {});
+        }
         const boxed = try self.alloc(ret_layout);
         self.writeBoxedDataPointer(boxed, data_ptr);
         return boxed;
@@ -8618,6 +9012,9 @@ pub const Interpreter = struct {
             }
             const dest: [*]u8 = @ptrFromInt(raw_ptr);
             @memcpy(dest[0..size], value.ptr[0..size]);
+            if (builtin.mode == .Debug) {
+                _ = self.inflight_zeroed_box_payloads.remove(raw_ptr);
+            }
         }
         return Value.zst;
     }

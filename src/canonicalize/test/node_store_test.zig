@@ -31,7 +31,7 @@ fn rand_idx_u16(comptime T: type) T {
 /// Helper to create a `DataSpan` from raw start and length positions.
 fn rand_span() base.DataSpan {
     const start = rand.random().int(u32);
-    const len = rand.random().int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
+    const len = rand.random().int(u30);
     return base.DataSpan{
         .start = start,
         .len = len,
@@ -173,6 +173,17 @@ test "NodeStore round trip - Statements" {
             .header = rand_idx(CIR.TypeHeader.Idx),
             .anno = rand_idx(CIR.TypeAnno.Idx),
             .is_opaque = false,
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
+        .s_where_alias_decl = .{
+            .header = rand_idx(CIR.TypeHeader.Idx),
+            .receiver = rand_idx(CIR.TypeAnno.Idx),
+            .where = .{
+                .span = rand_span(),
+                .owners = .{ .span = rand_span() },
+            },
         },
     });
 
@@ -867,6 +878,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .roc_version_mismatch = .{
+            .pinned = rand_ident_idx(),
+            .running = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .redundant_expose_main_type = .{
             .type_name = rand_ident_idx(),
             .module_name = rand_ident_idx(),
@@ -983,8 +1002,15 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .where_alias_constraint_not_on_receiver = .{
+            .receiver_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .underscore_in_type_declaration = .{
-            .is_alias = rand.random().boolean(),
+            .declared = rand.random().enumValue(CIR.DeclaredTypeKind),
             .region = rand_region(),
         },
     });
@@ -1496,9 +1522,11 @@ test "where clause span records canonical rigid ownership by annotation scope" {
     const method_name: base.Ident.Idx = @bitCast(@as(u32, 2));
     const outer = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
     const item = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
+    const detached = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
     const enclosing = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
     const outer_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = outer } }, base.Region.zero());
     const item_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = item } }, base.Region.zero());
+    const detached_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = detached } }, base.Region.zero());
     const enclosing_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = enclosing } }, base.Region.zero());
     const no_args = CIR.TypeAnno.Span{ .span = base.DataSpan.empty() };
 
@@ -1518,6 +1546,14 @@ test "where clause span records canonical rigid ownership by annotation scope" {
         .effectful = false,
     } }, base.Region.zero());
     try store.addScratchWhereClause(item_method);
+    const detached_method = try store.addWhereClause(.{ .w_method = .{
+        .var_ = detached,
+        .method_name = method_name,
+        .args = no_args,
+        .ret = detached_ref,
+        .effectful = false,
+    } }, base.Region.zero());
+    try store.addScratchWhereClause(detached_method);
     const enclosing_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = enclosing_ref,
         .method_name = method_name,
@@ -1527,21 +1563,25 @@ test "where clause span records canonical rigid ownership by annotation scope" {
     } }, base.Region.zero());
     try store.addScratchWhereClause(enclosing_method);
 
-    const where = try store.whereClauseSpanFrom(0, outer);
+    const where = try store.whereClauseSpanFrom(0, &.{outer});
     const owners = store.sliceWhereClauseOwners(where);
-    try testing.expectEqual(@as(usize, 3), owners.len);
+    try testing.expectEqual(@as(usize, 4), owners.len);
 
     try testing.expectEqual(@intFromEnum(outer), owners[0].rigid_var);
-    try testing.expect(owners[0].introduced_in_scope);
+    try testing.expect(owners[0].owned_by_annotation);
     try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{outer_method}, store.sliceWhereClausesForOwner(owners[0]));
 
     try testing.expectEqual(@intFromEnum(item), owners[1].rigid_var);
-    try testing.expect(owners[1].introduced_in_scope);
+    try testing.expect(owners[1].owned_by_annotation);
     try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{item_method}, store.sliceWhereClausesForOwner(owners[1]));
 
-    try testing.expectEqual(@intFromEnum(enclosing), owners[2].rigid_var);
-    try testing.expect(!owners[2].introduced_in_scope);
-    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{enclosing_method}, store.sliceWhereClausesForOwner(owners[2]));
+    try testing.expectEqual(@intFromEnum(detached), owners[2].rigid_var);
+    try testing.expect(!owners[2].owned_by_annotation);
+    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{detached_method}, store.sliceWhereClausesForOwner(owners[2]));
+
+    try testing.expectEqual(@intFromEnum(enclosing), owners[3].rigid_var);
+    try testing.expect(!owners[3].owned_by_annotation);
+    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{enclosing_method}, store.sliceWhereClausesForOwner(owners[3]));
 
     var cloned = try store.clone(gpa);
     defer cloned.deinit();

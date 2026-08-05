@@ -39,6 +39,13 @@ const MethodRegistryTestCheckedBodies = struct {
     ) ?checked_ids.CheckedExprId {
         unreachable;
     }
+
+    pub fn statementIdForSource(
+        _: *const @This(),
+        _: can.CIR.Statement.Idx,
+    ) ?checked_ids.CheckedStatementId {
+        unreachable;
+    }
 };
 
 // primitives - nums //
@@ -255,6 +262,27 @@ test "check type - numeral defaulting candidate order - integer-only method comm
         .def = .last_def,
         .warnings = &.{"Literal Defaulted"},
     } }, "I64 -> I64");
+}
+
+test "issue 10296: single quote literals do not emit defaulted warning" {
+    const source =
+        \\x = || 'M' == 'M'
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+}
+
+test "issue 10296: single quote literal compared to number literal without warning" {
+    const source =
+        \\y = || 'M' == 1
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+}
+
+test "issue 10296: single quote literal compared to fractional number without warning" {
+    const source =
+        \\z = || 'M' == 1.5
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
 }
 
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
@@ -4928,6 +4956,43 @@ test "consolidated - record literal lifts into record-backed nominal (control)" 
     try checkTypesModule(source, .{ .pass = .last_def }, "Point");
 }
 
+test "nominal constructor rejects an already nominal record backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Wrap :: { a : U8, b : U8 }.{
+        \\    inc_a : Wrap -> Wrap
+        \\    inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Invalid Nominal Record");
+}
+
+test "nominal constructor backing allows a nested nominal value" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner :: { value : U8 }
+        \\Outer :: { inner : Inner }
+        \\
+        \\inner = Inner.{ value: 1 }
+        \\outer = Outer.{ inner }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+}
+
+test "record update still lifts to its nominal extension" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Wrap :: { a : U8, b : U8 }
+        \\
+        \\inc_a : Wrap -> Wrap
+        \\inc_a = |wrap| { ..wrap, a: wrap.a + 1 }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Wrap -> Wrap");
+}
+
 test "consolidated - record literal does not lift through a newtype chain" {
     // Structural lifting is single-level only: it does NOT compose through a
     // transparent newtype chain (`Outer := Inner := { … }`). Pinned as the
@@ -5055,6 +5120,29 @@ test "check type - early return - pass" {
         \\}
     ;
     try checkTypesExpr(source, .pass, "Bool -> List(_a)");
+}
+
+test "check type - unreachable final expression does not constrain early return" {
+    const source =
+        \\f = |x| {
+        \\    return x
+        \\    x + 1
+        \\}
+        \\result = f(1.I64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
+}
+
+test "check type - unreachable statements do not constrain early return" {
+    const source =
+        \\f = |x| {
+        \\    return x
+        \\    y = x + 1
+        \\    y
+        \\}
+        \\result = f(1.I64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
 }
 
 test "check type - final infinite loop can satisfy annotated return type" {

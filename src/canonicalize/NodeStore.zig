@@ -67,14 +67,27 @@ pub const LiteralDispatchPlan = extern struct {
     target_var: u32,
     fn_var: u32,
     kind: u32,
+    resolution: u32,
 
     pub const Kind = enum(u32) {
         numeral,
         quote,
     };
 
+    pub const Resolution = enum(u32) {
+        unresolved,
+        builtin_direct,
+        custom_dispatch,
+        specialization_dispatch,
+        checked_error,
+    };
+
     pub fn dispatchKind(self: LiteralDispatchPlan) Kind {
         return @enumFromInt(self.kind);
+    }
+
+    pub fn dispatchResolution(self: LiteralDispatchPlan) Resolution {
+        return @enumFromInt(self.resolution);
     }
 };
 
@@ -211,7 +224,7 @@ pub const WhereClauseOwnerData = extern struct {
     rigid_var: u32,
     clauses_start: u32,
     clauses_len: u32,
-    introduced_in_scope: bool,
+    owned_by_annotation: bool,
     _padding: [3]u8 = .{ 0, 0, 0 },
 };
 
@@ -479,11 +492,11 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 86;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 88;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 56;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 20;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 21;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -665,20 +678,47 @@ pub fn recordLiteralDispatchPlan(
     const node = store.nodes.get(node_idx);
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
 
-    const plan = LiteralDispatchPlan{
+    var plan = LiteralDispatchPlan{
         .node_idx = @intFromEnum(node_idx),
         .target_var = @intFromEnum(target_var),
         .fn_var = @intFromEnum(fn_var),
         .kind = @intFromEnum(kind),
+        .resolution = @intFromEnum(LiteralDispatchPlan.Resolution.unresolved),
     };
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one != 0) {
+        plan.resolution = store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).resolution;
         store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
         return;
     }
 
     const plan_idx = try store.literal_dispatch_plans.append(store.gpa, plan);
     setLiteralDispatchPlanPlusOne(store, node_idx, @intFromEnum(plan_idx) + 1);
+}
+
+/// Finalize the checker-owned resolution for a live literal plan. An
+/// unresolved record is construction state; a second, different resolution
+/// would mean checking produced contradictory evidence for one literal.
+pub fn finalizeLiteralDispatchResolution(
+    store: *NodeStore,
+    node_idx: Node.Idx,
+    resolution: LiteralDispatchPlan.Resolution,
+) void {
+    std.debug.assert(resolution != .unresolved);
+    const node = store.nodes.get(node_idx);
+    const plan_plus_one = literalDispatchPlanPlusOne(node);
+    if (plan_plus_one == 0) return;
+
+    var plan = store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).*;
+    const previous = plan.dispatchResolution();
+    if (previous != .unresolved and previous != resolution) {
+        std.debug.panic(
+            "literal dispatch plan for node {d} finalized twice ({s}, then {s})",
+            .{ @intFromEnum(node_idx), @tagName(previous), @tagName(resolution) },
+        );
+    }
+    plan.resolution = @intFromEnum(resolution);
+    store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
 }
 
 /// Return the checked dispatch evidence owned by a literal node, if any.
@@ -705,7 +745,10 @@ pub fn literalDispatchPlans(store: *const NodeStore) []const LiteralDispatchPlan
     return store.literal_dispatch_plans.items.items;
 }
 
-fn detachLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) void {
+/// Retire the literal plan owned by `node_idx`, if any. Error recovery calls
+/// this for every expression discarded with a replaced subtree, so no plan can
+/// outlive the source node that would execute it.
+pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) void {
     const node = store.nodes.get(node_idx);
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one == 0) return;
@@ -975,6 +1018,16 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                     .header = @enumFromInt(p.header),
                     .anno = @enumFromInt(p.anno),
                     .is_opaque = p.is_opaque != 0,
+                },
+            };
+        },
+        .statement_where_alias_decl => {
+            const p = payload.statement_where_alias_decl;
+            return CIR.Statement{
+                .s_where_alias_decl = .{
+                    .header = @enumFromInt(p.header),
+                    .receiver = @enumFromInt(p.receiver),
+                    .where = store.loadWhereClauseSpan(p.where_span_idx),
                 },
             };
         },
@@ -1798,7 +1851,7 @@ pub fn replaceExprWithRuntimeError(
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    store.detachLiteralDispatchPlan(node_idx);
+    store.retireLiteralDispatchPlan(node_idx);
     var node = Node.init(.malformed);
     node.setPayload(.{ .diag_single_value = .{
         .value = @intFromEnum(diagnostic_idx),
@@ -1907,12 +1960,10 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
         },
         .where_alias => {
             const p = payload.where_alias;
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.var_idx));
-            const alias_name = @as(Ident.Idx, @bitCast(p.alias_name));
 
             return CIR.WhereClause{ .w_alias = .{
-                .var_ = var_,
-                .alias_name = alias_name,
+                .var_ = @enumFromInt(p.var_idx),
+                .alias = @enumFromInt(p.alias_idx),
             } };
         },
         .where_malformed => {
@@ -2533,6 +2584,14 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 .header = @intFromEnum(s.header),
                 .anno = @intFromEnum(s.anno),
                 .is_opaque = if (s.is_opaque) 1 else 0,
+            } });
+        },
+        .s_where_alias_decl => |s| {
+            node.tag = .statement_where_alias_decl;
+            node.setPayload(.{ .statement_where_alias_decl = .{
+                .header = @intFromEnum(s.header),
+                .receiver = @intFromEnum(s.receiver),
+                .where_span_idx = try store.storeWhereClauseSpan(s.where),
             } });
         },
         .s_type_anno => |s| {
@@ -3187,11 +3246,11 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
                 .effectful = @intFromBool(where_method.effectful),
             } });
         },
-        .w_alias => |mod_alias| {
+        .w_alias => |where_alias| {
             node.tag = .where_alias;
             node.setPayload(.{ .where_alias = .{
-                .var_idx = @intFromEnum(mod_alias.var_),
-                .alias_name = @bitCast(mod_alias.alias_name),
+                .var_idx = @intFromEnum(where_alias.var_),
+                .alias_idx = @intFromEnum(where_alias.alias),
             } });
         },
         .w_malformed => |malformed| {
@@ -4019,25 +4078,8 @@ pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Re
 
 /// Returns a span from the scratch where clauses starting at the given index,
 /// together with the canonical rigid declaration that owns each method group.
-pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_anno: CIR.TypeAnno.Idx) Allocator.Error!CIR.WhereClause.Span {
+pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CIR.TypeAnno.Idx) Allocator.Error!CIR.WhereClause.Span {
     const clauses = try store.spanFrom("where_clauses", CIR.WhereClause.IdxSpan, start);
-
-    var introduced = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
-    defer introduced.deinit(store.gpa);
-    try store.collectIntroducedRigidVars(root_anno, &introduced);
-    for (store.sliceWhereClauseIndices(clauses)) |where_idx| {
-        switch (store.getWhereClause(where_idx)) {
-            .w_method => |method| {
-                try store.collectIntroducedRigidVars(method.var_, &introduced);
-                for (store.sliceTypeAnnos(method.args)) |arg| {
-                    try store.collectIntroducedRigidVars(arg, &introduced);
-                }
-                try store.collectIntroducedRigidVars(method.ret, &introduced);
-            },
-            .w_alias => |alias| try store.collectIntroducedRigidVars(alias.var_, &introduced),
-            .w_malformed => {},
-        }
-    }
 
     const ClauseList = std.ArrayListUnmanaged(CIR.WhereClause.Idx);
     var grouped = std.AutoArrayHashMapUnmanaged(CIR.TypeAnno.Idx, ClauseList){};
@@ -4047,18 +4089,90 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_anno: CIR.TypeAnn
     }
 
     for (store.sliceWhereClauseIndices(clauses)) |where_idx| {
-        const method = switch (store.getWhereClause(where_idx)) {
-            .w_method => |method| method,
-            .w_alias, .w_malformed => continue,
+        const constrained_var = switch (store.getWhereClause(where_idx)) {
+            .w_method => |method| method.var_,
+            .w_alias => |alias| alias.var_,
+            .w_malformed => continue,
         };
-        const owner = switch (store.getTypeAnno(method.var_)) {
-            .rigid_var => method.var_,
+        const owner = switch (store.getTypeAnno(constrained_var)) {
+            .rigid_var => constrained_var,
             .rigid_var_lookup => |lookup| lookup.ref,
             else => continue,
         };
         const gop = try grouped.getOrPut(store.gpa, owner);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(store.gpa, where_idx);
+    }
+
+    var locally_declared = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
+    defer locally_declared.deinit(store.gpa);
+    for (root_annos) |root_anno| {
+        try store.collectIntroducedRigidVars(root_anno, &locally_declared);
+    }
+    for (store.sliceWhereClauseIndices(clauses)) |where_idx| {
+        switch (store.getWhereClause(where_idx)) {
+            .w_method => |method| {
+                try store.collectIntroducedRigidVars(method.var_, &locally_declared);
+                for (store.sliceTypeAnnos(method.args)) |arg| {
+                    try store.collectIntroducedRigidVars(arg, &locally_declared);
+                }
+                try store.collectIntroducedRigidVars(method.ret, &locally_declared);
+            },
+            .w_alias => |alias| {
+                try store.collectIntroducedRigidVars(alias.var_, &locally_declared);
+                try store.collectIntroducedRigidVars(alias.alias, &locally_declared);
+            },
+            .w_malformed => {},
+        }
+    }
+
+    // A constraint-only rigid is owned by this annotation only when a chain of
+    // method signatures connects it to a rigid in the ordinary annotation.
+    var reachable = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
+    defer reachable.deinit(store.gpa);
+    for (root_annos) |root_anno| {
+        try store.collectIntroducedRigidVars(root_anno, &reachable);
+    }
+
+    var owner_queue = std.ArrayListUnmanaged(CIR.TypeAnno.Idx).empty;
+    defer owner_queue.deinit(store.gpa);
+    for (grouped.keys()) |owner| {
+        if (reachable.contains(owner)) {
+            try owner_queue.append(store.gpa, owner);
+        }
+    }
+
+    var dependencies = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
+    defer dependencies.deinit(store.gpa);
+    var queue_index: usize = 0;
+    while (queue_index < owner_queue.items.len) : (queue_index += 1) {
+        const owner = owner_queue.items[queue_index];
+        dependencies.clearRetainingCapacity();
+
+        for (grouped.get(owner).?.items) |where_idx| {
+            switch (store.getWhereClause(where_idx)) {
+                .w_method => |method| {
+                    for (store.sliceTypeAnnos(method.args)) |arg| {
+                        try store.collectReferencedRigidVars(arg, &dependencies);
+                    }
+                    try store.collectReferencedRigidVars(method.ret, &dependencies);
+                },
+                // A where alias reaches the type variables its arguments name.
+                .w_alias => |alias| try store.collectReferencedRigidVars(alias.alias, &dependencies),
+                .w_malformed => {},
+            }
+        }
+
+        var dependency_it = dependencies.keyIterator();
+        while (dependency_it.next()) |dependency_ptr| {
+            const dependency = dependency_ptr.*;
+            if (!locally_declared.contains(dependency) or reachable.contains(dependency)) continue;
+
+            try reachable.put(store.gpa, dependency, {});
+            if (grouped.contains(dependency)) {
+                try owner_queue.append(store.gpa, dependency);
+            }
+        }
     }
 
     const owners_start: u32 = @intCast(store.where_clause_owners.len());
@@ -4071,7 +4185,7 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_anno: CIR.TypeAnn
             .rigid_var = @intFromEnum(owner),
             .clauses_start = clauses_start,
             .clauses_len = @intCast(owned_clauses.items.len),
-            .introduced_in_scope = introduced.contains(owner),
+            .owned_by_annotation = reachable.contains(owner),
         });
     }
 
@@ -4120,6 +4234,46 @@ fn collectIntroducedRigidVars(
             try store.collectIntroducedRigidVars(func.ret, introduced);
         },
         .parens => |parens| try store.collectIntroducedRigidVars(parens.anno, introduced),
+    }
+}
+
+fn collectReferencedRigidVars(
+    store: *const NodeStore,
+    anno_idx: CIR.TypeAnno.Idx,
+    referenced: *std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void),
+) Allocator.Error!void {
+    switch (store.getTypeAnno(anno_idx)) {
+        .rigid_var => try referenced.put(store.gpa, anno_idx, {}),
+        .rigid_var_lookup => |lookup| try referenced.put(store.gpa, lookup.ref, {}),
+        .underscore, .lookup, .malformed => {},
+        .apply => |apply| for (store.sliceTypeAnnos(apply.args)) |arg| {
+            try store.collectReferencedRigidVars(arg, referenced);
+        },
+        .tag_union => |tag_union| {
+            for (store.sliceTypeAnnos(tag_union.tags)) |tag| {
+                try store.collectReferencedRigidVars(tag, referenced);
+            }
+            if (tag_union.ext) |ext| try store.collectReferencedRigidVars(ext, referenced);
+        },
+        .tag => |tag| for (store.sliceTypeAnnos(tag.args)) |arg| {
+            try store.collectReferencedRigidVars(arg, referenced);
+        },
+        .tuple => |tuple| for (store.sliceTypeAnnos(tuple.elems)) |elem| {
+            try store.collectReferencedRigidVars(elem, referenced);
+        },
+        .record => |record| {
+            for (store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                try store.collectReferencedRigidVars(store.getAnnoRecordField(field_idx).ty, referenced);
+            }
+            if (record.ext) |ext| try store.collectReferencedRigidVars(ext, referenced);
+        },
+        .@"fn" => |func| {
+            for (store.sliceTypeAnnos(func.args)) |arg| {
+                try store.collectReferencedRigidVars(arg, referenced);
+            }
+            try store.collectReferencedRigidVars(func.ret, referenced);
+        },
+        .parens => |parens| try store.collectReferencedRigidVars(parens.anno, referenced),
     }
 }
 
@@ -4580,6 +4734,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_where_clause_not_allowed_in_type_decl;
             region = r.region;
         },
+        .where_alias_constraint_not_on_receiver => |r| {
+            node.tag = .diag_where_alias_constraint_not_on_receiver;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.receiver_name) } });
+        },
         .open_ext_not_allowed_in_type_decl => |r| {
             node.tag = .diag_open_ext_not_allowed_in_type_decl;
             region = r.region;
@@ -4625,6 +4784,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .module_header_deprecated => |r| {
             node.tag = .diag_module_header_deprecated;
             region = r.region;
+        },
+        .roc_version_mismatch => |r| {
+            node.tag = .diag_roc_version_mismatch;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.pinned), .ident2 = @bitCast(r.running) } });
         },
         .redundant_expose_main_type => |r| {
             node.tag = .diag_redundant_expose_main_type;
@@ -4824,7 +4988,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .underscore_in_type_declaration => |r| {
             node.tag = .diag_underscore_in_type_declaration;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromBool(r.is_alias) } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.declared) } });
         },
         .break_outside_loop => |r| {
             node.tag = .diag_break_outside_loop;
@@ -5147,6 +5311,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_where_clause_not_allowed_in_type_decl => return CIR.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_where_alias_constraint_not_on_receiver => return CIR.Diagnostic{ .where_alias_constraint_not_on_receiver = .{
+            .receiver_name = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_open_ext_not_allowed_in_type_decl => return CIR.Diagnostic{ .open_ext_not_allowed_in_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
@@ -5187,6 +5355,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_module_header_deprecated => return CIR.Diagnostic{ .module_header_deprecated = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_roc_version_mismatch => {
+            const p = payload.diag_two_idents;
+            return CIR.Diagnostic{ .roc_version_mismatch = .{
+                .pinned = @bitCast(p.ident1),
+                .running = @bitCast(p.ident2),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
         .diag_redundant_expose_main_type => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .redundant_expose_main_type = .{
@@ -5314,7 +5490,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_underscore_in_type_declaration => return CIR.Diagnostic{ .underscore_in_type_declaration = .{
-            .is_alias = payload.diag_single_value.value != 0,
+            .declared = @enumFromInt(payload.diag_single_value.value),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
@@ -5641,6 +5817,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     });
     const node1_idx = try original.nodes.append(gpa, node1);
     try original.recordLiteralDispatchPlan(node1_idx, .numeral, @enumFromInt(7), @enumFromInt(9));
+    original.finalizeLiteralDispatchResolution(node1_idx, .builtin_direct);
 
     // Add a region
     const region = Region{
@@ -5690,6 +5867,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, literal_plan.dispatchKind());
     try testing.expectEqual(@as(u32, 7), literal_plan.target_var);
     try testing.expectEqual(@as(u32, 9), literal_plan.fn_var);
+    try testing.expectEqual(LiteralDispatchPlan.Resolution.builtin_direct, literal_plan.dispatchResolution());
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());

@@ -168,6 +168,19 @@ const Builder = struct {
         const resolved = self.store.resolveVar(var_);
         const root = resolved.var_;
 
+        // The checker explicitly records when it closes an otherwise
+        // unresolved identity to `[]`. Encode the surviving union-find root so
+        // every reference to that identity shares one checked type digest.
+        if (resolved.desc.flags.empty_tag_union_is_default) {
+            try self.writeIdentityVariable(
+                root,
+                "defaulted_empty_tag_union",
+                null,
+                types.StaticDispatchConstraint.SafeList.Range.empty(),
+            );
+            return;
+        }
+
         switch (resolved.desc.content) {
             .flex => |flex| {
                 if (self.require_concrete) {
@@ -268,31 +281,38 @@ const Builder = struct {
     }
 
     /// INVARIANT: a still-open flex may be keyed as the canonical literal
-    /// default (Dec for numerals, Str for quotes) ONLY when every constraint
-    /// on it came directly from literal conversion — a pure,
-    /// otherwise-unconstrained literal is exactly what the checker's defaulting
-    /// commits to the kind's default.
-    /// Any OTHER constraint origin (binop/method/where-clause usage) feeds the
-    /// checker's candidate probing, which may commit a non-default candidate
-    /// (e.g. an integer-only method commits I64); such a var must already be
-    /// concrete when a concrete key is requested, so finding one still open
-    /// here means an upstream defaulting step was skipped — keying it as the
-    /// default would be a guess, so we raise an invariant violation instead.
+    /// default (Dec for numerals, Str for quotes) ONLY when every constraint on
+    /// it is a literal conversion — either a literal's own `from_literal`
+    /// constraint or a `where`-clause contract naming a literal-conversion hook.
+    /// Such a var is exactly what the checker's defaulting commits to the kind's
+    /// default.
+    /// Any OTHER constraint (binop/method usage, or a `where` clause naming some
+    /// other method) feeds the checker's candidate probing, which may commit a
+    /// non-default candidate (e.g. an integer-only method commits I64); such a
+    /// var must already be concrete when a concrete key is requested, so finding
+    /// one still open here means an upstream defaulting step was skipped —
+    /// keying it as the default would be a guess, so we raise an invariant
+    /// violation instead.
     ///
-    /// A mixed-kind set (both numeral and quote literal-origin constraints,
-    /// reachable only via a flex/flex merge the checker reports as a type
-    /// error, so it never survives to key generation) deterministically picks
-    /// `numeral` — the defaulting oracle (src/types/literal_defaulting.zig)
-    /// owns that precedence, so this key builder cannot disagree with the
-    /// checker's defaulting.
+    /// Both the kind and the "is this a literal conversion" test come from the
+    /// defaulting oracle (src/types/literal_defaulting.zig), so this key builder
+    /// cannot disagree with the checker's defaulting about which vars default —
+    /// including the mixed-kind set (both numeral and quote literal constraints,
+    /// reachable only via a flex/flex merge the checker reports as a type error,
+    /// so it never survives to key generation), where the oracle's precedence
+    /// deterministically picks `numeral`.
     fn flexLiteralDefaultKind(self: *Builder, flex: types.Flex) ?LiteralKind {
+        const literal_idents = types.literal_defaulting.LiteralMethodIdents{
+            .from_numeral = self.env.idents.from_numeral,
+            .from_quote = self.env.idents.from_quote,
+            .from_interpolation = self.env.idents.from_interpolation,
+        };
         const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
-        const kind = types.literal_defaulting.dominantKind(constraints);
+        const kind = types.literal_defaulting.dominantKind(literal_idents, constraints);
         var has_other = false;
         for (constraints) |constraint| {
-            switch (constraint.origin) {
-                .from_literal => {},
-                else => has_other = true,
+            if (types.literal_defaulting.constraintLiteralKind(literal_idents, constraint) == null) {
+                has_other = true;
             }
         }
         if (kind != null and has_other) {

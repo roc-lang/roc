@@ -222,6 +222,7 @@ pub const BuildArgs = struct {
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
     debug: bool = false, // include debug information in the output binary
+    keep_temp: bool = false, // do not delete temporary directories created during build
     verbose: bool = false, // enable verbose output including cache statistics
     timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable compilation caching
@@ -423,7 +424,7 @@ const main_help =
     \\Options:
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
     \\      --specialize=<yes|no>          Use lambda-set specialization (yes) or boxy lowering (no)
-    \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+    \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
     \\      --no-color                     Do not use ANSI escape codes in CLI output
     \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
@@ -567,6 +568,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var debug: bool = false;
+    var keep_temp: bool = false;
     var verbose: bool = false;
     var timings: bool = false;
     var no_cache: bool = false;
@@ -590,8 +592,9 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<opt>                    Build mode: speed (default LLVM optimized), size (LLVM optimized for binary size), dev (native dev backend), or interpreter (embedded interpreter backend)
             \\      --specialize=<yes|no>          Use lambda-set specialization (yes) or boxy lowering (no)
-            \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+            \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking
             \\      --debug                        Include debug information in the output binary
+            \\      --keep-temp                    Keep all temporary directories created during build
             \\      --verbose                      Enable verbose output including cache statistics
             \\      --timings                      Show how long each compilation phase took (shown automatically when a build is slow)
             \\      --no-cache                     Disable compilation caching
@@ -637,6 +640,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--debug")) {
             debug = true;
+        } else if (mem.eql(u8, arg, "--keep-temp")) {
+            keep_temp = true;
         } else if (mem.startsWith(u8, arg, "--wasm-memory")) {
             if (getFlagValue(arg)) |value| {
                 wasm_memory = std.fmt.parseInt(usize, value, 10) catch {
@@ -692,7 +697,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .target = target, .output = output, .debug = debug, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .target = target, .output = output, .debug = debug, .keep_temp = keep_temp, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -1874,6 +1879,11 @@ test "roc build" {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--thisisactuallyafile" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--thisisactuallyafile", result.build.path);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--keep-temp" });
+        defer result.deinit(gpa);
+        try testing.expect(result.build.keep_temp);
     }
 }
 

@@ -84,7 +84,14 @@ EndOfFile,
 			(header (name "A")
 				(args
 					(ty-var (raw "a"))))
-			(ty-var (raw "a")))
+			(ty-var (raw "a"))
+			(where
+				(method (mod-of "a") (name "a1")
+					(args
+						(ty-tuple
+							(ty-var (raw "a"))
+							(ty-var (raw "a"))))
+					(ty (name "Str")))))
 		(s-type-decl
 			(header (name "C")
 				(args
@@ -144,11 +151,11 @@ D(a, b) : C(a, b)
 			(ty-header (name "A")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "C(b)")
+		(alias (type "Error")
 			(ty-header (name "C")
 				(ty-args
 					(ty-rigid-var (name "b")))))
-		(alias (type "D(a, b)")
+		(alias (type "Error")
 			(ty-header (name "D")
 				(ty-args
 					(ty-rigid-var (name "a"))

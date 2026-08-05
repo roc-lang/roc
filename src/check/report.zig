@@ -63,7 +63,9 @@ const ComptimeCondition = problem_mod.ComptimeCondition;
 // Type declaration errors
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
 const RecursiveAlias = problem_mod.RecursiveAlias;
-const UnsupportedAliasWhereClause = problem_mod.UnsupportedAliasWhereClause;
+const NotAWhereAlias = problem_mod.NotAWhereAlias;
+const WhereAliasInTypePosition = problem_mod.WhereAliasInTypePosition;
+const RecursiveWhereAlias = problem_mod.RecursiveWhereAlias;
 const WhereClauseReceiverNotIntroduced = problem_mod.WhereClauseReceiverNotIntroduced;
 const InvalidNominalDeclRecursion = problem_mod.InvalidNominalDeclRecursion;
 
@@ -891,8 +893,14 @@ pub const ReportBuilder = struct {
             .recursive_alias => |data| {
                 return self.buildRecursiveAliasReport(data);
             },
-            .unsupported_alias_where_clause => |data| {
-                return self.buildUnsupportedAliasWhereClauseReport(data);
+            .not_a_where_alias => |data| {
+                return self.buildNotAWhereAliasReport(data);
+            },
+            .where_alias_in_type_position => |data| {
+                return self.buildWhereAliasInTypePositionReport(data);
+            },
+            .recursive_where_alias => |data| {
+                return self.buildRecursiveWhereAliasReport(data);
             },
             .where_clause_receiver_not_introduced => |data| {
                 return self.buildWhereClauseReceiverNotIntroducedReport(data);
@@ -2025,16 +2033,16 @@ pub const ReportBuilder = struct {
 
     /// Build a report for when alias syntax is used in a where clause
     /// This syntax was used for abilities which have been removed
-    fn buildUnsupportedAliasWhereClauseReport(
+    fn buildNotAWhereAliasReport(
         self: *Self,
-        data: UnsupportedAliasWhereClause,
+        data: NotAWhereAlias,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Unsupported Where Clause", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Not a Where Alias", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
-            D.bytes("The where clause syntax"),
-            D.ident(data.alias_name).withAnnotation(.type_variable),
-            D.bytes("is not supported."),
+            D.bytes("A where clause can only name a where alias, but"),
+            D.ident(data.name).withAnnotation(.type_variable),
+            D.bytes("is a type."),
         }, self, &report, &report.headline);
 
         // Add source region highlighting
@@ -2049,25 +2057,87 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
-            D.bytes("This syntax was used for abilities, which have been removed from Roc. Use method constraints like"),
-            D.bytes("where [a.methodName(args) -> ret]").withAnnotation(.inline_code),
-            D.bytes("instead."),
+            D.bytes("A where alias names a set of method constraints, declared like"),
+            D.bytes("a.Sortable : where [a.compare : a -> [LT, EQ, GT]]").withAnnotation(.inline_code),
+            D.bytes("and written in a where clause as"),
+            D.bytes("where [a.Sortable]").withAnnotation(.inline_code),
         }, self, &report);
 
         return report;
     }
 
-    /// Build a report for a where constraint on a rigid introduced by a different annotation.
+    fn buildWhereAliasInTypePositionReport(
+        self: *Self,
+        data: WhereAliasInTypePosition,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Where Alias Used as a Type", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.ident(data.name).withAnnotation(.type_variable),
+            D.bytes("is a where alias, not a type."),
+        }, self, &report, &report.headline);
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("A where alias names a set of method constraints, so it constrains a type variable in a"),
+            D.bytes("where").withAnnotation(.inline_code),
+            D.bytes("clause rather than standing in for a type of its own."),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildRecursiveWhereAliasReport(
+        self: *Self,
+        data: RecursiveWhereAlias,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Recursive Where Alias", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("The where alias"),
+            D.ident(data.name).withAnnotation(.type_variable),
+            D.bytes("names itself."),
+        }, self, &report, &report.headline);
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("A where alias is expanded where it is used, so it cannot reach itself, directly or through other where aliases."),
+        }, self, &report);
+
+        return report;
+    }
+
+    /// Build a report for a where constraint whose receiver is not owned by this annotation.
     fn buildWhereClauseReceiverNotIntroducedReport(
         self: *Self,
         data: WhereClauseReceiverNotIntroduced,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Constraint in Wrong Annotation", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Unbound Where Receiver", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The type variable"),
             D.ident(data.type_var_name).withAnnotation(.inline_code),
-            D.bytes("was introduced by a different annotation, so this where clause cannot add the"),
+            D.bytes("is not introduced by this annotation's type or a connected method constraint, so this where clause cannot add the"),
             D.ident(data.method_name).withAnnotation(.symbol),
             D.bytes("method to it."),
         }, self, &report, &report.headline);
@@ -2083,10 +2153,9 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
-            D.bytes("A where clause can only add methods to type variables introduced by the same annotation. Add this method to the annotation that introduced"),
+            D.bytes("A where clause receiver must be introduced by the annotation's type, or by the method type of a receiver that is already connected to the annotation. Connect"),
             D.ident(data.type_var_name).withAnnotation(.inline_code),
-            D.bytes(",").withNoPrecedingSpace(),
-            D.bytes("or use a new type variable here."),
+            D.bytes("to the annotation, or remove this constraint."),
         }, self, &report);
 
         return report;
@@ -3730,6 +3799,14 @@ pub const ReportBuilder = struct {
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("but no exposed module declares a hosted function with that name."),
+            }, self, &report, &report.headline),
+            .function_has_implementation => try D.renderSliceInto(&.{
+                D.bytes("The platform header's"),
+                D.bytes("hosted").withAnnotation(.inline_code),
+                D.bytes("section has an entry for"),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("but that function has an implementation. Hosted functions must have a type annotation without a Roc implementation."),
             }, self, &report, &report.headline),
             .duplicate_function => try D.renderSliceInto(&.{
                 D.bytes("The platform header's"),

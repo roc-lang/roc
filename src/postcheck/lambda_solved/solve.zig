@@ -26,6 +26,54 @@ const UnifyPair = struct {
     }
 };
 
+/// The store writes a unification defers until every type it pushed onto the
+/// unify stack has been processed.
+const UnifyFinishAction = union(enum) {
+    none,
+    link_rhs_to_lhs: struct {
+        lhs: Type.TypeVarId,
+        rhs: Type.TypeVarId,
+    },
+    link_var_to_root: struct {
+        var_: Type.TypeVarId,
+        target: Type.TypeVarId,
+    },
+    set_left_erased_link_right: struct {
+        lhs: Type.TypeVarId,
+        rhs: Type.TypeVarId,
+        source_fn_ty: Type.names.TypeDigest,
+        members: Type.Span,
+    },
+    set_left_lambda_set_link_right: struct {
+        lhs: Type.TypeVarId,
+        rhs: Type.TypeVarId,
+        members: Type.Span,
+    },
+    set_left_tag_union_link_right: struct {
+        lhs: Type.TypeVarId,
+        rhs: Type.TypeVarId,
+        tags: Type.Span,
+    },
+};
+
+const UnifyFrame = union(enum) {
+    process: struct {
+        lhs: Type.TypeVarId,
+        rhs: Type.TypeVarId,
+    },
+    finish: struct {
+        pair: UnifyPair,
+        action: UnifyFinishAction,
+    },
+};
+
+/// A pair of spans whose element-wise unification is deferred until after the
+/// enclosing merge has computed the span it writes into the store.
+const DeferredSpanPair = struct {
+    lhs: Type.Span,
+    rhs: Type.Span,
+};
+
 /// Solve lambda-set relationships in a lifted Monotype program.
 pub fn run(
     allocator: Allocator,
@@ -59,6 +107,22 @@ const Solver = struct {
     join_points: std.ArrayList(ActiveJoinPoint),
     return_contexts: std.ArrayList(ReturnContext),
     active_unifications: std.AutoHashMap(UnifyPair, void),
+    unify_stack: std.ArrayList(UnifyFrame),
+    active_private_evidence_relations: std.AutoHashMap(UnifyPair, void),
+    /// Per lifted Monotype: whether any `func` or `erased` node is reachable
+    /// from it. Clones of callable-free types carry no unbound slots and no
+    /// mutable lambda-set state, so one shared clone serves every use, and
+    /// lazy-leaf walks skip callable-free leaves without materializing them.
+    contains_callable: []bool,
+    /// Per lifted Monotype: whether a forced-dynamic iterator named type is
+    /// reachable from it. The forced-dynamic scan materializes exactly these
+    /// leaves so the named nodes it must mark exist in the solved store.
+    contains_forced_dynamic: []bool,
+    shared_clones: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
+    /// One memo map per lazily materialized tree, tying recursive
+    /// back-references to their existing vars exactly as an eager clone's
+    /// per-call memo did. Allocated on a leaf's first expansion.
+    leaf_contexts: std.ArrayList(std.AutoHashMap(MonoType.TypeId, Type.TypeVarId)),
 
     const FunctionShape = struct {
         args: Type.Span,
@@ -99,6 +163,10 @@ const Solver = struct {
         errdefer allocator.free(generated_backing_pats);
         @memset(generated_backing_pats, false);
 
+        const masks = try computeReachabilityMasks(allocator, lifted.types);
+        errdefer allocator.free(masks.contains_callable);
+        errdefer allocator.free(masks.contains_forced_dynamic);
+
         return .{
             .allocator = allocator,
             .program = program,
@@ -113,10 +181,23 @@ const Solver = struct {
             .join_points = .empty,
             .return_contexts = .empty,
             .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
+            .unify_stack = .empty,
+            .active_private_evidence_relations = std.AutoHashMap(UnifyPair, void).init(allocator),
+            .contains_callable = masks.contains_callable,
+            .contains_forced_dynamic = masks.contains_forced_dynamic,
+            .shared_clones = std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
+            .leaf_contexts = .empty,
         };
     }
 
     fn deinit(self: *Solver) void {
+        for (self.leaf_contexts.items) |*ctx| ctx.deinit();
+        self.leaf_contexts.deinit(self.allocator);
+        self.shared_clones.deinit();
+        self.allocator.free(self.contains_forced_dynamic);
+        self.allocator.free(self.contains_callable);
+        self.active_private_evidence_relations.deinit();
+        self.unify_stack.deinit(self.allocator);
         self.active_unifications.deinit();
         self.return_contexts.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
@@ -155,12 +236,14 @@ const Solver = struct {
             try self.solveFn(fn_id, fn_);
         }
 
+        try self.markAbiBoundaryCallables();
+
         try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.lifted.layout_requests.len);
         for (self.lifted.layout_requests) |request| {
             const ty = if (request.fn_id) |fn_id|
                 self.fnRetType(fn_id)
             else
-                try self.lowerTypeFresh(request.ty);
+                try self.monoLeaf(request.ty);
             try self.markErasedCallablesReachedByType(ty);
             try self.program.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
@@ -172,7 +255,7 @@ const Solver = struct {
 
         try self.program.runtime_schema_requests.ensureTotalCapacity(self.allocator, self.lifted.runtime_schema_requests.len);
         for (self.lifted.runtime_schema_requests) |request| {
-            const ty = try self.lowerTypeFresh(request.ty);
+            const ty = try self.monoLeaf(request.ty);
             try self.markErasedCallablesReachedByType(ty);
             try self.program.runtime_schema_requests.append(self.allocator, .{
                 .def = request.def,
@@ -180,17 +263,17 @@ const Solver = struct {
             });
         }
 
-        try self.closeUnfilledCallableSlots();
+        try self.markForcedDynamicIteratorCallables();
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
         for (self.expr_tys, 0..) |maybe_ty, index| {
-            const ty = maybe_ty orelse try self.lowerTypeFresh(self.lifted.exprs[index].ty);
+            const ty = maybe_ty orelse try self.monoLeaf(self.lifted.exprs[index].ty);
             try self.program.expr_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
         try self.program.pat_tys.ensureTotalCapacity(self.allocator, self.pat_tys.len);
         for (self.pat_tys, 0..) |maybe_ty, index| {
-            const ty = maybe_ty orelse try self.lowerTypeFresh(self.lifted.pats[index].ty);
+            const ty = maybe_ty orelse try self.monoLeaf(self.lifted.pats[index].ty);
             try self.program.pat_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
@@ -206,20 +289,15 @@ const Solver = struct {
         for (self.program.runtime_schema_requests.items) |*request| {
             request.ty = self.program.types.rootCompressed(request.ty);
         }
+
+        try self.finalizeMonoLeaves();
+        // After finalization so the materialized clones' callable slots close
+        // exactly as their eager counterparts always did.
+        try self.closeUnfilledCallableSlots();
     }
 
     fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
         const arg_locals = self.lifted.typedLocalSpan(fn_.args);
-        const args = try self.allocator.alloc(Type.TypeVarId, arg_locals.len);
-        defer self.allocator.free(args);
-        for (arg_locals, 0..) |arg, i| {
-            const local = self.lifted.locals[@intFromEnum(arg.local)];
-            if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
-                Common.invariant("Lambda Solved function argument type differed from its local type");
-            }
-            args[i] = self.localTy(arg.local);
-        }
-
         const capture_locals = self.lifted.typedLocalSpan(fn_.captures);
         const captures = try self.allocator.alloc(Type.Capture, capture_locals.len);
         defer self.allocator.free(captures);
@@ -230,6 +308,7 @@ const Solver = struct {
                 .symbol = local.symbol,
                 .binder = local.binder,
                 .capture_id = local.capture_id,
+                .checked_capture_id = local.checked_capture_id,
                 .ty = self.localTy(capture.local),
             };
         }
@@ -240,6 +319,40 @@ const Solver = struct {
             .captures = capture_span,
         }};
         const callable = try self.program.types.add(.{ .lambda_set = try self.program.types.addMembers(&members) });
+
+        if (fn_.signature) |signature| {
+            const fn_ty = try self.monoLeaf(signature);
+            const func = switch (try self.resolvedContent(fn_ty)) {
+                .func => |value| value,
+                else => Common.invariant("producer-authored lifted function signature was not a function"),
+            };
+            if (func.args.count() != arg_locals.len) {
+                Common.invariant("producer-authored lifted function signature arity changed before Lambda Solved");
+            }
+            for (arg_locals, 0..) |arg, i| {
+                const local = self.lifted.locals[@intFromEnum(arg.local)];
+                if (@import("builtin").mode == .Debug and
+                    !try self.sameMonoType(local.ty, arg.ty))
+                {
+                    Common.invariant("Lambda Solved function argument type differed from its local type");
+                }
+                try self.unify(self.localTy(arg.local), self.program.types.spanItem(func.args, i));
+            }
+            try self.unify(func.callable, callable);
+            return self.program.types.rootCompressed(fn_ty);
+        }
+
+        const args = try self.allocator.alloc(Type.TypeVarId, arg_locals.len);
+        defer self.allocator.free(args);
+        for (arg_locals, 0..) |arg, i| {
+            const local = self.lifted.locals[@intFromEnum(arg.local)];
+            if (@import("builtin").mode == .Debug and
+                !try self.sameMonoType(local.ty, arg.ty))
+            {
+                Common.invariant("Lambda Solved function argument type differed from its local type");
+            }
+            args[i] = self.localTy(arg.local);
+        }
 
         return try self.program.types.add(.{ .func = .{
             .args = try self.program.types.addSpan(args),
@@ -286,6 +399,43 @@ const Solver = struct {
         }
     }
 
+    /// Host-facing function schemas use the erased callable representation for
+    /// every callable value reachable from an argument or result. Seed that
+    /// explicit boundary requirement after ordinary body constraints have
+    /// unified, but before unresolved callable slots are closed as finite.
+    fn markAbiBoundaryCallables(self: *Solver) Allocator.Error!void {
+        for (self.lifted.fns, 0..) |fn_, index| {
+            if (fn_.body != .hosted) continue;
+            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            try self.markErasedCallablesAtFunctionBoundary(self.program.fn_tys.items[@intFromEnum(fn_id)]);
+        }
+
+        for (self.lifted.roots) |root| {
+            switch (root.request.abi) {
+                .platform, .hosted => {
+                    const index = @intFromEnum(root.fn_id);
+                    if (index >= self.program.fn_tys.items.len) {
+                        Common.invariant("Lambda Solved ABI root referenced a missing function");
+                    }
+                    try self.markErasedCallablesAtFunctionBoundary(self.program.fn_tys.items[index]);
+                },
+                .roc, .test_expect, .compile_time => {},
+            }
+        }
+    }
+
+    fn markErasedCallablesAtFunctionBoundary(self: *Solver, fn_ty: Type.TypeVarId) Allocator.Error!void {
+        const func = switch (try self.resolvedContent(fn_ty)) {
+            .func => |func| func,
+            else => Common.invariant("Lambda Solved ABI boundary referenced a non-function"),
+        };
+        for (0..func.args.count()) |index| {
+            const arg = self.program.types.spanItem(func.args, index);
+            try self.markErasedCallablesReachedByType(arg);
+        }
+        try self.markErasedCallablesReachedByType(func.ret);
+    }
+
     fn closeUnfilledCallableSlots(self: *Solver) Allocator.Error!void {
         self.program.types.compressAllRoots();
 
@@ -314,16 +464,20 @@ const Solver = struct {
         active: []bool,
     ) Allocator.Error!void {
         const root = self.program.types.rootCompressed(ty);
-        const index = @intFromEnum(root);
-        if (done[index] or active[index]) return;
+        const root_index = @intFromEnum(root);
+        if (done[root_index] or active[root_index]) return;
 
-        active[index] = true;
+        active[root_index] = true;
         defer {
-            active[index] = false;
-            done[index] = true;
+            active[root_index] = false;
+            done[root_index] = true;
         }
 
         switch (self.program.types.get(root)) {
+            // A leaf never materialized its callable slots; finalization's
+            // clones create them after this pass, unbound, exactly as the
+            // post-solve eager clones always did.
+            .mono => {},
             .link => Common.invariant("Lambda Solved root returned a link"),
             .unbound,
             .forall,
@@ -332,7 +486,8 @@ const Solver = struct {
             => {},
             .func => |func| {
                 try self.closeCallableSlot(func.callable, done, active);
-                for (self.program.types.span(func.args)) |arg| {
+                for (0..func.args.count()) |arg_index| {
+                    const arg = self.program.types.spanItem(func.args, arg_index);
                     try self.closeCallableSlotsInType(arg, done, active);
                 }
                 try self.closeCallableSlotsInType(func.ret, done, active);
@@ -340,24 +495,29 @@ const Solver = struct {
             .list => |elem| try self.closeCallableSlotsInType(elem, done, active),
             .box => |elem| try self.closeCallableSlotsInType(elem, done, active),
             .tuple => |items| {
-                for (self.program.types.span(items)) |item| {
+                for (0..items.count()) |index| {
+                    const item = self.program.types.spanItem(items, index);
                     try self.closeCallableSlotsInType(item, done, active);
                 }
             },
             .record => |fields| {
-                for (self.program.types.fieldSpan(fields)) |field| {
+                for (0..fields.count()) |index| {
+                    const field = self.program.types.fieldItem(fields, index);
                     try self.closeCallableSlotsInType(field.ty, done, active);
                 }
             },
             .tag_union => |tags| {
-                for (self.program.types.tagSpan(tags)) |tag| {
-                    for (self.program.types.span(tag.payloads)) |payload| {
+                for (0..tags.count()) |tag_index| {
+                    const tag = self.program.types.tagItem(tags, tag_index);
+                    for (0..tag.payloads.count()) |payload_index| {
+                        const payload = self.program.types.spanItem(tag.payloads, payload_index);
                         try self.closeCallableSlotsInType(payload, done, active);
                     }
                 }
             },
             .named => |named| {
-                for (self.program.types.span(named.args)) |arg| {
+                for (0..named.args.count()) |index| {
+                    const arg = self.program.types.spanItem(named.args, index);
                     try self.closeCallableSlotsInType(arg, done, active);
                 }
                 if (named.backing) |backing| {
@@ -391,8 +551,10 @@ const Solver = struct {
         done: []bool,
         active: []bool,
     ) Allocator.Error!void {
-        for (self.program.types.memberSpan(members)) |member| {
-            for (self.program.types.captureSpan(member.captures)) |capture| {
+        for (0..members.count()) |member_index| {
+            const member = self.program.types.memberItem(members, member_index);
+            for (0..member.captures.count()) |capture_index| {
+                const capture = self.program.types.captureItem(member.captures, capture_index);
                 try self.closeCallableSlotsInType(capture.ty, done, active);
             }
         }
@@ -419,6 +581,7 @@ const Solver = struct {
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
+            .static_data_candidate => |candidate| _ = try self.expectExpr(candidate.runtime_expr, expected),
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
                 for (self.lifted.exprSpan(items)) |child| {
@@ -439,6 +602,12 @@ const Solver = struct {
                     _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
                 }
             },
+            .record_update => |update| {
+                _ = try self.expectExpr(update.base, expected);
+                for (self.lifted.fieldExprSpan(update.fields)) |field| {
+                    _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
+                }
+            },
             .tag => |tag| {
                 const payload_tys = try self.tagPayloadsSpan(expected, tag.name);
                 const payloads = self.lifted.exprSpan(tag.payloads);
@@ -448,10 +617,9 @@ const Solver = struct {
                     _ = try self.expectExpr(payload, expected_payload_ty);
                 }
             },
-            .static_data_candidate => |candidate| _ = try self.expectExpr(candidate.runtime_expr, expected),
             .nominal => |backing| {
                 if (try self.namedBacking(expected)) |backing_ty| {
-                    if (self.hasBuiltinOwner(expected, .fields) or self.hasBuiltinOwner(expected, .field)) {
+                    if (try self.hasBuiltinOwner(expected, .fields) or try self.hasBuiltinOwner(expected, .field)) {
                         try self.inferGeneratedOpaqueBacking(backing);
                     } else {
                         _ = try self.expectExpr(backing, backing_ty);
@@ -556,6 +724,7 @@ const Solver = struct {
                 const scrutinee_ty = try self.inferExpr(match.scrutinee);
                 for (self.lifted.branchSpan(match.branches)) |branch| {
                     try self.bindPattern(branch.pat, scrutinee_ty);
+                    for (self.lifted.stmtSpan(branch.bindings)) |binding| try self.inferStmt(binding);
                     if (branch.guard) |guard| _ = try self.inferExpr(guard);
                     _ = try self.expectExpr(branch.body, expected);
                 }
@@ -576,15 +745,15 @@ const Solver = struct {
             .try_sequence => |sequence| {
                 const try_ty = try self.inferExpr(sequence.try_expr);
                 const tags = switch (try self.shapeContent(try_ty)) {
-                    .tag_union => |span| self.program.types.tagSpan(span),
+                    .tag_union => |span| span,
                     else => Common.invariant("try_sequence input was not a Try tag union"),
                 };
                 var ok_ty: ?Type.TypeVarId = null;
-                for (tags) |tag| {
+                for (0..tags.count()) |tag_index| {
+                    const tag = self.program.types.tagItem(tags, tag_index);
                     if (!std.mem.eql(u8, self.lifted.names.tagLabelText(tag.name), "Ok")) continue;
-                    const payloads = self.program.types.span(tag.payloads);
-                    if (payloads.len != 1) Common.invariant("try_sequence Ok tag had unexpected payload arity");
-                    ok_ty = payloads[0];
+                    if (tag.payloads.count() != 1) Common.invariant("try_sequence Ok tag had unexpected payload arity");
+                    ok_ty = self.program.types.spanItem(tag.payloads, 0);
                     break;
                 }
                 try self.unify(self.localTy(sequence.ok_local), ok_ty orelse Common.invariant("try_sequence input had no Ok tag"));
@@ -593,15 +762,15 @@ const Solver = struct {
             .try_record_sequence => |sequence| {
                 const try_ty = try self.inferExpr(sequence.try_expr);
                 const tags = switch (try self.shapeContent(try_ty)) {
-                    .tag_union => |span| self.program.types.tagSpan(span),
+                    .tag_union => |span| span,
                     else => Common.invariant("try_record_sequence input was not a Try tag union"),
                 };
                 var ok_ty: ?Type.TypeVarId = null;
-                for (tags) |tag| {
+                for (0..tags.count()) |tag_index| {
+                    const tag = self.program.types.tagItem(tags, tag_index);
                     if (!std.mem.eql(u8, self.lifted.names.tagLabelText(tag.name), "Ok")) continue;
-                    const payloads = self.program.types.span(tag.payloads);
-                    if (payloads.len != 1) Common.invariant("try_record_sequence Ok tag had unexpected payload arity");
-                    ok_ty = payloads[0];
+                    if (tag.payloads.count() != 1) Common.invariant("try_record_sequence Ok tag had unexpected payload arity");
+                    ok_ty = self.program.types.spanItem(tag.payloads, 0);
                     break;
                 }
                 const ok_record_ty = ok_ty orelse Common.invariant("try_record_sequence input had no Ok tag");
@@ -609,6 +778,7 @@ const Solver = struct {
                 try self.unify(self.localTy(sequence.rest_local), try self.recordField(ok_record_ty, sequence.rest_field));
                 _ = try self.expectExpr(sequence.ok_body, expected);
             },
+            .@"unreachable" => {},
             .block => |block| {
                 for (self.lifted.stmtSpan(block.statements)) |stmt| try self.inferStmt(stmt);
                 _ = try self.expectExpr(block.final_expr, expected);
@@ -705,6 +875,14 @@ const Solver = struct {
                 _ = try self.exprSlot(expr_id);
                 self.expr_done[index] = true;
                 for (self.lifted.fieldExprSpan(fields)) |field| {
+                    _ = try self.inferExpr(field.value);
+                }
+            },
+            .record_update => |update| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                _ = try self.inferExpr(update.base);
+                for (self.lifted.fieldExprSpan(update.fields)) |field| {
                     _ = try self.inferExpr(field.value);
                 }
             },
@@ -808,7 +986,7 @@ const Solver = struct {
                 }
             },
             .nominal => |backing| {
-                if (self.hasGeneratedOpaquePatOwner(pat_id) or self.hasBuiltinOwner(pat_ty, .fields) or self.hasBuiltinOwner(pat_ty, .field)) {
+                if (self.hasGeneratedOpaquePatOwner(pat_id) or try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
                     try self.bindGeneratedOpaqueBackingPattern(backing);
                 } else {
                     if (try self.namedBacking(pat_ty)) |backing_ty| {
@@ -823,7 +1001,7 @@ const Solver = struct {
 
     fn hasGeneratedOpaquePatOwner(self: *Solver, pat_id: Lifted.PatId) bool {
         return switch (self.lifted.types.get(self.lifted.pats[@intFromEnum(pat_id)].ty)) {
-            .named => |named| isGeneratedOpaqueEvidenceOwner(named.builtin_owner),
+            .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
             else => false,
         };
     }
@@ -841,134 +1019,18 @@ const Solver = struct {
         const generated = self.program.types.rootCompressed(generated_ty);
         const expected = self.program.types.rootCompressed(expected_ty);
         if (generated == expected) return;
-
-        const generated_score = generatedBackingScore(self.program.types.get(generated)) orelse {
-            try self.unify(generated, expected);
-            return;
-        };
-        const expected_score = generatedBackingScore(self.program.types.get(expected)) orelse {
-            try self.unify(generated, expected);
-            return;
-        };
-
-        if (generated_score > expected_score) {
-            self.program.types.set(expected, .{ .link = generated });
-        } else if (expected_score > generated_score) {
-            self.program.types.set(generated, .{ .link = expected });
-        } else {
-            try self.unify(generated, expected);
-        }
+        // The caller reached this path only through a pattern whose named
+        // backing carries generated-private authority. Preserve that explicit
+        // producer-owned backing deterministically; structural size is not an
+        // authority signal.
+        self.program.types.set(expected, .{ .link = generated });
     }
 
     fn expectExpr(self: *Solver, expr_id: Lifted.ExprId, expected: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
         const slot = try self.expectExprSlot(expr_id, expected);
         const inferred = try self.inferExpr(expr_id);
         try self.unify(slot, inferred);
-        try self.expectGeneratedIteratorBackingExpr(expr_id, expected, slot, inferred);
         return self.program.types.rootCompressed(slot);
-    }
-
-    fn expectGeneratedIteratorBackingExpr(
-        self: *Solver,
-        expr_id: Lifted.ExprId,
-        expected: Type.TypeVarId,
-        slot: Type.TypeVarId,
-        inferred: Type.TypeVarId,
-    ) Allocator.Error!void {
-        const backing_ty = self.generatedIteratorBacking(expected) orelse
-            self.generatedIteratorBacking(slot) orelse
-            self.generatedIteratorBacking(inferred) orelse
-            return;
-        switch (self.lifted.exprs[@intFromEnum(expr_id)].data) {
-            .record,
-            .tuple,
-            .tag,
-            .nominal,
-            .let_,
-            .static_data_candidate,
-            => {},
-            else => return,
-        }
-        try self.expectExprAtTypeEvenIfDone(expr_id, backing_ty);
-    }
-
-    fn expectExprAtTypeEvenIfDone(self: *Solver, expr_id: Lifted.ExprId, expected: Type.TypeVarId) Allocator.Error!void {
-        const expr = self.lifted.exprs[@intFromEnum(expr_id)];
-        switch (expr.data) {
-            .record => |fields| {
-                for (self.lifted.fieldExprSpan(fields)) |field| {
-                    const field_ty = try self.recordField(expected, field.name);
-                    try self.expectExprAtTypeEvenIfDone(field.value, field_ty);
-                }
-            },
-            .tuple => |items| {
-                const item_tys = try self.tupleItemsSpan(expected);
-                const children = self.lifted.exprSpan(items);
-                if (item_tys.count() != children.len) Common.invariant("tuple expression arity differs from generated backing type");
-                for (children, 0..) |child, i| {
-                    try self.expectExprAtTypeEvenIfDone(child, self.program.types.spanItem(item_tys, i));
-                }
-            },
-            .tag => |tag| {
-                const payload_tys = try self.tagPayloadsSpan(expected, tag.name);
-                const payloads = self.lifted.exprSpan(tag.payloads);
-                if (payload_tys.count() != payloads.len) Common.invariant("tag expression payload arity differs from generated backing type");
-                for (payloads, 0..) |payload, i| {
-                    try self.expectExprAtTypeEvenIfDone(payload, self.program.types.spanItem(payload_tys, i));
-                }
-            },
-            .static_data_candidate => |candidate| try self.expectExprAtTypeEvenIfDone(candidate.runtime_expr, expected),
-            .nominal => |backing| {
-                const backing_ty = try self.namedBacking(expected) orelse expected;
-                try self.expectExprAtTypeEvenIfDone(backing, backing_ty);
-            },
-            .let_ => |let_| {
-                const value_ty = try self.inferExpr(let_.value);
-                try self.bindPattern(let_.bind, value_ty);
-                try self.expectExprAtTypeEvenIfDone(let_.rest, expected);
-            },
-            .match_ => |match| {
-                // The match slot was solved at the minted nominal type during
-                // the first walk. Its branch bodies still need the backing
-                // type, without unifying the match node with that backing.
-                const scrutinee_ty = try self.inferExpr(match.scrutinee);
-                for (self.lifted.branchSpan(match.branches)) |branch| {
-                    try self.bindPattern(branch.pat, scrutinee_ty);
-                    if (branch.guard) |guard| _ = try self.inferExpr(guard);
-                    try self.expectExprAtTypeEvenIfDone(branch.body, expected);
-                }
-            },
-            .if_ => |if_| {
-                for (self.lifted.ifBranchSpan(if_.branches)) |branch| {
-                    _ = try self.inferExpr(branch.cond);
-                    try self.expectExprAtTypeEvenIfDone(branch.body, expected);
-                }
-                try self.expectExprAtTypeEvenIfDone(if_.final_else, expected);
-            },
-            .block => |block| try self.expectExprAtTypeEvenIfDone(block.final_expr, expected),
-            .comptime_branch_taken => |taken| try self.expectExprAtTypeEvenIfDone(taken.body, expected),
-            .if_initialized_payload => |payload_switch| {
-                _ = try self.inferExpr(payload_switch.cond);
-                _ = self.localTy(payload_switch.payload);
-                try self.expectExprAtTypeEvenIfDone(payload_switch.initialized, expected);
-                try self.expectExprAtTypeEvenIfDone(payload_switch.uninitialized, expected);
-            },
-            .try_sequence => |sequence| try self.expectExprAtTypeEvenIfDone(sequence.ok_body, expected),
-            .try_record_sequence => |sequence| try self.expectExprAtTypeEvenIfDone(sequence.ok_body, expected),
-            else => {
-                const inferred = try self.inferExpr(expr_id);
-                // An opaque leaf that already carries the generated nominal
-                // has no backing expression to revisit. Its construction site
-                // was traversed separately; keep this use at the nominal type.
-                if (self.generatedIteratorBacking(inferred) != null and
-                    self.generatedIteratorBacking(expected) == null)
-                {
-                    return;
-                }
-                const slot = try self.expectExprSlot(expr_id, expected);
-                try self.unify(slot, inferred);
-            },
-        }
     }
 
     fn exprSlot(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeVarId {
@@ -1049,6 +1111,27 @@ const Solver = struct {
         return context.solved_ret;
     }
 
+    fn markForcedDynamicIteratorCallables(self: *Solver) Allocator.Error!void {
+        self.program.types.compressAllRoots();
+        // Expanding a leaf appends fresh child vars, so the bound is re-read
+        // every iteration and an expanded var is revisited in place.
+        var index: usize = 0;
+        while (index < self.program.types.vars.items.len) : (index += 1) {
+            const ty: Type.TypeVarId = @enumFromInt(@as(u32, @intCast(index)));
+            if (self.program.types.rootCompressed(ty) != ty) continue;
+            switch (self.program.types.get(ty)) {
+                .named => |named| if (named.def.iterator_representation == .forced_dynamic) {
+                    try self.markErasedCallablesReachedByType(ty);
+                },
+                .mono => |leaf| if (self.contains_forced_dynamic[@intFromEnum(leaf.id)]) {
+                    _ = try self.expandMonoRoot(ty, leaf);
+                    index -= 1;
+                },
+                else => {},
+            }
+        }
+    }
+
     fn sameMonoType(self: *Solver, a: MonoType.TypeId, b: MonoType.TypeId) Allocator.Error!bool {
         if (a == b) return true;
         return try self.lifted.types.typeEql(self.allocator, self.lifted.names, a, b);
@@ -1077,90 +1160,231 @@ const Solver = struct {
     fn markErasedCallablesReachedByType(self: *Solver, ty: Type.TypeVarId) Allocator.Error!void {
         var active = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
         defer active.deinit();
-        try self.markErasedCallablesReachedByTypeInner(ty, &active, false);
+        try self.markErasedCallablesReachedByTypeInner(ty, &active);
     }
 
     fn markErasedCallablesReachedByTypeInner(
         self: *Solver,
         ty: Type.TypeVarId,
         active: *std.AutoHashMap(Type.TypeVarId, void),
-        // True while walking the backing of a bounded `Iter`/`Stream` nominal.
-        // Its step closure stays a lambda set (inline captures) rather than
-        // erasing to a boxed callable; every other function still erases.
-        in_iter_backing: bool,
     ) Allocator.Error!void {
         const root = self.program.types.rootCompressed(ty);
         if (active.contains(root)) return;
         try active.put(root, {});
         defer _ = active.remove(root);
 
-        switch (self.program.types.get(root)) {
+        const resolved = switch (self.program.types.get(root)) {
+            // Callable-free leaves contain nothing this walk could mark.
+            .mono => |leaf| if (self.contains_callable[@intFromEnum(leaf.id)])
+                try self.expandMonoRoot(root, leaf)
+            else
+                return,
+            else => |other| other,
+        };
+        switch (resolved) {
+            .mono => Common.invariant("lazy Monotype leaf reached erased-callable marking unexpanded"),
             .link => Common.invariant("Lambda Solved root returned a link"),
-            .unbound, .forall, .primitive, .zst, .erased => {},
+            .unbound, .forall, .primitive, .zst => {},
+            .erased => |erased| try self.markErasedCallablesReachedByMembers(erased.members, active),
             .func => |func| {
-                if (in_iter_backing) {
-                    try self.markErasedCallablesReachedByTypeInner(func.callable, active, false);
-                } else {
-                    const erased = try self.program.types.add(.{ .erased = .{
-                        .source_fn_ty = try self.solvedTypeDigest(root),
-                        .members = .empty(),
-                    } });
-                    try self.unify(func.callable, erased);
+                const erased = try self.program.types.add(.{ .erased = .{
+                    .source_fn_ty = try self.solvedTypeDigest(root),
+                    .members = .empty(),
+                } });
+                try self.unify(func.callable, erased);
+                for (0..func.args.count()) |index| {
+                    const arg = self.program.types.spanItem(func.args, index);
+                    try self.markErasedCallablesReachedByTypeInner(arg, active);
                 }
-                for (self.program.types.span(func.args)) |arg| {
-                    try self.markErasedCallablesReachedByTypeInner(arg, active, false);
-                }
-                try self.markErasedCallablesReachedByTypeInner(func.ret, active, false);
+                try self.markErasedCallablesReachedByTypeInner(func.ret, active);
             },
-            .list => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active, in_iter_backing),
-            .box => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active, in_iter_backing),
+            .list => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
+            .box => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
             .tuple => |items| {
-                for (self.program.types.span(items)) |item| {
-                    try self.markErasedCallablesReachedByTypeInner(item, active, in_iter_backing);
+                for (0..items.count()) |index| {
+                    const item = self.program.types.spanItem(items, index);
+                    try self.markErasedCallablesReachedByTypeInner(item, active);
                 }
             },
             .record => |fields| {
-                for (self.program.types.fieldSpan(fields)) |field| {
-                    try self.markErasedCallablesReachedByTypeInner(field.ty, active, in_iter_backing);
+                for (0..fields.count()) |index| {
+                    const field = self.program.types.fieldItem(fields, index);
+                    try self.markErasedCallablesReachedByTypeInner(field.ty, active);
                 }
             },
             .tag_union => |tags| {
-                for (self.program.types.tagSpan(tags)) |tag| {
-                    for (self.program.types.span(tag.payloads)) |payload| {
-                        try self.markErasedCallablesReachedByTypeInner(payload, active, in_iter_backing);
+                for (0..tags.count()) |tag_index| {
+                    const tag = self.program.types.tagItem(tags, tag_index);
+                    for (0..tag.payloads.count()) |payload_index| {
+                        const payload = self.program.types.spanItem(tag.payloads, payload_index);
+                        try self.markErasedCallablesReachedByTypeInner(payload, active);
                     }
                 }
             },
             .named => |named| {
-                for (self.program.types.span(named.args)) |arg| {
-                    try self.markErasedCallablesReachedByTypeInner(arg, active, false);
+                for (0..named.args.count()) |index| {
+                    const arg = self.program.types.spanItem(named.args, index);
+                    try self.markErasedCallablesReachedByTypeInner(arg, active);
                 }
                 if (named.backing) |backing| {
-                    const backing_is_iter = named.def.iterator_representation == .minted and
-                        if (named.builtin_owner) |owner|
-                            static_dispatch.isIteratorOwner(owner)
-                        else
-                            false;
-                    try self.markErasedCallablesReachedByTypeInner(backing.ty, active, backing_is_iter);
+                    try self.markErasedCallablesReachedByTypeInner(backing.ty, active);
                 }
             },
-            .lambda_set => |members| {
-                for (self.program.types.memberSpan(members)) |member| {
-                    for (self.program.types.captureSpan(member.captures)) |capture| {
-                        try self.markErasedCallablesReachedByTypeInner(capture.ty, active, in_iter_backing);
-                    }
-                }
-            },
+            .lambda_set => |members| try self.markErasedCallablesReachedByMembers(members, active),
         }
     }
 
-    fn lowerTypeFresh(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
-        var cloner = TypeCloner.init(self);
-        defer cloner.deinit();
-        const lowered = try cloner.lower(ty);
-        for (cloner.forced_dynamic_backings.items) |backing| {
-            try self.markErasedCallablesReachedByType(backing);
+    fn markErasedCallablesReachedByMembers(
+        self: *Solver,
+        members: Type.Span,
+        active: *std.AutoHashMap(Type.TypeVarId, void),
+    ) Allocator.Error!void {
+        for (0..members.count()) |member_index| {
+            const member = self.program.types.memberItem(members, member_index);
+            for (0..member.captures.count()) |capture_index| {
+                const capture = self.program.types.captureItem(member.captures, capture_index);
+                try self.markErasedCallablesReachedByTypeInner(capture.ty, active);
+            }
         }
+    }
+
+    /// New lazy leaf for a lifted Monotype. Each use owns its var; the leaf
+    /// materializes one level at a time as unification or shape reads touch
+    /// it, and `finalizeMonoLeaves` replaces whatever survives solving.
+    fn monoLeaf(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
+        return try self.program.types.add(.{ .mono = .{ .id = ty } });
+    }
+
+    fn lowerTypeFresh(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
+        return try self.monoLeaf(ty);
+    }
+
+    const MonoLeaf = std.meta.fieldInfo(Type.Content, .mono).type;
+
+    /// Materialize a lazy leaf's root one level in place: children become new
+    /// leaves and function callable slots start unbound, exactly as an eager
+    /// clone's would. The leaf's clone context ties recursive back-references
+    /// to their existing vars, so a recursive Monotype materializes as the
+    /// same cyclic graph an eager clone produced.
+    fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
+        const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else blk: {
+            const index: u32 = @intCast(self.leaf_contexts.items.len);
+            try self.leaf_contexts.append(self.allocator, std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
+            break :blk index;
+        };
+        if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
+            const existing_root = self.program.types.rootCompressed(existing);
+            if (existing_root != root) {
+                self.program.types.set(root, .{ .link = existing_root });
+                return try self.resolvedContentAt(existing_root);
+            }
+        } else {
+            try self.leaf_contexts.items[ctx].put(leaf.id, root);
+        }
+        var cloner = TypeCloner.init(self);
+        cloner.lazy_ctx = ctx;
+        defer cloner.deinit();
+        const content = try cloner.lowerContent(self.lifted.types.get(leaf.id));
+        self.program.types.set(root, content);
+        return content;
+    }
+
+    fn resolvedContentAt(self: *Solver, root: Type.TypeVarId) Allocator.Error!Type.Content {
+        const content = self.program.types.get(root);
+        return switch (content) {
+            .mono => |leaf| try self.expandMonoRoot(root, leaf),
+            else => content,
+        };
+    }
+
+    fn resolvedContent(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.Content {
+        return try self.resolvedContentAt(self.program.types.rootCompressed(ty));
+    }
+
+    /// Replace every output-reachable lazy leaf with a link to a materialized
+    /// clone so program views never observe one. Untouched leaves of one
+    /// callable-free Monotype share one clone; callable-bearing leaves get a
+    /// private clone whose callable-free subgraphs still share.
+    fn finalizeMonoLeaves(self: *Solver) Allocator.Error!void {
+        var visited = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
+        defer visited.deinit();
+        var work = std.ArrayList(Type.TypeVarId).empty;
+        defer work.deinit(self.allocator);
+
+        for (self.program.defs.items) |def| try work.append(self.allocator, def.ty);
+        try work.appendSlice(self.allocator, self.program.fn_tys.items);
+        try work.appendSlice(self.allocator, self.program.local_tys.items);
+        try work.appendSlice(self.allocator, self.program.expr_tys.items);
+        try work.appendSlice(self.allocator, self.program.pat_tys.items);
+        for (self.program.layout_requests.items) |request| try work.append(self.allocator, request.ty);
+        for (self.program.runtime_schema_requests.items) |request| try work.append(self.allocator, request.ty);
+
+        while (work.pop()) |ty| {
+            const root = self.program.types.rootCompressed(ty);
+            const gop = try visited.getOrPut(root);
+            if (gop.found_existing) continue;
+            switch (self.program.types.get(root)) {
+                .link => Common.invariant("Lambda Solved root returned a link"),
+                .mono => |leaf| {
+                    const clone = try self.finalMonoClone(leaf.id);
+                    self.program.types.set(root, .{ .link = self.program.types.rootCompressed(clone) });
+                },
+                .unbound, .forall, .primitive, .zst => {},
+                .list, .box => |elem| try work.append(self.allocator, elem),
+                .tuple => |items| for (0..items.count()) |index| {
+                    try work.append(self.allocator, self.program.types.spanItem(items, index));
+                },
+                .record => |fields| for (0..fields.count()) |index| {
+                    try work.append(self.allocator, self.program.types.fieldItem(fields, index).ty);
+                },
+                .tag_union => |tags| for (0..tags.count()) |tag_index| {
+                    const tag = self.program.types.tagItem(tags, tag_index);
+                    for (0..tag.payloads.count()) |payload_index| {
+                        try work.append(self.allocator, self.program.types.spanItem(tag.payloads, payload_index));
+                    }
+                },
+                .func => |func| {
+                    for (0..func.args.count()) |index| {
+                        try work.append(self.allocator, self.program.types.spanItem(func.args, index));
+                    }
+                    try work.append(self.allocator, func.callable);
+                    try work.append(self.allocator, func.ret);
+                },
+                .named => |named| {
+                    for (0..named.args.count()) |index| {
+                        try work.append(self.allocator, self.program.types.spanItem(named.args, index));
+                    }
+                    if (named.backing) |backing| try work.append(self.allocator, backing.ty);
+                    for (0..named.declared_order.count()) |index| switch (self.program.types.declaredFieldItem(named.declared_order, index)) {
+                        .named => {},
+                        .padding => |padding_ty| try work.append(self.allocator, padding_ty),
+                    };
+                },
+                .lambda_set => |members| for (0..members.count()) |member_index| {
+                    const member = self.program.types.memberItem(members, member_index);
+                    for (0..member.captures.count()) |capture_index| {
+                        try work.append(self.allocator, self.program.types.captureItem(member.captures, capture_index).ty);
+                    }
+                },
+                .erased => |erased| for (0..erased.members.count()) |member_index| {
+                    const member = self.program.types.memberItem(erased.members, member_index);
+                    for (0..member.captures.count()) |capture_index| {
+                        try work.append(self.allocator, self.program.types.captureItem(member.captures, capture_index).ty);
+                    }
+                },
+            }
+        }
+    }
+
+    /// Materialized clone for a leaf that survived solving, matching what the
+    /// post-solve eager clone produced: shared for callable-free Monotypes,
+    /// self-marking for forced-dynamic iterator content.
+    fn finalMonoClone(self: *Solver, id: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
+        var cloner = TypeCloner.init(self);
+        cloner.share = true;
+        defer cloner.deinit();
+        const lowered = try cloner.lower(id);
+        try cloner.markForcedDynamicCallables();
         return lowered;
     }
 
@@ -1181,7 +1405,8 @@ const Solver = struct {
     fn recordField(self: *Solver, ty: Type.TypeVarId, name: Type.names.RecordFieldNameId) Allocator.Error!Type.TypeVarId {
         return switch (try self.shapeContent(ty)) {
             .record => |fields| {
-                for (self.program.types.fieldSpan(fields)) |field| {
+                for (0..fields.count()) |index| {
+                    const field = self.program.types.fieldItem(fields, index);
                     if (field.name == name) return field.ty;
                 }
                 Common.invariant("record field was absent from checked record type");
@@ -1193,7 +1418,8 @@ const Solver = struct {
     fn recordFieldByLabel(self: *Solver, ty: Type.TypeVarId, label: []const u8) Allocator.Error!Type.TypeVarId {
         return switch (try self.shapeContent(ty)) {
             .record => |fields| {
-                for (self.program.types.fieldSpan(fields)) |field| {
+                for (0..fields.count()) |index| {
+                    const field = self.program.types.fieldItem(fields, index);
                     if (std.mem.eql(u8, self.lifted.names.recordFieldLabelText(field.name), label)) return field.ty;
                 }
                 Common.invariant("low-level record result was missing a required field");
@@ -1205,7 +1431,8 @@ const Solver = struct {
     fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
         return switch (try self.shapeContent(ty)) {
             .tag_union => |tags| {
-                for (self.program.types.tagSpan(tags)) |tag| {
+                for (0..tags.count()) |index| {
+                    const tag = self.program.types.tagItem(tags, index);
                     if (tag.name == name) {
                         return tag.payloads;
                     }
@@ -1217,36 +1444,17 @@ const Solver = struct {
     }
 
     fn namedBacking(self: *Solver, ty: Type.TypeVarId) Allocator.Error!?Type.TypeVarId {
-        return switch (self.program.types.rootContentCompressed(ty)) {
+        return switch (try self.resolvedContent(ty)) {
             .named => |named| if (named.backing) |backing| backing.ty else null,
             else => null,
         };
     }
 
-    fn generatedIteratorBacking(self: *Solver, ty: Type.TypeVarId) ?Type.TypeVarId {
-        return switch (self.program.types.rootContent(ty)) {
-            .named => |named| blk: {
-                if (named.def.iterator_representation == .none) break :blk null;
-                const owner = named.builtin_owner orelse break :blk null;
-                if (!static_dispatch.isIteratorOwner(owner)) break :blk null;
-                break :blk if (named.backing) |backing| backing.ty else null;
-            },
-            else => null,
-        };
-    }
-
-    fn hasBuiltinOwner(self: *Solver, ty: Type.TypeVarId, owner: static_dispatch.BuiltinOwner) bool {
-        return switch (self.program.types.rootContentCompressed(ty)) {
+    fn hasBuiltinOwner(self: *Solver, ty: Type.TypeVarId, owner: static_dispatch.BuiltinOwner) Allocator.Error!bool {
+        return switch (try self.resolvedContent(ty)) {
             .named => |named| if (named.builtin_owner) |builtin_owner| builtin_owner == owner else false,
             else => false,
         };
-    }
-
-    fn generatedOpaqueEvidenceScore(self: *Solver, named: anytype) u8 {
-        if (!isGeneratedOpaqueEvidenceOwner(named.builtin_owner)) return 0;
-
-        const backing = named.backing orelse return 0;
-        return generatedBackingScore(self.program.types.rootContentCompressed(backing.ty)) orelse 2;
     }
 
     fn bindLowLevelTypes(
@@ -1378,23 +1586,70 @@ const Solver = struct {
     fn shapeContent(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.Content {
         var current = self.program.types.rootCompressed(ty);
         while (true) {
-            switch (self.program.types.get(current)) {
+            const content = try self.resolvedContentAt(current);
+            switch (content) {
                 .named => |named| if (named.backing) |backing| {
                     current = self.program.types.rootCompressed(backing.ty);
                     continue;
-                } else return self.program.types.get(current),
-                else => return self.program.types.get(current),
+                } else return content,
+                else => return content,
             }
         }
     }
 
+    /// Drive unification from an explicit stack so structural nesting costs
+    /// heap frames instead of call frames. The loop only owns the frames it
+    /// pushed above `base`, so the helpers below may call back into `unify`
+    /// while an outer unification still has pending frames underneath.
     fn unify(self: *Solver, lhs: Type.TypeVarId, rhs: Type.TypeVarId) Allocator.Error!void {
+        const base = self.unify_stack.items.len;
+        try self.pushUnifyPair(&self.unify_stack, lhs, rhs);
+
+        while (self.unify_stack.items.len > base) {
+            const frame = self.unify_stack.pop().?;
+            switch (frame) {
+                .process => |process| try self.processUnifyPair(&self.unify_stack, process.lhs, process.rhs),
+                .finish => |finish| {
+                    self.applyUnifyFinish(finish.action);
+                    _ = self.active_unifications.remove(finish.pair);
+                },
+            }
+        }
+    }
+
+    fn pushUnifyPair(
+        self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        lhs: Type.TypeVarId,
+        rhs: Type.TypeVarId,
+    ) Allocator.Error!void {
+        try stack.append(self.allocator, .{ .process = .{ .lhs = lhs, .rhs = rhs } });
+    }
+
+    fn processUnifyPair(
+        self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        lhs: Type.TypeVarId,
+        rhs: Type.TypeVarId,
+    ) Allocator.Error!void {
         const a = self.program.types.rootCompressed(lhs);
         const b = self.program.types.rootCompressed(rhs);
         if (a == b) return;
 
-        const left = self.program.types.get(a);
-        const right = self.program.types.get(b);
+        const raw_left = self.program.types.get(a);
+        const raw_right = self.program.types.get(b);
+        if (raw_left == .mono and raw_right == .mono and raw_left.mono.id == raw_right.mono.id) {
+            self.program.types.set(b, .{ .link = a });
+            return;
+        }
+        const left = switch (raw_left) {
+            .mono => |leaf| try self.expandMonoRoot(a, leaf),
+            else => raw_left,
+        };
+        const right = switch (raw_right) {
+            .mono => |leaf| try self.expandMonoRoot(b, leaf),
+            else => raw_right,
+        };
 
         switch (left) {
             .link => Common.invariant("Lambda Solved root returned a link"),
@@ -1418,41 +1673,49 @@ const Solver = struct {
         const pair = UnifyPair.init(a, b);
         const active_entry = try self.active_unifications.getOrPut(pair);
         if (active_entry.found_existing) return;
-        defer _ = self.active_unifications.remove(pair);
+        errdefer _ = self.active_unifications.remove(pair);
 
+        // Reserve the finish frame before pushing any children so it pops last
+        // and retires `pair` once every type it scheduled has been unified.
+        const finish_index = stack.items.len;
+        try stack.append(self.allocator, .{ .finish = .{ .pair = pair, .action = .none } });
+        try self.unifyRoots(stack, finish_index, a, b, left, right);
+    }
+
+    fn unifyRoots(
+        self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        finish_index: usize,
+        a: Type.TypeVarId,
+        b: Type.TypeVarId,
+        left: Type.Content,
+        right: Type.Content,
+    ) Allocator.Error!void {
         if (transparentAliasBacking(left)) |backing| {
-            try self.unify(backing, b);
-            self.program.types.set(a, .{ .link = self.program.types.rootCompressed(backing) });
+            stack.items[finish_index].finish.action = .{ .link_var_to_root = .{ .var_ = a, .target = backing } };
+            try self.pushUnifyPair(stack, backing, b);
             return;
         }
         if (transparentAliasBacking(right)) |backing| {
-            try self.unify(a, backing);
-            self.program.types.set(b, .{ .link = self.program.types.rootCompressed(backing) });
+            stack.items[finish_index].finish.action = .{ .link_var_to_root = .{ .var_ = b, .target = backing } };
+            try self.pushUnifyPair(stack, a, backing);
             return;
         }
-
-        // An empty tag union is the seal for a slot that no value reached: a
-        // variable that was defaulted at Monotype materialization rather than
-        // constrained by evidence (see Monotype import, which re-enters it as an
-        // unresolved node instead of a closed row). Two representations of the
-        // same runtime type can therefore disagree here — most visibly in the
-        // phantom argument types of a function value that is inspected but never
-        // called (`|x, y| x + y` rendered as `<function>`), where the callee's
-        // own body solves an argument to a concrete number while the referencing
-        // site left the shared variable to seal as `[]`. Such a slot fixes no
-        // layout, so it yields to a concrete peer instead of tripping the
-        // exact-match invariant, matching how the Monotype layer lets local
-        // evidence supersede an empty tag union.
-        if (isEmptyTagUnion(left) and !isEmptyTagUnion(right)) {
+        if (try self.typeIsProvenUninhabited(a)) {
             self.program.types.set(a, .{ .link = b });
             return;
         }
-        if (isEmptyTagUnion(right) and !isEmptyTagUnion(left)) {
+        if (try self.typeIsProvenUninhabited(b)) {
             self.program.types.set(b, .{ .link = a });
             return;
         }
+        if (try self.unifyInspectableNamedBacking(a, b, left, right)) return;
+        if (try self.unifyInspectableNamedBacking(b, a, right, left)) return;
+        if (try self.unifyPublicNamedBacking(a, b, right)) return;
+        if (try self.unifyPublicNamedBacking(b, a, left)) return;
 
         switch (left) {
+            .mono => Common.invariant("lazy Monotype leaf reached unification unexpanded"),
             .primitive => |left_primitive| switch (right) {
                 .primitive => |right_primitive| {
                     if (left_primitive != right_primitive) {
@@ -1471,77 +1734,113 @@ const Solver = struct {
                     if (!std.mem.eql(u8, left_erased.source_fn_ty.bytes[0..], right_erased.source_fn_ty.bytes[0..])) {
                         Common.invariant("erased callable source function types failed Lambda Solved unification");
                     }
-                    self.program.types.set(a, .{ .erased = .{
+                    var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
+                    defer capture_pairs.deinit(self.allocator);
+                    const merged = try self.mergeLambdaSets(left_erased.members, right_erased.members, &capture_pairs);
+                    stack.items[finish_index].finish.action = .{ .set_left_erased_link_right = .{
+                        .lhs = a,
+                        .rhs = b,
                         .source_fn_ty = left_erased.source_fn_ty,
-                        .members = try self.mergeLambdaSets(left_erased.members, right_erased.members),
-                    } });
-                    self.program.types.set(b, .{ .link = a });
+                        .members = merged,
+                    } };
+                    try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 },
                 .lambda_set => |right_members| {
-                    self.program.types.set(a, .{ .erased = .{
+                    var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
+                    defer capture_pairs.deinit(self.allocator);
+                    const merged = try self.mergeLambdaSets(left_erased.members, right_members, &capture_pairs);
+                    stack.items[finish_index].finish.action = .{ .set_left_erased_link_right = .{
+                        .lhs = a,
+                        .rhs = b,
                         .source_fn_ty = left_erased.source_fn_ty,
-                        .members = try self.mergeLambdaSets(left_erased.members, right_members),
-                    } });
-                    self.program.types.set(b, .{ .link = a });
+                        .members = merged,
+                    } };
+                    try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 },
                 else => Common.invariant("erased callable type failed Lambda Solved unification"),
             },
             .lambda_set => |left_members| switch (right) {
                 .erased => |right_erased| {
-                    self.program.types.set(a, .{ .erased = .{
+                    var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
+                    defer capture_pairs.deinit(self.allocator);
+                    const merged = try self.mergeLambdaSets(left_members, right_erased.members, &capture_pairs);
+                    stack.items[finish_index].finish.action = .{ .set_left_erased_link_right = .{
+                        .lhs = a,
+                        .rhs = b,
                         .source_fn_ty = right_erased.source_fn_ty,
-                        .members = try self.mergeLambdaSets(left_members, right_erased.members),
-                    } });
-                    self.program.types.set(b, .{ .link = a });
+                        .members = merged,
+                    } };
+                    try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 },
                 .lambda_set => |right_members| {
-                    const merged = try self.mergeLambdaSets(left_members, right_members);
-                    self.program.types.set(a, .{ .lambda_set = merged });
-                    self.program.types.set(b, .{ .link = a });
+                    var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
+                    defer capture_pairs.deinit(self.allocator);
+                    const merged = try self.mergeLambdaSets(left_members, right_members, &capture_pairs);
+                    stack.items[finish_index].finish.action = .{ .set_left_lambda_set_link_right = .{
+                        .lhs = a,
+                        .rhs = b,
+                        .members = merged,
+                    } };
+                    try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 },
                 else => Common.invariant("lambda set failed Lambda Solved unification"),
             },
             .func => |left_fn| switch (right) {
                 .func => |right_fn| {
-                    try self.unifySpans(left_fn.args, right_fn.args, "function argument lists failed Lambda Solved unification");
-                    try self.unify(left_fn.callable, right_fn.callable);
-                    try self.unify(left_fn.ret, right_fn.ret);
-                    self.program.types.set(b, .{ .link = a });
+                    stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                    try self.pushUnifyPair(stack, left_fn.ret, right_fn.ret);
+                    try self.pushUnifyPair(stack, left_fn.callable, right_fn.callable);
+                    try self.pushSpanPairs(stack, left_fn.args, right_fn.args, "function argument lists failed Lambda Solved unification");
                 },
                 else => Common.invariant("function type failed Lambda Solved unification"),
             },
             .list => |left_elem| switch (right) {
                 .list => |right_elem| {
-                    try self.unify(left_elem, right_elem);
-                    self.program.types.set(b, .{ .link = a });
+                    stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                    try self.pushUnifyPair(stack, left_elem, right_elem);
                 },
                 else => Common.invariant("list type failed Lambda Solved unification"),
             },
             .box => |left_elem| switch (right) {
                 .box => |right_elem| {
-                    try self.unify(left_elem, right_elem);
-                    self.program.types.set(b, .{ .link = a });
+                    stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                    try self.pushUnifyPair(stack, left_elem, right_elem);
                 },
                 else => Common.invariant("box type failed Lambda Solved unification"),
             },
             .tuple => |left_items| switch (right) {
                 .tuple => |right_items| {
-                    try self.unifySpans(left_items, right_items, "tuple item lists failed Lambda Solved unification");
-                    self.program.types.set(b, .{ .link = a });
+                    stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                    try self.pushSpanPairs(stack, left_items, right_items, "tuple item lists failed Lambda Solved unification");
                 },
                 else => Common.invariant("tuple type failed Lambda Solved unification"),
             },
             .record => |left_fields| switch (right) {
                 .record => |right_fields| {
-                    try self.unifyFields(left_fields, right_fields);
-                    self.program.types.set(b, .{ .link = a });
+                    stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                    try self.pushFieldPairs(stack, left_fields, right_fields);
                 },
                 else => Common.invariant("record type failed Lambda Solved unification"),
             },
             .tag_union => |left_tags| switch (right) {
                 .tag_union => |right_tags| {
-                    try self.unifyTags(left_tags, right_tags);
-                    self.program.types.set(b, .{ .link = a });
+                    if (left_tags.count() == 0) {
+                        self.program.types.set(a, .{ .link = b });
+                        return;
+                    }
+                    if (right_tags.count() == 0) {
+                        self.program.types.set(b, .{ .link = a });
+                        return;
+                    }
+                    var payload_pairs = std.ArrayList(DeferredSpanPair).empty;
+                    defer payload_pairs.deinit(self.allocator);
+                    const merged = try self.mergeTags(left_tags, right_tags, &payload_pairs);
+                    stack.items[finish_index].finish.action = .{ .set_left_tag_union_link_right = .{
+                        .lhs = a,
+                        .rhs = b,
+                        .tags = merged,
+                    } };
+                    try self.pushPayloadSpanPairs(stack, payload_pairs.items);
                 },
                 else => Common.invariant("tag-union type failed Lambda Solved unification"),
             },
@@ -1555,43 +1854,448 @@ const Solver = struct {
                         if (try self.unifyIteratorOwnerStampedPublic(a, b, left_named, right_named)) return;
                         if (try self.unifyGeneratedIteratorJoin(a, b, left_named, right_named)) return;
                         if (try self.unifyPublicGeneratedIterator(a, b, left_named, right_named)) return;
+                        if (try self.unifyNominalOpaqueViews(a, b, left_named, right_named)) return;
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
-                    try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
-                    // Aliases have already been unwrapped above. Generated
-                    // compile-time evidence owners (`FieldNames`/`FieldName`/
-                    // `ParseTagUnionSpec`) use their backing only to carry
-                    // evidence rows, so two values with the same nominal identity
-                    // may intentionally have different backing rows; the
-                    // higher-scored backing is selected without unifying them.
-                    // Iterators are excluded: a minted `Iter`/`Stream` keeps its
-                    // step callable in its backing, so two same-identity minted
-                    // iterators must unify their backings for the step callable
-                    // members to merge. Selecting one backing by score instead
-                    // would drop a step closure, leaving a zero-sized callable a
-                    // later construction then mismatches at the box boundary.
-                    if (isScoreSelectedEvidenceOwner(left_named.builtin_owner) or
-                        isScoreSelectedEvidenceOwner(right_named.builtin_owner))
-                    {
-                        if (self.generatedOpaqueEvidenceScore(right_named) > self.generatedOpaqueEvidenceScore(left_named)) {
+                    if (left_named.backing) |left_backing| {
+                        const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
+                        if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
+                        if (left_backing.authority == right_backing.authority) {
+                            stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                            try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
+                        } else if (left_backing.authority == .generated_private) {
+                            try self.relateGeneratedPrivateEvidence(right_backing.ty, left_backing.ty);
+                            self.program.types.set(b, .{ .link = a });
+                        } else if (right_backing.authority == .generated_private) {
+                            try self.relateGeneratedPrivateEvidence(left_backing.ty, right_backing.ty);
                             self.program.types.set(a, .{ .link = b });
                         } else {
-                            self.program.types.set(b, .{ .link = a });
+                            Common.invariant("named type backing authorities were incompatible during Lambda Solved unification");
                         }
+                    } else if (right_named.backing != null) {
+                        Common.invariant("named type backing differed during Lambda Solved unification");
                     } else {
-                        if (left_named.backing) |left_backing| {
-                            const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
-                            if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
-                            try self.unify(left_backing.ty, right_backing.ty);
-                        } else if (right_named.backing != null) {
-                            Common.invariant("named type backing differed during Lambda Solved unification");
-                        }
-                        self.program.types.set(b, .{ .link = a });
+                        stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                        try self.pushSpanPairs(stack, left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
                     }
                 },
                 else => Common.invariant("named type failed Lambda Solved unification"),
             },
             .link, .unbound, .forall => unreachable,
+        }
+    }
+
+    fn applyUnifyFinish(self: *Solver, action: UnifyFinishAction) void {
+        switch (action) {
+            .none => {},
+            .link_rhs_to_lhs => |link| self.program.types.set(link.rhs, .{ .link = link.lhs }),
+            .link_var_to_root => |link| self.program.types.set(link.var_, .{ .link = self.program.types.rootCompressed(link.target) }),
+            .set_left_erased_link_right => |set| {
+                self.program.types.set(set.lhs, .{ .erased = .{
+                    .source_fn_ty = set.source_fn_ty,
+                    .members = set.members,
+                } });
+                self.program.types.set(set.rhs, .{ .link = set.lhs });
+            },
+            .set_left_lambda_set_link_right => |set| {
+                self.program.types.set(set.lhs, .{ .lambda_set = set.members });
+                self.program.types.set(set.rhs, .{ .link = set.lhs });
+            },
+            .set_left_tag_union_link_right => |set| {
+                self.program.types.set(set.lhs, .{ .tag_union = set.tags });
+                self.program.types.set(set.rhs, .{ .link = set.lhs });
+            },
+        }
+    }
+
+    /// Relate the definition-private nominal and opaque interface views of one
+    /// checked definition without widening the opaque side's inspectability.
+    /// Checking and Monotype have already established the exact TypeDef
+    /// identity; Lambda Solved consumes that relation solely to propagate
+    /// callable flow through the shared runtime representation.
+    fn unifyNominalOpaqueViews(
+        self: *Solver,
+        left_ty: Type.TypeVarId,
+        right_ty: Type.TypeVarId,
+        left: anytype,
+        right: anytype,
+    ) Allocator.Error!bool {
+        if (!sameMonoTypeDef(left.def, right.def) or
+            left.builtin_owner != right.builtin_owner)
+        {
+            return false;
+        }
+        const left_is_nominal = left.kind == .nominal;
+        const right_is_nominal = right.kind == .nominal;
+        const left_is_opaque = left.kind == .@"opaque";
+        const right_is_opaque = right.kind == .@"opaque";
+        if (!((left_is_nominal and right_is_opaque) or
+            (left_is_opaque and right_is_nominal)))
+        {
+            return false;
+        }
+
+        try self.unifySpans(
+            left.args,
+            right.args,
+            "nominal/opaque type arguments failed Lambda Solved unification",
+        );
+        const left_backing = left.backing orelse
+            Common.invariant("nominal/opaque visibility relation lacked a checked runtime backing");
+        const right_backing = right.backing orelse
+            Common.invariant("nominal/opaque visibility relation lacked a checked runtime backing");
+        if (left_backing.authority != .checked_public or
+            right_backing.authority != .checked_public)
+        {
+            Common.invariant("nominal/opaque visibility relation lacked checked-public backing authority");
+        }
+        if (left_is_nominal and left_backing.use != .inspectable) {
+            Common.invariant("definition-private nominal view lacked inspectable backing authority");
+        }
+        if (right_is_nominal and right_backing.use != .inspectable) {
+            Common.invariant("definition-private nominal view lacked inspectable backing authority");
+        }
+        if (left_is_opaque and left_backing.use != .runtime_layout_only) {
+            Common.invariant("opaque interface view carried inspectable backing authority");
+        }
+        if (right_is_opaque and right_backing.use != .runtime_layout_only) {
+            Common.invariant("opaque interface view carried inspectable backing authority");
+        }
+
+        try self.unify(left_backing.ty, right_backing.ty);
+        if (left_is_opaque) {
+            self.program.types.set(right_ty, .{ .link = left_ty });
+        } else {
+            self.program.types.set(left_ty, .{ .link = right_ty });
+        }
+        return true;
+    }
+
+    fn unifyPublicNamedBacking(
+        self: *Solver,
+        backing_ty: Type.TypeVarId,
+        named_ty: Type.TypeVarId,
+        named_content: Type.Content,
+    ) Allocator.Error!bool {
+        const named = switch (named_content) {
+            .named => |named| named,
+            else => return false,
+        };
+        switch (named.kind) {
+            .nominal, .@"opaque" => {},
+            .alias => return false,
+        }
+        const backing = named.backing orelse return false;
+        if (backing.authority != .checked_public or backing.use != .inspectable) return false;
+        if (!try self.typeIsProvenUninhabited(backing_ty)) return false;
+        const backing_root = self.program.types.rootCompressed(backing_ty);
+        const named_root = self.program.types.rootCompressed(named_ty);
+        if (backing_root != named_root) {
+            self.program.types.set(backing_root, .{ .link = named_root });
+        }
+        return true;
+    }
+
+    fn unifyInspectableNamedBacking(
+        self: *Solver,
+        structural_ty: Type.TypeVarId,
+        named_ty: Type.TypeVarId,
+        structural_content: Type.Content,
+        named_content: Type.Content,
+    ) Allocator.Error!bool {
+        switch (structural_content) {
+            .named, .link, .unbound, .forall => return false,
+            else => {},
+        }
+        const named = switch (named_content) {
+            .named => |named| named,
+            else => return false,
+        };
+        if (named.kind == .alias) return false;
+        const backing = named.backing orelse return false;
+        if (backing.use != .inspectable) return false;
+
+        const moved_structural = try self.program.types.add(structural_content);
+        try self.unify(moved_structural, backing.ty);
+        const structural_root = self.program.types.rootCompressed(structural_ty);
+        const named_root = self.program.types.rootCompressed(named_ty);
+        if (structural_root != named_root) {
+            self.program.types.set(structural_root, .{ .link = named_root });
+        }
+        return true;
+    }
+
+    fn typeIsProvenUninhabited(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
+        var visiting = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
+        defer visiting.deinit();
+        return self.typeIsProvenUninhabitedInner(ty, &visiting);
+    }
+
+    fn typeIsProvenUninhabitedInner(
+        self: *Solver,
+        ty: Type.TypeVarId,
+        visiting: *std.AutoHashMap(Type.TypeVarId, void),
+    ) Allocator.Error!bool {
+        const root = self.program.types.rootCompressed(ty);
+        const entry = try visiting.getOrPut(root);
+        if (entry.found_existing) return false;
+        defer _ = visiting.remove(root);
+
+        return switch (self.program.types.get(root)) {
+            // Probe leaves against the lifted store instead of materializing:
+            // uninhabitedness is a pure function of the Monotype.
+            .mono => |leaf| blk: {
+                var mono_visiting = std.AutoHashMap(MonoType.TypeId, void).init(self.allocator);
+                defer mono_visiting.deinit();
+                break :blk try self.monoProvenUninhabited(leaf.id, &mono_visiting);
+            },
+            .named => |named| if (named.backing) |backing|
+                if (backing.use == .inspectable)
+                    self.typeIsProvenUninhabitedInner(backing.ty, visiting)
+                else
+                    false
+            else
+                false,
+            .tag_union => |tags| blk: {
+                if (tags.count() == 0) break :blk true;
+                for (0..tags.count()) |tag_index| {
+                    const tag = self.program.types.tagItem(tags, tag_index);
+                    var tag_inhabited = true;
+                    for (0..tag.payloads.count()) |payload_index| {
+                        if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(tag.payloads, payload_index), visiting)) {
+                            tag_inhabited = false;
+                            break;
+                        }
+                    }
+                    if (tag_inhabited) break :blk false;
+                }
+                break :blk true;
+            },
+            .tuple => |items| blk: {
+                for (0..items.count()) |index| {
+                    if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(items, index), visiting)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |fields| blk: {
+                for (0..fields.count()) |index| {
+                    if (try self.typeIsProvenUninhabitedInner(self.program.types.fieldItem(fields, index).ty, visiting)) break :blk true;
+                }
+                break :blk false;
+            },
+            .box => |payload| self.typeIsProvenUninhabitedInner(payload, visiting),
+            .list, .func, .primitive, .lambda_set, .erased, .zst, .link, .unbound, .forall => false,
+        };
+    }
+
+    /// `typeIsProvenUninhabitedInner` over the lifted Monotype store, for
+    /// lazy leaves that have not materialized.
+    fn monoProvenUninhabited(
+        self: *Solver,
+        id: MonoType.TypeId,
+        visiting: *std.AutoHashMap(MonoType.TypeId, void),
+    ) Allocator.Error!bool {
+        const entry = try visiting.getOrPut(id);
+        if (entry.found_existing) return false;
+        defer _ = visiting.remove(id);
+
+        return switch (self.lifted.types.get(id)) {
+            .named => |named| if (named.backing) |backing|
+                if (backing.use == .inspectable)
+                    self.monoProvenUninhabited(backing.ty, visiting)
+                else
+                    false
+            else
+                false,
+            .tag_union => |tags| blk: {
+                const tag_span = self.lifted.types.tagSpan(tags);
+                if (tag_span.len == 0) break :blk true;
+                for (tag_span) |tag| {
+                    var tag_inhabited = true;
+                    for (self.lifted.types.span(tag.payloads)) |payload| {
+                        if (try self.monoProvenUninhabited(payload, visiting)) {
+                            tag_inhabited = false;
+                            break;
+                        }
+                    }
+                    if (tag_inhabited) break :blk false;
+                }
+                break :blk true;
+            },
+            .tuple => |items| blk: {
+                for (self.lifted.types.span(items)) |item| {
+                    if (try self.monoProvenUninhabited(item, visiting)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |fields| blk: {
+                for (self.lifted.types.fieldSpan(fields)) |field| {
+                    if (try self.monoProvenUninhabited(field.ty, visiting)) break :blk true;
+                }
+                break :blk false;
+            },
+            .box => |payload| self.monoProvenUninhabited(payload, visiting),
+            .list, .func, .primitive, .erased, .zst => false,
+        };
+    }
+
+    /// Transfer Lambda Solved callable evidence from a checked-public value
+    /// shape into its producer-authored generated-private representation.
+    /// Monotype has already sealed both representations, so this relation
+    /// deliberately preserves every composite and named root. Only callable
+    /// slots (and still-open Lambda Solved slots) are unified.
+    fn relateGeneratedPrivateEvidence(
+        self: *Solver,
+        public_ty: Type.TypeVarId,
+        private_ty: Type.TypeVarId,
+    ) Allocator.Error!void {
+        const public_root = self.program.types.rootCompressed(public_ty);
+        const private_root = self.program.types.rootCompressed(private_ty);
+        if (public_root == private_root) return;
+
+        const pair = UnifyPair.init(public_root, private_root);
+        const active = try self.active_private_evidence_relations.getOrPut(pair);
+        if (active.found_existing) return;
+        defer _ = self.active_private_evidence_relations.remove(pair);
+
+        const public = try self.resolvedContentAt(public_root);
+        const private = try self.resolvedContentAt(private_root);
+        if (public == .unbound or private == .unbound or
+            public == .lambda_set or private == .lambda_set or
+            public == .erased or private == .erased)
+        {
+            try self.unify(public_root, private_root);
+            return;
+        }
+
+        switch (public) {
+            .link, .unbound, .lambda_set, .erased => unreachable,
+            .mono => Common.invariant("lazy Monotype leaf reached the generated-private evidence relation unexpanded"),
+            .forall => Common.invariant("generated-private evidence relation received a generalized public type"),
+            .primitive => |public_primitive| switch (private) {
+                .primitive => |private_primitive| if (public_primitive != private_primitive) {
+                    Common.invariant("generated-private evidence relation received different primitive types");
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .zst => if (private != .zst) Common.invariant("generated-private evidence relation received different type structure"),
+            .list => |public_elem| switch (private) {
+                .list => |private_elem| try self.relateGeneratedPrivateEvidence(public_elem, private_elem),
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .box => |public_elem| switch (private) {
+                .box => |private_elem| try self.relateGeneratedPrivateEvidence(public_elem, private_elem),
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .tuple => |public_items| switch (private) {
+                .tuple => |private_items| {
+                    if (public_items.count() != private_items.count()) {
+                        Common.invariant("generated-private evidence relation received tuples of different arity");
+                    }
+                    for (0..public_items.count()) |index| {
+                        try self.relateGeneratedPrivateEvidence(
+                            self.program.types.spanItem(public_items, index),
+                            self.program.types.spanItem(private_items, index),
+                        );
+                    }
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .record => |public_fields| switch (private) {
+                .record => |private_fields| {
+                    if (public_fields.count() != private_fields.count()) {
+                        Common.invariant("generated-private evidence relation received records with different fields");
+                    }
+                    for (0..public_fields.count()) |index| {
+                        const public_field = self.program.types.fieldItem(public_fields, index);
+                        const private_field = self.program.types.fieldItem(private_fields, index);
+                        if (public_field.name != private_field.name) {
+                            Common.invariant("generated-private evidence relation received records with different fields");
+                        }
+                        try self.relateGeneratedPrivateEvidence(public_field.ty, private_field.ty);
+                    }
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .tag_union => |public_tags| switch (private) {
+                .tag_union => |private_tags| {
+                    if (public_tags.count() != private_tags.count()) {
+                        Common.invariant("generated-private evidence relation received tag unions with different tags");
+                    }
+                    for (0..public_tags.count()) |tag_index| {
+                        const public_tag = self.program.types.tagItem(public_tags, tag_index);
+                        const private_tag = self.program.types.tagItem(private_tags, tag_index);
+                        if (public_tag.name != private_tag.name or public_tag.checked_name != private_tag.checked_name or
+                            public_tag.payloads.count() != private_tag.payloads.count())
+                        {
+                            Common.invariant("generated-private evidence relation received tag unions with different tags");
+                        }
+                        for (0..public_tag.payloads.count()) |payload_index| {
+                            try self.relateGeneratedPrivateEvidence(
+                                self.program.types.spanItem(public_tag.payloads, payload_index),
+                                self.program.types.spanItem(private_tag.payloads, payload_index),
+                            );
+                        }
+                    }
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .func => |public_fn| switch (private) {
+                .func => |private_fn| {
+                    if (public_fn.args.count() != private_fn.args.count()) {
+                        Common.invariant("generated-private evidence relation received functions of different arity");
+                    }
+                    for (0..public_fn.args.count()) |index| {
+                        try self.relateGeneratedPrivateEvidence(
+                            self.program.types.spanItem(public_fn.args, index),
+                            self.program.types.spanItem(private_fn.args, index),
+                        );
+                    }
+                    try self.unify(public_fn.callable, private_fn.callable);
+                    try self.relateGeneratedPrivateEvidence(public_fn.ret, private_fn.ret);
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .named => |public_named| switch (private) {
+                .named => |private_named| {
+                    const same_identity = public_named.kind == private_named.kind and
+                        std.meta.eql(public_named.def, private_named.def) and
+                        public_named.builtin_owner == private_named.builtin_owner;
+                    if (!same_identity and MonoType.iteratorRelation(public_named, private_named) == .ordinary) {
+                        Common.invariant("generated-private evidence relation received different named types");
+                    }
+                    if (same_identity) {
+                        if (public_named.args.count() != private_named.args.count()) {
+                            Common.invariant("generated-private evidence relation received named types with different arity");
+                        }
+                        for (0..public_named.args.count()) |index| {
+                            try self.relateGeneratedPrivateEvidence(
+                                self.program.types.spanItem(public_named.args, index),
+                                self.program.types.spanItem(private_named.args, index),
+                            );
+                        }
+                        if (public_named.backing) |public_backing| {
+                            const private_backing = private_named.backing orelse
+                                Common.invariant("generated-private evidence relation received different named backing presence");
+                            if (public_backing.use != private_backing.use) {
+                                Common.invariant("generated-private evidence relation received different named backing uses");
+                            }
+                            try self.relateGeneratedPrivateEvidence(public_backing.ty, private_backing.ty);
+                        } else if (private_named.backing != null) {
+                            Common.invariant("generated-private evidence relation received different named backing presence");
+                        }
+                    } else {
+                        if (public_named.args.count() == 0 or private_named.args.count() == 0) {
+                            Common.invariant("generated-private iterator evidence lacked a public item argument");
+                        }
+                        try self.relateGeneratedPrivateEvidence(
+                            self.program.types.spanItem(public_named.args, 0),
+                            self.program.types.spanItem(private_named.args, 0),
+                        );
+                    }
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
         }
     }
 
@@ -1631,13 +2335,32 @@ const Solver = struct {
         }
 
         try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-        try self.unifyIteratorBackings(left, right);
+        const dynamic = if (left_dynamic) left else right;
+        const other = if (left_dynamic) right else left;
+        switch (other.def.iterator_representation) {
+            .none => try self.relateForcedDynamicPublicEvidence(dynamic, other),
+            .minted => try self.unifyGeneratedIteratorBackings(left, right),
+            .forced_dynamic => Common.invariant("forced-dynamic iterator relation received two dynamic representations"),
+        }
         if (left_dynamic) {
             self.program.types.set(right_ty, .{ .link = left_ty });
         } else {
             self.program.types.set(left_ty, .{ .link = right_ty });
         }
         return true;
+    }
+
+    fn relateForcedDynamicPublicEvidence(self: *Solver, dynamic: anytype, public: anytype) Allocator.Error!void {
+        const public_backing = public.backing orelse return;
+        const dynamic_backing = dynamic.backing orelse
+            Common.invariant("forced-dynamic iterator relation found dynamic backing on only one side");
+        if (public_backing.use != dynamic_backing.use) {
+            Common.invariant("forced-dynamic iterator relation found different backing uses");
+        }
+        if (public_backing.authority != .checked_public or dynamic_backing.authority != .generated_private) {
+            Common.invariant("forced-dynamic iterator evidence relation received incorrect backing authority");
+        }
+        try self.relateGeneratedPrivateEvidence(public_backing.ty, dynamic_backing.ty);
     }
 
     fn unifyGeneratedIteratorJoin(
@@ -1659,6 +2382,9 @@ const Solver = struct {
                 Common.invariant("generated iterator join found backing on only one side");
             if (left_backing.use != right_backing.use) {
                 Common.invariant("generated iterator join found different backing uses");
+            }
+            if (left_backing.authority != right_backing.authority) {
+                Common.invariant("generated iterator join found different backing authorities");
             }
             try self.unify(left_backing.ty, right_backing.ty);
         } else if (right.backing != null) {
@@ -1687,7 +2413,19 @@ const Solver = struct {
         }
         try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
 
-        if (left.def.iterator_representation == .minted) {
+        const left_minted = left.def.iterator_representation == .minted;
+        const generated = if (left_minted) left else right;
+        const public = if (left_minted) right else left;
+        if (public.backing) |public_backing| {
+            const generated_backing = generated.backing orelse
+                Common.invariant("generated iterator evidence had no private backing");
+            if (generated_backing.authority != .generated_private) {
+                Common.invariant("generated iterator evidence backing lacked private authority");
+            }
+            try self.relateGeneratedPrivateEvidence(public_backing.ty, generated_backing.ty);
+        }
+
+        if (left_minted) {
             self.program.types.set(right_ty, .{ .link = left_ty });
         } else {
             self.program.types.set(left_ty, .{ .link = right_ty });
@@ -1695,17 +2433,18 @@ const Solver = struct {
         return true;
     }
 
-    fn unifyIteratorBackings(self: *Solver, left: anytype, right: anytype) Allocator.Error!void {
-        if (left.backing) |left_backing| {
-            const right_backing = right.backing orelse
-                Common.invariant("iterator unification found backing on only one side");
-            if (left_backing.use != right_backing.use) {
-                Common.invariant("iterator unification found different backing uses");
-            }
-            try self.unify(left_backing.ty, right_backing.ty);
-        } else if (right.backing != null) {
-            Common.invariant("iterator unification found backing on only one side");
+    fn unifyGeneratedIteratorBackings(self: *Solver, left: anytype, right: anytype) Allocator.Error!void {
+        const left_backing = left.backing orelse
+            Common.invariant("generated iterator relation found backing on only one side");
+        const right_backing = right.backing orelse
+            Common.invariant("generated iterator relation found backing on only one side");
+        if (left_backing.use != right_backing.use) {
+            Common.invariant("generated iterator relation found different backing uses");
         }
+        if (left_backing.authority != .generated_private or right_backing.authority != .generated_private) {
+            Common.invariant("private iterator relation received a checked-public backing");
+        }
+        try self.unify(left_backing.ty, right_backing.ty);
     }
 
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
@@ -1718,15 +2457,6 @@ const Solver = struct {
         };
     }
 
-    /// A tag union with no tags is the materialized seal for an unconstrained
-    /// slot; it is uninhabited and fixes no layout.
-    fn isEmptyTagUnion(content: Type.Content) bool {
-        return switch (content) {
-            .tag_union => |tags| tags.count() == 0,
-            else => false,
-        };
-    }
-
     fn unifySpans(self: *Solver, lhs: Type.Span, rhs: Type.Span, comptime message: []const u8) Allocator.Error!void {
         if (lhs.count() != rhs.count()) Common.invariant(message);
         for (0..lhs.count()) |i| {
@@ -1736,27 +2466,116 @@ const Solver = struct {
         }
     }
 
-    fn unifyFields(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
+    /// Push one `process` frame per span element, in reverse so the stack
+    /// pops them in span order.
+    fn pushSpanPairs(
+        self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        lhs: Type.Span,
+        rhs: Type.Span,
+        comptime message: []const u8,
+    ) Allocator.Error!void {
+        if (lhs.count() != rhs.count()) Common.invariant(message);
+        var i = lhs.count();
+        while (i > 0) {
+            i -= 1;
+            const left_ty = self.program.types.spanItem(lhs, i);
+            const right_ty = self.program.types.spanItem(rhs, i);
+            try self.pushUnifyPair(stack, left_ty, right_ty);
+        }
+    }
+
+    fn pushFieldPairs(self: *Solver, stack: *std.ArrayList(UnifyFrame), lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
         if (lhs.count() != rhs.count()) Common.invariant("record field count failed Lambda Solved unification");
-        for (0..lhs.count()) |i| {
+        var i = lhs.count();
+        while (i > 0) {
+            i -= 1;
             const left_field = self.program.types.fieldItem(lhs, i);
             const right_field = self.program.types.fieldItem(rhs, i);
             if (left_field.name != right_field.name) Common.invariant("record field order failed Lambda Solved unification");
-            try self.unify(left_field.ty, right_field.ty);
+            try self.pushUnifyPair(stack, left_field.ty, right_field.ty);
         }
     }
 
-    fn unifyTags(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
-        if (lhs.count() != rhs.count()) Common.invariant("tag count failed Lambda Solved unification");
-        for (0..lhs.count()) |i| {
-            const left_tag = self.program.types.tagItem(lhs, i);
-            const right_tag = self.program.types.tagItem(rhs, i);
-            if (left_tag.name != right_tag.name) Common.invariant("tag order failed Lambda Solved unification");
-            try self.unifySpans(left_tag.payloads, right_tag.payloads, "tag payload count failed Lambda Solved unification");
+    fn pushPayloadSpanPairs(self: *Solver, stack: *std.ArrayList(UnifyFrame), pairs: []const DeferredSpanPair) Allocator.Error!void {
+        var i = pairs.len;
+        while (i > 0) {
+            i -= 1;
+            try self.pushSpanPairs(stack, pairs[i].lhs, pairs[i].rhs, "tag payload count failed Lambda Solved unification");
         }
     }
 
-    fn mergeLambdaSets(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!Type.Span {
+    fn pushCaptureSpanPairs(self: *Solver, stack: *std.ArrayList(UnifyFrame), pairs: []const DeferredSpanPair) Allocator.Error!void {
+        var i = pairs.len;
+        while (i > 0) {
+            i -= 1;
+            try self.pushCapturePairs(stack, pairs[i].lhs, pairs[i].rhs);
+        }
+    }
+
+    fn pushCapturePairs(self: *Solver, stack: *std.ArrayList(UnifyFrame), lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
+        if (lhs.count() != rhs.count()) Common.invariant("capture count failed Lambda Solved unification");
+        var i = lhs.count();
+        while (i > 0) {
+            i -= 1;
+            const left_capture = self.program.types.captureItem(lhs, i);
+            const right_capture = self.program.types.captureItem(rhs, i);
+            if (left_capture.capture_id != right_capture.capture_id) {
+                Common.invariant("capture identity failed Lambda Solved unification");
+            }
+            try self.pushUnifyPair(stack, left_capture.ty, right_capture.ty);
+        }
+    }
+
+    /// Merge two tag unions, collecting the shared tags' payload spans for the
+    /// caller to unify once the merged span has been recorded.
+    fn mergeTags(
+        self: *Solver,
+        lhs: Type.Span,
+        rhs: Type.Span,
+        payload_pairs: *std.ArrayList(DeferredSpanPair),
+    ) Allocator.Error!Type.Span {
+        var merged = std.ArrayList(Type.Tag).empty;
+        defer merged.deinit(self.allocator);
+        var shared_count: usize = 0;
+
+        for (0..lhs.count()) |left_index| {
+            const left_tag = self.program.types.tagItem(lhs, left_index);
+            try merged.append(self.allocator, left_tag);
+            for (0..rhs.count()) |right_index| {
+                const right_tag = self.program.types.tagItem(rhs, right_index);
+                if (left_tag.name != right_tag.name) continue;
+                try payload_pairs.append(self.allocator, .{
+                    .lhs = left_tag.payloads,
+                    .rhs = right_tag.payloads,
+                });
+                shared_count += 1;
+                break;
+            }
+        }
+
+        if (shared_count == 0) Common.invariant("disjoint tag unions failed Lambda Solved unification");
+
+        for (0..rhs.count()) |right_index| {
+            const right_tag = self.program.types.tagItem(rhs, right_index);
+            for (0..lhs.count()) |left_index| {
+                if (self.program.types.tagItem(lhs, left_index).name == right_tag.name) break;
+            } else {
+                try merged.append(self.allocator, right_tag);
+            }
+        }
+
+        return try self.program.types.addTags(merged.items);
+    }
+
+    /// Merge two lambda sets, collecting the shared members' capture spans for
+    /// the caller to unify once the merged span has been recorded.
+    fn mergeLambdaSets(
+        self: *Solver,
+        lhs: Type.Span,
+        rhs: Type.Span,
+        capture_pairs: *std.ArrayList(DeferredSpanPair),
+    ) Allocator.Error!Type.Span {
         var members = std.ArrayList(Type.FnMember).empty;
         defer members.deinit(self.allocator);
 
@@ -1768,25 +2587,16 @@ const Solver = struct {
             for (members.items) |left_member| {
                 if (left_member.lambda != right_member.lambda) continue;
                 found = true;
-                try self.unifyCaptures(left_member.captures, right_member.captures);
+                try capture_pairs.append(self.allocator, .{
+                    .lhs = left_member.captures,
+                    .rhs = right_member.captures,
+                });
                 break;
             }
             if (!found) try members.append(self.allocator, right_member);
         }
 
         return try self.program.types.addMembers(members.items);
-    }
-
-    fn unifyCaptures(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
-        if (lhs.count() != rhs.count()) Common.invariant("capture count failed Lambda Solved unification");
-        for (0..lhs.count()) |i| {
-            const left_capture = self.program.types.captureItem(lhs, i);
-            const right_capture = self.program.types.captureItem(rhs, i);
-            if (left_capture.capture_id != right_capture.capture_id) {
-                Common.invariant("capture identity failed Lambda Solved unification");
-            }
-            try self.unify(left_capture.ty, right_capture.ty);
-        }
     }
 
     fn solvedTypeDigest(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.names.TypeDigest {
@@ -1812,7 +2622,8 @@ const Solver = struct {
         try active.put(root, {});
         defer _ = active.remove(root);
 
-        switch (self.program.types.get(root)) {
+        switch (try self.resolvedContentAt(root)) {
+            .mono => Common.invariant("lazy Monotype leaf reached digest hashing unexpanded"),
             .link => Common.invariant("Lambda Solved root returned a link"),
             .unbound, .forall => Common.invariant("unresolved Lambda Solved type reached erased callable digest"),
             .primitive => |primitive| {
@@ -1843,18 +2654,18 @@ const Solver = struct {
             },
             .record => |fields| {
                 writeBytes(hasher, "record");
-                const field_slice = self.program.types.fieldSpan(fields);
-                writeU32(hasher, @intCast(field_slice.len));
-                for (field_slice) |field| {
+                writeU32(hasher, @intCast(fields.count()));
+                for (0..fields.count()) |index| {
+                    const field = self.program.types.fieldItem(fields, index);
                     writeBytes(hasher, self.lifted.names.recordFieldLabelText(field.name));
                     try self.writeSolvedTypeDigest(hasher, field.ty, active);
                 }
             },
             .tag_union => |tags| {
                 writeBytes(hasher, "tag_union");
-                const tag_slice = self.program.types.tagSpan(tags);
-                writeU32(hasher, @intCast(tag_slice.len));
-                for (tag_slice) |tag| {
+                writeU32(hasher, @intCast(tags.count()));
+                for (0..tags.count()) |index| {
+                    const tag = self.program.types.tagItem(tags, index);
                     writeBytes(hasher, self.lifted.names.tagLabelText(tag.name));
                     try self.writeSolvedTypeSpanDigest(hasher, tag.payloads, active);
                 }
@@ -1876,13 +2687,13 @@ const Solver = struct {
             },
             .lambda_set => |members| {
                 writeBytes(hasher, "lambda_set");
-                const member_slice = self.program.types.memberSpan(members);
-                writeU32(hasher, @intCast(member_slice.len));
-                for (member_slice) |member| {
+                writeU32(hasher, @intCast(members.count()));
+                for (0..members.count()) |member_index| {
+                    const member = self.program.types.memberItem(members, member_index);
                     writeU32(hasher, @intFromEnum(member.lambda));
-                    const captures = self.program.types.captureSpan(member.captures);
-                    writeU32(hasher, @intCast(captures.len));
-                    for (captures) |capture| {
+                    writeU32(hasher, @intCast(member.captures.count()));
+                    for (0..member.captures.count()) |capture_index| {
+                        const capture = self.program.types.captureItem(member.captures, capture_index);
                         writeU32(hasher, @intFromEnum(capture.symbol));
                         try self.writeSolvedTypeDigest(hasher, capture.ty, active);
                     }
@@ -1897,9 +2708,9 @@ const Solver = struct {
         span: Type.Span,
         active: *std.AutoHashMap(Type.TypeVarId, void),
     ) Allocator.Error!void {
-        const values = self.program.types.span(span);
-        writeU32(hasher, @intCast(values.len));
-        for (values) |child| {
+        writeU32(hasher, @intCast(span.count()));
+        for (0..span.count()) |index| {
+            const child = self.program.types.spanItem(span, index);
             try self.writeSolvedTypeDigest(hasher, child, active);
         }
     }
@@ -1924,36 +2735,187 @@ fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     hasher.update(std.mem.asBytes(&little));
 }
 
+const ReachabilityMasks = struct {
+    contains_callable: []bool,
+    contains_forced_dynamic: []bool,
+};
+
+/// Reverse-reachability over the lifted Monotype store: from `func` and
+/// `erased` nodes (types whose clones need fresh callable slots) and from
+/// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
+/// materialize).
+fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Error!ReachabilityMasks {
+    const count = types.types.len;
+    const flags = try allocator.alloc(bool, count);
+    errdefer allocator.free(flags);
+    @memset(flags, false);
+    const forced = try allocator.alloc(bool, count);
+    errdefer allocator.free(forced);
+    @memset(forced, false);
+
+    const edge_counts = try allocator.alloc(u32, count);
+    defer allocator.free(edge_counts);
+    @memset(edge_counts, 0);
+
+    const Walk = struct {
+        fn children(store: @TypeOf(types), content: MonoType.Content, callback: anytype) void {
+            switch (content) {
+                .primitive, .zst, .erased => {},
+                .list, .box => |elem| callback.child(elem),
+                .tuple => |items| for (store.span(items)) |item| callback.child(item),
+                .record => |fields| for (store.fieldSpan(fields)) |field| callback.child(field.ty),
+                .tag_union => |tags| for (store.tagSpan(tags)) |tag| {
+                    for (store.span(tag.payloads)) |payload| callback.child(payload);
+                },
+                .named => |named| {
+                    for (store.span(named.args)) |arg| callback.child(arg);
+                    if (named.backing) |backing| callback.child(backing.ty);
+                    for (store.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding_ty| callback.child(padding_ty),
+                    };
+                },
+                .func => |func| {
+                    for (store.span(func.args)) |arg| callback.child(arg);
+                    callback.child(func.ret);
+                },
+            }
+        }
+    };
+
+    for (types.types) |content| {
+        const Counter = struct {
+            counts: []u32,
+            fn child(self: @This(), ty: MonoType.TypeId) void {
+                self.counts[@intFromEnum(ty)] += 1;
+            }
+        };
+        Walk.children(types, content, Counter{ .counts = edge_counts });
+    }
+
+    var parent_starts = try allocator.alloc(u32, count + 1);
+    defer allocator.free(parent_starts);
+    parent_starts[0] = 0;
+    for (edge_counts, 0..) |edge_count, index| {
+        parent_starts[index + 1] = parent_starts[index] + edge_count;
+    }
+    const parents = try allocator.alloc(u32, parent_starts[count]);
+    defer allocator.free(parents);
+    const parent_writes = try allocator.dupe(u32, parent_starts[0..count]);
+    defer allocator.free(parent_writes);
+    for (types.types, 0..) |content, parent_index| {
+        const Filler = struct {
+            parents: []u32,
+            writes: []u32,
+            parent: u32,
+            fn child(self: @This(), ty: MonoType.TypeId) void {
+                const child_index = @intFromEnum(ty);
+                self.parents[self.writes[child_index]] = self.parent;
+                self.writes[child_index] += 1;
+            }
+        };
+        Walk.children(types, content, Filler{ .parents = parents, .writes = parent_writes, .parent = @intCast(parent_index) });
+    }
+
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(allocator);
+    for (types.types, 0..) |content, index| {
+        switch (content) {
+            .func, .erased => {
+                flags[index] = true;
+                try work.append(allocator, @intCast(index));
+            },
+            else => {},
+        }
+    }
+    while (work.pop()) |index| {
+        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
+            if (flags[parent]) continue;
+            flags[parent] = true;
+            try work.append(allocator, parent);
+        }
+    }
+    for (types.types, 0..) |content, index| {
+        switch (content) {
+            .named => |named| if (named.def.iterator_representation == .forced_dynamic) {
+                forced[index] = true;
+                try work.append(allocator, @intCast(index));
+            },
+            else => {},
+        }
+    }
+    while (work.pop()) |index| {
+        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
+            if (forced[parent]) continue;
+            forced[parent] = true;
+            try work.append(allocator, parent);
+        }
+    }
+    return .{ .contains_callable = flags, .contains_forced_dynamic = forced };
+}
+
 const TypeCloner = struct {
     solver: *Solver,
     map: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
-    forced_dynamic_backings: std.ArrayList(Type.TypeVarId),
+    /// Unification rewrites var contents in place (alias backings, named
+    /// absorption, uninhabited links), so clones that can still reach `unify`
+    /// must stay per-use. After solving no var is unified again, and clones of
+    /// callable-free types carry no unbound slots, so those may share one var
+    /// per Monotype during finalization.
+    share: bool = false,
+    /// One-level mode: children lower to lazy leaves in this clone context
+    /// instead of eager clones, reusing the context's existing var when the
+    /// Monotype already occurs in the tree. Used by `expandMonoRoot`.
+    lazy_ctx: ?u32 = null,
 
     fn init(solver: *Solver) TypeCloner {
         return .{
             .solver = solver,
             .map = std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
-            .forced_dynamic_backings = .empty,
         };
     }
 
     fn deinit(self: *TypeCloner) void {
-        self.forced_dynamic_backings.deinit(self.solver.allocator);
         self.map.deinit();
     }
 
     fn lower(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
+        if (self.lazy_ctx) |ctx| {
+            const map = &self.solver.leaf_contexts.items[ctx];
+            if (map.get(ty)) |existing| return existing;
+            const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = ctx } });
+            try map.put(ty, created);
+            return created;
+        }
         if (self.map.get(ty)) |cached| return cached;
+        const shareable = self.share and !self.solver.contains_callable[@intFromEnum(ty)];
+        if (shareable) {
+            if (self.solver.shared_clones.get(ty)) |shared| {
+                try self.map.put(ty, shared);
+                return shared;
+            }
+        }
         const reserved = try self.solver.program.types.add(.unbound);
         try self.map.put(ty, reserved);
-        const content = try self.lowerContent(self.solver.lifted.types.get(ty));
-        self.solver.program.types.set(reserved, content);
-        if (content == .named and content.named.def.iterator_representation == .forced_dynamic) {
-            const backing = content.named.backing orelse
-                Common.invariant("forced-dynamic iterator reached Lambda Solved without a backing type");
-            try self.forced_dynamic_backings.append(self.solver.allocator, backing.ty);
-        }
+        self.solver.program.types.set(reserved, try self.lowerContent(self.solver.lifted.types.get(ty)));
+        if (shareable) try self.solver.shared_clones.put(ty, reserved);
         return reserved;
+    }
+
+    /// Apply the explicit dynamic boundary only after the entire requested
+    /// Monotype clone is complete. A forced iterator can be reached while an
+    /// enclosing function or payload clone still holds reservations, so doing
+    /// this per-node would let callable identity observe an unfinished graph.
+    fn markForcedDynamicCallables(self: *TypeCloner) Allocator.Error!void {
+        var entries = self.map.iterator();
+        while (entries.next()) |entry| {
+            switch (self.solver.lifted.types.get(entry.key_ptr.*)) {
+                .named => |named| if (named.def.iterator_representation == .forced_dynamic) {
+                    try self.solver.markErasedCallablesReachedByType(entry.value_ptr.*);
+                },
+                else => {},
+            }
+        }
     }
 
     /// Re-materializes a nominal record's declared field order from the monotype
@@ -2020,13 +2982,14 @@ const TypeCloner = struct {
                     .builtin_owner = named.builtin_owner,
                     .args = try self.solver.program.types.addSpan(args),
                     .backing = if (named.backing) |raw_backing| blk_backing: {
-                        const backing_ty = if (isGeneratedOpaqueEvidenceOwner(named.builtin_owner))
+                        const backing_ty = if (raw_backing.authority == .generated_private)
                             raw_backing.ty
                         else
                             try self.structuralBackingForNamed(named.def, raw_backing.ty);
                         break :blk_backing .{
                             .ty = try self.lower(backing_ty),
                             .use = raw_backing.use,
+                            .authority = raw_backing.authority,
                         };
                     } else null,
                     .declared_order = try self.lowerDeclaredOrder(named.declared_order),
@@ -2074,27 +3037,15 @@ const TypeCloner = struct {
     }
 };
 
-fn generatedBackingScore(content: Type.Content) ?u8 {
-    return switch (content) {
-        .record => |fields| if (fields.count() == 0) 1 else 2,
-        .zst => 1,
-        else => null,
-    };
-}
-
-fn isGeneratedOpaqueEvidenceOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    return MonoType.generatedEvidenceOwnerUsesBacking(owner orelse return false);
-}
-
-/// A generated-backing owner whose same-identity instances carry independent
-/// evidence backing rows that unification selects by score rather than unifies
-/// (`FieldNames`/`FieldName`/`ParseTagUnionSpec`). Iterators also carry a
-/// generated backing but are excluded here: their same-identity instances share
-/// one backing structure whose step callable members must merge, so they take
-/// ordinary backing unification instead of score selection.
-fn isScoreSelectedEvidenceOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    const resolved = owner orelse return false;
-    return isGeneratedOpaqueEvidenceOwner(resolved) and !static_dispatch.isIteratorOwner(resolved);
+fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
+    return left.module == right.module and
+        left.type_name == right.type_name and
+        left.source_decl == right.source_decl and
+        optionalDigestEql(left.generated, right.generated) and
+        left.iterator_representation == right.iterator_representation and
+        left.iterator_kind == right.iterator_kind and
+        left.iterator_depth == right.iterator_depth and
+        std.meta.eql(left.iterator_topology, right.iterator_topology);
 }
 
 fn iteratorLikeOwnerFromPair(
@@ -2116,23 +3067,7 @@ fn iteratorLikeOwnerFromPair(
 }
 
 fn isIteratorLikeOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    const actual = owner orelse return false;
-    return switch (actual) {
-        .iter,
-        .stream,
-        => true,
-        else => false,
-    };
-}
-
-fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
-    return left.module == right.module and
-        left.type_name == right.type_name and
-        left.source_decl == right.source_decl and
-        optionalDigestEql(left.generated, right.generated) and
-        left.iterator_representation == right.iterator_representation and
-        left.iterator_kind == right.iterator_kind and
-        left.iterator_depth == right.iterator_depth;
+    return static_dispatch.isIteratorOwner(owner orelse return false);
 }
 
 fn optionalDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {

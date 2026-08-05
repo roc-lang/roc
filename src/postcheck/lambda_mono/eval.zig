@@ -310,6 +310,7 @@ pub const Evaluator = struct {
                 return frame.get(local_id) orelse self.unsupported_("unbound local");
             },
             .unit => return .unit,
+            .@"unreachable" => return self.unsupported_("unreachable marker escaped its terminated block-final position"),
             .int_lit => |int_value| {
                 const prim = self.primitiveOf(expr.ty) orelse return self.unsupported_("int literal without primitive type");
                 const raw: i128 = switch (int_value.kind) {
@@ -332,6 +333,7 @@ pub const Evaluator = struct {
             .list => |span| return .{ .list = try self.evalExprSpan(frame, span) },
             .tuple => |span| return .{ .tuple = try self.evalExprSpan(frame, span) },
             .record => |span| return try self.evalRecord(frame, expr.ty, span),
+            .record_update => |update| return try self.evalRecordUpdate(frame, expr.ty, update),
             .capture_record => |span| return .{ .capture_record = try self.evalExprSpan(frame, span) },
             .tag => |tag| return try self.evalTag(frame, expr.ty, tag.name, tag.payloads),
             .callable => |callable| {
@@ -442,14 +444,42 @@ pub const Evaluator = struct {
         const type_fields = self.program.types.fieldSpan(field_types);
         const out = self.alloc().alloc(Value, type_fields.len) catch return error.OutOfMemory;
         const field_exprs = self.program.fieldExprSpan(span);
-        // Evaluate in expression span order (observable through dbg), then place
-        // each value into the record type's field-span storage slot.
-        for (0..field_exprs.len) |i| {
-            const field_expr = GuardedList.at(field_exprs, i);
-            const value = try self.evalExpr(frame, field_expr.value);
-            const index = self.recordFieldIndex(type_fields, field_expr.name) orelse
-                return self.unsupported_("record field not found in record type");
-            out[index] = value;
+        // Records evaluate in type-store field order, matching solved-to-LIR
+        // lowering; source field order does not affect Roc evaluation.
+        for (0..type_fields.len) |i| {
+            const type_field = GuardedList.at(type_fields, i);
+            const value_expr = for (0..field_exprs.len) |expr_index| {
+                const field_expr = GuardedList.at(field_exprs, expr_index);
+                if (self.program.names.recordFieldLabelTextEql(type_field.name, field_expr.name)) {
+                    break field_expr.value;
+                }
+            } else return self.unsupported_("record field not found in record expression");
+            out[i] = try self.evalExpr(frame, value_expr);
+        }
+        return .{ .record = out };
+    }
+
+    fn evalRecordUpdate(self: *Evaluator, frame: *Frame, ty: Type.TypeId, update: Ast.RecordUpdate) EvalError!Value {
+        const field_types = switch (self.structural(ty)) {
+            .record => |fields| fields,
+            else => return self.unsupported_("record update without record type"),
+        };
+        const base_value = try self.evalExpr(frame, update.base);
+        const base_fields = switch (base_value) {
+            .record => |fields| fields,
+            else => return self.unsupported_("record update base without record value"),
+        };
+        const type_fields = self.program.types.fieldSpan(field_types);
+        if (base_fields.len != type_fields.len) return self.unsupported_("record update base arity differs from record type");
+        const out = self.alloc().dupe(Value, base_fields) catch return error.OutOfMemory;
+        const update_fields = self.program.fieldExprSpan(update.fields);
+        for (0..type_fields.len) |i| {
+            const type_field = GuardedList.at(type_fields, i);
+            const value_expr = for (0..update_fields.len) |update_index| {
+                const field = GuardedList.at(update_fields, update_index);
+                if (self.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
+            } else continue;
+            out[i] = try self.evalExpr(frame, value_expr);
         }
         return .{ .record = out };
     }
@@ -621,6 +651,10 @@ pub const Evaluator = struct {
         for (0..branch_slice.len) |i| {
             const branch = GuardedList.at(branch_slice, i);
             if (!try self.bindPattern(frame, branch.pat, scrutinee)) continue;
+            const bindings = self.program.stmtSpan(branch.bindings);
+            for (0..bindings.len) |binding_index| {
+                try self.evalStmt(frame, GuardedList.at(bindings, binding_index));
+            }
             if (branch.guard) |guard_expr| {
                 const guard = try self.evalExpr(frame, guard_expr);
                 if (!truthy(guard)) continue;
@@ -1181,6 +1215,7 @@ pub const Evaluator = struct {
             .num_count_leading_zero_bits => self.numBitCount(args, arg_types, .count_leading_zeros),
             .num_count_trailing_zero_bits => self.numBitCount(args, arg_types, .count_trailing_zeros),
 
+            .num_from_le_bytes_unchecked => self.evalNumFromLeBytes(args, result_ty),
             .simd_load_16_unchecked => self.evalSimdLoad(args, result_ty),
             .simd_store_16_unchecked => self.evalSimdStore(args),
             .simd_append_16 => self.evalSimdAppend(args),
@@ -1315,6 +1350,7 @@ pub const Evaluator = struct {
             .list_release_excess_capacity,
             .list_split_first,
             .list_split_last,
+            .list_map_prepare_reuse,
             .list_map_can_reuse,
             => self.evalListOp(op, args, arg_types, result_ty),
 
@@ -1535,7 +1571,10 @@ pub const Evaluator = struct {
                 return .{ .dec = result.value.num };
             },
             .negate => return .{ .dec = -%a },
-            .abs => return .{ .dec = if (a < 0) -%a else a },
+            .abs => {
+                if (a == std.math.minInt(i128)) return self.crashAbort("Decimal absolute value overflow!");
+                return .{ .dec = if (a < 0) -a else a };
+            },
             .abs_diff => return .{ .dec = if (a > b) a -% b else b -% a },
             .div => return .{ .dec = try self.decDiv(a, b) },
             .div_trunc => return .{ .dec = decTrunc(try self.decDiv(a, b)) },
@@ -1558,26 +1597,20 @@ pub const Evaluator = struct {
         if (a == 0) return 0;
 
         const one = RocDec.one_point_zero_i128;
-        const max_i128: u128 = @intCast(std.math.maxInt(i128));
         const is_negative = (a < 0) != (b < 0);
         const numerator = absU128(a);
-        if (numerator > max_i128) {
-            if (b == one) return a;
-            return self.crashAbort("Decimal division overflow in numerator!");
-        }
-
         const denominator = absU128(b);
-        if (denominator > max_i128) {
-            if (a == one) return b;
-            return self.crashAbort("Decimal division overflow in denominator!");
-        }
 
         const scaled: u256 = @as(u256, numerator) * @as(u256, @intCast(one));
         const quotient: u256 = scaled / @as(u256, denominator);
-        if (quotient > @as(u256, max_i128)) return self.crashAbort("Decimal division overflow!");
+        const limit: u256 = if (is_negative)
+            @as(u256, 1) << 127
+        else
+            @as(u256, @intCast(std.math.maxInt(i128)));
+        if (quotient > limit) return self.crashAbort("Decimal division overflow!");
 
-        const magnitude: i128 = @intCast(quotient);
-        return if (is_negative) -magnitude else magnitude;
+        const magnitude: u128 = @intCast(quotient);
+        return if (is_negative) @bitCast(0 -% magnitude) else @intCast(magnitude);
     }
 
     // transcendental / rounding
@@ -1773,6 +1806,29 @@ pub const Evaluator = struct {
         const result_bits = builtins.simd.eval(simd_op, source, destination, operands[0], operands[1], operands[2]);
         if (destination_kind != null) return .{ .int = @bitCast(result_bits) };
         return self.canonicalInt(result_prim, @bitCast(result_bits));
+    }
+
+    /// Read a little-endian integer out of a byte list. The result type gives
+    /// the width; the bounds check already happened in the Roc wrapper.
+    fn evalNumFromLeBytes(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
+        const prim = self.primitiveOf(result_ty) orelse return self.unsupported_("from_le_bytes result without primitive type");
+        const bytes = switch (args[0]) {
+            .list => |list| list,
+            else => return self.unsupported_("from_le_bytes from non-list value"),
+        };
+        const index: usize = @intCast(valueBits(args[1]) catch return self.unsupported_("from_le_bytes index without integer bits"));
+        return switch (prim) {
+            inline .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
+                const T = intType(p);
+                var value: u128 = 0;
+                for (0..@sizeOf(T)) |i| {
+                    const byte_bits = valueBits(bytes[index + i]) catch return self.unsupported_("from_le_bytes byte without integer bits");
+                    value |= @as(u128, @as(u8, @truncate(byte_bits))) << @intCast(i * 8);
+                }
+                break :blk makeInt(T, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(value))));
+            },
+            else => self.unsupported_("from_le_bytes on non-multi-byte-integer type"),
+        };
     }
 
     fn evalSimdLoad(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
@@ -2209,6 +2265,7 @@ pub const Evaluator = struct {
             .list_last => return try self.listFirstLast(result_ty, args[0].list, false),
             .list_split_first => return try self.listSplit(result_ty, args[0].list, true),
             .list_split_last => return try self.listSplit(result_ty, args[0].list, false),
+            .list_map_prepare_reuse => return args[0],
             .list_map_can_reuse => {
                 // In-place map reuse is disabled on the compared compile.
                 const prim = self.primitiveOf(result_ty) orelse .u8;

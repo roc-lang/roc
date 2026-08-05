@@ -25,6 +25,7 @@ pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
+pub const DeclaredTypeKind = @import("Diagnostic.zig").DeclaredTypeKind;
 
 /// Indices of builtin type declarations within the Builtin module.
 /// Generated at build time into typed static data embedded in the compiler.
@@ -433,7 +434,7 @@ pub const WhereClause = union(enum) {
     pub const Owner = extern struct {
         rigid_var: TypeAnno.Idx,
         clauses: IdxSpan,
-        introduced_in_scope: bool,
+        owned_by_annotation: bool,
         _padding: [3]u8 = .{ 0, 0, 0 },
 
         pub const Span = extern struct { span: base.DataSpan };
@@ -441,6 +442,12 @@ pub const WhereClause = union(enum) {
     pub const Span = extern struct {
         span: base.DataSpan,
         owners: Owner.Span,
+
+        /// A declaration with no constraints at all.
+        pub const empty = Span{
+            .span = base.DataSpan.empty(),
+            .owners = .{ .span = base.DataSpan.empty() },
+        };
     };
 
     w_method: struct {
@@ -450,9 +457,14 @@ pub const WhereClause = union(enum) {
         ret: TypeAnno.Idx,
         effectful: bool,
     },
+    /// Applies every constraint named by a where alias to `var_`.
+    ///
+    /// `alias` is the resolved reference to the where alias declaration — a
+    /// `lookup` when the alias takes no arguments and an `apply` when it does —
+    /// so the checker never has to re-resolve the name.
     w_alias: struct {
         var_: TypeAnno.Idx,
-        alias_name: base.Ident.Idx,
+        alias: TypeAnno.Idx,
     },
     w_malformed: struct {
         diagnostic: Diagnostic.Idx,
@@ -500,12 +512,9 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                try cir.store.getTypeAnno(alias.var_).pushToSExprTree(cir, tree, alias.var_);
-
-                const alias_name_str = cir.getIdent(alias.alias_name);
-                try tree.pushStringPair("name", alias_name_str);
-
                 const attrs = tree.beginNode();
+                try cir.store.getTypeAnno(alias.var_).pushToSExprTree(cir, tree, alias.var_);
+                try cir.store.getTypeAnno(alias.alias).pushToSExprTree(cir, tree, alias.alias);
                 try tree.endNode(begin, attrs);
             },
             .w_malformed => {

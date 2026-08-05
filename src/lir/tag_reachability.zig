@@ -479,6 +479,7 @@ const Pass = struct {
             .assign_call_erased => |s| {
                 self.noteUse(s.closure);
                 if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+                if (s.reuse_source) |reuse_source| self.noteUse(reuse_source);
                 const args = self.store.getLocalSpan(s.args);
                 for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
             },
@@ -1374,6 +1375,7 @@ test "tag reachability retains branches for erased call results" {
     const closure = try f.local(f.outer_layout);
     const result = try f.local(f.outer_layout);
     const disc = try f.local(.u16);
+    const arg_plan = try store.internErasedCallArgsPlan(&f.result.layouts, &.{});
 
     const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } });
     const bad = try store.addCFStmt(.{ .runtime_error = {} });
@@ -1391,6 +1393,7 @@ test "tag reachability retains branches for erased call results" {
         .target = result,
         .closure = closure,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .next = disc_read,
     } });
     const proc = try store.addProcSpec(.{

@@ -1161,6 +1161,8 @@ test "boxy layout planner records private worker function arg and return layouts
         .checked_fn_scheme = .{},
         .checked_fn_root = @enumFromInt(2),
         .static_dispatch_plans = .{},
+        .direct_dispatch_plans = .{},
+        .dispatch_relations = .{},
         .resolved_value_refs = .{},
         .top_level_value_uses = .{},
         .nested_proc_sites = .{},

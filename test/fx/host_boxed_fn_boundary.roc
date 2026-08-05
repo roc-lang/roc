@@ -106,6 +106,28 @@ run_host_roundtrip! = || {
     f(21)
 }
 
+UnitToI64 : {} -> I64
+
+make_transition_inner : {} -> Box(UnitToI64)
+make_transition_inner = |_| Box.box(|_| 42)
+
+run_host_declines_reuse! : () => I64
+run_host_declines_reuse! = || {
+    # Keep a direct helper boundary between the erased ABI entry and the pack.
+    # Its hidden ownership argument must forward the host's null explicitly.
+    outer = Box.box(|unit| make_transition_inner(unit))
+
+    Host.call_boxed_transition!(outer)
+}
+
+run_host_consumes_reuse! : () => I64
+run_host_consumes_reuse! = || {
+    outer = Box.unbox(Host.boxed_transition!(42))
+    inner = Box.unbox(outer({}))
+
+    inner({})
+}
+
 run_host_store! : () => I64
 run_host_store! = || {
     {
@@ -132,6 +154,8 @@ main! = || {
     Stdout.line!("host consumes recursive tree: ${run_host_consumes_recursive_tree!().to_str()}")
     Stdout.line!("host consumes boxed capture: ${run_host_consumes_boxed_capture!().to_str()}")
     Stdout.line!("host roundtrip: ${run_host_roundtrip!().to_str()}")
+    Stdout.line!("host declines reuse: ${run_host_declines_reuse!().to_str()}")
+    Stdout.line!("host consumes reuse: ${run_host_consumes_reuse!().to_str()}")
     Stdout.line!("host store: ${run_host_store!().to_str()}")
     Stdout.line!(Host.boxed_drop_report!())
 }

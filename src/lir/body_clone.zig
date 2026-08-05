@@ -217,6 +217,7 @@ fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
             .nominal => |ref| noteRead(counts, ref.backing_ref),
         },
         .assign_call => |s| {
+            if (s.result_desc) |desc| noteDescRead(counts, desc);
             const args = store.getLocalSpan(s.args);
             for (0..args.len) |index| noteRead(counts, GuardedList.at(args, index));
         },
@@ -225,6 +226,7 @@ fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
             noteSpanReads(store, counts, s.args);
             noteSpanReads(store, counts, s.arg_descs);
             if (s.result_desc) |desc| noteDescRead(counts, desc);
+            if (s.reuse_source) |reuse_source| noteRead(counts, reuse_source);
         },
         .assign_packed_erased_fn => |s| {
             if (s.capture) |capture| noteRead(counts, capture);
@@ -428,6 +430,16 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         pub fn cloneStmt(self: *Self, old_id: CFStmtId) Allocator.Error!CFStmtId {
             if (self.stmt_map.get(old_id)) |existing| return existing;
 
+            const saved_loc = self.store.current_loc;
+            defer self.store.current_loc = saved_loc;
+            const saved_region = self.store.current_region;
+            defer self.store.current_region = saved_region;
+            const saved_inline_scope = self.store.current_inline_scope;
+            defer self.store.current_inline_scope = saved_inline_scope;
+            self.store.current_loc = self.store.stmtLoc(old_id);
+            self.store.current_region = self.store.stmtRegion(old_id);
+            self.store.current_inline_scope = self.store.stmtInlineScope(old_id);
+
             const stmt = self.store.getCFStmt(old_id);
             if (@hasDecl(Rewriter, "interceptStmt")) {
                 if (try self.rewriter.interceptStmt(self, stmt)) |intercepted| {
@@ -455,6 +467,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .proc = s.proc,
                     .args = try self.mapLocalSpan(s.args),
+                    .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
+                    .out_desc = try self.mapMaybeLocal(s.out_desc),
                     .is_cold = s.is_cold,
                     .next = try self.cloneStmt(s.next),
                 } }),
@@ -467,6 +481,9 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .arg_desc_keys = s.arg_desc_keys,
                     .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
                     .out_desc = try self.mapMaybeLocal(s.out_desc),
+                    .arg_plan = s.arg_plan,
+                    .reuse_closure = s.reuse_closure,
+                    .reuse_source = try self.mapMaybeLocal(s.reuse_source),
                     .next = try self.cloneStmt(s.next),
                 } }),
                 .assign_packed_erased_fn => |s| try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{

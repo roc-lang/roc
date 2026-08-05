@@ -267,6 +267,7 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .flags = .{ .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default },
                     },
                 );
 
@@ -288,6 +289,7 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .flags = .{ .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default },
                     },
                 );
 

@@ -135,41 +135,33 @@ pub const BuildSession = struct {
             return null;
         }
 
-        // Try to find the module by path across all schedulers
-        var sched_it = self.env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            for (sched.modules.items) |*module_state| {
-                if (std.mem.eql(u8, module_state.path, self.absolute_path)) {
-                    if (module_state.moduleEnv()) |mod_env| {
-                        self.cached_module_env = mod_env;
-                        return mod_env;
-                    }
-                }
+        if (self.env.findModuleByPath(self.absolute_path)) |module_state| {
+            if (module_state.moduleEnv()) |mod_env| {
+                self.cached_module_env = mod_env;
+                return mod_env;
             }
         }
 
         // Fallback: try to get the discovered root module by its package identity.
         if (self.env.discovered_pkg_name) |root_pkg_name| {
-            if (self.env.schedulers.get(root_pkg_name)) |sched| {
-                if (sched.getRootModule()) |rm| {
-                    if (rm.moduleEnv()) |e| {
-                        self.cached_module_env = e;
-                        return e;
-                    }
+            if (self.env.rootModule(root_pkg_name)) |root| {
+                if (root.moduleEnv()) |root_env| {
+                    self.cached_module_env = root_env;
+                    return root_env;
                 }
             }
         }
 
-        // Fallback: try to get root module from any scheduler
-        sched_it = self.env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            if (sched.getRootModule()) |rm| {
-                if (rm.moduleEnv()) |e| {
-                    self.cached_module_env = e;
-                    return e;
-                }
+        // Fallback: try to get a root module from any coordinator package.
+        const coord = self.env.coordinator orelse return null;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            const root_id = pkg.root_module_id orelse continue;
+            const root = pkg.getModule(root_id) orelse continue;
+            if (root.moduleEnv()) |root_env| {
+                self.cached_module_env = root_env;
+                return root_env;
             }
         }
 

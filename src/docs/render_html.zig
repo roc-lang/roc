@@ -1587,7 +1587,7 @@ fn renderSearchTree(
 
             try w.writeAll(" <span class=\"type-ahead-signature\">");
             switch (entry.kind) {
-                .value, .alias => {
+                .value, .alias, .where_alias => {
                     try w.writeAll(": ");
                     try renderDocTypeHtml(w, sig_ctx, gpa, sig, false);
                 },
@@ -1627,7 +1627,7 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, en
                 try w.writeAll(" : ");
                 try renderDocTypeHtml(w, ctx, gpa, sig, false);
             },
-            .alias => {
+            .alias, .where_alias => {
                 try w.writeAll(" : ");
                 try renderDocTypeHtml(w, ctx, gpa, sig, false);
             },
@@ -2016,7 +2016,7 @@ const MultilineLayoutSet = struct {
                 .where_clause => |wc| {
                     try frames.append(gpa, .{ .value = wc.type, .children_visited = false });
                     for (wc.constraints) |constraint| {
-                        try frames.append(gpa, .{ .value = constraint.signature, .children_visited = false });
+                        try frames.append(gpa, .{ .value = constraint.child(), .children_visited = false });
                     }
                 },
             }
@@ -2082,7 +2082,7 @@ const MultilineLayoutSet = struct {
                 if (wc.layout == .multiline and wc.constraints.len > 0) break :blk true;
                 if (self.contains(wc.type)) break :blk true;
                 for (wc.constraints) |constraint| {
-                    if (self.contains(constraint.signature)) break :blk true;
+                    if (self.contains(constraint.child())) break :blk true;
                 }
                 break :blk false;
             },
@@ -2371,16 +2371,26 @@ fn renderDocTypeHtml(
                             var i = wc.constraints.len;
                             while (i > 0) {
                                 i -= 1;
-                                const constraint = wc.constraints[i];
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = constraint.signature,
-                                    .needs_parens = false,
-                                    .indent = item.indent,
-                                } });
-                                try frames.append(gpa, .{ .html = " : " });
-                                try frames.append(gpa, .{ .escaped = constraint.method_name });
+                                switch (wc.constraints[i]) {
+                                    .method => |method| {
+                                        try frames.append(gpa, .{ .doc_type = .{
+                                            .value = method.signature,
+                                            .needs_parens = false,
+                                            .indent = item.indent,
+                                        } });
+                                        try frames.append(gpa, .{ .html = " : " });
+                                        try frames.append(gpa, .{ .escaped = method.method_name });
+                                    },
+                                    .where_alias => |alias| {
+                                        try frames.append(gpa, .{ .doc_type = .{
+                                            .value = alias.alias,
+                                            .needs_parens = false,
+                                            .indent = item.indent,
+                                        } });
+                                    },
+                                }
                                 try frames.append(gpa, .{ .html = "</span>." });
-                                try frames.append(gpa, .{ .escaped = constraint.type_var });
+                                try frames.append(gpa, .{ .escaped = wc.constraints[i].typeVar() });
                                 try frames.append(gpa, .{ .html = "<span class=\"type-var\">" });
                                 if (i > 0) try frames.append(gpa, .{ .html = ", " });
                             }
@@ -2400,17 +2410,27 @@ fn renderDocTypeHtml(
                             var i = wc.constraints.len;
                             while (i > 0) {
                                 i -= 1;
-                                const constraint = wc.constraints[i];
                                 try frames.append(gpa, .{ .html = ",\n" });
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = constraint.signature,
-                                    .needs_parens = false,
-                                    .indent = item.indent + 2,
-                                } });
-                                try frames.append(gpa, .{ .html = " : " });
-                                try frames.append(gpa, .{ .escaped = constraint.method_name });
+                                switch (wc.constraints[i]) {
+                                    .method => |method| {
+                                        try frames.append(gpa, .{ .doc_type = .{
+                                            .value = method.signature,
+                                            .needs_parens = false,
+                                            .indent = item.indent + 2,
+                                        } });
+                                        try frames.append(gpa, .{ .html = " : " });
+                                        try frames.append(gpa, .{ .escaped = method.method_name });
+                                    },
+                                    .where_alias => |alias| {
+                                        try frames.append(gpa, .{ .doc_type = .{
+                                            .value = alias.alias,
+                                            .needs_parens = false,
+                                            .indent = item.indent + 2,
+                                        } });
+                                    },
+                                }
                                 try frames.append(gpa, .{ .html = "</span>." });
-                                try frames.append(gpa, .{ .escaped = constraint.type_var });
+                                try frames.append(gpa, .{ .escaped = wc.constraints[i].typeVar() });
                                 try frames.append(gpa, .{ .html = "<span class=\"type-var\">" });
                                 try frames.append(gpa, .{ .indent = item.indent + 2 });
                             }
@@ -3089,16 +3109,16 @@ fn buildWhereClauseFixture(gpa: Allocator) Allocator.Error!*const DocType {
     v_sig.* = .{ .type_var = try gpa.dupe(u8, "v") };
 
     const constraints = try gpa.alloc(DocType.Constraint, 2);
-    constraints[0] = .{
+    constraints[0] = .{ .method = .{
         .type_var = try gpa.dupe(u8, "k"),
         .method_name = try gpa.dupe(u8, "is_eq"),
         .signature = k_sig,
-    };
-    constraints[1] = .{
+    } };
+    constraints[1] = .{ .method = .{
         .type_var = try gpa.dupe(u8, "v"),
         .method_name = try gpa.dupe(u8, "to_hash"),
         .signature = v_sig,
-    };
+    } };
 
     const root = try gpa.create(DocType);
     root.* = .{ .where_clause = .{

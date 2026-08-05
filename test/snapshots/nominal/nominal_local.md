@@ -126,7 +126,29 @@ test = |{}| {
 			(e-empty_record)))
 	(d-let
 		(p-assign (ident "test"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-record-destructure
+					(destructs)))
+			(e-block
+				(s-nominal-decl
+					(ty-header (name "Utf8Format"))
+					(ty-record))
+				(s-let
+					(p-assign (ident "Utf8Format.encode_str"))
+					(e-lambda
+						(args
+							(p-assign (ident "_fmt"))
+							(p-assign (ident "s")))
+						(e-call (constraint-fn-var 272)
+							(e-lookup-external
+								(builtin))
+							(e-lookup-local
+								(p-assign (ident "s"))))))
+				(s-let
+					(p-assign (ident "fmt"))
+					(e-tag (name "Utf8Format")))
+				(e-runtime-error (tag "erroneous_value_expr")))))
 	(s-nominal-decl
 		(ty-header (name "Utf8Format"))
 		(ty-record)))
@@ -137,12 +159,12 @@ test = |{}| {
 	(defs
 		(patt (type "Str => {}"))
 		(patt (type "_arg -> {}"))
-		(patt (type "{} -> Error")))
+		(patt (type "{} -> Try(encoded, err)")))
 	(type_decls
 		(nominal (type "Utf8Format")
 			(ty-header (name "Utf8Format"))))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "_arg -> {}"))
-		(expr (type "{} -> Error"))))
+		(expr (type "{} -> Try(encoded, err)"))))
 ~~~

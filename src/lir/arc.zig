@@ -2,10 +2,11 @@
 //!
 //! This pass is the only non-builtin stage that may synthesize explicit
 //! `incref`, `decref`, and `free` statements. It first solves binding modes
-//! and proc ownership signatures (`arc_solve`), then walks each proc once and
-//! emits RC statements from the solution: borrowed bindings emit nothing,
-//! owned final occurrences move, and lifetime-ending releases land right
-//! after the last use of a binding's borrow group. Optimized builds also emit
+//! and proc ownership signatures (`arc_solve`), then fills stable plans for
+//! each structured ownership context and materializes their explicit RC
+//! decisions: borrowed bindings emit nothing, owned final occurrences move,
+//! and lifetime-ending releases land right after the last use of a binding's
+//! borrow group. Optimized builds also emit
 //! mode-specialized proc variants for call sites that can move arguments into
 //! positions the solved signature borrows, or that prove a dying argument
 //! statically unique so the variant elides the runtime uniqueness checks
@@ -17,17 +18,16 @@ const std = @import("std");
 const builtin = @import("builtin");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
-const base = @import("base");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 const arc_certify = @import("arc_certify.zig");
+const arc_dismantle = @import("arc_dismantle.zig");
 const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
-const StringLiteral = base.StringLiteral;
 const GuardedList = collections.GuardedList;
 
 pub const ResourceError = std.mem.Allocator.Error;
@@ -45,6 +45,194 @@ pub const InsertOptions = struct {
     /// enable this; dev builds and compile-time evaluation use the solved
     /// single variant per proc.
     specialize: bool = false,
+};
+
+const no_proc_local_index = std.math.maxInt(u32);
+const no_stmt_node_index = std.math.maxInt(u32);
+const no_arc_bit = std.math.maxInt(u32);
+const arc_bit_needed = no_arc_bit - 1;
+
+/// Exact per-procedure ARC bit domain. `frame_locals` is the complete,
+/// producer-authored local inventory maintained by direct LIR lowering and
+/// every pre-ARC transform. ARC consumes it directly: ownership sets contain
+/// only refcounted resources and their solved representatives, and liveness
+/// rows add only the proc's solved group and borrowed-result bits.
+const ProcArcDomain = struct {
+    global_local_index: []u32,
+    frame_locals: []const LIR.LocalId,
+    resource_bit_index: []const u32,
+    resource_locals: []const LIR.LocalId,
+    refcounted_locals: []const LIR.LocalId,
+    group_bit_index: []const u32,
+    group_leaders: []const LIR.LocalId,
+    value_use_bit_index: []const u32,
+    value_use_locals: []const LIR.LocalId,
+
+    fn init(
+        allocator: Allocator,
+        store: *const LirStore,
+        solution: *const arc_solve.Solution,
+        local_contains_refcounted: []const bool,
+        global_local_index: []u32,
+        frame_span: LIR.LocalSpan,
+    ) ResourceError!ProcArcDomain {
+        const frame = store.getLocalSpan(frame_span);
+        const frame_len = GuardedList.borrowLen(frame);
+        if (frame_len >= arc_bit_needed) arcInvariant("ARC proc-local domain exceeds its dense index representation");
+
+        const frame_locals = try allocator.alloc(LIR.LocalId, frame_len);
+        const resource_bit_index = try allocator.alloc(u32, frame_len);
+        @memset(resource_bit_index, no_arc_bit);
+        const resource_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+        const refcounted_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+        const group_bit_index = try allocator.alloc(u32, frame_len);
+        @memset(group_bit_index, no_arc_bit);
+        const group_leaders_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+        const value_use_bit_index = try allocator.alloc(u32, frame_len);
+        @memset(value_use_bit_index, no_arc_bit);
+        const value_use_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+
+        var mapped_len: usize = 0;
+        errdefer for (frame_locals[0..mapped_len]) |local| {
+            global_local_index[@intFromEnum(local)] = no_proc_local_index;
+        };
+        for (0..frame_len) |frame_index| {
+            const local = GuardedList.at(frame, frame_index);
+            const local_index = @intFromEnum(local);
+            if (local_index >= global_local_index.len) arcInvariant("ARC frame-local inventory names an unknown local");
+            if (frame_index > 0 and @intFromEnum(frame_locals[frame_index - 1]) >= local_index) {
+                arcInvariant("ARC frame-local inventory is not unique and sorted");
+            }
+            if (global_local_index[local_index] != no_proc_local_index) {
+                arcInvariant("ARC frame-local inventory overlaps an active proc domain");
+            }
+            frame_locals[frame_index] = local;
+            global_local_index[local_index] = @intCast(frame_index);
+            mapped_len += 1;
+        }
+
+        var refcounted_count: usize = 0;
+        for (frame_locals) |local| {
+            const local_index = @intFromEnum(local);
+            if (local_index >= local_contains_refcounted.len) arcInvariant("ARC refcounted-local table did not cover frame local");
+            if (!local_contains_refcounted[local_index]) continue;
+            refcounted_locals_buffer[refcounted_count] = local;
+            refcounted_count += 1;
+
+            const resource_locals = [_]LIR.LocalId{
+                local,
+                solution.leaderOf(local),
+                solution.unitLocalOf(local),
+            };
+            for (resource_locals) |resource_local| {
+                const resource_frame_index = requiredFrameIndex(global_local_index, resource_local);
+                resource_bit_index[resource_frame_index] = arc_bit_needed;
+            }
+        }
+
+        var resource_count: usize = 0;
+        for (resource_bit_index, 0..) |*bit_index, frame_index| {
+            if (bit_index.* != arc_bit_needed) continue;
+            bit_index.* = @intCast(resource_count);
+            resource_locals_buffer[resource_count] = frame_locals[frame_index];
+            resource_count += 1;
+        }
+
+        // A solved borrow group may have members in several proc specs when
+        // ownership-neutral bodies share locals. Liveness rows are proc-local,
+        // so record exactly the members named by this frame rather than
+        // requiring every module-wide member to belong to it.
+        const group_member_counts = try allocator.alloc(u32, frame_len);
+        @memset(group_member_counts, 0);
+        for (frame_locals) |local| {
+            const leader_frame_index = requiredFrameIndex(global_local_index, solution.leaderOf(local));
+            group_member_counts[leader_frame_index] += 1;
+        }
+
+        var group_count: usize = 0;
+        for (frame_locals, 0..) |local, frame_index| {
+            const leader = solution.leaderOf(local);
+            _ = requiredFrameIndex(global_local_index, leader);
+            if (leader != local) continue;
+            if (group_member_counts[frame_index] <= 1) continue;
+            group_bit_index[frame_index] = @intCast(group_count);
+            group_leaders_buffer[group_count] = leader;
+            group_count += 1;
+        }
+
+        var value_use_count: usize = 0;
+        for (frame_locals, 0..) |local, frame_index| {
+            if (!solution.isBorrowedCallResult(local)) continue;
+            value_use_bit_index[frame_index] = @intCast(value_use_count);
+            value_use_locals_buffer[value_use_count] = local;
+            value_use_count += 1;
+        }
+
+        return .{
+            .global_local_index = global_local_index,
+            .frame_locals = frame_locals,
+            .resource_bit_index = resource_bit_index,
+            .resource_locals = resource_locals_buffer[0..resource_count],
+            .refcounted_locals = refcounted_locals_buffer[0..refcounted_count],
+            .group_bit_index = group_bit_index,
+            .group_leaders = group_leaders_buffer[0..group_count],
+            .value_use_bit_index = value_use_bit_index,
+            .value_use_locals = value_use_locals_buffer[0..value_use_count],
+        };
+    }
+
+    fn requiredFrameIndex(global_local_index: []const u32, local: LIR.LocalId) usize {
+        const local_index = @intFromEnum(local);
+        if (local_index >= global_local_index.len) arcInvariant("ARC proc domain queried an unknown local");
+        const frame_index = global_local_index[local_index];
+        if (frame_index == no_proc_local_index) arcInvariant("ARC proc domain is missing a required frame local");
+        return frame_index;
+    }
+
+    fn frameIndexOf(self: *const ProcArcDomain, local: LIR.LocalId) usize {
+        return requiredFrameIndex(self.global_local_index, local);
+    }
+
+    fn resourceBitOf(self: *const ProcArcDomain, local: LIR.LocalId) ?usize {
+        const bit_index = self.resource_bit_index[self.frameIndexOf(local)];
+        if (bit_index == no_arc_bit) return null;
+        return bit_index;
+    }
+
+    fn requiredResourceBitOf(self: *const ProcArcDomain, local: LIR.LocalId) usize {
+        return self.resourceBitOf(local) orelse arcInvariant("ARC ownership set queried a non-resource local");
+    }
+
+    fn resourceLocalAt(self: *const ProcArcDomain, bit_index: usize) LIR.LocalId {
+        if (bit_index >= self.resource_locals.len) arcInvariant("ARC ownership bit exceeded its proc domain");
+        return self.resource_locals[bit_index];
+    }
+
+    fn groupBitOf(self: *const ProcArcDomain, leader: LIR.LocalId) ?usize {
+        const bit_index = self.group_bit_index[self.frameIndexOf(leader)];
+        if (bit_index == no_arc_bit) return null;
+        return self.resource_locals.len + bit_index;
+    }
+
+    fn valueUseBitOf(self: *const ProcArcDomain, local: LIR.LocalId) ?usize {
+        const bit_index = self.value_use_bit_index[self.frameIndexOf(local)];
+        if (bit_index == no_arc_bit) return null;
+        return self.resource_locals.len + self.group_leaders.len + bit_index;
+    }
+
+    fn livenessBitLen(self: *const ProcArcDomain) usize {
+        return self.resource_locals.len + self.group_leaders.len + self.value_use_locals.len;
+    }
+
+    fn clearGlobalIndices(self: *ProcArcDomain) void {
+        for (self.frame_locals, 0..) |local, expected_index| {
+            const local_index = @intFromEnum(local);
+            if (self.global_local_index[local_index] != expected_index) {
+                arcInvariant("ARC proc domain index changed while active");
+            }
+            self.global_local_index[local_index] = no_proc_local_index;
+        }
+    }
 };
 
 /// Public `insert` function.
@@ -68,96 +256,37 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer solution.deinit();
     inserter.solution = &solution;
 
-    // Liveness-table bit layout: one dense raw bit per local whose layout
-    // contains refcounted data and per explicit ownership-unit/borrow-group
-    // representative selected for such a local by the solved ownership graph,
-    // then one bit per multi-member borrow group (any member reads it;
-    // definitions end the previous resource and explicit source reads transfer
-    // liveness to the new resource), then one bit per borrowed call-result
-    // local (value-use semantics: RC statements are not uses, string-match
-    // captures kill on the match edge). Unrelated scalar locals are not ARC
-    // resources and therefore do not widen every row.
-    const no_liveness_bit = std.math.maxInt(u32);
-    var raw_liveness_bit_index = try store.allocator.alloc(u32, store.localCount());
-    defer store.allocator.free(raw_liveness_bit_index);
-    @memset(raw_liveness_bit_index, no_liveness_bit);
-    var raw_liveness_needed = try store.allocator.alloc(bool, store.localCount());
-    defer store.allocator.free(raw_liveness_needed);
-    @memset(raw_liveness_needed, false);
-    for (local_contains_refcounted, 0..) |contains_refcounted, local_index| {
-        if (!contains_refcounted) continue;
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
-        raw_liveness_needed[local_index] = true;
-        raw_liveness_needed[@intFromEnum(solution.leaderOf(local))] = true;
-        raw_liveness_needed[@intFromEnum(solution.unitLocalOf(local))] = true;
-        for (solution.groupMembers(solution.leaderOf(local))) |member| {
-            raw_liveness_needed[member] = true;
-        }
-    }
-    var raw_liveness_bit_count: usize = 0;
-    for (raw_liveness_needed, 0..) |needed, local_index| {
-        if (!needed) continue;
-        raw_liveness_bit_index[local_index] = @intCast(raw_liveness_bit_count);
-        raw_liveness_bit_count += 1;
-    }
-    var group_bit_index = try store.allocator.alloc(u32, store.localCount());
-    defer store.allocator.free(group_bit_index);
-    @memset(group_bit_index, no_liveness_bit);
-    var group_leaders = std.ArrayList(LIR.LocalId).empty;
-    defer group_leaders.deinit(store.allocator);
-    for (0..store.localCount()) |local_index| {
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
-        const leader = solution.leaderOf(local);
-        if (leader != local) continue;
-        if (solution.groupMembers(leader).len <= 1) continue;
-        group_bit_index[local_index] = @intCast(group_leaders.items.len);
-        try group_leaders.append(store.allocator, leader);
-    }
-    var value_use_bit_index = try store.allocator.alloc(u32, store.localCount());
-    defer store.allocator.free(value_use_bit_index);
-    @memset(value_use_bit_index, no_liveness_bit);
-    var value_use_locals = std.ArrayList(LIR.LocalId).empty;
-    defer value_use_locals.deinit(store.allocator);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        const target = switch (store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))))) {
-            .assign_call => |assign| assign.target,
-            .assign_call_erased => |assign| assign.target,
-            else => continue,
-        };
-        if (!solution.isBorrowed(target)) continue;
-        if (value_use_bit_index[@intFromEnum(target)] != no_liveness_bit) continue;
-        value_use_bit_index[@intFromEnum(target)] = @intCast(value_use_locals.items.len);
-        try value_use_locals.append(store.allocator, target);
-    }
-    inserter.raw_liveness_bit_index = raw_liveness_bit_index;
-    inserter.raw_liveness_bit_count = raw_liveness_bit_count;
-    inserter.group_bit_index = group_bit_index;
-    inserter.group_leaders = group_leaders.items;
-    inserter.value_use_bit_index = value_use_bit_index;
-    inserter.value_use_locals = value_use_locals.items;
-    inserter.liveness_bit_len = raw_liveness_bit_count + group_leaders.items.len + value_use_locals.items.len;
+    var dismantles = try arc_dismantle.compute(store.allocator, store, layouts, &solution);
+    defer dismantles.deinit();
+    inserter.dismantles = &dismantles;
 
-    var read_cache_arena = std.heap.ArenaAllocator.init(store.allocator);
-    defer read_cache_arena.deinit();
-    inserter.read_cache_arena = &read_cache_arena;
-    inserter.read_cache_allocator = read_cache_arena.allocator();
-    var reads_before_rebind_cache = std.AutoHashMap(ReadBeforeRebindKey, std.bit_set.DynamicBitSetUnmanaged).init(store.allocator);
-    defer reads_before_rebind_cache.deinit();
-    inserter.reads_before_rebind_cache = &reads_before_rebind_cache;
-    var active_loop_keep_ids = std.AutoHashMap(usize, u32).init(store.allocator);
-    defer active_loop_keep_ids.deinit();
-    inserter.active_loop_keep_ids = &active_loop_keep_ids;
-    var loop_keep_reads_consumed = std.AutoHashMap(u32, void).init(store.allocator);
-    defer loop_keep_reads_consumed.deinit();
-    inserter.loop_keep_reads_consumed = &loop_keep_reads_consumed;
-    var reaches_loop_edge = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
-    defer reaches_loop_edge.deinit();
-    inserter.reaches_loop_edge = &reaches_loop_edge;
+    // Domains are active one proc at a time. This reusable exact map makes
+    // global LocalId -> proc-dense index lookup O(1) without allocating and
+    // clearing a module-wide table for every proc.
+    const proc_local_index = try store.allocator.alloc(u32, store.localCount());
+    defer store.allocator.free(proc_local_index);
+    @memset(proc_local_index, no_proc_local_index);
+
+    // Liveness graphs are built serially. Reuse one dense statement-to-node
+    // table for every build and clear exactly the statements each graph
+    // touched, avoiding hash lookup in the dataflow inner loop.
+    const stmt_node_indices = try store.allocator.alloc(u32, store.cfStmtCount());
+    defer store.allocator.free(stmt_node_indices);
+    @memset(stmt_node_indices, no_stmt_node_index);
+    inserter.stmt_node_indices = stmt_node_indices;
+
+    const base_proc_count = store.procSpecCount();
+    var liveness_arena = std.heap.ArenaAllocator.init(store.allocator);
+    defer liveness_arena.deinit();
+    inserter.liveness_allocator = liveness_arena.allocator();
+    const liveness_graphs = try store.allocator.alloc(?Inserter.ReadBeforeRebindGraph, base_proc_count);
+    defer store.allocator.free(liveness_graphs);
+    @memset(liveness_graphs, null);
+    inserter.liveness_graphs = liveness_graphs;
 
     // Original (ownership-neutral) bodies stay valid after each proc's base
-    // emission because rewriting clones statements; specialized variants
+    // emission because materialization clones statements; specialized variants
     // re-emit from these.
-    const base_proc_count = store.procSpecCount();
     var original_bodies = try store.allocator.alloc(?LIR.CFStmtId, base_proc_count);
     defer store.allocator.free(original_bodies);
     for (0..base_proc_count) |proc_index| {
@@ -171,24 +300,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .queue = .empty,
         .enabled = options.specialize,
         .original_bodies = original_bodies,
-        .unique_seed_masks = try store.allocator.alloc(?u64, base_proc_count),
     };
-    @memset(variants.unique_seed_masks, null);
     defer {
-        store.allocator.free(variants.unique_seed_masks);
         variants.map.deinit();
         variants.sigs.deinit(store.allocator);
         variants.queue.deinit(store.allocator);
     }
     inserter.variants = &variants;
-
-    var owned_param_override = try OwnedSet.init(store.allocator, store.localCount());
-    defer owned_param_override.deinit();
-    inserter.owned_param_override = &owned_param_override;
-
-    var unique_param_override = try OwnedSet.init(store.allocator, store.localCount());
-    defer unique_param_override.deinit();
-    inserter.unique_param_override = &unique_param_override;
 
     var emit_index: usize = 0;
     while (true) {
@@ -215,58 +333,82 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         emit_proc_spec.rc_ret_lenders = emit_sig.ret_lenders;
 
         const body = original_bodies[@intFromEnum(source_proc)] orelse continue;
+        const source_spec = store.getProcSpec(source_proc);
+        var domain_arena = std.heap.ArenaAllocator.init(store.allocator);
+        defer domain_arena.deinit();
+        var domain = try ProcArcDomain.init(
+            domain_arena.allocator(),
+            store,
+            &solution,
+            local_contains_refcounted,
+            proc_local_index,
+            source_spec.frame_locals,
+        );
+        defer domain.clearGlobalIndices();
+        inserter.current_domain = &domain;
+        defer inserter.current_domain = null;
+
         const emit_args = store.getProcSpec(emit_proc).args;
         inserter.current_proc = emit_proc;
         inserter.current_sig = emit_sig;
         inserter.current_proc_body = body;
-        inserter.clearReadsBeforeRebindCache();
+        inserter.current_source_proc = source_proc;
+
+        // The ownership-neutral body and emitted LIR outlive this iteration;
+        // all solver and materialization state does not. A single per-emission arena
+        // gives those exact temporary structures one lifetime and removes
+        // thousands of individually paired allocations and frees.
+        var emission_arena = std.heap.ArenaAllocator.init(store.allocator);
+        defer emission_arena.deinit();
+        inserter.emission_allocator = emission_arena.allocator();
+        inserter.solve_allocator = inserter.emission_allocator;
+        var death_scratch = std.ArrayList(LIR.LocalId).empty;
+        var transfer_position_scratch = std.ArrayList(u32).empty;
+        var retain_arg_scratch = std.ArrayList(LIR.LocalId).empty;
+        var dismantle_temps = std.ArrayList(LIR.LocalId).empty;
+        inserter.death_scratch = &death_scratch;
+        inserter.transfer_position_scratch = &transfer_position_scratch;
+        inserter.retain_arg_scratch = &retain_arg_scratch;
+        inserter.dismantle_temps = &dismantle_temps;
+        var arc_plans = ArcPlans{};
+        inserter.arc_plans = &arc_plans;
+        inserter.next_loop_keep_id = 1;
+        var loop_liveness_caches = std.ArrayList(LoopLivenessCache).empty;
+        try loop_liveness_caches.append(inserter.emission_allocator, .{});
+        inserter.loop_liveness_caches = &loop_liveness_caches;
+
+        var owned_param_override = try OwnedSet.init(inserter.emission_allocator, &domain);
+        defer owned_param_override.deinit();
+        inserter.owned_param_override = &owned_param_override;
+
+        var unique_param_override = try OwnedSet.init(inserter.emission_allocator, &domain);
+        defer unique_param_override.deinit();
+        inserter.unique_param_override = &unique_param_override;
 
         // Variant parameter positions demanded owned override the solved
         // borrowed binding for this emission only, and positions the demand
         // vector proves unique seed the body's born-unique view.
         const solved_sig = solution.sigOf(source_proc);
-        var override_locals_buffer: [64]LIR.LocalId = undefined;
-        var override_count: usize = 0;
-        var unique_locals_buffer: [64]LIR.LocalId = undefined;
-        var unique_count: usize = 0;
         const emit_params_for_overrides = store.getLocalSpan(emit_args);
         for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
             const param = GuardedList.at(emit_params_for_overrides, position);
             if (position >= 64) break;
             if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
                 owned_param_override.set(param);
-                override_locals_buffer[override_count] = param;
-                override_count += 1;
             }
             if ((emit_sig.unique_params >> @as(u6, @intCast(position))) & 1 != 0) {
                 unique_param_override.set(param);
-                unique_locals_buffer[unique_count] = param;
-                unique_count += 1;
             }
         }
-        defer for (override_locals_buffer[0..override_count]) |param| {
-            owned_param_override.unset(param);
-        };
-        defer for (unique_locals_buffer[0..unique_count]) |param| {
-            unique_param_override.unset(param);
-        };
 
-        var join_bodies = JoinBodyMap.init(store.allocator);
-        defer join_bodies.deinit();
-        var join_visit = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
-        defer join_visit.deinit();
-        try inserter.collectJoinBodies(body, &join_bodies, &join_visit);
-        inserter.join_bodies = &join_bodies;
-        defer inserter.join_bodies = null;
-        var rewritten_joins = RewrittenJoinMap.init(store.allocator);
-        defer {
-            var iter = rewritten_joins.valueIterator();
-            while (iter.next()) |entry| entry.keep.deinit();
-            rewritten_joins.deinit();
-        }
-        inserter.rewritten_joins = &rewritten_joins;
-        defer inserter.rewritten_joins = null;
-        var owned = try OwnedSet.init(store.allocator, store.localCount());
+        const join_bodies = solution.joinBodiesOf(source_proc);
+        inserter.join_bodies = join_bodies;
+        defer inserter.join_bodies = &.{};
+        const final_joins = try inserter.emission_allocator.alloc(?LIR.JoinPoint, join_bodies.len);
+        @memset(final_joins, null);
+        inserter.final_joins = final_joins;
+        defer inserter.final_joins = &.{};
+        var owned = try OwnedSet.init(inserter.emission_allocator, &domain);
         defer owned.deinit();
         const emit_params_for_owned = store.getLocalSpan(emit_args);
         for (0..GuardedList.borrowLen(emit_params_for_owned)) |position| {
@@ -276,27 +418,37 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             }
         }
 
-        var solve_arena = std.heap.ArenaAllocator.init(store.allocator);
-        defer solve_arena.deinit();
-        inserter.solve_allocator = solve_arena.allocator();
-        var join_summaries = JoinSummaryMap.init(solve_arena.allocator());
-        var switch_summaries = SwitchSummaryMap.init(solve_arena.allocator());
-        inserter.join_summaries = &join_summaries;
-        inserter.switch_summaries = &switch_summaries;
+        const join_summaries = try inserter.emission_allocator.alloc(?*JoinSummary, join_bodies.len);
+        @memset(join_summaries, null);
+        const switch_summaries = try inserter.emission_allocator.alloc(?*SwitchSummary, solution.switchCountOf(source_proc));
+        @memset(switch_summaries, null);
+        inserter.join_summaries = join_summaries;
+        inserter.switch_summaries = switch_summaries;
         defer {
-            var solved_joins = join_summaries.valueIterator();
-            while (solved_joins.next()) |summary| {
-                _ = inserter.active_loop_keep_ids.remove(@intFromPtr(&summary.*.body_keep));
-            }
-            inserter.join_summaries = null;
-            inserter.switch_summaries = null;
+            inserter.join_summaries = &.{};
+            inserter.switch_summaries = &.{};
         }
         try inserter.solveProcSummaries(body, &owned);
 
-        const rewritten_body = try inserter.rewritePath(body, &owned, .{});
-        const elided_body = try elideImmediateRcPairs(store, rewritten_body);
-        const join_points = try inserter.procJoinPoints(elided_body);
-        store.setProcSpecBodyAndJoinPoints(emit_proc, elided_body, join_points);
+        const rewritten_body = try inserter.materializeArcPlans();
+        const join_points = try inserter.finishFinalJoinPoints();
+        store.setProcSpecBodyAndJoinPoints(emit_proc, rewritten_body, join_points);
+
+        // Dismantle temporaries are fresh locals referenced by the emitted
+        // body; the frame must own them. They were appended to the store in
+        // ascending id order above every existing local, so concatenating
+        // keeps the frame span sorted.
+        if (dismantle_temps.items.len > 0) {
+            const emit_spec = store.getProcSpec(emit_proc);
+            const old_frame = store.getLocalSpan(emit_spec.frame_locals);
+            const old_len = GuardedList.borrowLen(old_frame);
+            var frame = try std.ArrayList(LIR.LocalId).initCapacity(store.allocator, old_len + dismantle_temps.items.len);
+            defer frame.deinit(store.allocator);
+            for (0..old_len) |i| frame.appendAssumeCapacity(GuardedList.at(old_frame, i));
+            frame.appendSliceAssumeCapacity(dismantle_temps.items);
+            const frame_locals = try store.addLocalSpan(frame.items);
+            store.getProcSpecPtr(emit_proc).frame_locals = frame_locals;
+        }
     }
 
     if (builtin.mode == .Debug) {
@@ -308,7 +460,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             else
                 variants.sigs.items[proc_index - solution.sigs.len];
         }
-        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, boxy_rc_descs, .{ .sigs = all_sigs }, options.roots);
+        const certified_boxy_rc_descs = try computeBoxyRcDescs(store);
+        defer store.allocator.free(certified_boxy_rc_descs);
+        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, certified_boxy_rc_descs, .{ .sigs = all_sigs }, options.roots);
     }
 }
 
@@ -519,34 +673,167 @@ const VariantTable = struct {
     enabled: bool,
     /// Ownership-neutral bodies of the base procs, for variant re-emission.
     original_bodies: []const ?LIR.CFStmtId,
-    /// Lazily-computed parameter positions whose unique seed can eliminate a
-    /// runtime uniqueness check in the original body.
-    unique_seed_masks: []?u64,
 };
 
-const RewriteOptions = struct {
-    boundaries: []const RewriteBoundary = &.{},
-    loop_keep: ?*const OwnedSet = null,
-    loop_keep_id: u32 = 0,
+/// Explicit loop-liveness input. The identity is allocated with the join
+/// summary and travels with the keep-set; no consumer reconstructs it from a
+/// pointer address.
+const LoopKeep = struct {
+    set: *const OwnedSet,
+    id: u32,
 };
 
-const RewriteBoundary = struct {
-    stop: LIR.CFStmtId,
-    replacement: LIR.CFStmtId,
-    keep: *const OwnedSet,
+const LoopLivenessCache = struct {
+    /// Dense liveness-node rows for one compact loop identity. Null rows are
+    /// outside the forward closure of that join's two explicit regions.
+    rows: []?ExactBitSet = &.{},
+    active: ?std.bit_set.DynamicBitSetUnmanaged = null,
+    keep_reads: ?ExactBitSet = null,
+    /// The join regions interpreted under this loop identity. Solving their
+    /// forward closure up front makes every later query a direct node lookup,
+    /// including sibling switch arms that the first query did not traverse.
+    region_roots: [2]LIR.CFStmtId = undefined,
+    initialized: bool = false,
+    consumed_keep_bits: bool = false,
+    dirty: bool = false,
 };
 
-const ReadBeforeRebindKey = struct {
-    start: LIR.CFStmtId,
-    loop_keep_id: u32,
+/// One exact finite-lattice bit set. Procedure-local ARC domains commonly fit
+/// in one machine word; those sets stay inline and wider producer-authored
+/// domains allocate exact words. Ownership and liveness use the same
+/// representation so snapshots preserve identical operations and ordering.
+const ExactBitSet = struct {
+    bit_len: usize,
+    storage: union(enum) {
+        inline_word: usize,
+        allocated: std.bit_set.DynamicBitSetUnmanaged,
+    },
+
+    fn initEmpty(allocator: Allocator, bit_len: usize) Allocator.Error!ExactBitSet {
+        if (bit_len <= @bitSizeOf(usize)) {
+            return .{ .bit_len = bit_len, .storage = .{ .inline_word = 0 } };
+        }
+        return .{
+            .bit_len = bit_len,
+            .storage = .{ .allocated = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, bit_len) },
+        };
+    }
+
+    fn deinit(self: *ExactBitSet, allocator: Allocator) void {
+        switch (self.storage) {
+            .inline_word => {},
+            .allocated => |*bits| bits.deinit(allocator),
+        }
+        self.* = undefined;
+    }
+
+    fn clone(self: *const ExactBitSet, allocator: Allocator) Allocator.Error!ExactBitSet {
+        return switch (self.storage) {
+            .inline_word => |bits| .{ .bit_len = self.bit_len, .storage = .{ .inline_word = bits } },
+            .allocated => |bits| .{ .bit_len = self.bit_len, .storage = .{ .allocated = try bits.clone(allocator) } },
+        };
+    }
+
+    fn set(self: *ExactBitSet, bit: usize) void {
+        std.debug.assert(bit < self.bit_len);
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* |= @as(usize, 1) << @intCast(bit),
+            .allocated => |*bits| bits.set(bit),
+        }
+    }
+
+    fn unset(self: *ExactBitSet, bit: usize) void {
+        std.debug.assert(bit < self.bit_len);
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* &= ~(@as(usize, 1) << @intCast(bit)),
+            .allocated => |*bits| bits.unset(bit),
+        }
+    }
+
+    fn isSet(self: *const ExactBitSet, bit: usize) bool {
+        std.debug.assert(bit < self.bit_len);
+        return switch (self.storage) {
+            .inline_word => |bits| bits & (@as(usize, 1) << @intCast(bit)) != 0,
+            .allocated => |bits| bits.isSet(bit),
+        };
+    }
+
+    fn unsetAll(self: *ExactBitSet) void {
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* = 0,
+            .allocated => |*bits| bits.unsetAll(),
+        }
+    }
+
+    fn setUnion(self: *ExactBitSet, other: ExactBitSet) void {
+        std.debug.assert(self.bit_len == other.bit_len);
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* |= other.storage.inline_word,
+            .allocated => |*bits| bits.setUnion(other.storage.allocated),
+        }
+    }
+
+    fn setIntersection(self: *ExactBitSet, other: ExactBitSet) void {
+        std.debug.assert(self.bit_len == other.bit_len);
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* &= other.storage.inline_word,
+            .allocated => |*bits| bits.setIntersection(other.storage.allocated),
+        }
+    }
+
+    fn count(self: *const ExactBitSet) usize {
+        return switch (self.storage) {
+            .inline_word => |bits| @popCount(bits),
+            .allocated => |bits| bits.count(),
+        };
+    }
+
+    fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
+        if (options.kind != .set) @compileError("ARC exact sets iterate only set bits");
+        return union(enum) {
+            inline_word: usize,
+            allocated: std.bit_set.DynamicBitSetUnmanaged.Iterator(options),
+
+            fn next(self: *@This()) ?usize {
+                return switch (self.*) {
+                    .inline_word => |*remaining| {
+                        if (remaining.* == 0) return null;
+                        const bit = switch (options.direction) {
+                            .forward => @ctz(remaining.*),
+                            .reverse => @bitSizeOf(usize) - 1 - @clz(remaining.*),
+                        };
+                        remaining.* &= ~(@as(usize, 1) << @intCast(bit));
+                        return bit;
+                    },
+                    .allocated => |*iter| iter.next(),
+                };
+            }
+        };
+    }
+
+    fn iterator(self: *const ExactBitSet, comptime options: std.bit_set.IteratorOptions) Iterator(options) {
+        return switch (self.storage) {
+            .inline_word => |bits| .{ .inline_word = bits },
+            .allocated => |*bits| .{ .allocated = bits.iterator(options) },
+        };
+    }
+
+    fn eql(self: *const ExactBitSet, other: ExactBitSet) bool {
+        if (self.bit_len != other.bit_len) return false;
+        return switch (self.storage) {
+            .inline_word => |bits| bits == other.storage.inline_word,
+            .allocated => |bits| bits.eql(other.storage.allocated),
+        };
+    }
 };
 
 // Join-summary solver
 //
-// One structured abstract interpretation per proc emission computes, before
-// any rewriting, each join's entry keep-set, body keep-set, and body
-// reachability, plus each continuation-carrying switch's merged branch exit
-// state. The rewrite walk reads these summaries rather than deriving them.
+// One structured abstract interpretation per proc emission computes each
+// join's entry keep-set, body keep-set, and body reachability, plus each
+// continuation-carrying switch's merged branch exit state. The same
+// dependency visits update stable ArcPlan slots; there is no second ownership
+// walk after convergence.
 //
 // Domain and soundness: the abstract state is a must-owned unit set — a bit
 // is present at a program point only when every path represented by that
@@ -568,7 +855,7 @@ const ReadBeforeRebindKey = struct {
 // their join statement. The walk count is therefore bounded by the bit
 // budget of the accumulators, and each walk is linear in region size.
 //
-// The equations the rewrite walk consumes:
+// The equations that update solver-owned ArcPlan slots:
 // - entry_state(J): intersection of the must-owned states reaching J's join
 //   statement.
 // - entry_keep(J): entry_state filtered to units whose liveness group is
@@ -587,6 +874,7 @@ const ReadBeforeRebindKey = struct {
 //   continuation statement without crossing a join frame.
 
 const JoinSummary = struct {
+    index: u32,
     id: LIR.JoinPointId,
     start: LIR.CFStmtId,
     params: LIR.LocalSpan,
@@ -596,22 +884,31 @@ const JoinSummary = struct {
     /// Must-owned state at the join statement, intersected over arrivals.
     entry_state: OwnedSet,
     entry_keep: OwnedSet,
-    /// Pointer-stable: loop keep-set registrations and rewrite options
-    /// reference this set in place.
+    /// Pointer-stable: loop liveness boundary facts and structured plan
+    /// contexts reference this set in place.
     body_keep: OwnedSet,
+    /// Monotone intersection of the latest state from every eligible jump
+    /// site. When one site shrinks, intersecting only that new state produces
+    /// the exact new all-site meet.
+    jump_common: OwnedSet,
     body_keep_seeded: bool = false,
     body_reachable: bool = false,
     loop_keep_id: u32,
+    remainder_plan: u32,
+    body_plan: u32,
+    arrival_plans: std.ArrayList(u32) = .empty,
+    jump_plans: std.ArrayList(u32) = .empty,
     /// Context the join statement was first reached in; remainder and body
     /// segments derive theirs from it.
     origin_ctx: SolveContext,
     /// Must-owned state per eligible jump statement targeting this join.
-    jump_states: std.AutoHashMap(LIR.CFStmtId, OwnedSet),
+    jump_states: []?OwnedSet,
     process_queued: bool = false,
     body_walk_queued: bool = false,
 };
 
 const SwitchSummary = struct {
+    index: u32,
     start: LIR.CFStmtId,
     continuation: LIR.CFStmtId,
     /// Intersection of branch exit states reaching the continuation; only
@@ -619,6 +916,15 @@ const SwitchSummary = struct {
     common: OwnedSet,
     reached: bool = false,
     resume_ctx: SolveContext,
+    continuation_plan: u32,
+    exit_plans: std.ArrayList(u32) = .empty,
+    /// Plans inside a join frame that structurally encounter this
+    /// continuation before any ordinary branch makes it reachable. They are
+    /// initially completed as independent paths; the first contributing
+    /// branch converts them to shared-continuation stops using their exact
+    /// saved state.
+    latent_stop_plans: std.ArrayList(u32) = .empty,
+    control_plans: std.ArrayList(u32) = .empty,
     resume_queued: bool = false,
 };
 
@@ -628,47 +934,46 @@ const SwitchSummary = struct {
 /// reaching an enclosing continuation contributes nothing.
 const SolveStop = struct {
     stmt: LIR.CFStmtId,
-    summary: ?*SwitchSummary,
+    summary: *SwitchSummary,
+    contributes: bool,
     parent: ?*const SolveStop,
 };
 
 /// Join bodies the current segment is nested inside; jumps targeting one of
 /// these are loop back edges and do not feed that join's body keep.
 const SolveBodyScope = struct {
-    join: LIR.JoinPointId,
+    join_index: u32,
     parent: ?*const SolveBodyScope,
 };
 
 const SolveContext = struct {
-    loop_keep: ?*const OwnedSet = null,
-    loop_keep_id: u32 = 0,
+    loop_keep: ?LoopKeep = null,
     stops: ?*const SolveStop = null,
     body_scope: ?*const SolveBodyScope = null,
 };
-
-const JoinSummaryMap = std.AutoHashMap(LIR.JoinPointId, *JoinSummary);
-const SwitchSummaryMap = std.AutoHashMap(LIR.CFStmtId, *SwitchSummary);
 
 const SolveSegment = struct {
     cursor: LIR.CFStmtId,
     owned: OwnedSet,
     ctx: SolveContext,
+    plan_index: u32,
+    plan_version: u32,
 };
 
 const SolveTask = union(enum) {
     segment: *SolveSegment,
-    join_process: LIR.JoinPointId,
-    body_walk: LIR.JoinPointId,
-    switch_resume: LIR.CFStmtId,
+    join_process: u32,
+    body_walk: u32,
+    switch_resume: u32,
 };
 
 fn cloneOwnedSetWith(allocator: Allocator, source: *const OwnedSet) ResourceError!OwnedSet {
     const bits = try source.bits.clone(allocator);
-    return .{ .allocator = allocator, .bits = bits };
+    return .{ .allocator = allocator, .domain = source.domain, .bits = bits };
 }
 
 fn assignOwnedSet(target: *OwnedSet, source: *const OwnedSet) void {
-    if (target.len() != source.len()) arcInvariant("ARC owned-set assignment length mismatch");
+    target.requireSameDomain(source);
     target.bits.unsetAll();
     target.bits.setUnion(source.bits);
 }
@@ -682,65 +987,157 @@ fn intersectOwnedSetChanged(target: *OwnedSet, other: *const OwnedSet) bool {
     return target.bits.count() != before;
 }
 
-fn rewriteBoundaryForStop(boundaries: []const RewriteBoundary, cursor: LIR.CFStmtId) ?RewriteBoundary {
-    var i = boundaries.len;
-    while (i > 0) {
-        i -= 1;
-        if (boundaries[i].stop == cursor) return boundaries[i];
-    }
-    return null;
-}
+/// Sentinel outside the compact plan-index domain.
+const no_plan: u32 = std.math.maxInt(u32);
 
-fn replacementReached(boundaries: []const RewriteBoundary, cursor: LIR.CFStmtId) bool {
-    var i = boundaries.len;
-    while (i > 0) {
-        i -= 1;
-        if (boundaries[i].replacement == cursor) return true;
-    }
-    return false;
-}
+/// Concrete release form selected during planning. Materialization does not
+/// consult solved maybe-initialized metadata to decide which LIR statement to
+/// emit.
+const ReleaseDecision = union(enum) {
+    initialized: LIR.LocalId,
+    maybe_initialized: struct {
+        value: LIR.LocalId,
+        condition: LIR.LocalId,
+        condition_mask: u64,
+    },
+};
 
-fn appendRewriteBoundary(
-    allocator: std.mem.Allocator,
-    boundaries: []const RewriteBoundary,
-    boundary: RewriteBoundary,
-) ResourceError![]RewriteBoundary {
-    const nested = try allocator.alloc(RewriteBoundary, boundaries.len + 1);
-    @memcpy(nested[0..boundaries.len], boundaries);
-    nested[boundaries.len] = boundary;
-    return nested;
-}
-
-const LinearRewriteFrame = struct {
-    stmt: LIR.CFStmtId,
-    head: LIR.CFStmtId,
+/// One solver-owned linear decision. The small lists retain their capacity
+/// across fixed-point revisits; only the converged contents are consumed by
+/// materialization.
+const ArcPlanStep = struct {
+    initialized: bool = false,
+    stmt: LIR.CFStmtId = undefined,
+    pre_release: ?ReleaseDecision = null,
+    pre_release_extra: std.ArrayList(ReleaseDecision) = .empty,
+    pre_retain: std.ArrayList(LIR.LocalId) = .empty,
     retain_assign_ref_target: bool = true,
     retain_set_target: bool = true,
-    /// Low-level retained argument positions whose ownership unit moves into
-    /// the result instead of being retained.
+    preserve_consumed_args: u64 = 0,
     transfer_mask: u64 = 0,
-    /// Aggregate operand positions whose ownership unit moves into the
-    /// constructed value instead of being retained.
-    transfer_positions: []const u32 = &.{},
-    /// Move the tag payload or packed capture instead of retaining it.
+    transfer_positions: std.ArrayList(u32) = .empty,
     transfer_single: bool = false,
-    /// Skip the low-level retain_result incref: the result binding is
-    /// borrowed and emits no RC statements.
+    reuse_unique: bool = false,
     skip_result_retain: bool = false,
-    /// Runtime uniqueness checks this low-level statement proved redundant,
-    /// by argument position.
     unique_args: u64 = 0,
-    /// The packed callable reuse allocation is statically unique here.
-    packed_reuse_unique: bool = false,
-    /// Retain the call result right after the call: the callee returns a
-    /// borrow of its arguments but this binding needs its own unit.
     retain_call_result: bool = false,
-    /// Mode-specialized variant this call site targets instead of the
-    /// original callee.
+    call_callee: ?LIR.LirProcSpecId = null,
+    call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     call_target_override: ?LIR.LirProcSpecId = null,
-    /// Locals whose lifetime ends at this statement; released right after it.
-    /// Owned by the frame and freed when the frame is patched or destroyed.
-    post_release: []const LIR.LocalId = &.{},
+    post_release: std.ArrayList(LIR.LocalId) = .empty,
+
+    fn reset(self: *ArcPlanStep, stmt: LIR.CFStmtId) void {
+        self.initialized = true;
+        self.stmt = stmt;
+        self.pre_release = null;
+        self.pre_release_extra.clearRetainingCapacity();
+        self.pre_retain.clearRetainingCapacity();
+        self.retain_assign_ref_target = true;
+        self.retain_set_target = true;
+        self.preserve_consumed_args = 0;
+        self.transfer_mask = 0;
+        self.transfer_positions.clearRetainingCapacity();
+        self.transfer_single = false;
+        self.reuse_unique = false;
+        self.skip_result_retain = false;
+        self.unique_args = 0;
+        self.retain_call_result = false;
+        self.call_callee = null;
+        self.call_demanded = arc_sig.RcSig.all_owned;
+        self.call_target_override = null;
+        self.post_release.clearRetainingCapacity();
+    }
+};
+
+const ArcPlanTerminal = union(enum) {
+    none,
+    /// A switch branch reached its shared continuation. `target_plan` is a
+    /// structured plan identity, not a statement-id lookup.
+    stop: struct {
+        switch_index: u32,
+        target_plan: u32,
+        releases: std.ArrayList(ReleaseDecision),
+    },
+    join: struct {
+        stmt: LIR.CFStmtId,
+        join_index: u32,
+        remainder_plan: u32,
+        body_plan: u32,
+        body_reachable: bool,
+        releases: std.ArrayList(ReleaseDecision),
+    },
+    switch_stmt: struct {
+        stmt: LIR.CFStmtId,
+        branch_plans: []u32,
+        default_plan: u32,
+        continuation_plan: u32,
+        continuation_reachable: bool,
+    },
+    initialized_payload_switch: struct {
+        stmt: LIR.CFStmtId,
+        initialized_plan: u32,
+        uninitialized_plan: u32,
+    },
+    str_match: struct {
+        stmt: LIR.CFStmtId,
+        match_plan: u32,
+        miss_plan: u32,
+        capture_retain_count: u16,
+    },
+    boxy_tag_match: struct {
+        stmt: LIR.CFStmtId,
+        match_plan: u32,
+        miss_plan: u32,
+    },
+    str_match_set: struct {
+        stmt: LIR.CFStmtId,
+        match_plans: []u32,
+        miss_plan: u32,
+        capture_retain_counts: []u16,
+    },
+    jump: struct {
+        stmt: LIR.CFStmtId,
+        join_index: u32,
+        releases: std.ArrayList(ReleaseDecision),
+    },
+    terminal: struct {
+        stmt: LIR.CFStmtId,
+        releases: std.ArrayList(ReleaseDecision),
+        retain_value: ?LIR.LocalId,
+    },
+};
+
+/// A stable structured-path/context slot. The solver overwrites its steps and
+/// terminal whenever the exact dependency that supplies its entry state
+/// changes. `previous_terminal` preserves child plan identities across that
+/// overwrite; those identities are what distinguish the same statement under
+/// different structured ownership contexts.
+const ArcPlan = struct {
+    start: LIR.CFStmtId,
+    steps: std.ArrayList(ArcPlanStep) = .empty,
+    step_count: u32 = 0,
+    terminal: ArcPlanTerminal = .none,
+    previous_terminal: ArcPlanTerminal = .none,
+};
+
+const ArcPlanMetadata = struct {
+    /// Incremented whenever a dependency schedules a replacement visit.
+    /// Older queued visits are ignored before they can overwrite the slot.
+    version: u32 = 0,
+    scheduled: bool = false,
+    terminal_state: ?OwnedSet = null,
+    stop_switch_index: u32 = no_plan,
+    latent_stop_switch_index: u32 = no_plan,
+    latent_stop_state: ?OwnedSet = null,
+    control_switch_index: u32 = no_plan,
+    arrival_join_index: u32 = no_plan,
+    jump_join_index: u32 = no_plan,
+};
+
+const ArcPlans = struct {
+    plans: std.ArrayList(ArcPlan) = .empty,
+    metadata: std.ArrayList(ArcPlanMetadata) = .empty,
+    root: u32 = no_plan,
 };
 
 const Inserter = struct {
@@ -749,6 +1146,12 @@ const Inserter = struct {
     local_contains_refcounted: []const bool = &.{},
     boxy_rc_descs: []const ?LIR.BoxyDescRef = &.{},
     solution: *const arc_solve.Solution = undefined,
+    /// Field takes solved against the ownership-neutral bodies; consulted by
+    /// statement id, so base and variant emissions share one solve.
+    dismantles: *const arc_dismantle.Dismantles = undefined,
+    /// Temporaries synthesized while dismantling containers in the proc
+    /// currently being emitted; appended to its frame locals afterward.
+    dismantle_temps: *std.ArrayList(LIR.LocalId) = undefined,
     /// Mode-specialized variant table (shared across the emission worklist).
     variants: *VariantTable = undefined,
     /// Parameter locals whose borrowed solved binding is overridden to owned
@@ -757,991 +1160,444 @@ const Inserter = struct {
     /// Parameter locals the current variant's demand vector seeds as born
     /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
     unique_param_override: *OwnedSet = undefined,
-    /// Ownership signature of the proc currently being rewritten.
+    /// Exact resource and liveness bit domain of the proc currently emitted.
+    /// It is built directly from that proc's explicit `frame_locals` span.
+    current_domain: ?*const ProcArcDomain = null,
+    /// Ownership signature of the proc currently being materialized.
     current_sig: arc_sig.RcSig = arc_sig.RcSig.all_owned,
-    /// Per-proc cache for "which locals may be read before they are rebound
-    /// from this statement?" ARC asks that question many times while deciding
-    /// where ownership units die. Generated record parsers create many
-    /// field-slot locals and join paths, so walking the graph once per local
-    /// becomes quadratic. This cache stores the same information under the
-    /// statement transfer rules: reads happen before a statement's target
-    /// rebinding kills the previous value.
-    reads_before_rebind_cache: *std.AutoHashMap(ReadBeforeRebindKey, std.bit_set.DynamicBitSetUnmanaged) = undefined,
-    read_cache_arena: *std.heap.ArenaAllocator = undefined,
-    read_cache_allocator: Allocator = undefined,
-    /// Raw liveness-bit index per local. Locals whose committed layout
-    /// contains refcounted data and their explicit solved ownership-unit /
-    /// borrow-group representatives receive bits; all others hold maxInt.
-    raw_liveness_bit_index: []const u32 = &.{},
-    raw_liveness_bit_count: usize = 0,
-    /// Group-bit index per local: leaders of multi-member borrow groups map
-    /// to a dense index (others hold maxInt). Group bits live after the raw
-    /// resource-local bits in the liveness table.
-    group_bit_index: []const u32 = &.{},
-    /// Leader local per dense group-bit index.
-    group_leaders: []const LIR.LocalId = &.{},
-    /// Value-use bit index per local: borrowed call-result locals map to a
-    /// dense index (others hold maxInt). Value-use bits live after the raw
-    /// resource-local and group bits in the liveness table.
-    value_use_bit_index: []const u32 = &.{},
-    /// Local per dense value-use bit index.
-    value_use_locals: []const LIR.LocalId = &.{},
-    /// Total liveness-table bit width: raw resource locals, then group bits,
-    /// then value-use bits.
-    liveness_bit_len: usize = 0,
-    /// Live mapping from an OwnedSet address used as a loop keep-set to its
-    /// explicit cache identity. IDs are never reused within one proc emission,
-    /// and the map entry is removed before the keep-set storage is destroyed.
-    active_loop_keep_ids: *std.AutoHashMap(usize, u32) = undefined,
-    /// Loop keep identities whose cached liveness rows read keep-set bits at
-    /// a loop edge; only these need purging when their keep-set shrinks.
-    loop_keep_reads_consumed: *std.AutoHashMap(u32, void) = undefined,
-    /// Statements from which a `loop_continue`/`loop_break` is reachable,
-    /// discovered by keep-free liveness builds. Only these statements' rows
-    /// depend on a loop keep-set; every other loop-keyed query is answered
-    /// by the shared keep-free row, which keeps the row cache linear in
-    /// proc size instead of growing per join nesting level.
-    reaches_loop_edge: *std.AutoHashMap(LIR.CFStmtId, void) = undefined,
+    /// Direct cache per compact loop identity; each entry is indexed by the
+    /// immutable liveness graph's compact node number.
+    loop_liveness_caches: *std.ArrayList(LoopLivenessCache) = undefined,
+    /// Reusable dense original-statement id -> active liveness-node index.
+    stmt_node_indices: []u32 = &.{},
+    /// Immutable ownership-neutral liveness graph per source proc. Variants
+    /// share their source graph and its keep-free fixed point.
+    liveness_graphs: []?ReadBeforeRebindGraph = &.{},
+    liveness_allocator: Allocator = undefined,
+    /// Source proc whose immutable graph currently occupies the reusable
+    /// dense statement-to-node table.
+    active_liveness_source: ?LIR.LirProcSpecId = null,
+    current_source_proc: LIR.LirProcSpecId = undefined,
     next_loop_keep_id: u32 = 1,
     // Set to the proc being rewritten before any diagnostic or helper reads it.
     current_proc: LIR.LirProcSpecId = undefined,
     current_proc_body: LIR.CFStmtId = undefined,
     current_rewrite_stmt: ?LIR.CFStmtId = null,
-    join_bodies: ?*const JoinBodyMap = null,
-    rewritten_joins: ?*RewrittenJoinMap = null,
-    /// Per-emission join summaries computed by the solver before rewriting.
-    join_summaries: ?*JoinSummaryMap = null,
+    join_bodies: []const arc_solve.JoinBody = &.{},
+    /// Join metadata accumulated when each final join is materialized,
+    /// avoiding a second discovery walk over the finished graph.
+    final_joins: []?LIR.JoinPoint = &.{},
+    /// Per-emission join summaries computed alongside ArcPlan decisions.
+    join_summaries: []?*JoinSummary = &.{},
     /// Per-emission switch-continuation summaries from the same solve.
-    switch_summaries: ?*SwitchSummaryMap = null,
+    switch_summaries: []?*SwitchSummary = &.{},
     /// Arena backing one emission's solver structures.
     solve_allocator: Allocator = undefined,
+    /// Arena backing all non-output state for the current proc emission.
+    emission_allocator: Allocator = undefined,
+    arc_plans: *ArcPlans = undefined,
+    materialized_plans: []?LIR.CFStmtId = &.{},
+    materialized_joins: []?LIR.CFStmtId = &.{},
+    /// Reused planning buffers. Their contents are ephemeral; every slice
+    /// retained by an ArcPlan is copied into the proc arena first.
+    death_scratch: *std.ArrayList(LIR.LocalId) = undefined,
+    transfer_position_scratch: *std.ArrayList(u32) = undefined,
+    retain_arg_scratch: *std.ArrayList(LIR.LocalId) = undefined,
 
     const CallArgOwnership = struct {
-        retain_args: std.ArrayList(LIR.LocalId) = .empty,
-        transfer_args: std.ArrayList(LIR.LocalId) = .empty,
+        retain_args: []const LIR.LocalId = &.{},
         /// Ownership vector the call site demands; differs from the callee's
         /// solved signature only when borrowed positions upgrade to moves.
         demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
-
-        fn deinit(self: *CallArgOwnership, allocator: std.mem.Allocator) void {
-            self.retain_args.deinit(allocator);
-            self.transfer_args.deinit(allocator);
-        }
     };
 
-    const RewriteTask = union(enum) {
-        path: *RewritePathTask,
-        join: *RewriteJoinTask,
-        switch_no_continuation: *RewriteSwitchNoContinuationTask,
-        switch_after_continuation: *RewriteSwitchContinuationTask,
-        switch_finish_continuation: *RewriteSwitchContinuationTask,
-        initialized_payload_switch: *RewriteInitializedPayloadSwitchTask,
-        str_match: *RewriteStrMatchTask,
-        str_match_set: *RewriteStrMatchSetTask,
-        boxy_tag_match: *RewriteBoxyTagMatchTask,
+    const MaterializeTask = union(enum) {
+        path: MaterializePathTask,
+        control: *MaterializeControlTask,
+        join: *MaterializeJoinTask,
+        stop: *MaterializeStopTask,
     };
 
-    const RewritePathTask = struct {
-        cursor: LIR.CFStmtId,
-        owned: OwnedSet,
-        options: RewriteOptions,
-        frames: std.ArrayList(LinearRewriteFrame),
+    const MaterializePathTask = struct {
+        plan_index: u32,
         result: *LIR.CFStmtId,
     };
 
-    const RewriteJoinTask = struct {
-        start: LIR.CFStmtId,
-        id: LIR.JoinPointId,
-        params: LIR.LocalSpan,
-        maybe_uninitialized_params: LIR.LocalSpan = .empty(),
-        maybe_uninitialized_conditions: LIR.LocalSpan = .empty(),
-        maybe_uninitialized_condition_masks: LIR.U64Span = .empty(),
-        body: LIR.CFStmtId = undefined,
+    const MaterializeControlTask = struct {
+        plan_index: u32,
+        child_results: []LIR.CFStmtId,
+        result: *LIR.CFStmtId,
+    };
+
+    const MaterializeJoinTask = struct {
+        plan_index: u32,
         remainder: LIR.CFStmtId = undefined,
-        incoming_owned: OwnedSet,
-        entry_keep: OwnedSet,
-        body_keep: OwnedSet,
-        body_reachable: bool,
-        loop_keep_id: u32,
-        frames: std.ArrayList(LinearRewriteFrame),
+        body: LIR.CFStmtId = undefined,
         result: *LIR.CFStmtId,
     };
 
-    const RewriteSwitchNoContinuationTask = struct {
-        start: LIR.CFStmtId,
-        cond: LIR.LocalId,
-        branches: LIR.CFSwitchBranchSpan,
-        branch_results: []LIR.CFStmtId,
-        default_branch: LIR.CFStmtId = undefined,
-        default_is_cold: bool,
-        continuation: ?LIR.CFStmtId,
-        frames: std.ArrayList(LinearRewriteFrame),
+    const MaterializeStopTask = struct {
+        plan_index: u32,
+        target: LIR.CFStmtId = undefined,
         result: *LIR.CFStmtId,
     };
 
-    const RewriteSwitchContinuationTask = struct {
-        start: LIR.CFStmtId,
-        cond: LIR.LocalId,
-        branches: LIR.CFSwitchBranchSpan,
-        original_continuation: LIR.CFStmtId,
-        continuation: LIR.CFStmtId = undefined,
-        branch_results: []LIR.CFStmtId,
-        default_branch: LIR.CFStmtId = undefined,
-        default_is_cold: bool,
-        entry_owned: OwnedSet,
-        common: OwnedSet,
-        parent_options: RewriteOptions,
-        nested_boundaries: []RewriteBoundary = &.{},
-        frames: std.ArrayList(LinearRewriteFrame),
-        result: *LIR.CFStmtId,
-    };
+    fn materializeArcPlans(self: *Inserter) ResourceError!LIR.CFStmtId {
+        if (self.arc_plans.root == no_plan) arcInvariant("ARC materialized plans without a root");
+        const materialized = try self.emission_allocator.alloc(?LIR.CFStmtId, self.arc_plans.plans.items.len);
+        @memset(materialized, null);
+        self.materialized_plans = materialized;
+        const joins = try self.emission_allocator.alloc(?LIR.CFStmtId, self.join_bodies.len);
+        @memset(joins, null);
+        self.materialized_joins = joins;
 
-    const RewriteInitializedPayloadSwitchTask = struct {
-        cond: LIR.LocalId,
-        cond_mask: u64,
-        payload: LIR.LocalId,
-        uninitialized_is_cold: bool,
-        initialized_branch: LIR.CFStmtId = undefined,
-        uninitialized_branch: LIR.CFStmtId = undefined,
-        frames: std.ArrayList(LinearRewriteFrame),
-        result: *LIR.CFStmtId,
-    };
-
-    const RewriteStrMatchTask = struct {
-        start: LIR.CFStmtId,
-        source: LIR.LocalId,
-        prefix: LIR.StrLiteral,
-        steps: LIR.StrMatchStepSpan,
-        end: LIR.StrPatternEnd,
-        on_match: LIR.CFStmtId = undefined,
-        on_miss: LIR.CFStmtId = undefined,
-        frames: std.ArrayList(LinearRewriteFrame),
-        result: *LIR.CFStmtId,
-    };
-
-    const RewriteStrMatchSetTask = struct {
-        start: LIR.CFStmtId,
-        source: LIR.LocalId,
-        arms: LIR.StrMatchArmSpan,
-        on_matches: []LIR.CFStmtId,
-        on_miss: LIR.CFStmtId = undefined,
-        frames: std.ArrayList(LinearRewriteFrame),
-        result: *LIR.CFStmtId,
-    };
-
-    const RewriteBoxyTagMatchTask = struct {
-        start: LIR.CFStmtId,
-        source: LIR.LocalId,
-        source_desc: LIR.BoxyDescRef,
-        tag_name: StringLiteral.Idx,
-        on_match: LIR.CFStmtId = undefined,
-        on_miss: LIR.CFStmtId = undefined,
-        frames: std.ArrayList(LinearRewriteFrame),
-        result: *LIR.CFStmtId,
-    };
-
-    fn rewritePath(self: *Inserter, start: LIR.CFStmtId, owned: *OwnedSet, options: RewriteOptions) ResourceError!LIR.CFStmtId {
         var result: LIR.CFStmtId = undefined;
-        var tasks = std.ArrayList(RewriteTask).empty;
-        defer {
-            while (tasks.pop()) |task| self.destroyRewriteTask(task);
-            tasks.deinit(self.store.allocator);
-        }
-
-        try self.pushRewritePath(&tasks, start, owned, options, &result);
+        var tasks = std.ArrayList(MaterializeTask).empty;
+        try tasks.append(self.emission_allocator, .{ .path = .{
+            .plan_index = self.arc_plans.root,
+            .result = &result,
+        } });
         while (tasks.pop()) |task| {
             switch (task) {
-                .path => |path| try self.processRewritePath(&tasks, path),
-                .join => |join| try self.finishRewriteJoin(join),
-                .switch_no_continuation => |switch_| try self.finishRewriteSwitchNoContinuation(switch_),
-                .switch_after_continuation => |switch_| try self.processRewriteSwitchAfterContinuation(&tasks, switch_),
-                .switch_finish_continuation => |switch_| try self.finishRewriteSwitchContinuation(switch_),
-                .initialized_payload_switch => |switch_| try self.finishRewriteInitializedPayloadSwitch(switch_),
-                .str_match => |str_match| try self.finishRewriteStrMatch(str_match),
-                .str_match_set => |str_match_set| try self.finishRewriteStrMatchSet(str_match_set),
-                .boxy_tag_match => |tag_match| try self.finishRewriteBoxyTagMatch(tag_match),
+                .path => |path| try self.processMaterializePath(&tasks, path),
+                .control => |control| try self.finishMaterializeControl(control),
+                .join => |join| try self.finishMaterializeJoin(join),
+                .stop => |stop| try self.finishMaterializeStop(stop),
             }
         }
         return result;
     }
 
-    fn pushRewritePath(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        start: LIR.CFStmtId,
-        owned: *const OwnedSet,
-        options: RewriteOptions,
-        result: *LIR.CFStmtId,
-    ) ResourceError!void {
-        const task = try self.store.allocator.create(RewritePathTask);
-        errdefer self.store.allocator.destroy(task);
-        task.* = .{
-            .cursor = start,
-            .owned = try owned.clone(),
-            .options = options,
-            .frames = .empty,
-            .result = result,
+    fn pushMaterializePath(self: *Inserter, tasks: *std.ArrayList(MaterializeTask), plan_index: u32, result: *LIR.CFStmtId) ResourceError!void {
+        if (plan_index == no_plan) arcInvariant("ARC materializer received the no-plan sentinel");
+        try tasks.append(self.emission_allocator, .{ .path = .{ .plan_index = plan_index, .result = result } });
+    }
+
+    fn completeMaterializedPath(self: *Inserter, plan_index: u32, tail: LIR.CFStmtId, result: *LIR.CFStmtId) ResourceError!void {
+        const head = try self.materializeArcPlanSteps(plan_index, tail);
+        if (plan_index >= self.materialized_plans.len) arcInvariant("ARC materialized path index exceeded its cache");
+        if (self.materialized_plans[plan_index]) |existing| {
+            if (existing != head) arcInvariant("ARC materialized one structured path inconsistently");
+        } else {
+            self.materialized_plans[plan_index] = head;
+        }
+        result.* = head;
+    }
+
+    fn processMaterializePath(self: *Inserter, tasks: *std.ArrayList(MaterializeTask), path: MaterializePathTask) ResourceError!void {
+        if (path.plan_index >= self.materialized_plans.len) arcInvariant("ARC materializer referenced an unknown plan");
+        if (self.materialized_plans[path.plan_index]) |cached| {
+            path.result.* = cached;
+            return;
+        }
+        if (!self.planMetadata(path.plan_index).scheduled) arcInvariant("ARC materializer reached an unscheduled plan");
+        const plan = self.arcPlan(path.plan_index);
+        switch (plan.terminal) {
+            .none => arcInvariant("ARC materializer reached an incomplete plan"),
+            .terminal => |terminal| {
+                var tail = terminal.stmt;
+                tail = try self.materializeTerminalReleases(terminal.releases.items, tail);
+                if (terminal.retain_value) |value| tail = try self.retainLocalIfRc(value, tail);
+                try self.completeMaterializedPath(path.plan_index, tail, path.result);
+            },
+            .jump => |jump| {
+                const source = self.store.getCFStmt(jump.stmt).jump;
+                var tail = try self.addCFStmtAtSource(jump.stmt, .{ .jump = .{ .target = source.target } });
+                tail = try self.materializeTerminalReleases(jump.releases.items, tail);
+                try self.completeMaterializedPath(path.plan_index, tail, path.result);
+            },
+            .stop => |stop| {
+                if (self.materialized_plans[stop.target_plan]) |target| {
+                    const tail = try self.materializeTerminalReleases(stop.releases.items, target);
+                    try self.completeMaterializedPath(path.plan_index, tail, path.result);
+                    return;
+                }
+                const state = try self.emission_allocator.create(MaterializeStopTask);
+                state.* = .{ .plan_index = path.plan_index, .result = path.result };
+                try tasks.append(self.emission_allocator, .{ .stop = state });
+                try self.pushMaterializePath(tasks, stop.target_plan, &state.target);
+            },
+            .join => |join| {
+                if (join.join_index >= self.materialized_joins.len) arcInvariant("ARC materializer join index exceeded its cache");
+                if (self.materialized_joins[join.join_index]) |cached_join| {
+                    const tail = try self.materializeTerminalReleases(join.releases.items, cached_join);
+                    try self.completeMaterializedPath(path.plan_index, tail, path.result);
+                    return;
+                }
+                const state = try self.emission_allocator.create(MaterializeJoinTask);
+                state.* = .{ .plan_index = path.plan_index, .result = path.result };
+                try tasks.append(self.emission_allocator, .{ .join = state });
+                if (join.body_reachable) try self.pushMaterializePath(tasks, join.body_plan, &state.body);
+                try self.pushMaterializePath(tasks, join.remainder_plan, &state.remainder);
+            },
+            .switch_stmt => |switch_plan| {
+                const source = self.store.getCFStmt(switch_plan.stmt).switch_stmt;
+                const branch_count = switch_plan.branch_plans.len;
+                const child_count = branch_count + 1 + @intFromBool(switch_plan.continuation_reachable);
+                const state = try self.emission_allocator.create(MaterializeControlTask);
+                state.* = .{
+                    .plan_index = path.plan_index,
+                    .child_results = try self.emission_allocator.alloc(LIR.CFStmtId, child_count),
+                    .result = path.result,
+                };
+                try tasks.append(self.emission_allocator, .{ .control = state });
+                for (switch_plan.branch_plans, 0..) |child, index| try self.pushMaterializePath(tasks, child, &state.child_results[index]);
+                try self.pushMaterializePath(tasks, switch_plan.default_plan, &state.child_results[branch_count]);
+                if (switch_plan.continuation_reachable) {
+                    if (source.continuation == null) arcInvariant("ARC continuation plan belonged to a switch without a continuation");
+                    try self.pushMaterializePath(tasks, switch_plan.continuation_plan, &state.child_results[branch_count + 1]);
+                }
+            },
+            .initialized_payload_switch => |switch_plan| {
+                const state = try self.emission_allocator.create(MaterializeControlTask);
+                state.* = .{
+                    .plan_index = path.plan_index,
+                    .child_results = try self.emission_allocator.alloc(LIR.CFStmtId, 2),
+                    .result = path.result,
+                };
+                try tasks.append(self.emission_allocator, .{ .control = state });
+                try self.pushMaterializePath(tasks, switch_plan.uninitialized_plan, &state.child_results[1]);
+                try self.pushMaterializePath(tasks, switch_plan.initialized_plan, &state.child_results[0]);
+            },
+            .str_match => |str_plan| {
+                const state = try self.emission_allocator.create(MaterializeControlTask);
+                state.* = .{
+                    .plan_index = path.plan_index,
+                    .child_results = try self.emission_allocator.alloc(LIR.CFStmtId, 2),
+                    .result = path.result,
+                };
+                try tasks.append(self.emission_allocator, .{ .control = state });
+                try self.pushMaterializePath(tasks, str_plan.miss_plan, &state.child_results[1]);
+                try self.pushMaterializePath(tasks, str_plan.match_plan, &state.child_results[0]);
+            },
+            .boxy_tag_match => |tag_plan| {
+                const state = try self.emission_allocator.create(MaterializeControlTask);
+                state.* = .{
+                    .plan_index = path.plan_index,
+                    .child_results = try self.emission_allocator.alloc(LIR.CFStmtId, 2),
+                    .result = path.result,
+                };
+                try tasks.append(self.emission_allocator, .{ .control = state });
+                try self.pushMaterializePath(tasks, tag_plan.miss_plan, &state.child_results[1]);
+                try self.pushMaterializePath(tasks, tag_plan.match_plan, &state.child_results[0]);
+            },
+            .str_match_set => |str_plan| {
+                const state = try self.emission_allocator.create(MaterializeControlTask);
+                state.* = .{
+                    .plan_index = path.plan_index,
+                    .child_results = try self.emission_allocator.alloc(LIR.CFStmtId, str_plan.match_plans.len + 1),
+                    .result = path.result,
+                };
+                try tasks.append(self.emission_allocator, .{ .control = state });
+                try self.pushMaterializePath(tasks, str_plan.miss_plan, &state.child_results[str_plan.match_plans.len]);
+                for (str_plan.match_plans, 0..) |child, index| try self.pushMaterializePath(tasks, child, &state.child_results[index]);
+            },
+        }
+    }
+
+    fn finishMaterializeStop(self: *Inserter, state: *MaterializeStopTask) ResourceError!void {
+        const terminal = self.arcPlan(state.plan_index).terminal.stop;
+        const tail = try self.materializeTerminalReleases(terminal.releases.items, state.target);
+        try self.completeMaterializedPath(state.plan_index, tail, state.result);
+    }
+
+    fn finishMaterializeJoin(self: *Inserter, state: *MaterializeJoinTask) ResourceError!void {
+        const terminal = self.arcPlan(state.plan_index).terminal.join;
+        const source = self.store.getCFStmt(terminal.stmt).join;
+        var tail: LIR.CFStmtId = undefined;
+        if (terminal.body_reachable) {
+            tail = try self.addCFStmtAtSource(terminal.stmt, .{ .join = .{
+                .id = source.id,
+                .params = source.params,
+                .maybe_uninitialized_params = source.maybe_uninitialized_params,
+                .maybe_uninitialized_conditions = source.maybe_uninitialized_conditions,
+                .maybe_uninitialized_condition_masks = source.maybe_uninitialized_condition_masks,
+                .body = state.body,
+                .remainder = state.remainder,
+            } });
+            try self.recordFinalJoin(terminal.join_index, .{
+                .id = source.id,
+                .params = source.params,
+                .body = state.body,
+            });
+            self.materialized_joins[terminal.join_index] = tail;
+        } else {
+            tail = state.remainder;
+        }
+        tail = try self.materializeTerminalReleases(terminal.releases.items, tail);
+        try self.completeMaterializedPath(state.plan_index, tail, state.result);
+    }
+
+    fn finishMaterializeControl(self: *Inserter, state: *MaterializeControlTask) ResourceError!void {
+        const plan = self.arcPlan(state.plan_index);
+        var tail: LIR.CFStmtId = undefined;
+        switch (plan.terminal) {
+            .switch_stmt => |switch_plan| {
+                const source = self.store.getCFStmt(switch_plan.stmt).switch_stmt;
+                const source_branches = self.store.getCFSwitchBranches(source.branches);
+                if (source_branches.len != switch_plan.branch_plans.len) arcInvariant("ARC materializer switch branch count changed");
+                const branches = try self.emission_allocator.alloc(LIR.CFSwitchBranch, source_branches.len);
+                for (0..source_branches.len) |index| {
+                    const source_branch = GuardedList.at(source_branches, index);
+                    branches[index] = .{ .value = source_branch.value, .body = state.child_results[index] };
+                }
+                const continuation = if (switch_plan.continuation_reachable)
+                    state.child_results[source_branches.len + 1]
+                else
+                    source.continuation;
+                tail = try self.addCFStmtAtSource(switch_plan.stmt, .{ .switch_stmt = .{
+                    .cond = source.cond,
+                    .branches = try self.store.addCFSwitchBranches(branches),
+                    .default_branch = state.child_results[source_branches.len],
+                    .default_is_cold = source.default_is_cold,
+                    .continuation = continuation,
+                } });
+            },
+            .initialized_payload_switch => |switch_plan| {
+                const source = self.store.getCFStmt(switch_plan.stmt).switch_initialized_payload;
+                tail = try self.addCFStmtAtSource(switch_plan.stmt, .{ .switch_initialized_payload = .{
+                    .cond = source.cond,
+                    .cond_mask = source.cond_mask,
+                    .payload = source.payload,
+                    .uninitialized_is_cold = source.uninitialized_is_cold,
+                    .initialized_branch = state.child_results[0],
+                    .uninitialized_branch = state.child_results[1],
+                } });
+            },
+            .str_match => |str_plan| {
+                const source = self.store.getCFStmt(str_plan.stmt).str_match;
+                const on_match = try self.retainLocalIfRcCount(source.source, str_plan.capture_retain_count, state.child_results[0]);
+                tail = try self.addCFStmtAtSource(str_plan.stmt, .{ .str_match = .{
+                    .source = source.source,
+                    .prefix = source.prefix,
+                    .steps = source.steps,
+                    .end = source.end,
+                    .on_match = on_match,
+                    .on_miss = state.child_results[1],
+                } });
+            },
+            .boxy_tag_match => |tag_plan| {
+                const source = self.store.getCFStmt(tag_plan.stmt).boxy_tag_match;
+                tail = try self.addCFStmtAtSource(tag_plan.stmt, .{ .boxy_tag_match = .{
+                    .source = source.source,
+                    .source_desc = source.source_desc,
+                    .tag_name = source.tag_name,
+                    .on_match = state.child_results[0],
+                    .on_miss = state.child_results[1],
+                } });
+            },
+            .str_match_set => |str_plan| {
+                const source = self.store.getCFStmt(str_plan.stmt).str_match_set;
+                const source_arms = self.store.getStrMatchArms(source.arms);
+                if (source_arms.len != str_plan.match_plans.len) arcInvariant("ARC materializer string arm count changed");
+                const arms = try self.emission_allocator.alloc(LIR.StrMatchArm, source_arms.len);
+                for (0..source_arms.len) |index| {
+                    const source_arm = GuardedList.at(source_arms, index);
+                    arms[index] = .{
+                        .prefix = source_arm.prefix,
+                        .steps = source_arm.steps,
+                        .end = source_arm.end,
+                        .on_match = try self.retainLocalIfRcCount(source.source, str_plan.capture_retain_counts[index], state.child_results[index]),
+                    };
+                }
+                tail = try self.addCFStmtAtSource(str_plan.stmt, .{ .str_match_set = .{
+                    .source = source.source,
+                    .arms = try self.store.addStrMatchArms(arms),
+                    .on_miss = state.child_results[source_arms.len],
+                } });
+            },
+            else => arcInvariant("ARC control materializer received a non-control plan"),
+        }
+        try self.completeMaterializedPath(state.plan_index, tail, state.result);
+    }
+
+    fn materializeReleaseDecision(self: *Inserter, release: ReleaseDecision, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        return switch (release) {
+            .initialized => |local| try self.releaseLocalIfRc(local, next),
+            .maybe_initialized => |conditional| try self.releaseMaybeInitializedLocal(
+                conditional.condition,
+                conditional.condition_mask,
+                conditional.value,
+                next,
+            ),
         };
-        errdefer task.owned.deinit();
-        try tasks.append(self.store.allocator, .{ .path = task });
     }
 
-    fn takeRewriteFrames(path: *RewritePathTask) std.ArrayList(LinearRewriteFrame) {
-        const frames = path.frames;
-        path.frames = .empty;
-        return frames;
-    }
-
-    fn processRewritePath(self: *Inserter, tasks: *std.ArrayList(RewriteTask), path: *RewritePathTask) ResourceError!void {
-        errdefer self.destroyRewritePath(path);
-
-        while (true) {
-            if (rewriteBoundaryForStop(path.options.boundaries, path.cursor)) |boundary| {
-                const tail = try self.releaseDifference(&path.owned, boundary.keep, boundary.replacement);
-                path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                self.destroyRewritePath(path);
-                return;
-            }
-            if (replacementReached(path.options.boundaries, path.cursor)) {
-                path.result.* = try self.finishLinearRewrite(&path.frames, path.cursor);
-                self.destroyRewritePath(path);
-                return;
-            }
-
-            const stmt = self.store.getCFStmt(path.cursor);
-            var current_start = path.cursor;
-            switch (stmt) {
-                .assign_ref => |assign| {
-                    var transfer = AliasBindTransfer{ .retain_target = true, .release_old_target = false };
-                    if (self.isBindingBorrowed(assign.target)) {
-                        // Borrowed bindings carry no ownership unit and emit
-                        // no RC statements; the lender's liveness group keeps
-                        // the value alive across every use.
-                        transfer.retain_target = false;
-                    } else switch (assign.op) {
-                        .local => |source| {
-                            if (assign.target != source) {
-                                transfer = try self.transferForAliasBind(&path.owned, assign.target, source, assign.next, path.options.loop_keep);
-                            } else {
-                                transfer.retain_target = false;
-                            }
-                        },
-                        else => {
-                            transfer.release_old_target = self.transferForFreshBind(&path.owned, assign.target);
-                        },
-                    }
-                    if (transfer.release_old_target) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .retain_assign_ref_target = transfer.retain_target,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_literal => |assign| {
-                    if (self.transferForFreshBind(&path.owned, assign.target)) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .init_uninitialized => |uninit| {
-                    if (self.transferForInit(&path.owned, uninit.target)) {
-                        current_start = try self.emitRebindRelease(uninit.target, current_start);
-                    }
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
-                    path.cursor = uninit.next;
-                },
-                .assign_call => |assign| {
-                    const callee_sig = self.solution.sigOf(assign.proc);
-                    // Unique demands clone variants, so they exist only when
-                    // specialization is on, and never for pinned callees,
-                    // whose vectors are ABI contracts.
-                    const unique_demand = self.variants.enabled and !self.solution.isPinnedProc(assign.proc);
-                    var transfer = try self.transferForCall(&path.owned, assign.proc, callee_sig, unique_demand, assign.args, assign.next, assign.target, null, path.options.loop_keep);
-                    defer transfer.deinit(self.store.allocator);
-                    const call_target = try self.variantForCall(assign.proc, transfer.args.demanded);
-                    if (transfer.release_old_target) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    current_start = try self.retainArgs(transfer.args.retain_args.items, current_start);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    try self.noteCallResultDeathIfUnused(&path.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, path.options.loop_keep, &deaths);
-                    try self.postStmtDeaths(&path.owned, &.{}, assign.args, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .retain_call_result = transfer.retain_call_result,
-                        .call_target_override = call_target,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_call_erased => |assign| {
-                    var transfer = try self.transferForCall(&path.owned, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, path.options.loop_keep);
-                    defer transfer.deinit(self.store.allocator);
-                    if (transfer.release_old_target) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    current_start = try self.retainLocalIfRc(assign.closure, current_start);
-                    current_start = try self.retainArgs(transfer.args.retain_args.items, current_start);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    try self.noteCallResultDeathIfUnused(&path.owned, assign.target, .owned, assign.next, path.options.loop_keep, &deaths);
-                    const singles = [_]LIR.LocalId{assign.closure};
-                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_packed_erased_fn => |assign| {
-                    const transfer = try self.transferForSingle(&path.owned, assign.capture, assign.target, assign.next, path.options.loop_keep);
-                    const reuse_transferred = if (assign.reuse) |reuse|
-                        try self.singleTransfer(reuse, assign.next, assign.target, &path.owned, path.options.loop_keep)
-                    else
-                        false;
-                    if (transfer.release_old_target) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    if (!transfer.transfer_single) {
-                        if (assign.capture) |capture| {
-                            current_start = try self.retainLocalIfRc(capture, current_start);
-                        }
-                    }
-                    if (assign.reuse) |reuse| {
-                        if (!reuse_transferred) {
-                            current_start = try self.retainLocalIfRc(reuse, current_start);
-                        }
-                    }
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.reuse orelse assign.target, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer.transfer_single,
-                        .packed_reuse_unique = if (assign.reuse) |reuse| reuse_transferred and self.isLocalUniqueHere(reuse) else false,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_desc_ref => |assign| {
-                    current_start = try self.releaseValuesInvalidatedByDescriptorUpdate(
-                        assign.target,
-                        &path.owned,
-                        assign.next,
-                        current_start,
-                    );
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const desc_local = assign.desc.localOrNull() orelse assign.target;
-                    const residual_local = if (assign.tag_residual_for) |desc| desc.localOrNull() orelse assign.target else assign.target;
-                    const singles = [_]LIR.LocalId{ desc_local, residual_local, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, assign.captures, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const dict_local = assign.dict.localOrNull() orelse assign.target;
-                    const singles = [_]LIR.LocalId{ dict_local, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_box => |assign| {
-                    const transfer_single = if (assign.payload_mode == .move)
-                        try self.singleTransfer(assign.payload, assign.next, assign.target, &path.owned, path.options.loop_keep)
-                    else
-                        false;
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    if (assign.payload_mode == .move and !transfer_single) {
-                        current_start = try self.retainLocalIfRc(assign.payload, current_start);
-                    }
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.payload, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer_single,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_reuse_box => |assign| {
-                    const transfer_single = try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep);
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    if (!transfer_single) {
-                        current_start = try self.retainLocalIfRc(assign.source, current_start);
-                    }
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer_single,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_unbox => |assign| {
-                    const transfer_single = if (assign.source_mode == .move)
-                        try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep)
-                    else
-                        false;
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    if (assign.source_mode == .move and !transfer_single) {
-                        current_start = try self.retainLocalIfRc(assign.source, current_start);
-                    }
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer_single,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_adapt => |assign| {
-                    const transfer_single = if (assign.source_mode == .move)
-                        try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep)
-                    else
-                        false;
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    if (assign.source_mode == .move and !transfer_single) {
-                        current_start = try self.retainLocalIfRc(assign.source, current_start);
-                    }
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer_single,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_inspect => |assign| {
-                    const transfer_single = if (assign.source_mode == .move)
-                        try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep)
-                    else
-                        false;
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    if (assign.source_mode == .move and !transfer_single) {
-                        current_start = try self.retainLocalIfRc(assign.source, current_start);
-                    }
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer_single,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_eq => |assign| {
-                    const transfer_single = false;
-                    if (assign.source_mode == .move) {
-                        _ = try self.singleTransfer(assign.lhs, assign.next, assign.target, &path.owned, path.options.loop_keep);
-                        _ = try self.singleTransfer(assign.rhs, assign.next, assign.target, &path.owned, path.options.loop_keep);
-                    }
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    if (assign.source_mode == .move) {
-                        current_start = try self.retainLocalIfRc(assign.rhs, current_start);
-                        current_start = try self.retainLocalIfRc(assign.lhs, current_start);
-                    }
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer_single,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_tag => |assign| {
-                    var transfer_single = false;
-                    if (assign.payload) |payload| {
-                        if (assign.payload_mode == .move) {
-                            transfer_single = try self.singleTransfer(payload, assign.next, assign.target, &path.owned, path.options.loop_keep);
-                        }
-                    }
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    if (assign.payload_mode == .move and !transfer_single) {
-                        if (assign.payload) |payload| {
-                            current_start = try self.retainLocalIfRc(payload, current_start);
-                        }
-                    }
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer_single,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_boxy_tag_payload => |assign| {
-                    const transfer_single = if (assign.source_mode == .move)
-                        try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep)
-                    else
-                        false;
-                    const retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign.target);
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    if (assign.source_mode == .move and !transfer_single) {
-                        current_start = try self.retainLocalIfRc(assign.source, current_start);
-                    }
-                    if (!self.isBindingBorrowed(assign.target)) self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer_single,
-                        .retain_assign_ref_target = retain_assign_ref_target,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .boxy_tag_match => |tag_match| {
-                    try self.scheduleRewriteBoxyTagMatch(tasks, path, path.cursor, tag_match);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .assign_call_dict => |assign| {
-                    const transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep, .no);
-                    current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
-                    try self.postStmtDeaths(&path.owned, &.{}, assign.arg_descs, assign.next, path.options.loop_keep, &deaths);
-                    try self.postStmtDeaths(&path.owned, &.{}, assign.hidden_args, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_mask = transfer_mask,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_low_level => |assign| {
-                    const transfer = try self.transferForLowLevel(&path.owned, assign.args, assign.rc_effect, assign.target, assign.next, path.options.loop_keep, true);
-                    if (transfer.release_old_target) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    if (assign.rc_effect.consume_args != 0) {
-                        current_start = try self.retainMaskedArgs(assign.args, transfer.preserve_consumed_args, current_start);
-                    }
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_mask = transfer.transfer_mask,
-                        .skip_result_retain = self.isBindingBorrowed(assign.target),
-                        .unique_args = transfer.unique_args,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .assign_list => |assign| {
-                    var transfer_positions: std.ArrayList(u32) = .empty;
-                    errdefer transfer_positions.deinit(self.store.allocator);
-                    const transfer = try self.transferForAggregate(&path.owned, assign.elems, assign.target, assign.next, path.options.loop_keep, &transfer_positions);
-                    var transferred_positions = try self.takeTransferPositions(&transfer_positions);
-                    errdefer if (transferred_positions.len != 0) self.store.allocator.free(transferred_positions);
-                    if (transfer.release_old_target) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&path.owned, &singles, assign.elems, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_positions = transferred_positions,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    transferred_positions = &.{};
-                    path.cursor = assign.next;
-                },
-                .assign_struct => |assign| {
-                    var transfer_positions: std.ArrayList(u32) = .empty;
-                    errdefer transfer_positions.deinit(self.store.allocator);
-                    const transfer = try self.transferForAggregate(&path.owned, assign.fields, assign.target, assign.next, path.options.loop_keep, &transfer_positions);
-                    var transferred_positions = try self.takeTransferPositions(&transfer_positions);
-                    errdefer if (transferred_positions.len != 0) self.store.allocator.free(transferred_positions);
-                    if (transfer.release_old_target) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&path.owned, &singles, assign.fields, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_positions = transferred_positions,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    transferred_positions = &.{};
-                    path.cursor = assign.next;
-                },
-                .assign_tag => |assign| {
-                    const transfer = try self.transferForSingle(&path.owned, assign.payload, assign.target, assign.next, path.options.loop_keep);
-                    if (transfer.release_old_target) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer.transfer_single,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .store_struct => |assign| {
-                    var transfer_positions: std.ArrayList(u32) = .empty;
-                    errdefer transfer_positions.deinit(self.store.allocator);
-                    try self.spanTransferPositions(assign.fields, assign.next, assign.dest, &path.owned, path.options.loop_keep, &transfer_positions);
-                    var transferred_positions = try self.takeTransferPositions(&transfer_positions);
-                    errdefer if (transferred_positions.len != 0) self.store.allocator.free(transferred_positions);
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    try self.postStmtDeaths(&path.owned, &.{}, assign.fields, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_positions = transferred_positions,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    transferred_positions = &.{};
-                    path.cursor = assign.next;
-                },
-                .store_tag => |assign| {
-                    var transfer_single = false;
-                    if (assign.payload) |payload| {
-                        transfer_single = try self.singleTransfer(payload, assign.next, assign.dest, &path.owned, path.options.loop_keep);
-                    }
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{assign.payload orelse assign.dest};
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .transfer_single = transfer_single,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .set_local => |assign| {
-                    const transfer = try self.transferForSetLocal(&path.owned, assign.target, assign.value, assign.mode, assign.next, path.options.loop_keep);
-                    if (transfer.release_old_target) {
-                        current_start = try self.emitRebindRelease(assign.target, current_start);
-                    }
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.value, assign.target };
-                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .retain_set_target = transfer.retain_target,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = assign.next;
-                },
-                .debug => |debug_stmt| {
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{debug_stmt.message};
-                    try self.postStmtDeaths(&path.owned, &singles, null, debug_stmt.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = debug_stmt.next;
-                },
-                .expect => |expect_stmt| {
-                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{expect_stmt.condition};
-                    try self.postStmtDeaths(&path.owned, &singles, null, expect_stmt.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
-                        .stmt = path.cursor,
-                        .head = current_start,
-                        .post_release = try self.takePostReleases(&deaths),
-                    });
-                    path.cursor = expect_stmt.next;
-                },
-                .incref => |rc| {
-                    if (path.options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
-                    self.noteEmittedRetain(&path.owned, rc.value);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
-                    path.cursor = rc.next;
-                },
-                .decref => |rc| {
-                    if (path.options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
-                    self.noteEmittedRelease(&path.owned, rc.value);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
-                    path.cursor = rc.next;
-                },
-                .decref_if_initialized => |rc| {
-                    if (path.options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
-                    self.noteEmittedRelease(&path.owned, rc.value);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
-                    path.cursor = rc.next;
-                },
-                .free => |rc| {
-                    if (path.options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
-                    self.noteEmittedRelease(&path.owned, rc.value);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
-                    path.cursor = rc.next;
-                },
-                .switch_stmt => |switch_stmt| {
-                    try self.scheduleRewriteSwitch(tasks, path, path.cursor, switch_stmt);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try self.scheduleRewriteInitializedPayloadSwitch(tasks, path, switch_stmt);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .str_match => |str_match| {
-                    try self.scheduleRewriteStrMatch(tasks, path, path.cursor, str_match);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .str_match_set => |str_match_set| {
-                    try self.scheduleRewriteStrMatchSet(tasks, path, path.cursor, str_match_set);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .join => |join_stmt| {
-                    try self.scheduleRewriteJoin(tasks, path, path.cursor, join_stmt);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .runtime_error, .comptime_exhaustiveness_failed => {
-                    const tail = try self.releaseAll(&path.owned, path.cursor);
-                    path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .comptime_branch_taken => |marker| {
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
-                    path.cursor = marker.next;
-                },
-                .loop_continue => {
-                    const tail = if (path.options.loop_keep) |keep| try self.releaseDifference(&path.owned, keep, path.cursor) else path.cursor;
-                    path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .loop_break => {
-                    const tail = if (path.options.loop_keep) |keep| try self.releaseDifference(&path.owned, keep, path.cursor) else path.cursor;
-                    path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .jump => |jump_stmt| {
-                    const summary = self.solveSummaryOf(jump_stmt.target);
-                    const jump = try self.store.addCFStmt(.{ .jump = .{ .target = jump_stmt.target } });
-                    const tail = try self.releaseDifference(&path.owned, &summary.body_keep, jump);
-                    path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .ret => |ret_stmt| {
-                    var tail = path.cursor;
-                    if (self.current_sig.ret_mode == .borrowed) {
-                        // The caller borrows the result from its own
-                        // arguments; no unit transfers.
-                        tail = try self.releaseAll(&path.owned, tail);
-                    } else if (self.consumeAtTerminal(&path.owned, ret_stmt.value)) {
-                        // Move on return: the binding's own unit transfers to
-                        // the caller; no retain/release pair is needed.
-                        tail = try self.releaseAll(&path.owned, tail);
-                    } else {
-                        tail = try self.releaseAll(&path.owned, tail);
-                        tail = try self.retainLocalIfRc(ret_stmt.value, tail);
-                    }
-                    path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .crash => {
-                    const tail = try self.releaseAll(&path.owned, path.cursor);
-                    path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-                .expect_err => |expect_err_stmt| {
-                    // Terminal: the message's ownership unit transfers to the
-                    // failure report, so it is not released here.
-                    var tail = path.cursor;
-                    if (self.consumeAtTerminal(&path.owned, expect_err_stmt.message)) {
-                        tail = try self.releaseAll(&path.owned, tail);
-                    } else {
-                        tail = try self.releaseAll(&path.owned, tail);
-                        tail = try self.retainLocalIfRc(expect_err_stmt.message, tail);
-                    }
-                    path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                    self.destroyRewritePath(path);
-                    return;
-                },
-            }
-        }
-    }
-
-    fn finishLinearRewrite(
-        self: *Inserter,
-        frames: *std.ArrayList(LinearRewriteFrame),
-        tail_start: LIR.CFStmtId,
-    ) ResourceError!LIR.CFStmtId {
-        var next = tail_start;
-        while (frames.pop()) |frame| {
-            next = try self.patchLinearFrame(frame, next);
-        }
+    fn materializeTerminalReleases(self: *Inserter, releases: []const ReleaseDecision, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        var next = tail;
+        for (releases) |release| next = try self.materializeReleaseDecision(release, next);
         return next;
     }
 
-    fn patchLinearFrame(
-        self: *Inserter,
-        frame: LinearRewriteFrame,
-        tail_start: LIR.CFStmtId,
-    ) ResourceError!LIR.CFStmtId {
-        const stmt = self.store.getCFStmt(frame.stmt);
+    fn addCFStmtAtSource(self: *Inserter, source_stmt: LIR.CFStmtId, stmt: LIR.CFStmt) ResourceError!LIR.CFStmtId {
         const saved_loc = self.store.current_loc;
         defer self.store.current_loc = saved_loc;
         const saved_region = self.store.current_region;
         defer self.store.current_region = saved_region;
+        const saved_inline_scope = self.store.current_inline_scope;
+        defer self.store.current_inline_scope = saved_inline_scope;
+        self.store.current_loc = self.store.stmtLoc(source_stmt);
+        self.store.current_region = self.store.stmtRegion(source_stmt);
+        self.store.current_inline_scope = self.store.stmtInlineScope(source_stmt);
+        return try self.store.addCFStmt(stmt);
+    }
+
+    fn materializeArcPlanSteps(self: *Inserter, plan_index: u32, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        const plan = self.arcPlan(plan_index);
+        var next = tail;
+        var index: usize = plan.step_count;
+        while (index > 0) {
+            index -= 1;
+            next = try self.materializeArcPlanStep(&plan.steps.items[index], next);
+        }
+        return next;
+    }
+
+    fn materializeArcPlanStep(self: *Inserter, step: *const ArcPlanStep, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        const stmt = self.store.getCFStmt(step.stmt);
         const saved_rewrite_stmt = self.current_rewrite_stmt;
         defer self.current_rewrite_stmt = saved_rewrite_stmt;
-        self.current_rewrite_stmt = frame.stmt;
-        self.store.current_loc = self.store.stmtLoc(frame.stmt);
-        self.store.current_region = self.store.stmtRegion(frame.stmt);
-        var next = tail_start;
-        var cloned: LIR.CFStmtId = undefined;
-        defer if (frame.transfer_positions.len != 0) {
-            self.store.allocator.free(frame.transfer_positions);
-        };
-        defer if (frame.post_release.len != 0) {
-            self.store.allocator.free(frame.post_release);
-        };
+        self.current_rewrite_stmt = step.stmt;
+        const saved_loc = self.store.current_loc;
+        defer self.store.current_loc = saved_loc;
+        const saved_region = self.store.current_region;
+        defer self.store.current_region = saved_region;
+        const saved_inline_scope = self.store.current_inline_scope;
+        defer self.store.current_inline_scope = saved_inline_scope;
+        self.store.current_loc = self.store.stmtLoc(step.stmt);
+        self.store.current_region = self.store.stmtRegion(step.stmt);
+        self.store.current_inline_scope = self.store.stmtInlineScope(step.stmt);
 
-        // Lifetime-ending releases come right after the statement and its
-        // own retains.
-        {
-            var i = frame.post_release.len;
-            while (i > 0) {
-                i -= 1;
-                next = try self.releaseLocalIfRc(frame.post_release[i], next);
-            }
+        var next = tail;
+        var release_index = step.post_release.items.len;
+        while (release_index > 0) {
+            release_index -= 1;
+            next = try self.releaseLocalIfRc(step.post_release.items[release_index], next);
         }
-        switch (stmt) {
-            .assign_ref => |assign| {
-                if (frame.retain_assign_ref_target) {
-                    next = try self.retainLocalIfRc(assign.target, next);
-                }
-                cloned = try self.store.addCFStmt(.{ .assign_ref = .{
+
+        var cloned: LIR.CFStmtId = switch (stmt) {
+            .assign_ref => |assign| blk: {
+                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, next);
+                break :blk try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = assign.target,
                     .op = assign.op,
                     .next = next,
                 } });
             },
-            .assign_literal => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_literal = .{
+            .assign_literal => |assign| try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = assign.target,
+                .value = assign.value,
+                .next = next,
+            } }),
+            .init_uninitialized => |uninit| try self.store.addCFStmt(.{ .init_uninitialized = .{
+                .target = uninit.target,
+                .next = next,
+            } }),
+            .assign_call => |assign| blk: {
+                if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, next);
+                break :blk try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
-                    .value = assign.value,
-                    .next = next,
-                } });
-            },
-            .init_uninitialized => |uninit| {
-                cloned = try self.store.addCFStmt(.{ .init_uninitialized = .{
-                    .target = uninit.target,
-                    .next = next,
-                } });
-            },
-            .assign_call => |assign| {
-                if (frame.retain_call_result) {
-                    next = try self.retainLocalIfRc(assign.target, next);
-                }
-                cloned = try self.store.addCFStmt(.{ .assign_call = .{
-                    .target = assign.target,
-                    .proc = frame.call_target_override orelse assign.proc,
+                    .proc = step.call_target_override orelse assign.proc,
                     .args = assign.args,
                     .result_desc = assign.result_desc,
                     .out_desc = assign.out_desc,
@@ -1749,77 +1605,67 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
-            .assign_call_erased => |assign| {
-                next = try self.releaseLocalIfRc(assign.closure, next);
-                cloned = try self.store.addCFStmt(.{ .assign_call_erased = .{
+            .assign_call_erased => |assign| blk: {
+                if (!assign.reuse_closure) next = try self.releaseLocalIfRc(assign.closure, next);
+                break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
-                    .arg_layouts = assign.arg_layouts,
-                    .arg_descs = assign.arg_descs,
-                    .arg_desc_keys = assign.arg_desc_keys,
-                    .result_desc = assign.result_desc,
-                    .out_desc = assign.out_desc,
+                    .arg_plan = assign.arg_plan,
+                    .reuse_closure = assign.reuse_closure,
+                    .reuse_source = assign.reuse_source,
                     .next = next,
                 } });
             },
-            .assign_packed_erased_fn => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+            .assign_packed_erased_fn => |assign| blk: {
+                if (assign.capture) |capture| {
+                    if (!step.transfer_single) next = try self.retainLocalIfRc(capture, next);
+                }
+                break :blk try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                     .target = assign.target,
                     .proc = assign.proc,
                     .capture = assign.capture,
                     .capture_layout = assign.capture_layout,
                     .on_drop = assign.on_drop,
-                    .result_desc = assign.result_desc,
                     .reuse = assign.reuse,
-                    .reuse_unique = frame.packed_reuse_unique,
+                    .reuse_unique = step.reuse_unique,
                     .next = next,
                 } });
             },
-            .assign_boxy_desc_ref => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-                    .target = assign.target,
-                    .desc = assign.desc,
-                    .nested_index = assign.nested_index,
-                    .box_payload_layout = assign.box_payload_layout,
-                    .tag_payload = assign.tag_payload,
-                    .tag_ext = assign.tag_ext,
-                    .tag_residual_for = assign.tag_residual_for,
-                    .captures = assign.captures,
-                    .next = next,
-                } });
-            },
-            .assign_boxy_dict_ref => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
-                    .target = assign.target,
-                    .dict = assign.dict,
-                    .next = next,
-                } });
-            },
-            .assign_boxy_box => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_box = .{
-                    .target = assign.target,
-                    .payload = assign.payload,
-                    .payload_layout = assign.payload_layout,
-                    .source_desc = assign.source_desc,
-                    .payload_desc = assign.payload_desc,
-                    .payload_mode = assign.payload_mode,
-                    .next = next,
-                } });
-            },
-            .assign_boxy_reuse_box => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
-                    .target = assign.target,
-                    .source = assign.source,
-                    .desc = assign.desc,
-                    .next = next,
-                } });
-            },
-            .assign_boxy_unbox => |assign| {
-                if (assign.source_mode == .borrow and self.localMayNeedBoxyRc(assign.target)) {
-                    next = try self.retainLocalIfRc(assign.target, next);
-                }
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
+            .assign_boxy_desc_ref => |assign| try self.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                .target = assign.target,
+                .desc = assign.desc,
+                .nested_index = assign.nested_index,
+                .box_payload_layout = assign.box_payload_layout,
+                .tag_payload = assign.tag_payload,
+                .tag_ext = assign.tag_ext,
+                .tag_residual_for = assign.tag_residual_for,
+                .captures = assign.captures,
+                .next = next,
+            } }),
+            .assign_boxy_dict_ref => |assign| try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
+                .target = assign.target,
+                .dict = assign.dict,
+                .next = next,
+            } }),
+            .assign_boxy_box => |assign| try self.store.addCFStmt(.{ .assign_boxy_box = .{
+                .target = assign.target,
+                .payload = assign.payload,
+                .payload_layout = assign.payload_layout,
+                .source_desc = assign.source_desc,
+                .payload_desc = assign.payload_desc,
+                .payload_mode = assign.payload_mode,
+                .next = next,
+            } }),
+            .assign_boxy_reuse_box => |assign| try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
+                .target = assign.target,
+                .source = assign.source,
+                .desc = assign.desc,
+                .next = next,
+            } }),
+            .assign_boxy_unbox => |assign| blk: {
+                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, next);
+                break :blk try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
                     .target = assign.target,
                     .source = assign.source,
                     .source_desc = assign.source_desc,
@@ -1829,28 +1675,28 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
-            .assign_boxy_adapt => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_adapt = .{
-                    .target = assign.target,
-                    .source = assign.source,
-                    .adapter = assign.adapter,
-                    .source_desc = assign.source_desc,
-                    .target_desc = assign.target_desc,
-                    .source_mode = assign.source_mode,
-                    .next = next,
-                } });
-            },
-            .assign_boxy_inspect => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
-                    .target = assign.target,
-                    .source = assign.source,
-                    .source_desc = assign.source_desc,
-                    .source_mode = assign.source_mode,
-                    .next = next,
-                } });
-            },
-            .assign_boxy_eq => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_eq = .{
+            .assign_boxy_adapt => |assign| try self.store.addCFStmt(.{ .assign_boxy_adapt = .{
+                .target = assign.target,
+                .source = assign.source,
+                .adapter = assign.adapter,
+                .source_desc = assign.source_desc,
+                .target_desc = assign.target_desc,
+                .source_mode = assign.source_mode,
+                .next = next,
+            } }),
+            .assign_boxy_inspect => |assign| try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
+                .target = assign.target,
+                .source = assign.source,
+                .source_desc = assign.source_desc,
+                .source_mode = assign.source_mode,
+                .next = next,
+            } }),
+            .assign_boxy_eq => |assign| blk: {
+                if (assign.source_mode == .move) {
+                    next = try self.retainLocalIfRc(assign.rhs, next);
+                    next = try self.retainLocalIfRc(assign.lhs, next);
+                }
+                break :blk try self.store.addCFStmt(.{ .assign_boxy_eq = .{
                     .target = assign.target,
                     .lhs = assign.lhs,
                     .rhs = assign.rhs,
@@ -1859,23 +1705,19 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
-            .assign_boxy_tag => |assign| {
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_tag = .{
-                    .target = assign.target,
-                    .target_desc = assign.target_desc,
-                    .tag_name = assign.tag_name,
-                    .payload = assign.payload,
-                    .payload_layout = assign.payload_layout,
-                    .payload_desc = assign.payload_desc,
-                    .payload_mode = assign.payload_mode,
-                    .next = next,
-                } });
-            },
-            .assign_boxy_tag_payload => |assign| {
-                if (frame.retain_assign_ref_target) {
-                    next = try self.retainLocalIfRc(assign.target, next);
-                }
-                cloned = try self.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
+            .assign_boxy_tag => |assign| try self.store.addCFStmt(.{ .assign_boxy_tag = .{
+                .target = assign.target,
+                .target_desc = assign.target_desc,
+                .tag_name = assign.tag_name,
+                .payload = assign.payload,
+                .payload_layout = assign.payload_layout,
+                .payload_desc = assign.payload_desc,
+                .payload_mode = assign.payload_mode,
+                .next = next,
+            } }),
+            .assign_boxy_tag_payload => |assign| blk: {
+                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, next);
+                break :blk try self.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
                     .target = assign.target,
                     .target_desc = assign.target_desc,
                     .source = assign.source,
@@ -1886,10 +1728,9 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
-            .boxy_tag_match => arcInvariant("boxy tag match reached linear ARC clone"),
-            .assign_call_dict => |assign| {
-                next = try self.retainSpanExcept(assign.args, frame.transfer_mask, next);
-                cloned = try self.store.addCFStmt(.{ .assign_call_dict = .{
+            .assign_call_dict => |assign| blk: {
+                next = try self.retainSpanExcept(assign.args, step.transfer_mask, next);
+                break :blk try self.store.addCFStmt(.{ .assign_call_dict = .{
                     .target = assign.target,
                     .dict = assign.dict,
                     .method = assign.method,
@@ -1902,47 +1743,43 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
-            .assign_low_level => |assign| {
+            .assign_low_level => |assign| blk: {
                 if (assign.rc_effect.retain_args != 0) {
-                    next = try self.retainMaskedArgs(assign.args, assign.rc_effect.retain_args & ~frame.transfer_mask, next);
+                    next = try self.retainMaskedArgs(assign.args, assign.rc_effect.retain_args & ~step.transfer_mask, next);
                 }
-                if (assign.rc_effect.retain_result and !frame.skip_result_retain) {
-                    next = try self.retainLocalIfRc(assign.target, next);
-                }
-                cloned = try self.store.addCFStmt(.{ .assign_low_level = .{
+                if (assign.rc_effect.retain_result and !step.skip_result_retain) next = try self.retainLocalIfRc(assign.target, next);
+                break :blk try self.store.addCFStmt(.{ .assign_low_level = .{
                     .target = assign.target,
                     .op = assign.op,
                     .rc_effect = assign.rc_effect,
-                    .unique_args = frame.unique_args,
+                    .unique_args = step.unique_args,
                     .args = assign.args,
                     .interchangeable = assign.interchangeable,
                     .next = next,
                 } });
             },
-            .assign_list => |assign| {
-                next = try self.retainSpanExceptPositions(assign.elems, frame.transfer_positions, next);
-                cloned = try self.store.addCFStmt(.{ .assign_list = .{
+            .assign_list => |assign| blk: {
+                next = try self.retainSpanExceptPositions(assign.elems, step.transfer_positions.items, next);
+                break :blk try self.store.addCFStmt(.{ .assign_list = .{
                     .target = assign.target,
                     .elems = assign.elems,
                     .next = next,
                 } });
             },
-            .assign_struct => |assign| {
-                next = try self.retainSpanExceptPositions(assign.fields, frame.transfer_positions, next);
-                cloned = try self.store.addCFStmt(.{ .assign_struct = .{
+            .assign_struct => |assign| blk: {
+                next = try self.retainSpanExceptPositions(assign.fields, step.transfer_positions.items, next);
+                break :blk try self.store.addCFStmt(.{ .assign_struct = .{
                     .target = assign.target,
                     .fields = assign.fields,
                     .contents_desc = assign.contents_desc,
                     .next = next,
                 } });
             },
-            .assign_tag => |assign| {
+            .assign_tag => |assign| blk: {
                 if (assign.payload) |payload| {
-                    if (!frame.transfer_single) {
-                        next = try self.retainLocalIfRc(payload, next);
-                    }
+                    if (!step.transfer_single) next = try self.retainLocalIfRc(payload, next);
                 }
-                cloned = try self.store.addCFStmt(.{ .assign_tag = .{
+                break :blk try self.store.addCFStmt(.{ .assign_tag = .{
                     .target = assign.target,
                     .target_desc = assign.target_desc,
                     .variant_index = assign.variant_index,
@@ -1951,22 +1788,20 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
-            .store_struct => |assign| {
-                next = try self.retainSpanExceptPositions(assign.fields, frame.transfer_positions, next);
-                cloned = try self.store.addCFStmt(.{ .store_struct = .{
+            .store_struct => |assign| blk: {
+                next = try self.retainSpanExceptPositions(assign.fields, step.transfer_positions.items, next);
+                break :blk try self.store.addCFStmt(.{ .store_struct = .{
                     .dest = assign.dest,
                     .struct_layout = assign.struct_layout,
                     .fields = assign.fields,
                     .next = next,
                 } });
             },
-            .store_tag => |assign| {
+            .store_tag => |assign| blk: {
                 if (assign.payload) |payload| {
-                    if (!frame.transfer_single) {
-                        next = try self.retainLocalIfRc(payload, next);
-                    }
+                    if (!step.transfer_single) next = try self.retainLocalIfRc(payload, next);
                 }
-                cloned = try self.store.addCFStmt(.{ .store_tag = .{
+                break :blk try self.store.addCFStmt(.{ .store_tag = .{
                     .dest = assign.dest,
                     .tag_layout = assign.tag_layout,
                     .variant_index = assign.variant_index,
@@ -1975,619 +1810,51 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
-            .set_local => |assign| {
-                if (assign.target != assign.value and frame.retain_set_target) {
-                    next = try self.retainLocalIfRc(assign.target, next);
-                }
-                cloned = try self.store.addCFStmt(.{ .set_local = .{
+            .set_local => |assign| blk: {
+                if (assign.target != assign.value and step.retain_set_target) next = try self.retainLocalIfRc(assign.target, next);
+                break :blk try self.store.addCFStmt(.{ .set_local = .{
                     .target = assign.target,
                     .value = assign.value,
                     .mode = assign.mode,
                     .next = next,
                 } });
             },
-            .debug => |debug_stmt| {
-                cloned = try self.store.addCFStmt(.{ .debug = .{
-                    .message = debug_stmt.message,
-                    .next = next,
-                } });
-            },
-            .expect => |expect_stmt| {
-                cloned = try self.store.addCFStmt(.{ .expect = .{
-                    .condition = expect_stmt.condition,
-                    .next = next,
-                } });
-            },
-            .switch_initialized_payload => arcInvariant("ARC linear rewrite frame contained initialized-payload switch"),
-            .comptime_branch_taken => |marker| {
-                cloned = try self.store.addCFStmt(.{ .comptime_branch_taken = .{
-                    .site = marker.site,
-                    .branch_index = marker.branch_index,
-                    .next = next,
-                } });
-            },
-            .incref => |rc| {
-                cloned = try self.store.addCFStmt(.{ .incref = .{
-                    .value = rc.value,
-                    .rc = rc.rc,
-                    .count = rc.count,
-                    .atomicity = self.rcAtomicity(rc.value),
-                    .next = next,
-                } });
-            },
-            .decref => |rc| {
-                cloned = try self.store.addCFStmt(.{ .decref = .{
-                    .value = rc.value,
-                    .rc = rc.rc,
-                    .atomicity = self.rcAtomicity(rc.value),
-                    .next = next,
-                } });
-            },
-            .decref_if_initialized => |rc| {
-                cloned = try self.store.addCFStmt(.{ .decref_if_initialized = .{
-                    .cond = rc.cond,
-                    .cond_mask = rc.cond_mask,
-                    .value = rc.value,
-                    .rc = rc.rc,
-                    .atomicity = self.rcAtomicity(rc.value),
-                    .next = next,
-                } });
-            },
-            .free => |rc| {
-                cloned = try self.store.addCFStmt(.{ .free = .{
-                    .value = rc.value,
-                    .rc = rc.rc,
-                    .atomicity = self.rcAtomicity(rc.value),
-                    .next = next,
-                } });
-            },
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .switch_stmt,
-            .str_match,
-            .str_match_set,
-            .loop_continue,
-            .loop_break,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            .expect_err,
-            => arcInvariant("ARC linear rewrite attempted to patch a non-linear statement"),
-        }
-        return self.attachPrefix(frame.head, frame.stmt, cloned);
-    }
-
-    fn attachPrefix(self: *Inserter, head: LIR.CFStmtId, old_tail: LIR.CFStmtId, new_tail: LIR.CFStmtId) LIR.CFStmtId {
-        if (head == old_tail) return new_tail;
-
-        var cursor = head;
-        while (cursor != old_tail) {
-            const stmt = self.store.getCFStmtPtr(cursor);
-            switch (stmt.*) {
-                .incref => |*rc| {
-                    if (rc.next == old_tail) {
-                        rc.next = new_tail;
-                        return head;
-                    }
-                    cursor = rc.next;
-                },
-                .decref => |*rc| {
-                    if (rc.next == old_tail) {
-                        rc.next = new_tail;
-                        return head;
-                    }
-                    cursor = rc.next;
-                },
-                .decref_if_initialized => |*rc| {
-                    if (rc.next == old_tail) {
-                        rc.next = new_tail;
-                        return head;
-                    }
-                    cursor = rc.next;
-                },
-                .free => |*rc| {
-                    if (rc.next == old_tail) {
-                        rc.next = new_tail;
-                        return head;
-                    }
-                    cursor = rc.next;
-                },
-                .switch_initialized_payload => |*switch_stmt| {
-                    switch_stmt.initialized_branch = self.attachPrefix(switch_stmt.initialized_branch, old_tail, new_tail);
-                    switch_stmt.uninitialized_branch = self.attachPrefix(switch_stmt.uninitialized_branch, old_tail, new_tail);
-                    return head;
-                },
-                else => arcInvariant("ARC linear rewrite prefix contained a non-RC statement"),
-            }
-        }
-
-        arcInvariant("ARC linear rewrite prefix did not reach the cloned statement");
-    }
-
-    fn scheduleRewriteJoin(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        path: *RewritePathTask,
-        start: LIR.CFStmtId,
-        join_stmt: anytype,
-    ) ResourceError!void {
-        if (self.rewritten_joins) |rewritten_joins| {
-            if (rewritten_joins.get(start)) |rewritten| {
-                const tail = try self.releaseDifference(&path.owned, &rewritten.keep, rewritten.stmt);
-                path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                return;
-            }
-        }
-
-        const summary = self.solveSummaryOf(join_stmt.id);
-        const state = try self.store.allocator.create(RewriteJoinTask);
-        var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        state.* = .{
-            .start = start,
-            .id = join_stmt.id,
-            .params = join_stmt.params,
-            .maybe_uninitialized_params = join_stmt.maybe_uninitialized_params,
-            .maybe_uninitialized_conditions = join_stmt.maybe_uninitialized_conditions,
-            .maybe_uninitialized_condition_masks = join_stmt.maybe_uninitialized_condition_masks,
-            .incoming_owned = try path.owned.clone(),
-            .entry_keep = try cloneOwnedSetWith(self.store.allocator, &summary.entry_keep),
-            .body_keep = try cloneOwnedSetWith(self.store.allocator, &summary.body_keep),
-            .body_reachable = summary.body_reachable,
-            .loop_keep_id = summary.loop_keep_id,
-            .frames = takeRewriteFrames(path),
-            .result = path.result,
-        };
-        errdefer if (!queued) state.incoming_owned.deinit();
-        errdefer if (!queued) state.entry_keep.deinit();
-        errdefer if (!queued) state.body_keep.deinit();
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
-        var loop_keep_registered = false;
-        errdefer if (!queued and loop_keep_registered) {
-            _ = self.active_loop_keep_ids.remove(@intFromPtr(&state.body_keep));
-        };
-        try self.active_loop_keep_ids.put(@intFromPtr(&state.body_keep), state.loop_keep_id);
-        loop_keep_registered = true;
-
-        try tasks.append(self.store.allocator, .{ .join = state });
-        queued = true;
-        const join_options = RewriteOptions{
-            .boundaries = path.options.boundaries,
-            .loop_keep = &state.body_keep,
-            .loop_keep_id = state.loop_keep_id,
-        };
-        try self.pushRewritePath(tasks, join_stmt.remainder, &state.entry_keep, .{
-            .boundaries = join_options.boundaries,
-            .loop_keep = join_options.loop_keep,
-            .loop_keep_id = join_options.loop_keep_id,
-        }, &state.remainder);
-        if (state.body_reachable) {
-            try self.pushRewritePath(tasks, join_stmt.body, &state.body_keep, join_options, &state.body);
-        }
-    }
-
-    fn finishRewriteJoin(self: *Inserter, state: *RewriteJoinTask) ResourceError!void {
-        errdefer self.destroyRewriteJoin(state);
-        if (!state.body_reachable) {
-            const tail = try self.releaseDifference(&state.incoming_owned, &state.entry_keep, state.remainder);
-            state.result.* = try self.finishLinearRewrite(&state.frames, tail);
-            self.destroyRewriteJoin(state);
-            return;
-        }
-        const join = try self.store.addCFStmt(.{ .join = .{
-            .id = state.id,
-            .params = state.params,
-            .maybe_uninitialized_params = state.maybe_uninitialized_params,
-            .maybe_uninitialized_conditions = state.maybe_uninitialized_conditions,
-            .maybe_uninitialized_condition_masks = state.maybe_uninitialized_condition_masks,
-            .body = state.body,
-            .remainder = state.remainder,
-        } });
-        if (self.rewritten_joins) |rewritten_joins| {
-            try rewritten_joins.put(state.start, .{
-                .keep = try state.entry_keep.clone(),
-                .stmt = join,
-            });
-        }
-        const tail = try self.releaseDifference(&state.incoming_owned, &state.entry_keep, join);
-        state.result.* = try self.finishLinearRewrite(&state.frames, tail);
-        self.destroyRewriteJoin(state);
-    }
-
-    fn scheduleRewriteSwitch(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        path: *RewritePathTask,
-        start: LIR.CFStmtId,
-        switch_stmt: anytype,
-    ) ResourceError!void {
-        if (switch_stmt.continuation) |continuation| {
-            const summaries = self.switch_summaries orelse arcInvariant("ARC rewrite ran without switch summaries");
-            const summary = summaries.get(start) orelse arcInvariant("ARC rewrite reached a switch without a summary");
-
-            if (!summary.reached) {
-                try self.scheduleRewriteSwitchNoContinuation(tasks, path, start, switch_stmt.cond, switch_stmt.branches, switch_stmt.default_branch, switch_stmt.default_is_cold, switch_stmt.continuation);
-                return;
-            }
-            try self.scheduleRewriteSwitchContinuation(tasks, path, start, switch_stmt.cond, switch_stmt.branches, switch_stmt.default_is_cold, continuation, &summary.common);
-            return;
-        }
-
-        try self.scheduleRewriteSwitchNoContinuation(tasks, path, start, switch_stmt.cond, switch_stmt.branches, switch_stmt.default_branch, switch_stmt.default_is_cold, null);
-    }
-
-    fn scheduleRewriteInitializedPayloadSwitch(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        path: *RewritePathTask,
-        switch_stmt: anytype,
-    ) ResourceError!void {
-        const state = try self.store.allocator.create(RewriteInitializedPayloadSwitchTask);
-        var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        state.* = .{
-            .cond = switch_stmt.cond,
-            .cond_mask = switch_stmt.cond_mask,
-            .payload = switch_stmt.payload,
-            .uninitialized_is_cold = switch_stmt.uninitialized_is_cold,
-            .frames = takeRewriteFrames(path),
-            .result = path.result,
-        };
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
-
-        try tasks.append(self.store.allocator, .{ .initialized_payload_switch = state });
-        queued = true;
-
-        var initialized_owned = try path.owned.clone();
-        defer initialized_owned.deinit();
-        self.placeUnit(&initialized_owned, switch_stmt.payload);
-
-        var uninitialized_owned = try path.owned.clone();
-        defer uninitialized_owned.deinit();
-        // The branch proves the cell uninitialized: the payload binding
-        // ends with nothing to release.
-        _ = self.transferForInit(&uninitialized_owned, switch_stmt.payload);
-
-        try self.pushRewritePath(tasks, switch_stmt.initialized_branch, &initialized_owned, path.options, &state.initialized_branch);
-        try self.pushRewritePath(tasks, switch_stmt.uninitialized_branch, &uninitialized_owned, path.options, &state.uninitialized_branch);
-    }
-
-    fn scheduleRewriteSwitchNoContinuation(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        path: *RewritePathTask,
-        start: LIR.CFStmtId,
-        cond: LIR.LocalId,
-        branches_span: LIR.CFSwitchBranchSpan,
-        default_branch: LIR.CFStmtId,
-        default_is_cold: bool,
-        continuation: ?LIR.CFStmtId,
-    ) ResourceError!void {
-        const branches = self.store.getCFSwitchBranches(branches_span);
-        const state = try self.store.allocator.create(RewriteSwitchNoContinuationTask);
-        var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        const branch_results = try self.store.allocator.alloc(LIR.CFStmtId, branches.len);
-        errdefer if (!queued) self.store.allocator.free(branch_results);
-        state.* = .{
-            .start = start,
-            .cond = cond,
-            .branches = branches_span,
-            .branch_results = branch_results,
-            .default_is_cold = default_is_cold,
-            .continuation = continuation,
-            .frames = takeRewriteFrames(path),
-            .result = path.result,
-        };
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
-
-        try tasks.append(self.store.allocator, .{ .switch_no_continuation = state });
-        queued = true;
-        try self.pushRewritePath(tasks, default_branch, &path.owned, path.options, &state.default_branch);
-        for (0..GuardedList.borrowLen(branches)) |index| {
-            const branch = GuardedList.at(branches, index);
-            try self.pushRewritePath(tasks, branch.body, &path.owned, path.options, &state.branch_results[index]);
-        }
-    }
-
-    fn finishRewriteSwitchNoContinuation(self: *Inserter, state: *RewriteSwitchNoContinuationTask) ResourceError!void {
-        errdefer self.destroyRewriteSwitchNoContinuation(state);
-        const branches = self.store.getCFSwitchBranches(state.branches);
-        if (branches.len != state.branch_results.len) arcInvariant("ARC switch branch result count changed during rewrite");
-        const rewritten_branches = try self.store.allocator.alloc(LIR.CFSwitchBranch, branches.len);
-        defer self.store.allocator.free(rewritten_branches);
-        for (0..GuardedList.borrowLen(branches)) |i| {
-            const branch = GuardedList.at(branches, i);
-            const rewritten = state.branch_results[i];
-            rewritten_branches[i] = .{
-                .value = branch.value,
-                .body = rewritten,
-            };
-        }
-        const switch_stmt = try self.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = state.cond,
-            .branches = try self.store.addCFSwitchBranches(rewritten_branches),
-            .default_branch = state.default_branch,
-            .default_is_cold = state.default_is_cold,
-            .continuation = state.continuation,
-        } });
-        state.result.* = try self.finishLinearRewrite(&state.frames, switch_stmt);
-        self.destroyRewriteSwitchNoContinuation(state);
-    }
-
-    fn finishRewriteInitializedPayloadSwitch(self: *Inserter, state: *RewriteInitializedPayloadSwitchTask) ResourceError!void {
-        errdefer self.destroyRewriteInitializedPayloadSwitch(state);
-        const switch_stmt = try self.store.addCFStmt(.{ .switch_initialized_payload = .{
-            .cond = state.cond,
-            .cond_mask = state.cond_mask,
-            .payload = state.payload,
-            .uninitialized_is_cold = state.uninitialized_is_cold,
-            .initialized_branch = state.initialized_branch,
-            .uninitialized_branch = state.uninitialized_branch,
-        } });
-        state.result.* = try self.finishLinearRewrite(&state.frames, switch_stmt);
-        self.destroyRewriteInitializedPayloadSwitch(state);
-    }
-
-    fn scheduleRewriteSwitchContinuation(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        path: *RewritePathTask,
-        start: LIR.CFStmtId,
-        cond: LIR.LocalId,
-        branches_span: LIR.CFSwitchBranchSpan,
-        default_is_cold: bool,
-        continuation: LIR.CFStmtId,
-        common: *const OwnedSet,
-    ) ResourceError!void {
-        const branches = self.store.getCFSwitchBranches(branches_span);
-        const state = try self.store.allocator.create(RewriteSwitchContinuationTask);
-        var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        const branch_results = try self.store.allocator.alloc(LIR.CFStmtId, branches.len);
-        errdefer if (!queued) self.store.allocator.free(branch_results);
-        state.* = .{
-            .start = start,
-            .cond = cond,
-            .branches = branches_span,
-            .original_continuation = continuation,
-            .branch_results = branch_results,
-            .default_is_cold = default_is_cold,
-            .entry_owned = try path.owned.clone(),
-            .common = try common.clone(),
-            .parent_options = path.options,
-            .frames = takeRewriteFrames(path),
-            .result = path.result,
-        };
-        errdefer if (!queued) state.entry_owned.deinit();
-        errdefer if (!queued) state.common.deinit();
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
-
-        try tasks.append(self.store.allocator, .{ .switch_after_continuation = state });
-        queued = true;
-        try self.pushRewritePath(tasks, continuation, &state.common, path.options, &state.continuation);
-    }
-
-    fn processRewriteSwitchAfterContinuation(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        state: *RewriteSwitchContinuationTask,
-    ) ResourceError!void {
-        var handed_off = false;
-        errdefer if (!handed_off) self.destroyRewriteSwitchContinuation(state);
-
-        state.nested_boundaries = try appendRewriteBoundary(self.store.allocator, state.parent_options.boundaries, .{
-            .stop = state.original_continuation,
-            .replacement = state.continuation,
-            .keep = &state.common,
-        });
-        const nested_options = RewriteOptions{
-            .boundaries = state.nested_boundaries,
-            .loop_keep = state.parent_options.loop_keep,
-            .loop_keep_id = state.parent_options.loop_keep_id,
+            .debug => |debug_stmt| try self.store.addCFStmt(.{ .debug = .{
+                .message = debug_stmt.message,
+                .next = next,
+            } }),
+            .expect => |expect_stmt| try self.store.addCFStmt(.{ .expect = .{
+                .condition = expect_stmt.condition,
+                .next = next,
+            } }),
+            .decref_if_initialized => |rc| try self.store.addCFStmt(.{ .decref_if_initialized = .{
+                .cond = rc.cond,
+                .cond_mask = rc.cond_mask,
+                .value = rc.value,
+                .rc = rc.rc,
+                .atomicity = self.rcAtomicity(rc.value),
+                .next = next,
+            } }),
+            .comptime_branch_taken => |marker| try self.store.addCFStmt(.{ .comptime_branch_taken = .{
+                .site = marker.site,
+                .branch_index = marker.branch_index,
+                .next = next,
+            } }),
+            else => arcInvariant("ARC solved linear plan contained a non-linear statement"),
         };
 
-        try tasks.append(self.store.allocator, .{ .switch_finish_continuation = state });
-        handed_off = true;
-        const switch_stmt = self.store.getCFStmt(state.start).switch_stmt;
-        try self.pushRewritePath(tasks, switch_stmt.default_branch, &state.entry_owned, nested_options, &state.default_branch);
-        const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-        if (branches.len != state.branch_results.len) arcInvariant("ARC switch branch result count changed during continuation rewrite");
-        for (0..GuardedList.borrowLen(branches)) |index| {
-            const branch = GuardedList.at(branches, index);
-            try self.pushRewritePath(tasks, branch.body, &state.entry_owned, nested_options, &state.branch_results[index]);
+        if (step.pre_release) |release| cloned = try self.materializeReleaseDecision(release, cloned);
+        var pre_release_index = step.pre_release_extra.items.len;
+        while (pre_release_index > 0) {
+            pre_release_index -= 1;
+            cloned = try self.materializeReleaseDecision(step.pre_release_extra.items[pre_release_index], cloned);
         }
-    }
-
-    fn finishRewriteSwitchContinuation(self: *Inserter, state: *RewriteSwitchContinuationTask) ResourceError!void {
-        errdefer self.destroyRewriteSwitchContinuation(state);
-        const branches = self.store.getCFSwitchBranches(state.branches);
-        if (branches.len != state.branch_results.len) arcInvariant("ARC switch branch result count changed during rewrite");
-        const rewritten_branches = try self.store.allocator.alloc(LIR.CFSwitchBranch, branches.len);
-        defer self.store.allocator.free(rewritten_branches);
-        for (0..GuardedList.borrowLen(branches)) |i| {
-            const branch = GuardedList.at(branches, i);
-            const rewritten = state.branch_results[i];
-            rewritten_branches[i] = .{
-                .value = branch.value,
-                .body = rewritten,
-            };
+        if (step.preserve_consumed_args != 0) {
+            const assign = stmt.assign_low_level;
+            cloned = try self.retainMaskedArgs(assign.args, step.preserve_consumed_args, cloned);
         }
-        const switch_stmt = try self.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = state.cond,
-            .branches = try self.store.addCFSwitchBranches(rewritten_branches),
-            .default_branch = state.default_branch,
-            .default_is_cold = state.default_is_cold,
-            .continuation = state.continuation,
-        } });
-        state.result.* = try self.finishLinearRewrite(&state.frames, switch_stmt);
-        self.destroyRewriteSwitchContinuation(state);
-    }
-
-    fn scheduleRewriteStrMatch(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        path: *RewritePathTask,
-        start: LIR.CFStmtId,
-        str_match: anytype,
-    ) ResourceError!void {
-        const state = try self.store.allocator.create(RewriteStrMatchTask);
-        var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        state.* = .{
-            .start = start,
-            .source = str_match.source,
-            .prefix = str_match.prefix,
-            .steps = str_match.steps,
-            .end = str_match.end,
-            .frames = takeRewriteFrames(path),
-            .result = path.result,
-        };
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
-
-        try tasks.append(self.store.allocator, .{ .str_match = state });
-        queued = true;
-
-        var match_owned = try path.owned.clone();
-        defer match_owned.deinit();
-        const steps = self.store.getStrMatchSteps(str_match.steps);
-        for (0..GuardedList.borrowLen(steps)) |step_index| {
-            const step = GuardedList.at(steps, step_index);
-            switch (step.capture) {
-                .discard => {},
-                .view => |local| self.placeUnit(&match_owned, local),
-            }
-        }
-
-        try self.pushRewritePath(tasks, str_match.on_miss, &path.owned, path.options, &state.on_miss);
-        try self.pushRewritePath(tasks, str_match.on_match, &match_owned, path.options, &state.on_match);
-    }
-
-    fn finishRewriteStrMatch(self: *Inserter, state: *RewriteStrMatchTask) ResourceError!void {
-        errdefer self.destroyRewriteStrMatch(state);
-        const on_match = try self.retainStrMatchSourceForCaptures(state.source, state.steps, state.on_match);
-        const str_match = try self.store.addCFStmt(.{ .str_match = .{
-            .source = state.source,
-            .prefix = state.prefix,
-            .steps = state.steps,
-            .end = state.end,
-            .on_match = on_match,
-            .on_miss = state.on_miss,
-        } });
-        state.result.* = try self.finishLinearRewrite(&state.frames, str_match);
-        self.destroyRewriteStrMatch(state);
-    }
-
-    fn scheduleRewriteStrMatchSet(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        path: *RewritePathTask,
-        start: LIR.CFStmtId,
-        str_match_set: anytype,
-    ) ResourceError!void {
-        const arms = self.store.getStrMatchArms(str_match_set.arms);
-        const state = try self.store.allocator.create(RewriteStrMatchSetTask);
-        var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        const on_matches = try self.store.allocator.alloc(LIR.CFStmtId, arms.len);
-        errdefer if (!queued) self.store.allocator.free(on_matches);
-
-        state.* = .{
-            .start = start,
-            .source = str_match_set.source,
-            .arms = str_match_set.arms,
-            .on_matches = on_matches,
-            .frames = takeRewriteFrames(path),
-            .result = path.result,
-        };
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
-
-        try tasks.append(self.store.allocator, .{ .str_match_set = state });
-        queued = true;
-
-        try self.pushRewritePath(tasks, str_match_set.on_miss, &path.owned, path.options, &state.on_miss);
-        for (0..GuardedList.borrowLen(arms)) |arm_index| {
-            const arm = GuardedList.at(arms, arm_index);
-            var match_owned = try path.owned.clone();
-            defer match_owned.deinit();
-            const steps = self.store.getStrMatchSteps(arm.steps);
-            for (0..GuardedList.borrowLen(steps)) |step_index| {
-                const step = GuardedList.at(steps, step_index);
-                switch (step.capture) {
-                    .discard => {},
-                    .view => |local| self.placeUnit(&match_owned, local),
-                }
-            }
-            try self.pushRewritePath(tasks, arm.on_match, &match_owned, path.options, &state.on_matches[arm_index]);
-        }
-    }
-
-    fn finishRewriteStrMatchSet(self: *Inserter, state: *RewriteStrMatchSetTask) ResourceError!void {
-        errdefer self.destroyRewriteStrMatchSet(state);
-        const arms = self.store.getStrMatchArms(state.arms);
-        if (arms.len != state.on_matches.len) arcInvariant("ARC string-match-set arm count changed during rewrite");
-
-        const rewritten_arms = try self.store.allocator.alloc(LIR.StrMatchArm, arms.len);
-        defer self.store.allocator.free(rewritten_arms);
-        for (0..GuardedList.borrowLen(arms)) |index| {
-            const arm = GuardedList.at(arms, index);
-            const rewritten_on_match = state.on_matches[index];
-            rewritten_arms[index] = .{
-                .prefix = arm.prefix,
-                .steps = arm.steps,
-                .end = arm.end,
-                .on_match = try self.retainStrMatchSourceForCaptures(state.source, arm.steps, rewritten_on_match),
-            };
-        }
-
-        const str_match_set = try self.store.addCFStmt(.{ .str_match_set = .{
-            .source = state.source,
-            .arms = try self.store.addStrMatchArms(rewritten_arms),
-            .on_miss = state.on_miss,
-        } });
-        state.result.* = try self.finishLinearRewrite(&state.frames, str_match_set);
-        self.destroyRewriteStrMatchSet(state);
-    }
-
-    fn scheduleRewriteBoxyTagMatch(
-        self: *Inserter,
-        tasks: *std.ArrayList(RewriteTask),
-        path: *RewritePathTask,
-        start: LIR.CFStmtId,
-        tag_match: anytype,
-    ) ResourceError!void {
-        const state = try self.store.allocator.create(RewriteBoxyTagMatchTask);
-        var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        state.* = .{
-            .start = start,
-            .source = tag_match.source,
-            .source_desc = tag_match.source_desc,
-            .tag_name = tag_match.tag_name,
-            .frames = takeRewriteFrames(path),
-            .result = path.result,
-        };
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
-
-        try tasks.append(self.store.allocator, .{ .boxy_tag_match = state });
-        queued = true;
-
-        try self.pushRewritePath(tasks, tag_match.on_miss, &path.owned, path.options, &state.on_miss);
-        try self.pushRewritePath(tasks, tag_match.on_match, &path.owned, path.options, &state.on_match);
-    }
-
-    fn finishRewriteBoxyTagMatch(self: *Inserter, state: *RewriteBoxyTagMatchTask) ResourceError!void {
-        errdefer self.destroyRewriteBoxyTagMatch(state);
-        const tag_match = try self.store.addCFStmt(.{ .boxy_tag_match = .{
-            .source = state.source,
-            .source_desc = state.source_desc,
-            .tag_name = state.tag_name,
-            .on_match = state.on_match,
-            .on_miss = state.on_miss,
-        } });
-        state.result.* = try self.finishLinearRewrite(&state.frames, tag_match);
-        self.destroyRewriteBoxyTagMatch(state);
+        if (step.pre_retain.items.len != 0) cloned = try self.retainArgs(step.pre_retain.items, cloned);
+        return cloned;
     }
 
     /// Runs the join-summary solver for one proc emission: a structured
@@ -2598,15 +1865,17 @@ const Inserter = struct {
     fn solveProcSummaries(self: *Inserter, body: LIR.CFStmtId, entry_owned: *const OwnedSet) ResourceError!void {
         var tasks = std.ArrayList(SolveTask).empty;
         defer tasks.deinit(self.solve_allocator);
-        try self.pushSolveSegment(&tasks, body, entry_owned, .{});
+        const root_plan = try self.newArcPlan(body);
+        self.arc_plans.root = root_plan;
+        try self.pushSolveSegment(&tasks, body, entry_owned, .{}, root_plan);
         while (true) {
             while (tasks.pop()) |task| {
                 if (builtin.mode == .Debug) solver_iterations += 1;
                 switch (task) {
                     .segment => |segment| try self.processSolveSegment(&tasks, segment),
-                    .join_process => |join_id| try self.processSolveJoin(&tasks, join_id),
-                    .body_walk => |join_id| try self.processSolveBodyWalk(&tasks, join_id),
-                    .switch_resume => |switch_stmt| try self.processSolveSwitchResume(&tasks, switch_stmt),
+                    .join_process => |join_index| try self.processSolveJoin(&tasks, join_index),
+                    .body_walk => |join_index| try self.processSolveBodyWalk(&tasks, join_index),
+                    .switch_resume => |switch_index| try self.processSolveSwitchResume(&tasks, switch_index),
                 }
             }
             // Jump reachability is structural, so once the tasks drain, a
@@ -2615,16 +1884,17 @@ const Inserter = struct {
             // for unreachable bodies; the shrink can ripple through
             // loop-keyed liveness, so drain again until nothing adjusts.
             var adjusted = false;
-            var summaries = self.join_summaries.?.valueIterator();
-            while (summaries.next()) |summary_ptr| {
-                const summary = summary_ptr.*;
+            for (self.join_summaries) |maybe_summary| {
+                const summary = maybe_summary orelse continue;
                 if (summary.body_reachable) continue;
-                var params_only = try OwnedSet.init(self.solve_allocator, self.store.localCount());
+                var params_only = try OwnedSet.init(self.solve_allocator, self.domain());
                 self.placeSolveJoinParamsInto(summary, &params_only);
                 if (params_only.eql(&summary.body_keep)) continue;
                 assignOwnedSet(&summary.body_keep, &params_only);
+                try self.refreshJumpPlans(summary);
                 const purged = try self.purgeLoopKeepLiveness(summary.loop_keep_id);
                 const entry_changed = try self.recomputeSolveEntryKeep(summary);
+                try self.refreshJoinArrivalPlans(summary);
                 if (purged or entry_changed) {
                     try self.scheduleSolveJoinProcess(&tasks, summary);
                     adjusted = true;
@@ -2632,276 +1902,453 @@ const Inserter = struct {
             }
             if (!adjusted) break;
         }
+        try self.finalizeArcPlans();
+    }
+
+    fn finalizeArcPlans(self: *Inserter) ResourceError!void {
+        for (self.arc_plans.plans.items, 0..) |*plan, plan_index| {
+            if (!self.arc_plans.metadata.items[plan_index].scheduled) continue;
+            if (plan.terminal == .none) arcInvariant("ARC fixed point left a scheduled structured plan without a terminal decision");
+            if (plan.step_count > plan.steps.items.len) arcInvariant("ARC fixed point left an invalid plan step count");
+            for (plan.steps.items[0..plan.step_count]) |*step| {
+                if (step.call_callee) |callee| {
+                    step.call_target_override = try self.variantForCall(callee, step.call_demanded);
+                }
+            }
+        }
     }
 
     fn processSolveSegment(self: *Inserter, tasks: *std.ArrayList(SolveTask), segment: *SolveSegment) ResourceError!void {
+        if (!self.beginArcPlanUpdate(segment)) return;
         while (true) {
             var stop_entry = segment.ctx.stops;
             while (stop_entry) |entry| : (stop_entry = entry.parent) {
                 if (entry.stmt != segment.cursor) continue;
-                if (entry.summary) |switch_summary| {
-                    try self.contributeSolveSwitchExit(tasks, switch_summary, switch_summary.start, &segment.owned);
+                if (!entry.contributes and !entry.summary.reached) {
+                    try self.registerLatentSwitchStopPlan(entry.summary, segment.plan_index, &segment.owned);
+                    continue;
                 }
+                try self.updateSwitchStopPlan(entry.summary, segment.plan_index, &segment.owned);
+                if (entry.contributes) try self.contributeSolveSwitchExit(tasks, entry.summary, &segment.owned);
                 return;
             }
 
             const stmt = self.store.getCFStmt(segment.cursor);
             switch (stmt) {
                 .assign_ref => |assign| {
-                    if (!self.isBindingBorrowed(assign.target)) {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    var transfer = AliasBindTransfer{ .retain_target = true, .release_old_target = false };
+                    if (self.isBindingBorrowed(assign.target)) {
+                        transfer.retain_target = false;
+                    } else {
                         switch (assign.op) {
                             .local => |source| {
                                 if (assign.target != source) {
-                                    _ = try self.transferForAliasBind(&segment.owned, assign.target, source, assign.next, segment.ctx.loop_keep);
+                                    transfer = try self.transferForAliasBind(&segment.owned, assign.target, source, assign.next, segment.ctx.loop_keep);
+                                } else {
+                                    transfer.retain_target = false;
                                 }
                             },
-                            else => _ = self.transferForFreshBind(&segment.owned, assign.target),
+                            else => transfer.release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
                         }
                     }
+                    // A take read consumes the container's stored unit for
+                    // this field: the target still binds owned, but no
+                    // retain is paid.
+                    if (self.takeApplies(segment.cursor)) transfer.retain_target = false;
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.retain_assign_ref_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .init_uninitialized => |uninit| {
-                    _ = self.transferForInit(&segment.owned, uninit.target);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    step.pre_release = if (self.transferForInit(&segment.owned, uninit.target)) self.releaseDecision(uninit.target) else null;
                     segment.cursor = uninit.next;
                 },
                 .assign_literal => |assign| {
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_call => |assign| {
-                    // Call targets are not materialized during solving, so
-                    // the unique-demand scan stays off; it has no effect on
-                    // the abstract ownership state.
-                    var transfer = try self.transferForCall(&segment.owned, null, self.solution.sigOf(assign.proc), false, assign.args, assign.next, assign.target, null, segment.ctx.loop_keep);
-                    defer transfer.deinit(self.store.allocator);
-                    try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, segment.ctx.loop_keep, null);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, segment.ctx.loop_keep, null);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const unique_demand = self.variants.enabled and !self.solution.isPinnedProc(assign.proc);
+                    const transfer = try self.transferForCall(&segment.owned, assign.proc, self.solution.sigOf(assign.proc), unique_demand, assign.args, assign.next, assign.target, null, segment.ctx.loop_keep);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    try step.pre_retain.appendSlice(self.solve_allocator, transfer.args.retain_args);
+                    step.retain_call_result = transfer.retain_call_result;
+                    step.call_callee = assign.proc;
+                    step.call_demanded = transfer.args.demanded;
+                    self.death_scratch.clearRetainingCapacity();
+                    try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.copyDeathScratchToStep(step);
                     segment.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
-                    var transfer = try self.transferForCall(&segment.owned, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
-                    defer transfer.deinit(self.store.allocator);
-                    try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, null);
-                    const singles = [_]LIR.LocalId{assign.closure};
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, null);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = try self.transferForCall(&segment.owned, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
+                    var preserve_reuse_source = false;
+                    if (assign.reuse_closure) {
+                        if (assign.closure == assign.target) arcInvariant("owned erased call cannot consume and rebind the same local");
+                        const reuse_source = assign.reuse_source orelse arcInvariant("owned erased call lacked its explicit reuse ownership source");
+                        preserve_reuse_source = try self.groupUsedInPath(assign.next, reuse_source, segment.ctx.loop_keep);
+                        if (!preserve_reuse_source) _ = self.takeUnit(&segment.owned, reuse_source);
+                    }
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    try step.pre_retain.appendSlice(self.solve_allocator, transfer.args.retain_args);
+                    if (!assign.reuse_closure) try step.pre_retain.append(self.solve_allocator, assign.closure);
+                    if (preserve_reuse_source) try step.pre_retain.append(self.solve_allocator, assign.reuse_source.?);
+                    self.death_scratch.clearRetainingCapacity();
+                    try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    const singles = [_]LIR.LocalId{ assign.closure, assign.reuse_source orelse assign.closure };
+                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.copyDeathScratchToStep(step);
                     segment.cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
-                    _ = try self.transferForSingle(&segment.owned, assign.capture, assign.target, assign.next, segment.ctx.loop_keep);
-                    if (assign.reuse) |reuse| {
-                        _ = try self.singleTransfer(reuse, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
-                    }
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = try self.transferForPackedErased(&segment.owned, assign, segment.ctx.loop_keep);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    step.reuse_unique = transfer.reuse_unique;
+                    if (transfer.preserve_reuse) try step.pre_retain.append(self.solve_allocator, assign.reuse.?);
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.reuse orelse assign.target, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_desc_ref => |assign| {
-                    try self.takeValuesInvalidatedByDescriptorUpdate(assign.target, &segment.owned, assign.next);
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    try self.planValuesInvalidatedByDescriptorUpdate(
+                        assign.target,
+                        &segment.owned,
+                        assign.next,
+                        segment.ctx.loop_keep,
+                        &step.pre_release_extra,
+                    );
+                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    self.death_scratch.clearRetainingCapacity();
                     const desc_local = assign.desc.localOrNull() orelse assign.target;
                     const residual_local = if (assign.tag_residual_for) |desc| desc.localOrNull() orelse assign.target else assign.target;
                     const singles = [_]LIR.LocalId{ desc_local, residual_local, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.captures, assign.next, segment.ctx.loop_keep, null);
+                    try self.postStmtDeaths(&segment.owned, &singles, assign.captures, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.copyDeathScratchToStep(step);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_dict_ref => |assign| {
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const dict_local = assign.dict.localOrNull() orelse assign.target;
                     const singles = [_]LIR.LocalId{ dict_local, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_box => |assign| {
-                    if (assign.payload_mode == .move) {
-                        _ = try self.singleTransfer(assign.payload, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.payload_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.payload_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.payload);
                     }
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
                     const singles = [_]LIR.LocalId{ assign.payload, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_reuse_box => |assign| {
-                    _ = try self.singleTransfer(assign.source, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (!transfer.transfer_single) try step.pre_retain.append(self.solve_allocator, assign.source);
                     const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_unbox => |assign| {
-                    if (assign.source_mode == .move) {
-                        _ = try self.singleTransfer(assign.source, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.source_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.source_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.source);
                     }
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
+                    step.retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign.target);
                     const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_adapt => |assign| {
-                    if (assign.source_mode == .move) {
-                        _ = try self.singleTransfer(assign.source, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.source_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.source_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.source);
                     }
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
                     const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_inspect => |assign| {
-                    if (assign.source_mode == .move) {
-                        _ = try self.singleTransfer(assign.source, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.source_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.source_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.source);
                     }
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
                     const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_eq => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     if (assign.source_mode == .move) {
                         _ = try self.singleTransfer(assign.lhs, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
                         _ = try self.singleTransfer(assign.rhs, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
                     }
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
+                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_tag => |assign| {
-                    if (assign.payload) |payload| {
-                        if (assign.payload_mode == .move) {
-                            _ = try self.singleTransfer(payload, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
-                        }
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.payload_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.payload_mode == .move and !transfer.transfer_single) {
+                        if (assign.payload) |payload| try step.pre_retain.append(self.solve_allocator, payload);
                     }
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
                     const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_tag_payload => |assign| {
-                    if (assign.source_mode == .move) {
-                        _ = try self.singleTransfer(assign.source, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.source_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.source_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.source);
                     }
-                    _ = self.takeRebindTarget(&segment.owned, assign.target);
-                    if (!self.isBindingBorrowed(assign.target)) self.placeUnit(&segment.owned, assign.target);
+                    step.retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign.target);
                     const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .boxy_tag_match => |tag_match| {
-                    try self.pushSolveSegment(tasks, tag_match.on_match, &segment.owned, segment.ctx);
-                    try self.pushSolveSegment(tasks, tag_match.on_miss, &segment.owned, segment.ctx);
+                    const terminal = try self.prepareBoxyTagMatchPlan(segment.plan_index, segment.cursor, tag_match.on_match, tag_match.on_miss);
+                    const child_plans = terminal.boxy_tag_match;
+                    try self.pushSolveSegment(tasks, tag_match.on_match, &segment.owned, segment.ctx, child_plans.match_plan);
+                    try self.pushSolveSegment(tasks, tag_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
                     return;
                 },
                 .assign_call_dict => |assign| {
-                    _ = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &segment.owned, segment.ctx.loop_keep, .no);
-                    _ = self.transferForFreshBind(&segment.owned, assign.target);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    step.transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &segment.owned, segment.ctx.loop_keep, .no);
+                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    self.death_scratch.clearRetainingCapacity();
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, null);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.arg_descs, assign.next, segment.ctx.loop_keep, null);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.hidden_args, assign.next, segment.ctx.loop_keep, null);
+                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.postStmtDeaths(&segment.owned, &.{}, assign.arg_descs, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.postStmtDeaths(&segment.owned, &.{}, assign.hidden_args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.copyDeathScratchToStep(step);
                     segment.cursor = assign.next;
                 },
                 .assign_low_level => |assign| {
-                    _ = try self.transferForLowLevel(&segment.owned, assign.args, assign.rc_effect, assign.target, assign.next, segment.ctx.loop_keep, false);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = try self.transferForLowLevel(&segment.owned, assign.args, assign.rc_effect, assign.target, assign.next, segment.ctx.loop_keep, true);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.preserve_consumed_args = transfer.preserve_consumed_args;
+                    step.transfer_mask = transfer.transfer_mask;
+                    step.skip_result_retain = self.isBindingBorrowed(assign.target);
+                    step.unique_args = transfer.unique_args;
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_list => |assign| {
-                    _ = try self.transferForAggregate(&segment.owned, assign.elems, assign.target, assign.next, segment.ctx.loop_keep, null);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    self.transfer_position_scratch.clearRetainingCapacity();
+                    const transfer = try self.transferForAggregate(&segment.owned, assign.elems, assign.target, assign.next, segment.ctx.loop_keep, self.transfer_position_scratch);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    try step.transfer_positions.appendSlice(self.solve_allocator, self.transfer_position_scratch.items);
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.elems, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.elems, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_struct => |assign| {
-                    _ = try self.transferForAggregate(&segment.owned, assign.fields, assign.target, assign.next, segment.ctx.loop_keep, null);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    self.transfer_position_scratch.clearRetainingCapacity();
+                    const transfer = try self.transferForAggregate(&segment.owned, assign.fields, assign.target, assign.next, segment.ctx.loop_keep, self.transfer_position_scratch);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    try step.transfer_positions.appendSlice(self.solve_allocator, self.transfer_position_scratch.items);
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.fields, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.fields, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_tag => |assign| {
-                    _ = try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next, segment.ctx.loop_keep);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next, segment.ctx.loop_keep);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
                     const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .store_struct => |assign| {
-                    try self.spanTransferPositions(assign.fields, assign.next, assign.dest, &segment.owned, segment.ctx.loop_keep, null);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.fields, assign.next, segment.ctx.loop_keep, null);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    self.transfer_position_scratch.clearRetainingCapacity();
+                    try self.spanTransferPositions(assign.fields, assign.next, assign.dest, &segment.owned, segment.ctx.loop_keep, self.transfer_position_scratch);
+                    try step.transfer_positions.appendSlice(self.solve_allocator, self.transfer_position_scratch.items);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &.{}, assign.fields, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .store_tag => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     if (assign.payload) |payload| {
-                        _ = try self.singleTransfer(payload, assign.next, assign.dest, &segment.owned, segment.ctx.loop_keep);
+                        step.transfer_single = try self.singleTransfer(payload, assign.next, assign.dest, &segment.owned, segment.ctx.loop_keep);
                     }
                     const singles = [_]LIR.LocalId{assign.payload orelse assign.dest};
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .set_local => |assign| {
-                    _ = try self.transferForSetLocal(&segment.owned, assign.target, assign.value, assign.mode, assign.next, segment.ctx.loop_keep);
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = try self.transferForSetLocal(&segment.owned, assign.target, assign.value, assign.mode, assign.next, segment.ctx.loop_keep);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.retain_set_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ assign.value, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .debug => |debug_stmt| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const singles = [_]LIR.LocalId{debug_stmt.message};
-                    try self.postStmtDeaths(&segment.owned, &singles, null, debug_stmt.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, debug_stmt.next, segment.ctx.loop_keep);
                     segment.cursor = debug_stmt.next;
                 },
                 .expect => |expect_stmt| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const singles = [_]LIR.LocalId{expect_stmt.condition};
-                    try self.postStmtDeaths(&segment.owned, &singles, null, expect_stmt.next, segment.ctx.loop_keep, null);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, expect_stmt.next, segment.ctx.loop_keep);
                     segment.cursor = expect_stmt.next;
                 },
                 .decref_if_initialized => |rc| {
+                    _ = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     self.noteEmittedRelease(&segment.owned, rc.value);
                     segment.cursor = rc.next;
                 },
                 .incref, .decref, .free => arcInvariant("ARC summary solver received already-reference-counted LIR"),
                 .switch_stmt => |switch_stmt| {
+                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                     if (switch_stmt.continuation) |continuation| {
-                        const summaries = self.switch_summaries orelse arcInvariant("ARC solver ran without a switch table");
-                        const gop = try summaries.getOrPut(segment.cursor);
-                        if (!gop.found_existing) {
+                        const switch_index = self.solution.switchIndexOfStmt(segment.cursor);
+                        if (switch_index >= self.switch_summaries.len) arcInvariant("ARC solver switch index exceeded its lifted table");
+                        if (self.switch_summaries[switch_index] == null) {
                             const switch_summary = try self.solve_allocator.create(SwitchSummary);
+                            const continuation_plan = try self.newArcPlan(continuation);
                             switch_summary.* = .{
+                                .index = switch_index,
                                 .start = segment.cursor,
                                 .continuation = continuation,
-                                .common = try OwnedSet.init(self.solve_allocator, self.store.localCount()),
+                                .common = try OwnedSet.init(self.solve_allocator, self.domain()),
                                 .resume_ctx = segment.ctx,
+                                .continuation_plan = continuation_plan,
                             };
-                            gop.value_ptr.* = switch_summary;
+                            self.switch_summaries[switch_index] = switch_summary;
                         }
-                        const switch_summary = gop.value_ptr.*;
+                        const switch_summary = self.switch_summaries[switch_index].?;
+                        const terminal = try self.prepareSwitchPlan(
+                            segment.plan_index,
+                            segment.cursor,
+                            branches,
+                            switch_stmt.default_branch,
+                            switch_summary.continuation_plan,
+                            switch_summary.reached,
+                        );
+                        try self.registerSwitchControlPlan(switch_summary, segment.plan_index);
+                        const child_plans = terminal.switch_stmt;
                         if (!switch_summary.resume_queued) {
                             switch_summary.resume_queued = true;
-                            try tasks.append(self.solve_allocator, .{ .switch_resume = segment.cursor });
+                            try tasks.append(self.solve_allocator, .{ .switch_resume = switch_index });
                         }
                         const stop = try self.solve_allocator.create(SolveStop);
-                        stop.* = .{ .stmt = continuation, .summary = switch_summary, .parent = segment.ctx.stops };
+                        stop.* = .{
+                            .stmt = continuation,
+                            .summary = switch_summary,
+                            .contributes = true,
+                            .parent = segment.ctx.stops,
+                        };
                         var branch_ctx = segment.ctx;
                         branch_ctx.stops = stop;
-                        const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                         for (0..GuardedList.borrowLen(branches)) |branch_index| {
                             const branch = GuardedList.at(branches, branch_index);
-                            try self.pushSolveSegment(tasks, branch.body, &segment.owned, branch_ctx);
+                            try self.pushSolveSegment(tasks, branch.body, &segment.owned, branch_ctx, child_plans.branch_plans[branch_index]);
                         }
-                        try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, branch_ctx);
+                        try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, branch_ctx, child_plans.default_plan);
                         return;
                     }
 
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+                    const terminal = try self.prepareSwitchPlan(segment.plan_index, segment.cursor, branches, switch_stmt.default_branch, no_plan, false);
+                    const child_plans = terminal.switch_stmt;
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
-                        try self.pushSolveSegment(tasks, branch.body, &segment.owned, segment.ctx);
+                        try self.pushSolveSegment(tasks, branch.body, &segment.owned, segment.ctx, child_plans.branch_plans[branch_index]);
                     }
-                    try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, segment.ctx);
+                    try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, segment.ctx, child_plans.default_plan);
                     return;
                 },
                 .switch_initialized_payload => |switch_stmt| {
+                    const terminal = try self.prepareInitializedPayloadSwitchPlan(
+                        segment.plan_index,
+                        segment.cursor,
+                        switch_stmt.initialized_branch,
+                        switch_stmt.uninitialized_branch,
+                    );
+                    const child_plans = terminal.initialized_payload_switch;
                     var initialized_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
                     self.placeUnit(&initialized_owned, switch_stmt.payload);
 
@@ -2910,11 +2357,13 @@ const Inserter = struct {
                     // binding ends with nothing to release.
                     _ = self.transferForInit(&uninitialized_owned, switch_stmt.payload);
 
-                    try self.pushSolveSegment(tasks, switch_stmt.initialized_branch, &initialized_owned, segment.ctx);
-                    try self.pushSolveSegment(tasks, switch_stmt.uninitialized_branch, &uninitialized_owned, segment.ctx);
+                    try self.pushSolveSegment(tasks, switch_stmt.initialized_branch, &initialized_owned, segment.ctx, child_plans.initialized_plan);
+                    try self.pushSolveSegment(tasks, switch_stmt.uninitialized_branch, &uninitialized_owned, segment.ctx, child_plans.uninitialized_plan);
                     return;
                 },
                 .str_match => |str_match| {
+                    const terminal = try self.prepareStrMatchPlan(segment.plan_index, segment.cursor, str_match.on_match, str_match.on_miss);
+                    const child_plans = terminal.str_match;
                     var match_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
                     const steps = self.store.getStrMatchSteps(str_match.steps);
                     for (0..GuardedList.borrowLen(steps)) |step_index| {
@@ -2924,12 +2373,14 @@ const Inserter = struct {
                             .view => |local| self.placeUnit(&match_owned, local),
                         }
                     }
-                    try self.pushSolveSegment(tasks, str_match.on_match, &match_owned, segment.ctx);
-                    try self.pushSolveSegment(tasks, str_match.on_miss, &segment.owned, segment.ctx);
+                    try self.pushSolveSegment(tasks, str_match.on_match, &match_owned, segment.ctx, child_plans.match_plan);
+                    try self.pushSolveSegment(tasks, str_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
                     return;
                 },
                 .str_match_set => |str_match_set| {
                     const arms = self.store.getStrMatchArms(str_match_set.arms);
+                    const terminal = try self.prepareStrMatchSetPlan(segment.plan_index, segment.cursor, arms, str_match_set.on_miss);
+                    const child_plans = terminal.str_match_set;
                     for (0..GuardedList.borrowLen(arms)) |arm_index| {
                         const arm = GuardedList.at(arms, arm_index);
                         var match_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
@@ -2941,37 +2392,515 @@ const Inserter = struct {
                                 .view => |local| self.placeUnit(&match_owned, local),
                             }
                         }
-                        try self.pushSolveSegment(tasks, arm.on_match, &match_owned, segment.ctx);
+                        try self.pushSolveSegment(tasks, arm.on_match, &match_owned, segment.ctx, child_plans.match_plans[arm_index]);
                     }
-                    try self.pushSolveSegment(tasks, str_match_set.on_miss, &segment.owned, segment.ctx);
+                    try self.pushSolveSegment(tasks, str_match_set.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
                     return;
                 },
                 .join => |join_stmt| {
                     try self.solveArriveAtJoin(tasks, segment, join_stmt);
                     return;
                 },
-                .jump => |jump_stmt| {
-                    try self.solveJumpContribution(tasks, segment, jump_stmt.target);
+                .jump => {
+                    try self.solveJumpContribution(tasks, segment);
                     return;
                 },
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
-                .ret,
-                .crash,
-                .expect_err,
-                => return,
+                .runtime_error, .comptime_exhaustiveness_failed, .crash => {
+                    try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, null);
+                    return;
+                },
+                .loop_continue, .loop_break => {
+                    if (segment.ctx.loop_keep) |keep| {
+                        try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, keep.set, null);
+                    } else {
+                        try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, &segment.owned, null);
+                    }
+                    return;
+                },
+                .ret => |ret_stmt| {
+                    var retain_value: ?LIR.LocalId = null;
+                    if (self.current_sig.ret_mode == .borrowed) {
+                        // No ownership unit transfers to the caller.
+                    } else if (!self.consumeAtTerminal(&segment.owned, ret_stmt.value)) {
+                        retain_value = ret_stmt.value;
+                    }
+                    try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
+                    return;
+                },
+                .expect_err => |expect_err_stmt| {
+                    const retain_value = if (self.consumeAtTerminal(&segment.owned, expect_err_stmt.message))
+                        null
+                    else
+                        expect_err_stmt.message;
+                    try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
+                    return;
+                },
                 .comptime_branch_taken => |marker| {
+                    _ = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     segment.cursor = marker.next;
                 },
             }
         }
     }
 
-    fn solveSummaryOf(self: *Inserter, join_id: LIR.JoinPointId) *JoinSummary {
-        const summaries = self.join_summaries orelse arcInvariant("ARC solver ran without a summary table");
-        return summaries.get(join_id) orelse arcInvariant("ARC solver referenced a join without a summary");
+    fn solveSummaryOf(self: *Inserter, join_index: u32) *JoinSummary {
+        if (join_index >= self.join_summaries.len) arcInvariant("ARC solver join index exceeded its lifted table");
+        return self.join_summaries[join_index] orelse arcInvariant("ARC solver referenced a join before its summary was initialized");
+    }
+
+    fn newArcPlan(self: *Inserter, start: LIR.CFStmtId) ResourceError!u32 {
+        if (self.arc_plans.plans.items.len != self.arc_plans.metadata.items.len) {
+            arcInvariant("ARC plan and metadata tables lost index alignment");
+        }
+        const index = self.arc_plans.plans.items.len;
+        if (index >= no_plan) arcInvariant("ARC plan index representation exhausted");
+        try self.arc_plans.plans.append(self.solve_allocator, .{ .start = start });
+        try self.arc_plans.metadata.append(self.solve_allocator, .{});
+        return @intCast(index);
+    }
+
+    fn arcPlan(self: *Inserter, plan_index: u32) *ArcPlan {
+        if (plan_index >= self.arc_plans.plans.items.len) arcInvariant("ARC referenced an unknown structured plan");
+        return &self.arc_plans.plans.items[plan_index];
+    }
+
+    fn planMetadata(self: *Inserter, plan_index: u32) *ArcPlanMetadata {
+        if (plan_index >= self.arc_plans.metadata.items.len) arcInvariant("ARC referenced metadata for an unknown structured plan");
+        return &self.arc_plans.metadata.items[plan_index];
+    }
+
+    fn beginArcPlanUpdate(self: *Inserter, segment: *const SolveSegment) bool {
+        const metadata = self.planMetadata(segment.plan_index);
+        if (segment.plan_version != metadata.version) return false;
+        const plan = self.arcPlan(segment.plan_index);
+        if (plan.start != segment.cursor) arcInvariant("ARC structured plan was scheduled from a different start statement");
+        plan.step_count = 0;
+        plan.previous_terminal = plan.terminal;
+        plan.terminal = .none;
+        return true;
+    }
+
+    fn nextArcPlanStep(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId) ResourceError!*ArcPlanStep {
+        const plan = self.arcPlan(plan_index);
+        const step_index = plan.step_count;
+        plan.step_count += 1;
+        if (step_index == plan.steps.items.len) {
+            try plan.steps.append(self.solve_allocator, .{});
+        } else if (step_index > plan.steps.items.len) {
+            arcInvariant("ARC plan step cursor skipped a stable slot");
+        }
+        const step = &plan.steps.items[step_index];
+        if (step.initialized and step.stmt != stmt) {
+            arcInvariant("ARC structured plan changed statement shape across fixed-point visits");
+        }
+        step.reset(stmt);
+        return step;
+    }
+
+    fn copyDeathScratchToStep(self: *Inserter, step: *ArcPlanStep) ResourceError!void {
+        try step.post_release.appendSlice(self.solve_allocator, self.death_scratch.items);
+    }
+
+    fn finishArcPlanStepDeaths(
+        self: *Inserter,
+        step: *ArcPlanStep,
+        owned: *OwnedSet,
+        singles: []const LIR.LocalId,
+        span: ?LIR.LocalSpan,
+        next: LIR.CFStmtId,
+        loop_keep: ?LoopKeep,
+    ) ResourceError!void {
+        self.death_scratch.clearRetainingCapacity();
+        try self.postStmtDeaths(owned, singles, span, next, loop_keep, self.death_scratch);
+        try self.copyDeathScratchToStep(step);
+    }
+
+    fn setPlanTerminalState(self: *Inserter, plan_index: u32, owned: *const OwnedSet) ResourceError!void {
+        const metadata = self.planMetadata(plan_index);
+        if (metadata.terminal_state) |*state| {
+            assignOwnedSet(state, owned);
+        } else {
+            metadata.terminal_state = try cloneOwnedSetWith(self.solve_allocator, owned);
+        }
+    }
+
+    fn releaseDecision(self: *const Inserter, local: LIR.LocalId) ReleaseDecision {
+        if (self.solution.maybeUninitializedCondition(local)) |condition| {
+            return .{ .maybe_initialized = .{
+                .value = local,
+                .condition = condition.local,
+                .condition_mask = condition.mask,
+            } };
+        }
+        return .{ .initialized = local };
+    }
+
+    fn collectReleaseDifferenceInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet, keep: *const OwnedSet) ResourceError!void {
+        owned.requireSameDomain(keep);
+        releases.clearRetainingCapacity();
+        var iter = owned.bits.iterator(.{ .direction = .reverse });
+        while (iter.next()) |bit| {
+            if (keep.bits.isSet(bit)) continue;
+            try releases.append(self.solve_allocator, self.releaseDecision(owned.domain.resourceLocalAt(bit)));
+        }
+    }
+
+    fn collectReleaseAllInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet) ResourceError!void {
+        releases.clearRetainingCapacity();
+        var iter = owned.bits.iterator(.{ .direction = .reverse });
+        while (iter.next()) |bit| try releases.append(self.solve_allocator, self.releaseDecision(owned.domain.resourceLocalAt(bit)));
+    }
+
+    fn updateJoinArrivalPlan(self: *Inserter, summary: *JoinSummary, plan_index: u32, stmt: LIR.CFStmtId, owned: *const OwnedSet) ResourceError!void {
+        try self.setPlanTerminalState(plan_index, owned);
+        const metadata = self.planMetadata(plan_index);
+        if (metadata.arrival_join_index == no_plan) {
+            metadata.arrival_join_index = summary.index;
+            try summary.arrival_plans.append(self.solve_allocator, plan_index);
+        } else if (metadata.arrival_join_index != summary.index) {
+            arcInvariant("ARC structured plan arrived at two different joins");
+        }
+        const plan = self.arcPlan(plan_index);
+        var releases: std.ArrayList(ReleaseDecision) = .empty;
+        switch (plan.previous_terminal) {
+            .join => |previous| {
+                if (previous.stmt != stmt or previous.join_index != summary.index) {
+                    arcInvariant("ARC join plan changed structural identity");
+                }
+                releases = previous.releases;
+            },
+            else => {},
+        }
+        try self.collectReleaseDifferenceInto(&releases, owned, &summary.entry_keep);
+        plan.terminal = .{ .join = .{
+            .stmt = stmt,
+            .join_index = summary.index,
+            .remainder_plan = summary.remainder_plan,
+            .body_plan = summary.body_plan,
+            .body_reachable = summary.body_reachable,
+            .releases = releases,
+        } };
+    }
+
+    fn refreshJoinArrivalPlans(self: *Inserter, summary: *JoinSummary) ResourceError!void {
+        for (summary.arrival_plans.items) |plan_index| {
+            const metadata = self.planMetadata(plan_index);
+            const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC join arrival plan lacked its exact state");
+            const plan = self.arcPlan(plan_index);
+            const terminal = switch (plan.terminal) {
+                .join => |*join| join,
+                else => arcInvariant("ARC registered join arrival plan had another terminal"),
+            };
+            terminal.body_reachable = summary.body_reachable;
+            try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.entry_keep);
+        }
+    }
+
+    fn updateJumpPlan(self: *Inserter, summary: *JoinSummary, plan_index: u32, stmt: LIR.CFStmtId, owned: *const OwnedSet) ResourceError!void {
+        try self.setPlanTerminalState(plan_index, owned);
+        const metadata = self.planMetadata(plan_index);
+        if (metadata.jump_join_index == no_plan) {
+            metadata.jump_join_index = summary.index;
+            try summary.jump_plans.append(self.solve_allocator, plan_index);
+        } else if (metadata.jump_join_index != summary.index) {
+            arcInvariant("ARC structured plan jumped to two different joins");
+        }
+        const plan = self.arcPlan(plan_index);
+        var releases: std.ArrayList(ReleaseDecision) = .empty;
+        switch (plan.previous_terminal) {
+            .jump => |previous| {
+                if (previous.stmt != stmt or previous.join_index != summary.index) arcInvariant("ARC jump plan changed structural identity");
+                releases = previous.releases;
+            },
+            else => {},
+        }
+        try self.collectReleaseDifferenceInto(&releases, owned, &summary.body_keep);
+        plan.terminal = .{ .jump = .{
+            .stmt = stmt,
+            .join_index = summary.index,
+            .releases = releases,
+        } };
+    }
+
+    fn refreshJumpPlans(self: *Inserter, summary: *JoinSummary) ResourceError!void {
+        for (summary.jump_plans.items) |plan_index| {
+            const metadata = self.planMetadata(plan_index);
+            const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC jump plan lacked its exact state");
+            const plan = self.arcPlan(plan_index);
+            const terminal = switch (plan.terminal) {
+                .jump => |*jump| jump,
+                else => arcInvariant("ARC registered jump plan had another terminal"),
+            };
+            try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.body_keep);
+        }
+    }
+
+    fn updateSwitchStopPlan(self: *Inserter, summary: *SwitchSummary, plan_index: u32, owned: *const OwnedSet) ResourceError!void {
+        try self.setPlanTerminalState(plan_index, owned);
+        const metadata = self.planMetadata(plan_index);
+        if (metadata.stop_switch_index == no_plan) {
+            metadata.stop_switch_index = summary.index;
+            try summary.exit_plans.append(self.solve_allocator, plan_index);
+        } else if (metadata.stop_switch_index != summary.index) {
+            arcInvariant("ARC structured plan stopped at two different switch continuations");
+        }
+        const plan = self.arcPlan(plan_index);
+        var releases: std.ArrayList(ReleaseDecision) = .empty;
+        switch (plan.previous_terminal) {
+            .stop => |previous| {
+                if (previous.switch_index != summary.index or previous.target_plan != summary.continuation_plan) {
+                    arcInvariant("ARC switch-stop plan changed structural identity");
+                }
+                releases = previous.releases;
+            },
+            else => {},
+        }
+        try self.collectReleaseDifferenceInto(&releases, owned, &summary.common);
+        plan.terminal = .{ .stop = .{
+            .switch_index = summary.index,
+            .target_plan = summary.continuation_plan,
+            .releases = releases,
+        } };
+    }
+
+    fn registerLatentSwitchStopPlan(
+        self: *Inserter,
+        summary: *SwitchSummary,
+        plan_index: u32,
+        owned: *const OwnedSet,
+    ) ResourceError!void {
+        const metadata = self.planMetadata(plan_index);
+        if (metadata.latent_stop_switch_index == no_plan) {
+            metadata.latent_stop_switch_index = summary.index;
+            try summary.latent_stop_plans.append(self.solve_allocator, plan_index);
+        } else if (metadata.latent_stop_switch_index != summary.index) {
+            arcInvariant("ARC structured plan was latent at two different switch continuations");
+        }
+        if (metadata.latent_stop_state) |*state| {
+            assignOwnedSet(state, owned);
+        } else {
+            metadata.latent_stop_state = try cloneOwnedSetWith(self.solve_allocator, owned);
+        }
+    }
+
+    fn activateLatentSwitchStopPlans(self: *Inserter, summary: *SwitchSummary) ResourceError!void {
+        for (summary.latent_stop_plans.items) |plan_index| {
+            const metadata = self.planMetadata(plan_index);
+            const owned = if (metadata.latent_stop_state) |*state|
+                state
+            else
+                arcInvariant("ARC latent switch-stop plan lacked its exact state");
+            try self.updateSwitchStopPlan(summary, plan_index, owned);
+        }
+    }
+
+    fn refreshSwitchStopPlans(self: *Inserter, summary: *SwitchSummary) ResourceError!void {
+        for (summary.exit_plans.items) |plan_index| {
+            const metadata = self.planMetadata(plan_index);
+            const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC switch-stop plan lacked its exact state");
+            const plan = self.arcPlan(plan_index);
+            const terminal = switch (plan.terminal) {
+                .stop => |*stop| stop,
+                else => arcInvariant("ARC registered switch-stop plan had another terminal"),
+            };
+            try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.common);
+        }
+    }
+
+    fn registerSwitchControlPlan(self: *Inserter, summary: *SwitchSummary, plan_index: u32) ResourceError!void {
+        const metadata = self.planMetadata(plan_index);
+        if (metadata.control_switch_index == no_plan) {
+            metadata.control_switch_index = summary.index;
+            try summary.control_plans.append(self.solve_allocator, plan_index);
+        } else if (metadata.control_switch_index != summary.index) {
+            arcInvariant("ARC structured plan contained two continuation switches");
+        }
+    }
+
+    fn refreshSwitchControlPlans(self: *Inserter, summary: *SwitchSummary) void {
+        for (summary.control_plans.items) |plan_index| {
+            const plan = self.arcPlan(plan_index);
+            switch (plan.terminal) {
+                .switch_stmt => |*switch_plan| switch_plan.continuation_reachable = summary.reached,
+                else => arcInvariant("ARC registered switch control plan had another terminal"),
+            }
+        }
+    }
+
+    fn setArcPlanTerminal(
+        self: *Inserter,
+        plan_index: u32,
+        stmt: LIR.CFStmtId,
+        owned: *const OwnedSet,
+        keep: ?*const OwnedSet,
+        retain_value: ?LIR.LocalId,
+    ) ResourceError!void {
+        const plan = self.arcPlan(plan_index);
+        var releases: std.ArrayList(ReleaseDecision) = .empty;
+        switch (plan.previous_terminal) {
+            .terminal => |previous| {
+                if (previous.stmt != stmt) arcInvariant("ARC terminal plan changed structural identity");
+                releases = previous.releases;
+            },
+            else => {},
+        }
+        if (keep) |kept| {
+            try self.collectReleaseDifferenceInto(&releases, owned, kept);
+        } else {
+            try self.collectReleaseAllInto(&releases, owned);
+        }
+        plan.terminal = .{ .terminal = .{
+            .stmt = stmt,
+            .releases = releases,
+            .retain_value = retain_value,
+        } };
+    }
+
+    fn prepareSwitchPlan(
+        self: *Inserter,
+        plan_index: u32,
+        stmt: LIR.CFStmtId,
+        branch_starts: anytype,
+        default_start: LIR.CFStmtId,
+        continuation_plan: u32,
+        continuation_reachable: bool,
+    ) ResourceError!*ArcPlanTerminal {
+        const previous_terminal = self.arcPlan(plan_index).previous_terminal;
+        var branch_plans: []u32 = undefined;
+        var default_plan: u32 = undefined;
+        switch (previous_terminal) {
+            .switch_stmt => |previous| {
+                if (previous.stmt != stmt or previous.branch_plans.len != branch_starts.len) {
+                    arcInvariant("ARC switch plan changed structural shape across fixed-point visits");
+                }
+                branch_plans = previous.branch_plans;
+                default_plan = previous.default_plan;
+            },
+            else => {
+                branch_plans = try self.solve_allocator.alloc(u32, branch_starts.len);
+                for (0..branch_starts.len) |index| {
+                    branch_plans[index] = try self.newArcPlan(GuardedList.at(branch_starts, index).body);
+                }
+                default_plan = try self.newArcPlan(default_start);
+            },
+        }
+        for (branch_plans, 0..) |child, index| {
+            if (self.arcPlan(child).start != GuardedList.at(branch_starts, index).body) {
+                arcInvariant("ARC switch arm plan changed its structured start");
+            }
+        }
+        if (self.arcPlan(default_plan).start != default_start) arcInvariant("ARC switch default plan changed its structured start");
+        self.arcPlan(plan_index).terminal = .{ .switch_stmt = .{
+            .stmt = stmt,
+            .branch_plans = branch_plans,
+            .default_plan = default_plan,
+            .continuation_plan = continuation_plan,
+            .continuation_reachable = continuation_reachable,
+        } };
+        return &self.arcPlan(plan_index).terminal;
+    }
+
+    fn prepareInitializedPayloadSwitchPlan(
+        self: *Inserter,
+        plan_index: u32,
+        stmt: LIR.CFStmtId,
+        initialized_start: LIR.CFStmtId,
+        uninitialized_start: LIR.CFStmtId,
+    ) ResourceError!*ArcPlanTerminal {
+        const previous_terminal = self.arcPlan(plan_index).previous_terminal;
+        const children = switch (previous_terminal) {
+            .initialized_payload_switch => |previous| blk: {
+                if (previous.stmt != stmt) arcInvariant("ARC initialized-payload plan changed structural shape");
+                break :blk .{ previous.initialized_plan, previous.uninitialized_plan };
+            },
+            else => .{ try self.newArcPlan(initialized_start), try self.newArcPlan(uninitialized_start) },
+        };
+        if (self.arcPlan(children[0]).start != initialized_start or self.arcPlan(children[1]).start != uninitialized_start) {
+            arcInvariant("ARC initialized-payload child plan changed its structured start");
+        }
+        self.arcPlan(plan_index).terminal = .{ .initialized_payload_switch = .{
+            .stmt = stmt,
+            .initialized_plan = children[0],
+            .uninitialized_plan = children[1],
+        } };
+        return &self.arcPlan(plan_index).terminal;
+    }
+
+    fn prepareStrMatchPlan(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId, match_start: LIR.CFStmtId, miss_start: LIR.CFStmtId) ResourceError!*ArcPlanTerminal {
+        const previous_terminal = self.arcPlan(plan_index).previous_terminal;
+        const children = switch (previous_terminal) {
+            .str_match => |previous| blk: {
+                if (previous.stmt != stmt) arcInvariant("ARC string-match plan changed structural shape");
+                break :blk .{ previous.match_plan, previous.miss_plan };
+            },
+            else => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
+        };
+        if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
+            arcInvariant("ARC string-match child plan changed its structured start");
+        }
+        const capture_retain_count = self.strMatchCaptureRetainCount(self.store.getCFStmt(stmt).str_match.steps);
+        self.arcPlan(plan_index).terminal = .{ .str_match = .{
+            .stmt = stmt,
+            .match_plan = children[0],
+            .miss_plan = children[1],
+            .capture_retain_count = capture_retain_count,
+        } };
+        return &self.arcPlan(plan_index).terminal;
+    }
+
+    fn prepareBoxyTagMatchPlan(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId, match_start: LIR.CFStmtId, miss_start: LIR.CFStmtId) ResourceError!*ArcPlanTerminal {
+        const previous_terminal = self.arcPlan(plan_index).previous_terminal;
+        const children = switch (previous_terminal) {
+            .boxy_tag_match => |previous| blk: {
+                if (previous.stmt != stmt) arcInvariant("ARC Boxy tag-match plan changed structural shape");
+                break :blk .{ previous.match_plan, previous.miss_plan };
+            },
+            else => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
+        };
+        if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
+            arcInvariant("ARC Boxy tag-match child plan changed its structured start");
+        }
+        self.arcPlan(plan_index).terminal = .{ .boxy_tag_match = .{
+            .stmt = stmt,
+            .match_plan = children[0],
+            .miss_plan = children[1],
+        } };
+        return &self.arcPlan(plan_index).terminal;
+    }
+
+    fn prepareStrMatchSetPlan(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId, arms: anytype, miss_start: LIR.CFStmtId) ResourceError!*ArcPlanTerminal {
+        const previous_terminal = self.arcPlan(plan_index).previous_terminal;
+        var match_plans: []u32 = undefined;
+        var miss_plan: u32 = undefined;
+        var retain_counts: []u16 = undefined;
+        switch (previous_terminal) {
+            .str_match_set => |previous| {
+                if (previous.stmt != stmt or previous.match_plans.len != arms.len) {
+                    arcInvariant("ARC string-match-set plan changed structural shape");
+                }
+                match_plans = previous.match_plans;
+                miss_plan = previous.miss_plan;
+                retain_counts = previous.capture_retain_counts;
+            },
+            else => {
+                match_plans = try self.solve_allocator.alloc(u32, arms.len);
+                retain_counts = try self.solve_allocator.alloc(u16, arms.len);
+                for (0..arms.len) |index| match_plans[index] = try self.newArcPlan(GuardedList.at(arms, index).on_match);
+                miss_plan = try self.newArcPlan(miss_start);
+            },
+        }
+        for (match_plans, 0..) |child, index| {
+            if (self.arcPlan(child).start != GuardedList.at(arms, index).on_match) arcInvariant("ARC string-match-set arm plan changed its start");
+        }
+        if (self.arcPlan(miss_plan).start != miss_start) arcInvariant("ARC string-match-set miss plan changed its start");
+        for (0..arms.len) |index| retain_counts[index] = self.strMatchCaptureRetainCount(GuardedList.at(arms, index).steps);
+        self.arcPlan(plan_index).terminal = .{ .str_match_set = .{
+            .stmt = stmt,
+            .match_plans = match_plans,
+            .miss_plan = miss_plan,
+            .capture_retain_counts = retain_counts,
+        } };
+        return &self.arcPlan(plan_index).terminal;
     }
 
     fn pushSolveSegment(
@@ -2980,12 +2909,19 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         owned: *const OwnedSet,
         ctx: SolveContext,
+        plan_index: u32,
     ) ResourceError!void {
+        const metadata = self.planMetadata(plan_index);
+        metadata.scheduled = true;
+        metadata.version += 1;
+        if (metadata.version == 0) arcInvariant("ARC plan version representation exhausted");
         const segment = try self.solve_allocator.create(SolveSegment);
         segment.* = .{
             .cursor = start,
             .owned = try cloneOwnedSetWith(self.solve_allocator, owned),
             .ctx = ctx,
+            .plan_index = plan_index,
+            .plan_version = metadata.version,
         };
         try tasks.append(self.solve_allocator, .{ .segment = segment });
     }
@@ -2993,13 +2929,13 @@ const Inserter = struct {
     fn scheduleSolveJoinProcess(self: *Inserter, tasks: *std.ArrayList(SolveTask), summary: *JoinSummary) ResourceError!void {
         if (summary.process_queued) return;
         summary.process_queued = true;
-        try tasks.append(self.solve_allocator, .{ .join_process = summary.id });
+        try tasks.append(self.solve_allocator, .{ .join_process = summary.index });
     }
 
     fn scheduleSolveBodyWalk(self: *Inserter, tasks: *std.ArrayList(SolveTask), summary: *JoinSummary) ResourceError!void {
         if (summary.body_walk_queued) return;
         summary.body_walk_queued = true;
-        try tasks.append(self.solve_allocator, .{ .body_walk = summary.id });
+        try tasks.append(self.solve_allocator, .{ .body_walk = summary.index });
     }
 
     /// Rebuilds a stop chain with contributions disabled: segments inside a
@@ -3007,27 +2943,41 @@ const Inserter = struct {
     fn stripStopContributions(self: *Inserter, stops: ?*const SolveStop) ResourceError!?*const SolveStop {
         const entry = stops orelse return null;
         const parent = try self.stripStopContributions(entry.parent);
-        if (entry.summary == null and parent == entry.parent) return entry;
+        if (!entry.contributes and parent == entry.parent) return entry;
         const node = try self.solve_allocator.create(SolveStop);
-        node.* = .{ .stmt = entry.stmt, .summary = null, .parent = parent };
+        node.* = .{
+            .stmt = entry.stmt,
+            .summary = entry.summary,
+            .contributes = false,
+            .parent = parent,
+        };
         return node;
     }
 
-    /// Drops cached loop-keyed liveness rows after their keep-set shrank.
-    /// Rows depend on the keep-set contents only through `loop_continue` /
-    /// `loop_break` reads, so builds that never consumed keep bits stay
-    /// valid and nothing is purged. Returns whether rows were dropped.
+    fn registerLoopKeep(
+        self: *Inserter,
+        loop_keep_id: u32,
+        body: LIR.CFStmtId,
+        remainder: LIR.CFStmtId,
+    ) ResourceError!void {
+        if (loop_keep_id != self.loop_liveness_caches.items.len) {
+            arcInvariant("ARC loop identities were not registered sequentially");
+        }
+        try self.loop_liveness_caches.append(self.emission_allocator, .{
+            .region_roots = .{ body, remainder },
+        });
+    }
+
+    /// Marks exactly one loop identity for boundary-delta propagation after
+    /// its keep-set shrank. Rows depend on the keep-set only through loop-edge
+    /// reads, so a build that consumed no keep bits remains valid.
     fn purgeLoopKeepLiveness(self: *Inserter, loop_keep_id: u32) ResourceError!bool {
-        if (!self.loop_keep_reads_consumed.remove(loop_keep_id)) return false;
-        var stale = std.ArrayList(ReadBeforeRebindKey).empty;
-        defer stale.deinit(self.store.allocator);
-        var keys = self.reads_before_rebind_cache.keyIterator();
-        while (keys.next()) |key| {
-            if (key.loop_keep_id == loop_keep_id) try stale.append(self.store.allocator, key.*);
+        if (loop_keep_id >= self.loop_liveness_caches.items.len) {
+            arcInvariant("ARC purged an unknown loop identity");
         }
-        for (stale.items) |key| {
-            _ = self.reads_before_rebind_cache.remove(key);
-        }
+        const cache = &self.loop_liveness_caches.items[loop_keep_id];
+        if (!cache.consumed_keep_bits) return false;
+        cache.dirty = true;
         return true;
     }
 
@@ -3036,15 +2986,10 @@ const Inserter = struct {
     /// otherwise.
     fn groupUsedFromTable(
         self: *Inserter,
-        reads: *const std.bit_set.DynamicBitSetUnmanaged,
+        reads: *const ExactBitSet,
         local: LIR.LocalId,
     ) bool {
-        const leader = self.solution.leaderOf(local);
-        if (self.solution.groupMembers(leader).len > 1) {
-            const bit = self.groupBitOf(local) orelse
-                arcInvariant("ARC multi-member borrow group missing its liveness group bit");
-            return reads.isSet(bit);
-        }
+        if (self.groupBitOf(local)) |bit| return reads.isSet(bit);
         const bit = self.rawLivenessBitOf(local) orelse return false;
         return reads.isSet(bit);
     }
@@ -3054,9 +2999,7 @@ const Inserter = struct {
     /// the final keep, so the fixpoint descends monotonically.
     fn seedSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!void {
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
-        for (0..self.store.localCount()) |index| {
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-            if (!self.localContainsRefcounted(local)) continue;
+        for (self.domain().refcounted_locals) |local| {
             if (self.groupUsedFromTable(reads, local)) summary.body_keep.set(local);
         }
         self.placeSolveJoinParamsInto(summary, &summary.body_keep);
@@ -3075,8 +3018,8 @@ const Inserter = struct {
 
     const BodyKeepUpdate = struct {
         changed: bool,
-        /// Loop-keyed liveness rows for this join were invalidated; every
-        /// region interpreted under its keep must re-walk.
+        /// Loop-keyed liveness for this join changed; every ownership region
+        /// interpreted under its keep must re-walk after the exact row delta.
         purged: bool,
     };
 
@@ -3084,27 +3027,19 @@ const Inserter = struct {
     /// filter to units read in the body, then place params. The stored keep
     /// can only shrink.
     fn recomputeSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!BodyKeepUpdate {
-        if (summary.jump_states.count() == 0) return .{ .changed = false, .purged = false };
-        var merged = try OwnedSet.init(self.solve_allocator, self.store.localCount());
-        var first = true;
-        var sites = summary.jump_states.valueIterator();
-        while (sites.next()) |state| {
-            if (first) {
-                assignOwnedSet(&merged, state);
-                first = false;
-            } else {
-                merged.intersect(state);
-            }
-        }
+        if (!summary.body_reachable) return .{ .changed = false, .purged = false };
+        var merged = try OwnedSet.init(self.solve_allocator, self.domain());
+        assignOwnedSet(&merged, &summary.jump_common);
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
         var owned_iter = merged.bits.iterator(.{});
         while (owned_iter.next()) |index| {
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+            const local = merged.domain.resourceLocalAt(index);
             if (!self.groupUsedFromTable(reads, local)) merged.unset(local);
         }
         self.placeSolveJoinParamsInto(summary, &merged);
         if (merged.eql(&summary.body_keep)) return .{ .changed = false, .purged = false };
         assignOwnedSet(&summary.body_keep, &merged);
+        try self.refreshJumpPlans(summary);
         const purged = try self.purgeLoopKeepLiveness(summary.loop_keep_id);
         return .{ .changed = true, .purged = purged };
     }
@@ -3112,11 +3047,11 @@ const Inserter = struct {
     /// Recomputes entry_keep = (entry_state filtered to units read from the
     /// remainder) | (body_keep & entry_state). Returns whether it changed.
     fn recomputeSolveEntryKeep(self: *Inserter, summary: *JoinSummary) ResourceError!bool {
-        var keep = try OwnedSet.init(self.solve_allocator, self.store.localCount());
+        var keep = try OwnedSet.init(self.solve_allocator, self.domain());
         const remainder_reads = try self.computeReadsBeforeRebind(summary.remainder, null, 0);
         var entry_iter = summary.entry_state.bits.iterator(.{});
         while (entry_iter.next()) |index| {
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+            const local = summary.entry_state.domain.resourceLocalAt(index);
             if (self.groupUsedFromTable(remainder_reads, local) or summary.body_keep.contains(local)) {
                 keep.set(local);
             }
@@ -3135,15 +3070,14 @@ const Inserter = struct {
         body_scope: ?*const SolveBodyScope,
     ) ResourceError!SolveContext {
         return .{
-            .loop_keep = &summary.body_keep,
-            .loop_keep_id = summary.loop_keep_id,
+            .loop_keep = .{ .set = &summary.body_keep, .id = summary.loop_keep_id },
             .stops = try self.stripStopContributions(summary.origin_ctx.stops),
             .body_scope = body_scope,
         };
     }
 
-    fn processSolveJoin(self: *Inserter, tasks: *std.ArrayList(SolveTask), join_id: LIR.JoinPointId) ResourceError!void {
-        const summary = self.solveSummaryOf(join_id);
+    fn processSolveJoin(self: *Inserter, tasks: *std.ArrayList(SolveTask), join_index: u32) ResourceError!void {
+        const summary = self.solveSummaryOf(join_index);
         summary.process_queued = false;
         if (!summary.body_keep_seeded) {
             summary.body_keep_seeded = true;
@@ -3151,28 +3085,29 @@ const Inserter = struct {
         }
 
         _ = try self.recomputeSolveEntryKeep(summary);
+        try self.refreshJoinArrivalPlans(summary);
 
         const remainder_ctx = try self.solveRegionCtx(summary, summary.origin_ctx.body_scope);
-        try self.pushSolveSegment(tasks, summary.remainder, &summary.entry_keep, remainder_ctx);
+        try self.pushSolveSegment(tasks, summary.remainder, &summary.entry_keep, remainder_ctx, summary.remainder_plan);
         if (summary.body_reachable) try self.scheduleSolveBodyWalk(tasks, summary);
     }
 
-    fn processSolveBodyWalk(self: *Inserter, tasks: *std.ArrayList(SolveTask), join_id: LIR.JoinPointId) ResourceError!void {
-        const summary = self.solveSummaryOf(join_id);
+    fn processSolveBodyWalk(self: *Inserter, tasks: *std.ArrayList(SolveTask), join_index: u32) ResourceError!void {
+        const summary = self.solveSummaryOf(join_index);
         summary.body_walk_queued = false;
         if (!summary.body_reachable) return;
         const scope = try self.solve_allocator.create(SolveBodyScope);
-        scope.* = .{ .join = summary.id, .parent = summary.origin_ctx.body_scope };
+        scope.* = .{ .join_index = summary.index, .parent = summary.origin_ctx.body_scope };
         const body_ctx = try self.solveRegionCtx(summary, scope);
-        try self.pushSolveSegment(tasks, summary.body, &summary.body_keep, body_ctx);
+        try self.pushSolveSegment(tasks, summary.body, &summary.body_keep, body_ctx, summary.body_plan);
     }
 
-    fn processSolveSwitchResume(self: *Inserter, tasks: *std.ArrayList(SolveTask), switch_stmt: LIR.CFStmtId) ResourceError!void {
-        const summaries = self.switch_summaries orelse arcInvariant("ARC solver ran without a switch table");
-        const summary = summaries.get(switch_stmt) orelse arcInvariant("ARC solver resumed an unknown switch");
+    fn processSolveSwitchResume(self: *Inserter, tasks: *std.ArrayList(SolveTask), switch_index: u32) ResourceError!void {
+        if (switch_index >= self.switch_summaries.len) arcInvariant("ARC solver resumed a switch beyond its lifted table");
+        const summary = self.switch_summaries[switch_index] orelse arcInvariant("ARC solver resumed an uninitialized switch");
         summary.resume_queued = false;
         if (!summary.reached) return;
-        try self.pushSolveSegment(tasks, summary.continuation, &summary.common, summary.resume_ctx);
+        try self.pushSolveSegment(tasks, summary.continuation, &summary.common, summary.resume_ctx, summary.continuation_plan);
     }
 
     /// A branch segment reached its switch's continuation: fold its exit
@@ -3181,20 +3116,24 @@ const Inserter = struct {
         self: *Inserter,
         tasks: *std.ArrayList(SolveTask),
         summary: *SwitchSummary,
-        switch_stmt: LIR.CFStmtId,
         owned: *const OwnedSet,
     ) ResourceError!void {
         var changed = false;
         if (!summary.reached) {
             summary.reached = true;
+            self.refreshSwitchControlPlans(summary);
             assignOwnedSet(&summary.common, owned);
+            try self.activateLatentSwitchStopPlans(summary);
             changed = true;
         } else {
             changed = intersectOwnedSetChanged(&summary.common, owned);
         }
         if (changed and !summary.resume_queued) {
+            try self.refreshSwitchStopPlans(summary);
             summary.resume_queued = true;
-            try tasks.append(self.solve_allocator, .{ .switch_resume = switch_stmt });
+            try tasks.append(self.solve_allocator, .{ .switch_resume = summary.index });
+        } else if (changed) {
+            try self.refreshSwitchStopPlans(summary);
         }
     }
 
@@ -3206,13 +3145,17 @@ const Inserter = struct {
         segment: *SolveSegment,
         join_stmt: anytype,
     ) ResourceError!void {
-        const summaries = self.join_summaries orelse arcInvariant("ARC solver ran without a summary table");
-        const local_count = self.store.localCount();
-        const gop = try summaries.getOrPut(join_stmt.id);
-        if (!gop.found_existing) {
-            errdefer _ = summaries.remove(join_stmt.id);
+        const join_index = self.solution.joinIndexOfStmt(segment.cursor);
+        if (join_index >= self.join_summaries.len) arcInvariant("ARC solver join index exceeded its lifted table");
+        if (self.join_summaries[join_index] == null) {
             const summary = try self.solve_allocator.create(JoinSummary);
+            const join_fact = self.join_bodies[join_index];
+            const jump_states = try self.solve_allocator.alloc(?OwnedSet, join_fact.jump_count);
+            @memset(jump_states, null);
+            const remainder_plan = try self.newArcPlan(join_stmt.remainder);
+            const body_plan = try self.newArcPlan(join_stmt.body);
             summary.* = .{
+                .index = join_index,
                 .id = join_stmt.id,
                 .start = segment.cursor,
                 .params = join_stmt.params,
@@ -3220,26 +3163,31 @@ const Inserter = struct {
                 .remainder = join_stmt.remainder,
                 .body = join_stmt.body,
                 .entry_state = try cloneOwnedSetWith(self.solve_allocator, &segment.owned),
-                .entry_keep = try OwnedSet.init(self.solve_allocator, local_count),
-                .body_keep = try OwnedSet.init(self.solve_allocator, local_count),
+                .entry_keep = try OwnedSet.init(self.solve_allocator, self.domain()),
+                .body_keep = try OwnedSet.init(self.solve_allocator, self.domain()),
+                .jump_common = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .loop_keep_id = self.next_loop_keep_id,
+                .remainder_plan = remainder_plan,
+                .body_plan = body_plan,
                 .origin_ctx = segment.ctx,
-                .jump_states = std.AutoHashMap(LIR.CFStmtId, OwnedSet).init(self.solve_allocator),
+                .jump_states = jump_states,
             };
+            try self.registerLoopKeep(summary.loop_keep_id, summary.body, summary.remainder);
             self.next_loop_keep_id += 1;
-            try self.active_loop_keep_ids.put(@intFromPtr(&summary.body_keep), summary.loop_keep_id);
-            gop.value_ptr.* = summary;
+            self.join_summaries[join_index] = summary;
+            try self.updateJoinArrivalPlan(summary, segment.plan_index, segment.cursor, &segment.owned);
             try self.scheduleSolveJoinProcess(tasks, summary);
             return;
         }
 
-        const summary = gop.value_ptr.*;
+        const summary = self.join_summaries[join_index].?;
         if (summary.body != join_stmt.body or summary.remainder != join_stmt.remainder or
             !localSpanEql(summary.params, join_stmt.params) or
             !localSpanEql(summary.maybe_uninitialized_params, join_stmt.maybe_uninitialized_params))
         {
             arcInvariant("ARC solver saw one join id with conflicting metadata");
         }
+        try self.updateJoinArrivalPlan(summary, segment.plan_index, segment.cursor, &segment.owned);
         if (intersectOwnedSetChanged(&summary.entry_state, &segment.owned)) {
             try self.scheduleSolveJoinProcess(tasks, summary);
         }
@@ -3251,25 +3199,34 @@ const Inserter = struct {
         self: *Inserter,
         tasks: *std.ArrayList(SolveTask),
         segment: *SolveSegment,
-        target: LIR.JoinPointId,
     ) ResourceError!void {
+        const target_index = self.solution.jumpTargetJoinIndexOf(segment.cursor);
+        const summary = self.solveSummaryOf(target_index);
+        try self.updateJumpPlan(summary, segment.plan_index, segment.cursor, &segment.owned);
         var scope = segment.ctx.body_scope;
         while (scope) |entry| {
-            if (entry.join == target) return;
+            if (entry.join_index == target_index) return;
             scope = entry.parent;
         }
-        const summary = self.solveSummaryOf(target);
+        const site_index = self.solution.jumpSiteIndexOf(segment.cursor);
+        if (site_index >= summary.jump_states.len) arcInvariant("ARC jump-site index exceeded its lifted join table");
         var changed = false;
-        const site = try summary.jump_states.getOrPut(segment.cursor);
-        if (!site.found_existing) {
-            site.value_ptr.* = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
+        if (summary.jump_states[site_index] == null) {
+            summary.jump_states[site_index] = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
             changed = true;
         } else {
-            changed = intersectOwnedSetChanged(site.value_ptr, &segment.owned);
+            changed = intersectOwnedSetChanged(&summary.jump_states[site_index].?, &segment.owned);
         }
+        const site = &summary.jump_states[site_index].?;
         const first_reach = !summary.body_reachable;
-        if (first_reach) summary.body_reachable = true;
         if (!changed and !first_reach) return;
+        const common_changed = if (first_reach) blk: {
+            summary.body_reachable = true;
+            try self.refreshJoinArrivalPlans(summary);
+            assignOwnedSet(&summary.jump_common, site);
+            break :blk true;
+        } else intersectOwnedSetChanged(&summary.jump_common, site);
+        if (!common_changed) return;
         const update = try self.recomputeSolveBodyKeep(summary);
         if (update.purged) {
             // Liveness rows under this join's keep changed, so states
@@ -3289,83 +3246,6 @@ const Inserter = struct {
             return;
         }
         if (first_reach) try self.scheduleSolveBodyWalk(tasks, summary);
-    }
-
-    fn destroyRewriteTask(self: *Inserter, task: RewriteTask) void {
-        switch (task) {
-            .path => |path| self.destroyRewritePath(path),
-            .join => |join| self.destroyRewriteJoin(join),
-            .switch_no_continuation => |switch_| self.destroyRewriteSwitchNoContinuation(switch_),
-            .switch_after_continuation => |switch_| self.destroyRewriteSwitchContinuation(switch_),
-            .switch_finish_continuation => |switch_| self.destroyRewriteSwitchContinuation(switch_),
-            .initialized_payload_switch => |switch_| self.destroyRewriteInitializedPayloadSwitch(switch_),
-            .str_match => |str_match| self.destroyRewriteStrMatch(str_match),
-            .str_match_set => |str_match_set| self.destroyRewriteStrMatchSet(str_match_set),
-            .boxy_tag_match => |tag_match| self.destroyRewriteBoxyTagMatch(tag_match),
-        }
-    }
-
-    fn destroyFrames(self: *Inserter, frames: *std.ArrayList(LinearRewriteFrame)) void {
-        for (frames.items) |frame| {
-            if (frame.post_release.len != 0) {
-                self.store.allocator.free(frame.post_release);
-            }
-            if (frame.transfer_positions.len != 0) {
-                self.store.allocator.free(frame.transfer_positions);
-            }
-        }
-        frames.deinit(self.store.allocator);
-    }
-
-    fn destroyRewritePath(self: *Inserter, path: *RewritePathTask) void {
-        self.destroyFrames(&path.frames);
-        path.owned.deinit();
-        self.store.allocator.destroy(path);
-    }
-
-    fn destroyRewriteJoin(self: *Inserter, state: *RewriteJoinTask) void {
-        _ = self.active_loop_keep_ids.remove(@intFromPtr(&state.body_keep));
-        self.destroyFrames(&state.frames);
-        state.incoming_owned.deinit();
-        state.entry_keep.deinit();
-        state.body_keep.deinit();
-        self.store.allocator.destroy(state);
-    }
-
-    fn destroyRewriteSwitchNoContinuation(self: *Inserter, state: *RewriteSwitchNoContinuationTask) void {
-        self.destroyFrames(&state.frames);
-        self.store.allocator.free(state.branch_results);
-        self.store.allocator.destroy(state);
-    }
-
-    fn destroyRewriteSwitchContinuation(self: *Inserter, state: *RewriteSwitchContinuationTask) void {
-        self.destroyFrames(&state.frames);
-        state.entry_owned.deinit();
-        state.common.deinit();
-        if (state.nested_boundaries.len != 0) self.store.allocator.free(state.nested_boundaries);
-        self.store.allocator.free(state.branch_results);
-        self.store.allocator.destroy(state);
-    }
-
-    fn destroyRewriteInitializedPayloadSwitch(self: *Inserter, state: *RewriteInitializedPayloadSwitchTask) void {
-        self.destroyFrames(&state.frames);
-        self.store.allocator.destroy(state);
-    }
-
-    fn destroyRewriteStrMatch(self: *Inserter, state: *RewriteStrMatchTask) void {
-        self.destroyFrames(&state.frames);
-        self.store.allocator.destroy(state);
-    }
-
-    fn destroyRewriteStrMatchSet(self: *Inserter, state: *RewriteStrMatchSetTask) void {
-        self.destroyFrames(&state.frames);
-        self.store.allocator.free(state.on_matches);
-        self.store.allocator.destroy(state);
-    }
-
-    fn destroyRewriteBoxyTagMatch(self: *Inserter, state: *RewriteBoxyTagMatchTask) void {
-        self.destroyFrames(&state.frames);
-        self.store.allocator.destroy(state);
     }
 
     fn isBindingBorrowed(self: *const Inserter, local: LIR.LocalId) bool {
@@ -3395,19 +3275,17 @@ const Inserter = struct {
     //   being rebound. Rebinding kills only that name's own binding — a
     //   rebound borrowed alias must not release its source's unit — so this
     //   one is keyed by the raw local id on purpose.
-    // - `noteEmittedRetain` / `noteEmittedRelease` replay already-emitted RC
-    //   statements into the state during boundary re-walks; emitted RC
-    //   statements name unit locals directly, so raw keying is exact there.
+    // - `noteEmittedRelease` replays already-emitted release statements into
+    //   the state during boundary re-walks; emitted RC statements name unit
+    //   locals directly, so raw keying is exact there.
     //
     // Per-instruction transfer functions (`transferFor*`,
     // `consumeAtTerminal`) — one per ownership-moving instruction kind.
     // Each advances the abstract ownership state exactly once and returns
-    // the emission decisions as a small struct. The rewrite walk
-    // (`processRewritePath`) materializes RC statements from the decisions;
-    // the join-summary solver (`processSolveSegment`) applies the same state
-    // transition and discards them. Adding an ownership-moving LIR
-    // instruction means adding one transfer function here, called
-    // identically by both, instead of two hand-synchronized copies.
+    // the concrete decision written into the stable ArcPlan slot by
+    // `processSolveSegment`. Adding an ownership-moving LIR instruction
+    // means adding one transfer function here and one dumb materialization
+    // case that follows its completed decision.
 
     /// The single alias-to-unit resolution used by every transfer site.
     fn unitOf(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
@@ -3448,10 +3326,6 @@ const Inserter = struct {
         owned.set(local);
     }
 
-    fn addOwnedIfRc(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) void {
-        self.placeUnit(owned, local);
-    }
-
     /// Places the unit a call result carries: an owned return always hands
     /// the caller a unit, and a borrowed return still needs one here unless
     /// the result binding itself is borrowed.
@@ -3480,12 +3354,6 @@ const Inserter = struct {
         return true;
     }
 
-    /// Replays an already-emitted incref into the state during a boundary
-    /// re-walk (the only context where the walks see RC statements).
-    fn noteEmittedRetain(self: *Inserter, owned: *OwnedSet, value: LIR.LocalId) void {
-        self.placeUnit(owned, value);
-    }
-
     /// Replays an already-emitted decref/free into the state during a
     /// boundary re-walk. Emitted RC statements name unit locals directly.
     fn noteEmittedRelease(_: *const Inserter, owned: *OwnedSet, value: LIR.LocalId) void {
@@ -3508,7 +3376,7 @@ const Inserter = struct {
         target: LIR.LocalId,
         source: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
         const move_value = try self.canMoveAliasBindValue(owned, source, target, next, loop_keep);
         const release_old_target = self.takeRebindTarget(owned, target);
@@ -3542,7 +3410,7 @@ const Inserter = struct {
         value: LIR.LocalId,
         mode: LIR.SetLocalWriteMode,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
         if (target == value) return .{ .retain_target = false, .release_old_target = false };
         const move_value = try self.canMoveAliasBindValue(owned, value, target, next, loop_keep);
@@ -3561,10 +3429,6 @@ const Inserter = struct {
         /// The callee returns a borrow of its arguments but this binding
         /// needs its own unit: pay one retain right after the call.
         retain_call_result: bool,
-
-        fn deinit(self: *CallTransfer, allocator: std.mem.Allocator) void {
-            self.args.deinit(allocator);
-        }
     };
 
     /// Direct and erased calls: owned argument positions consume the
@@ -3582,17 +3446,15 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         extra_use: ?LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!CallTransfer {
-        var arg_ownership = try self.callArgOwnership(callee, owned, callee_sig, unique_demand, args, next, target, loop_keep);
-        errdefer arg_ownership.deinit(self.store.allocator);
+        const arg_ownership = try self.callArgOwnership(callee, owned, callee_sig, unique_demand, args, next, target, loop_keep);
         const target_feeds_call = self.spanUsesLocal(args, target) or
             (extra_use != null and extra_use.? == target);
         const release_old_target = if (target_feeds_call)
             false
         else
             self.takeRebindTarget(owned, target);
-        self.unsetArgs(owned, arg_ownership.transfer_args.items);
         self.placeCallResultUnit(owned, target, arg_ownership.demanded.ret_mode);
         const retain_call_result = arg_ownership.demanded.ret_mode == .borrowed and
             self.localContainsRefcounted(target) and
@@ -3617,7 +3479,7 @@ const Inserter = struct {
         operands: LIR.LocalSpan,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         transfer_positions: ?*std.ArrayList(u32),
     ) ResourceError!AggregateTransfer {
         try self.spanTransferPositions(operands, next, target, owned, loop_keep, transfer_positions);
@@ -3640,7 +3502,7 @@ const Inserter = struct {
         payload: ?LIR.LocalId,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!SingleTransfer {
         var transfer_single = false;
         if (payload) |operand| {
@@ -3649,6 +3511,40 @@ const Inserter = struct {
         const release_old_target = self.takeRebindTarget(owned, target);
         self.placeUnit(owned, target);
         return .{ .transfer_single = transfer_single, .release_old_target = release_old_target };
+    }
+
+    const PackedErasedTransfer = struct {
+        transfer_single: bool,
+        preserve_reuse: bool,
+        reuse_unique: bool,
+        release_old_target: bool,
+    };
+
+    fn transferForPackedErased(
+        self: *Inserter,
+        owned: *OwnedSet,
+        assign: @FieldType(LIR.CFStmt, "assign_packed_erased_fn"),
+        loop_keep: ?LoopKeep,
+    ) ResourceError!PackedErasedTransfer {
+        var preserve_reuse = false;
+        var reuse_unique = false;
+        if (assign.reuse) |reuse| {
+            if (reuse == assign.target) arcInvariant("erased callable repack cannot reuse its result binding");
+            preserve_reuse = try self.groupUsedInPath(assign.next, reuse, loop_keep);
+            reuse_unique = !preserve_reuse and self.ownsUnit(owned, reuse) and self.isLocalUniqueHere(reuse);
+            if (assign.capture) |capture| {
+                if (self.solution.leaderOf(capture) == self.solution.leaderOf(reuse)) reuse_unique = false;
+            }
+            if (!preserve_reuse) _ = self.takeUnit(owned, reuse);
+        }
+
+        const transfer = try self.transferForSingle(owned, assign.capture, assign.target, assign.next, loop_keep);
+        return .{
+            .transfer_single = transfer.transfer_single,
+            .preserve_reuse = preserve_reuse,
+            .reuse_unique = reuse_unique,
+            .release_old_target = transfer.release_old_target,
+        };
     }
 
     const LowLevelTransfer = struct {
@@ -3675,7 +3571,7 @@ const Inserter = struct {
         rc_effect: LIR.LowLevel.RcEffect,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         want_unique: bool,
     ) ResourceError!LowLevelTransfer {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
@@ -3720,64 +3616,28 @@ const Inserter = struct {
         return true;
     }
 
-    /// Emits the release decided by a `release_old_target` transfer
-    /// decision, honoring conditional presence of maybe-initialized cells.
-    fn emitRebindRelease(self: *Inserter, target: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        if (self.solution.maybeUninitializedCondition(target)) |condition| {
-            return try self.releaseMaybeInitializedLocal(condition.local, condition.mask, target, next);
-        }
-        return try self.releaseLocalIfRc(target, next);
-    }
-
-    fn releaseOldTargetIfNeeded(self: *Inserter, target: LIR.LocalId, owned: *OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        if (!self.takeRebindTarget(owned, target)) return next;
-        return try self.emitRebindRelease(target, next);
-    }
-
-    fn releaseValuesInvalidatedByDescriptorUpdate(
+    fn planValuesInvalidatedByDescriptorUpdate(
         self: *Inserter,
         desc_local: LIR.LocalId,
         owned: *OwnedSet,
-        start: LIR.CFStmtId,
         next: LIR.CFStmtId,
-    ) ResourceError!LIR.CFStmtId {
-        var current = next;
-        var local_index: usize = 0;
-        while (local_index < owned.len()) : (local_index += 1) {
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
-            if (!owned.contains(local)) continue;
-            if (!self.localUsesDescriptorLocal(local, desc_local)) continue;
-            if (try self.localValueUsedBeforeRebind(start, local)) continue;
-            _ = self.takeRebindTarget(owned, local);
-            current = try self.emitRebindRelease(local, current);
-        }
-        return current;
-    }
-
-    fn takeValuesInvalidatedByDescriptorUpdate(
-        self: *Inserter,
-        desc_local: LIR.LocalId,
-        owned: *OwnedSet,
-        start: LIR.CFStmtId,
+        loop_keep: ?LoopKeep,
+        releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         var local_index: usize = 0;
-        while (local_index < owned.len()) : (local_index += 1) {
+        while (local_index < self.store.localCount()) : (local_index += 1) {
             const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
             if (!owned.contains(local)) continue;
             if (!self.localUsesDescriptorLocal(local, desc_local)) continue;
-            if (try self.localValueUsedBeforeRebind(start, local)) continue;
-            _ = self.takeRebindTarget(owned, local);
+            if (try self.valueUsedInPath(next, local, loop_keep)) continue;
+            if (!self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
+            try releases.append(self.solve_allocator, self.releaseDecision(local));
         }
     }
 
     fn localUsesDescriptorLocal(self: *const Inserter, local: LIR.LocalId, desc_local: LIR.LocalId) bool {
         const desc = boxyDescForLocal(self.boxy_rc_descs, local) orelse return false;
         return if (desc.localOrNull()) |local_desc| local_desc == desc_local else false;
-    }
-
-    fn localValueUsedBeforeRebind(self: *Inserter, start: LIR.CFStmtId, local: LIR.LocalId) ResourceError!bool {
-        const reads = try self.livenessRow(start, null);
-        return reads.isSet(@intFromEnum(local));
     }
 
     /// Computes which low-level argument positions in `span` (restricted to
@@ -3796,7 +3656,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         target_holds_unit: TargetHoldsUnit,
     ) ResourceError!u64 {
         var transfer: u64 = 0;
@@ -3824,7 +3684,7 @@ const Inserter = struct {
 
     /// Aggregate variant of `spanTransferMask`. Aggregate spans are not
     /// low-level argument vectors and can be wider than a u64 mask, so the
-    /// rewrite path records transferred positions in an owned slice while
+    /// ArcPlan records transferred positions in stable per-step storage while
     /// the analysis path passes null and keeps only the ownership-state
     /// transition.
     fn spanTransferPositions(
@@ -3833,7 +3693,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         transferred_positions: ?*std.ArrayList(u32),
     ) ResourceError!void {
         if (!self.localContainsRefcounted(target)) return;
@@ -3846,7 +3706,7 @@ const Inserter = struct {
             if (try self.groupUsedInPath(next, local, loop_keep)) continue;
             self.unsetOwnedUnit(owned, local);
             if (transferred_positions) |positions| {
-                try positions.append(self.store.allocator, @intCast(i));
+                try positions.append(self.emission_allocator, @intCast(i));
             }
         }
     }
@@ -3859,7 +3719,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         if (local == target) return false;
         if (!self.localContainsRefcounted(target)) return false;
@@ -3880,7 +3740,7 @@ const Inserter = struct {
         singles: []const LIR.LocalId,
         span: ?LIR.LocalSpan,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(LIR.LocalId),
     ) ResourceError!void {
         for (singles) |local| {
@@ -3895,12 +3755,25 @@ const Inserter = struct {
         }
     }
 
+    fn canMoveAliasBindValue(
+        self: *Inserter,
+        owned: *const OwnedSet,
+        value: LIR.LocalId,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+        loop_keep: ?LoopKeep,
+    ) ResourceError!bool {
+        if (!self.ownsUnit(owned, value)) return false;
+        if (!self.localContainsRefcounted(value)) return false;
+        return !(try self.groupUsedInPathExcept(next, value, target, loop_keep));
+    }
+
     fn noteDeathIfUnused(
         self: *Inserter,
         owned: *OwnedSet,
         local: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(LIR.LocalId),
     ) ResourceError!void {
         // A borrowed operand's lifetime event belongs to its owning leader:
@@ -3920,7 +3793,7 @@ const Inserter = struct {
         }
         owned.unset(owner);
         if (collected) |list| {
-            try list.append(self.store.allocator, owner);
+            try list.append(self.emission_allocator, owner);
         }
     }
 
@@ -3930,7 +3803,7 @@ const Inserter = struct {
         local: LIR.LocalId,
         ret_mode: arc_sig.Mode,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(LIR.LocalId),
     ) ResourceError!void {
         if (ret_mode == .owned and self.solution.isBorrowed(local)) {
@@ -3945,7 +3818,7 @@ const Inserter = struct {
         owned: *OwnedSet,
         local: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(LIR.LocalId),
     ) ResourceError!void {
         if (!owned.contains(local)) return;
@@ -3953,31 +3826,8 @@ const Inserter = struct {
         if (try self.valueUsedInPath(next, local, loop_keep)) return;
         owned.unset(local);
         if (collected) |list| {
-            try list.append(self.store.allocator, local);
+            try list.append(self.emission_allocator, local);
         }
-    }
-
-    fn takePostReleases(self: *Inserter, deaths: *std.ArrayList(LIR.LocalId)) ResourceError![]const LIR.LocalId {
-        if (deaths.items.len == 0) return &.{};
-        return try deaths.toOwnedSlice(self.store.allocator);
-    }
-
-    fn takeTransferPositions(self: *Inserter, positions: *std.ArrayList(u32)) ResourceError![]const u32 {
-        if (positions.items.len == 0) return &.{};
-        return try positions.toOwnedSlice(self.store.allocator);
-    }
-
-    fn canMoveAliasBindValue(
-        self: *Inserter,
-        owned: *const OwnedSet,
-        value: LIR.LocalId,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
-    ) ResourceError!bool {
-        if (!self.ownsUnit(owned, value)) return false;
-        if (!self.localContainsRefcounted(value)) return false;
-        return !(try self.groupUsedInPathExcept(next, value, target, loop_keep));
     }
 
     fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -4022,7 +3872,7 @@ const Inserter = struct {
         mask: u64,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!u64 {
         if (mask == 0) return 0;
         var preserve: u64 = 0;
@@ -4110,180 +3960,27 @@ const Inserter = struct {
     }
 
     fn procParamCanUseUniqueSeed(
-        self: *Inserter,
+        self: *const Inserter,
         proc_id: LIR.LirProcSpecId,
         position: usize,
-    ) ResourceError!bool {
+    ) bool {
         if (position >= 64) return false;
-        const proc_index = @intFromEnum(proc_id);
-        if (proc_index >= self.variants.unique_seed_masks.len) return false;
-        if (self.variants.unique_seed_masks[proc_index]) |mask| {
-            return (mask & argMaskBit(position)) != 0;
-        }
-
-        const mask = try self.computeProcUniqueSeedMask(proc_id);
-        self.variants.unique_seed_masks[proc_index] = mask;
-        return (mask & argMaskBit(position)) != 0;
-    }
-
-    fn computeProcUniqueSeedMask(self: *Inserter, proc_id: LIR.LirProcSpecId) ResourceError!u64 {
-        const proc = self.store.getProcSpec(proc_id);
-        const params = self.store.getLocalSpan(proc.args);
-        if (params.len == 0) return 0;
-
-        var mask: u64 = 0;
-        var visited = try self.store.allocator.alloc(bool, self.store.cfStmtCount());
-        defer self.store.allocator.free(visited);
-        @memset(visited, false);
-
-        var stack = std.ArrayList(LIR.CFStmtId).empty;
-        defer stack.deinit(self.store.allocator);
-
-        if (self.variants.original_bodies[@intFromEnum(proc_id)]) |body| {
-            try stack.append(self.store.allocator, body);
-        }
-        const join_points = self.store.getJoinPointSpan(proc.join_points);
-        for (0..GuardedList.borrowLen(join_points)) |join_index| {
-            const join_point = GuardedList.at(join_points, join_index);
-            try stack.append(self.store.allocator, join_point.body);
-        }
-
-        while (stack.pop()) |stmt_id| {
-            const stmt_index = @intFromEnum(stmt_id);
-            if (stmt_index >= visited.len) arcInvariant("ARC unique-seed scan saw stmt outside store");
-            if (visited[stmt_index]) continue;
-            visited[stmt_index] = true;
-
-            const stmt = self.store.getCFStmt(stmt_id);
-            switch (stmt) {
-                .assign_low_level => |assign| {
-                    mask |= self.uniqueSeedMaskForLowLevel(params, assign.args, assign.rc_effect);
-                    try stack.append(self.store.allocator, assign.next);
-                },
-                .switch_stmt => |switch_stmt| {
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(self.store.allocator, branch.body);
-                    }
-                    try stack.append(self.store.allocator, switch_stmt.default_branch);
-                    if (switch_stmt.continuation) |continuation| {
-                        try stack.append(self.store.allocator, continuation);
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
-                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
-                },
-                .str_match => |str_match| {
-                    try stack.append(self.store.allocator, str_match.on_match);
-                    try stack.append(self.store.allocator, str_match.on_miss);
-                },
-                .boxy_tag_match => |tag_match| {
-                    try stack.append(self.store.allocator, tag_match.on_match);
-                    try stack.append(self.store.allocator, tag_match.on_miss);
-                },
-                .str_match_set => |str_match_set| {
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(self.store.allocator, arm.on_match);
-                    }
-                    try stack.append(self.store.allocator, str_match_set.on_miss);
-                },
-                .join => |join_stmt| {
-                    try stack.append(self.store.allocator, join_stmt.body);
-                    try stack.append(self.store.allocator, join_stmt.remainder);
-                },
-                inline .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call,
-                .assign_call_erased,
-                .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .assign_call_dict,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .set_local,
-                .debug,
-                .expect,
-                .comptime_branch_taken,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                => |linear| try stack.append(self.store.allocator, linear.next),
-                .ret,
-                .jump,
-                .crash,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
-                => {},
-            }
-        }
-
-        return mask;
-    }
-
-    fn uniqueSeedMaskForLowLevel(
-        self: *const Inserter,
-        params: anytype,
-        args: LIR.LocalSpan,
-        rc_effect: LIR.LowLevel.RcEffect,
-    ) u64 {
-        const check_mask = rc_effect.may_runtime_uniqueness_check_args & rc_effect.consume_args;
-        if (check_mask == 0) return 0;
-
-        var mask: u64 = 0;
-        const locals = self.store.getLocalSpan(args);
-        for (0..GuardedList.borrowLen(locals)) |arg_position| {
-            const arg = GuardedList.at(locals, arg_position);
-            if (arg_position >= 64) break;
-            if ((check_mask & argMaskBit(arg_position)) == 0) continue;
-            for (0..@min(params.len, 64)) |param_position| {
-                const param = GuardedList.at(params, param_position);
-                if (arg == param) {
-                    mask |= argMaskBit(param_position);
-                    break;
-                }
-            }
-        }
-        return mask;
+        return (self.solution.uniqueSeedMaskOf(proc_id) & argMaskBit(position)) != 0;
     }
 
     fn callArgOwnership(
         self: *Inserter,
         callee: ?LIR.LirProcSpecId,
-        owned: *const OwnedSet,
+        owned: *OwnedSet,
         callee_sig: arc_sig.RcSig,
         unique_demand: bool,
         span: LIR.LocalSpan,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!CallArgOwnership {
-        var result = CallArgOwnership{};
-        errdefer result.deinit(self.store.allocator);
-        var transferred = try OwnedSet.init(self.store.allocator, owned.len());
-        defer transferred.deinit();
-
-        result.demanded = callee_sig;
+        self.retain_arg_scratch.clearRetainingCapacity();
+        var demanded = callee_sig;
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |position| {
             const local = GuardedList.at(locals, position);
@@ -4299,30 +3996,29 @@ const Inserter = struct {
                 if (position >= 64) continue;
                 const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
                 const owner = self.solution.unitLocalOf(local);
-                const can_transfer = owned.contains(owner) and !used_after_call and !transferred.contains(owner);
+                const can_transfer = owned.contains(owner) and !used_after_call;
                 if (!can_transfer) continue;
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
-                const seed_can_reach_check = if (callee) |direct| try self.procParamCanUseUniqueSeed(direct, position) else false;
+                const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
                 const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local);
                 if (!return_borrows_param and !seeds_unique_param) continue;
-                result.demanded.borrowed_params &= ~bit;
+                demanded.borrowed_params &= ~bit;
                 if (return_borrows_param) {
-                    result.demanded.ret_mode = .owned;
-                    result.demanded.ret_lenders = 0;
+                    demanded.ret_mode = .owned;
+                    demanded.ret_lenders = 0;
                 }
                 if (seeds_unique_param) {
-                    result.demanded.unique_params |= bit;
+                    demanded.unique_params |= bit;
                 }
-                try result.transfer_args.append(self.store.allocator, local);
-                transferred.set(owner);
+                owned.unset(owner);
                 continue;
             }
 
             const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
             const owner = self.solution.unitLocalOf(local);
-            const can_transfer = owned.contains(owner) and !used_after_call and !transferred.contains(owner);
+            const can_transfer = owned.contains(owner) and !used_after_call;
 
             if (can_transfer) {
                 // A dying argument moving into an owned position that is
@@ -4331,21 +4027,23 @@ const Inserter = struct {
                 // checked ops it reaches in the body go check-free.
                 const seed_can_reach_check = if (position < 64) blk: {
                     const direct = callee orelse break :blk false;
-                    break :blk try self.procParamCanUseUniqueSeed(direct, position);
+                    break :blk self.procParamCanUseUniqueSeed(direct, position);
                 } else false;
                 if (unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local))
                 {
-                    result.demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
+                    demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
                 }
-                try result.transfer_args.append(self.store.allocator, local);
-                transferred.set(owner);
+                owned.unset(owner);
             } else {
-                try result.retain_args.append(self.store.allocator, local);
+                try self.retain_arg_scratch.append(self.emission_allocator, local);
             }
         }
 
-        return result;
+        return .{
+            .retain_args = self.retain_arg_scratch.items,
+            .demanded = demanded,
+        };
     }
 
     /// Resolves the proc a call site targets: the original callee when the
@@ -4373,10 +4071,27 @@ const Inserter = struct {
         if (entry.found_existing) return entry.value_ptr.*;
 
         const source_spec = self.store.getProcSpec(callee);
-        var variant_spec = source_spec;
-        variant_spec.name = self.store.freshSyntheticSymbol();
-        variant_spec.body = self.variants.original_bodies[@intFromEnum(callee)];
-        const variant = try self.store.addProcSpec(variant_spec);
+        const variant = try self.store.addProcSpec(.{
+            .name = self.store.freshSyntheticSymbol(),
+            .args = source_spec.args,
+            .erased_reuse_arg = source_spec.erased_reuse_arg,
+            .erased_call_args = source_spec.erased_call_args,
+            .frame_locals = source_spec.frame_locals,
+            .body = self.variants.original_bodies[@intFromEnum(callee)],
+            .ret_layout = source_spec.ret_layout,
+            .ret_desc = source_spec.ret_desc,
+            .runtime_ret_desc = source_spec.runtime_ret_desc,
+            .erased_arg_desc_offsets = source_spec.erased_arg_desc_offsets,
+            .erased_arg_layouts = source_spec.erased_arg_layouts,
+            .erased_arg_desc_params = source_spec.erased_arg_desc_params,
+            .erased_capture_arg = source_spec.erased_capture_arg,
+            .abi = source_spec.abi,
+            .boxy_runtime_entry = source_spec.boxy_runtime_entry,
+            .is_static_initializer = source_spec.is_static_initializer,
+            .hosted = source_spec.hosted,
+            .tail_transform = source_spec.tail_transform,
+            .stack_probe = source_spec.stack_probe,
+        });
         try self.store.copyProcDebugInfo(variant, callee);
         entry.value_ptr.* = variant;
         try self.variants.sigs.append(self.store.allocator, demanded);
@@ -4399,12 +4114,6 @@ const Inserter = struct {
         return false;
     }
 
-    fn unsetArgs(self: *Inserter, owned: *OwnedSet, args: []const LIR.LocalId) void {
-        for (args) |local| {
-            self.unsetOwnedUnit(owned, local);
-        }
-    }
-
     fn unsetMaskedArgsExcept(
         self: *Inserter,
         owned: *OwnedSet,
@@ -4423,225 +4132,28 @@ const Inserter = struct {
         }
     }
 
-    fn collectJoinBodies(
-        self: *Inserter,
-        start: LIR.CFStmtId,
-        join_bodies: *JoinBodyMap,
-        visited: *std.AutoHashMap(LIR.CFStmtId, void),
-    ) ResourceError!void {
-        var stack = std.ArrayList(LIR.CFStmtId).empty;
-        defer stack.deinit(self.store.allocator);
-        try stack.append(self.store.allocator, start);
-
-        while (stack.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-
-            const stmt = self.store.getCFStmt(current);
-            switch (stmt) {
-                .assign_ref => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_literal => |assign| try stack.append(self.store.allocator, assign.next),
-                .init_uninitialized => |uninit| try stack.append(self.store.allocator, uninit.next),
-                .assign_call => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_call_erased => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_packed_erased_fn => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_desc_ref => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_dict_ref => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_box => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_reuse_box => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_unbox => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_adapt => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_inspect => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_eq => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_tag_payload => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_call_dict => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_low_level => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_struct => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .store_struct => |assign| try stack.append(self.store.allocator, assign.next),
-                .store_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .set_local => |assign| try stack.append(self.store.allocator, assign.next),
-                .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
-                .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
-                .comptime_branch_taken => |taken| try stack.append(self.store.allocator, taken.next),
-                .decref_if_initialized => |rc| try stack.append(self.store.allocator, rc.next),
-                .switch_stmt => |switch_stmt| {
-                    if (switch_stmt.continuation) |continuation| {
-                        try stack.append(self.store.allocator, continuation);
-                    }
-                    try stack.append(self.store.allocator, switch_stmt.default_branch);
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(self.store.allocator, branch.body);
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
-                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
-                },
-                .str_match => |str_match| {
-                    try stack.append(self.store.allocator, str_match.on_match);
-                    try stack.append(self.store.allocator, str_match.on_miss);
-                },
-                .boxy_tag_match => |tag_match| {
-                    try stack.append(self.store.allocator, tag_match.on_match);
-                    try stack.append(self.store.allocator, tag_match.on_miss);
-                },
-                .str_match_set => |str_match_set| {
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(self.store.allocator, arm.on_match);
-                    }
-                    try stack.append(self.store.allocator, str_match_set.on_miss);
-                },
-                .join => |join_stmt| {
-                    const previous = try join_bodies.getOrPut(join_stmt.id);
-                    if (previous.found_existing and previous.value_ptr.* != join_stmt.body) {
-                        arcInvariant("ARC join-body collection saw one join id with multiple bodies");
-                    }
-                    previous.value_ptr.* = join_stmt.body;
-                    try stack.append(self.store.allocator, join_stmt.remainder);
-                    try stack.append(self.store.allocator, join_stmt.body);
-                },
-                .jump,
-                .ret,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
-                .crash,
-                .expect_err,
-                => {},
-                .incref, .decref, .free => arcInvariant("ARC join-body collection received already-reference-counted LIR"),
-            }
+    fn recordFinalJoin(self: *Inserter, join_index: u32, join_point: LIR.JoinPoint) ResourceError!void {
+        if (join_index >= self.final_joins.len) arcInvariant("ARC emitted a join beyond its lifted final-join table");
+        if (self.final_joins[join_index]) |existing| {
+            if (joinPointEql(existing, join_point)) return;
+            arcInvariant("ARC final join-point output saw one join id with different data");
         }
+        self.final_joins[join_index] = join_point;
     }
 
-    fn procJoinPoints(self: *Inserter, body: ?LIR.CFStmtId) ResourceError!LIR.JoinPointSpan {
-        const start = body orelse return LIR.JoinPointSpan.empty();
-
-        var joins: FinalJoinMap = .empty;
-        defer joins.deinit(self.store.allocator);
-        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.store.allocator);
-        defer visited.deinit();
-        try self.collectFinalJoinPoints(start, &joins, &visited);
-
-        const sorted = try self.store.allocator.alloc(LIR.JoinPoint, joins.count());
-        defer self.store.allocator.free(sorted);
-        for (joins.values(), 0..) |join, index| {
-            sorted[index] = join;
+    fn finishFinalJoinPoints(self: *Inserter) ResourceError!LIR.JoinPointSpan {
+        var count: usize = 0;
+        for (self.final_joins) |join| count += @intFromBool(join != null);
+        if (count == 0) return LIR.JoinPointSpan.empty();
+        const sorted = try self.emission_allocator.alloc(LIR.JoinPoint, count);
+        var next: usize = 0;
+        for (self.final_joins) |maybe_join| {
+            const join = maybe_join orelse continue;
+            sorted[next] = join;
+            next += 1;
         }
         std.mem.sort(LIR.JoinPoint, sorted, {}, joinPointLessThan);
         return try self.store.addJoinPointSpan(sorted);
-    }
-
-    fn collectFinalJoinPoints(
-        self: *Inserter,
-        start: LIR.CFStmtId,
-        joins: *FinalJoinMap,
-        visited: *std.AutoHashMap(LIR.CFStmtId, void),
-    ) ResourceError!void {
-        var stack = std.ArrayList(LIR.CFStmtId).empty;
-        defer stack.deinit(self.store.allocator);
-        try stack.append(self.store.allocator, start);
-
-        while (stack.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-
-            const stmt = self.store.getCFStmt(current);
-            switch (stmt) {
-                .assign_ref => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_literal => |assign| try stack.append(self.store.allocator, assign.next),
-                .init_uninitialized => |uninit| try stack.append(self.store.allocator, uninit.next),
-                .assign_call => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_call_erased => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_packed_erased_fn => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_desc_ref => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_dict_ref => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_box => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_reuse_box => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_unbox => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_adapt => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_inspect => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_eq => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_boxy_tag_payload => |assign| try stack.append(self.store.allocator, assign.next),
-                .boxy_tag_match => |tag_match| {
-                    try stack.append(self.store.allocator, tag_match.on_match);
-                    try stack.append(self.store.allocator, tag_match.on_miss);
-                },
-                .assign_call_dict => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_low_level => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_struct => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .store_struct => |assign| try stack.append(self.store.allocator, assign.next),
-                .store_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .set_local => |assign| try stack.append(self.store.allocator, assign.next),
-                .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
-                .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
-                .incref => |rc| try stack.append(self.store.allocator, rc.next),
-                .decref => |rc| try stack.append(self.store.allocator, rc.next),
-                .decref_if_initialized => |rc| try stack.append(self.store.allocator, rc.next),
-                .free => |rc| try stack.append(self.store.allocator, rc.next),
-                .comptime_branch_taken => |taken| try stack.append(self.store.allocator, taken.next),
-                .switch_stmt => |switch_stmt| {
-                    if (switch_stmt.continuation) |continuation| {
-                        try stack.append(self.store.allocator, continuation);
-                    }
-                    try stack.append(self.store.allocator, switch_stmt.default_branch);
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(self.store.allocator, branch.body);
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
-                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
-                },
-                .str_match => |str_match| {
-                    try stack.append(self.store.allocator, str_match.on_match);
-                    try stack.append(self.store.allocator, str_match.on_miss);
-                },
-                .str_match_set => |str_match_set| {
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(self.store.allocator, arm.on_match);
-                    }
-                    try stack.append(self.store.allocator, str_match_set.on_miss);
-                },
-                .join => |join_stmt| {
-                    const entry = try joins.getOrPut(self.store.allocator, join_stmt.id);
-                    const join_point = LIR.JoinPoint{
-                        .id = join_stmt.id,
-                        .params = join_stmt.params,
-                        .body = join_stmt.body,
-                    };
-                    if (entry.found_existing and !joinPointEql(entry.value_ptr.*, join_point)) {
-                        arcInvariant("ARC final join-point output saw one join id with different data");
-                    }
-                    entry.value_ptr.* = join_point;
-                    try stack.append(self.store.allocator, join_stmt.remainder);
-                    try stack.append(self.store.allocator, join_stmt.body);
-                },
-                .jump,
-                .ret,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
-                .crash,
-                .expect_err,
-                => {},
-            }
-        }
     }
 
     /// Kill applied to one successor edge only: value-use bits of string
@@ -4654,8 +4166,8 @@ const Inserter = struct {
 
     const ReadBeforeRebindNode = struct {
         stmt: LIR.CFStmtId,
-        reads: std.bit_set.DynamicBitSetUnmanaged,
-        exposed: std.bit_set.DynamicBitSetUnmanaged,
+        reads: ExactBitSet,
+        exposed: ExactBitSet,
         successor_start: usize,
         successor_len: u32,
         def: ?LIR.LocalId,
@@ -4665,42 +4177,44 @@ const Inserter = struct {
     const ReadBeforeRebindGraph = struct {
         allocator: Allocator,
         nodes: std.ArrayList(ReadBeforeRebindNode),
-        successors: std.ArrayList(LIR.CFStmtId),
-        indices: std.AutoHashMap(LIR.CFStmtId, usize),
+        /// Node indices, resolved exactly once while each edge is appended.
+        successors: std.ArrayList(u32),
+        predecessor_starts: []const usize = &.{},
+        predecessors: []const usize = &.{},
+        loop_edges: []const usize = &.{},
+        /// Compact node bits whose forward paths can reach a loop boundary.
+        reaches_loop_edge: std.bit_set.DynamicBitSetUnmanaged = .{},
 
         fn init(allocator: Allocator) ReadBeforeRebindGraph {
             return .{
                 .allocator = allocator,
                 .nodes = .empty,
                 .successors = .empty,
-                .indices = std.AutoHashMap(LIR.CFStmtId, usize).init(allocator),
             };
         }
     };
 
-    fn clearReadsBeforeRebindCache(self: *Inserter) void {
-        self.reads_before_rebind_cache.clearRetainingCapacity();
-        self.loop_keep_reads_consumed.clearRetainingCapacity();
-        self.reaches_loop_edge.clearRetainingCapacity();
-        _ = self.read_cache_arena.reset(.retain_capacity);
-    }
-
     fn ensureReadBeforeRebindNode(
         self: *Inserter,
         graph: *ReadBeforeRebindGraph,
-        work: *std.ArrayList(LIR.CFStmtId),
+        work: *std.ArrayList(u32),
         stmt: LIR.CFStmtId,
-    ) ResourceError!void {
-        if (graph.indices.contains(stmt)) return;
+    ) ResourceError!u32 {
+        const stmt_index = @intFromEnum(stmt);
+        if (stmt_index >= self.stmt_node_indices.len) {
+            arcInvariant("ARC liveness reached a generated statement");
+        }
+        if (self.stmt_node_indices[stmt_index] != no_stmt_node_index) {
+            return self.stmt_node_indices[stmt_index];
+        }
 
-        var reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.liveness_bit_len);
+        var reads = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
         errdefer reads.deinit(graph.allocator);
-        var exposed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.liveness_bit_len);
+        var exposed = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
         errdefer exposed.deinit(graph.allocator);
 
         const index = graph.nodes.items.len;
-        try graph.indices.put(stmt, index);
-        errdefer _ = graph.indices.remove(stmt);
+        if (index >= no_stmt_node_index) arcInvariant("ARC liveness graph exceeded its node index representation");
 
         try graph.nodes.append(graph.allocator, .{
             .stmt = stmt,
@@ -4710,63 +4224,59 @@ const Inserter = struct {
             .successor_len = 0,
             .def = null,
         });
-        try work.append(graph.allocator, stmt);
+        self.stmt_node_indices[stmt_index] = @intCast(index);
+        try work.append(graph.allocator, @intCast(index));
+        return @intCast(index);
     }
 
     fn appendReadBeforeRebindSuccessor(
         self: *Inserter,
         graph: *ReadBeforeRebindGraph,
-        work: *std.ArrayList(LIR.CFStmtId),
+        work: *std.ArrayList(u32),
         node_index: usize,
         successor: LIR.CFStmtId,
     ) ResourceError!void {
+        const successor_node = try self.ensureReadBeforeRebindNode(graph, work, successor);
         const successor_index = graph.successors.items.len;
         if (graph.nodes.items[node_index].successor_len == 0) {
             graph.nodes.items[node_index].successor_start = successor_index;
         }
-        try graph.successors.append(graph.allocator, successor);
+        try graph.successors.append(graph.allocator, successor_node);
         graph.nodes.items[node_index].successor_len += 1;
-        try self.ensureReadBeforeRebindNode(graph, work, successor);
     }
 
     /// Raw liveness-bit position for a refcounted resource local or one of
     /// its explicit solved ownership-unit / borrow-group representatives.
     fn rawLivenessBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
-        const index = self.raw_liveness_bit_index[@intFromEnum(local)];
-        if (index == std.math.maxInt(u32)) return null;
-        return index;
+        return self.domain().resourceBitOf(local);
     }
 
-    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
+    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) void {
         if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
     }
 
     /// Group-bit position of a local's multi-member borrow group, if any.
     fn groupBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
         const leader = self.solution.leaderOf(local);
-        const index = self.group_bit_index[@intFromEnum(leader)];
-        if (index == std.math.maxInt(u32)) return null;
-        return self.raw_liveness_bit_count + index;
+        return self.domain().groupBitOf(leader);
     }
 
     /// Value-use bit position of a borrowed call-result local, if any.
     fn valueUseBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
-        const index = self.value_use_bit_index[@intFromEnum(local)];
-        if (index == std.math.maxInt(u32)) return null;
-        return self.raw_liveness_bit_count + self.group_leaders.len + index;
+        return self.domain().valueUseBitOf(local);
     }
 
     /// Records a value use: the raw read-before-rebind bit, the local's
     /// group bit, and its value-use bit. Reference-count statements record
     /// only the raw bit through `noteReadBeforeRebindLocal`: they must not
     /// extend group or call-result liveness.
-    fn noteLivenessUseLocal(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
+    fn noteLivenessUseLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) void {
         if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
         if (self.groupBitOf(local)) |bit| reads.set(bit);
         if (self.valueUseBitOf(local)) |bit| reads.set(bit);
     }
 
-    fn noteLivenessUseSpan(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, span: LIR.LocalSpan) void {
+    fn noteLivenessUseSpan(self: *const Inserter, reads: *ExactBitSet, span: LIR.LocalSpan) void {
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
             const local = GuardedList.at(locals, index);
@@ -4774,20 +4284,20 @@ const Inserter = struct {
         }
     }
 
-    fn noteLivenessUseRefOp(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, op: LIR.RefOp) void {
+    fn noteLivenessUseRefOp(self: *const Inserter, reads: *ExactBitSet, op: LIR.RefOp) void {
         self.noteLivenessUseLocal(reads, refOpSource(op));
     }
 
     /// Records the loop keep-set as reads at a `loop_continue`/`loop_break`:
     /// kept units, groups with any kept member, and kept call-result locals
     /// all stay live across the loop edge.
-    fn noteLivenessLoopKeep(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, keep: *const OwnedSet) void {
+    fn noteLivenessLoopKeep(self: *const Inserter, reads: *ExactBitSet, keep: *const OwnedSet) void {
         // Every kept unit reads as a value use, which also sets its group
         // and value-use bits, so the loop edge keeps a group alive whenever
         // any member is kept.
         var keep_iter = keep.bits.iterator(.{});
         while (keep_iter.next()) |kept| {
-            self.noteLivenessUseLocal(reads, @enumFromInt(@as(u32, @intCast(kept))));
+            self.noteLivenessUseLocal(reads, keep.domain.resourceLocalAt(kept));
         }
     }
 
@@ -4831,24 +4341,87 @@ const Inserter = struct {
         graph.nodes.items[node_index].edge_kills = merged;
     }
 
+    /// Makes the reusable dense statement lookup name exactly one immutable
+    /// source graph. Switching source procs clears only nodes touched by the
+    /// previous graph and installs only nodes in the next; persisted rows stay
+    /// in their graph's arena and variants of one source never remap.
+    fn activateCurrentLivenessGraph(self: *Inserter) void {
+        if (self.active_liveness_source != null and self.active_liveness_source.? == self.current_source_proc) return;
+        if (self.active_liveness_source) |previous_source| {
+            const previous_index = @intFromEnum(previous_source);
+            if (previous_index >= self.liveness_graphs.len) arcInvariant("ARC active liveness source exceeded its graph table");
+            if (self.liveness_graphs[previous_index]) |*previous| {
+                for (previous.nodes.items) |node| self.stmt_node_indices[@intFromEnum(node.stmt)] = no_stmt_node_index;
+            }
+        }
+        const source_index = @intFromEnum(self.current_source_proc);
+        if (source_index >= self.liveness_graphs.len) arcInvariant("ARC liveness source proc exceeded its graph table");
+        if (self.liveness_graphs[source_index]) |*graph| {
+            for (graph.nodes.items, 0..) |node, node_index| {
+                if (node_index >= no_stmt_node_index) arcInvariant("ARC liveness graph exceeded its node index representation");
+                const stmt_index = @intFromEnum(node.stmt);
+                if (self.stmt_node_indices[stmt_index] != no_stmt_node_index) {
+                    arcInvariant("ARC liveness graph activation overlapped a previous source graph");
+                }
+                self.stmt_node_indices[stmt_index] = @intCast(node_index);
+            }
+        }
+        self.active_liveness_source = self.current_source_proc;
+    }
+
     fn computeReadsBeforeRebind(
         self: *Inserter,
         start: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         loop_keep_id: u32,
-    ) ResourceError!*const std.bit_set.DynamicBitSetUnmanaged {
-        const key = ReadBeforeRebindKey{
-            .start = start,
-            .loop_keep_id = loop_keep_id,
-        };
-        if (self.reads_before_rebind_cache.getPtr(key)) |cached| return cached;
+    ) ResourceError!*const ExactBitSet {
+        self.activateCurrentLivenessGraph();
+        if (loop_keep_id == 0) {
+            const stmt_index = @intFromEnum(start);
+            if (stmt_index >= self.stmt_node_indices.len) arcInvariant("ARC liveness queried a generated statement");
+            const source_index = @intFromEnum(self.current_source_proc);
+            if (self.liveness_graphs[source_index]) |*graph| {
+                const node_index = self.stmt_node_indices[stmt_index];
+                if (node_index == no_stmt_node_index or node_index >= graph.nodes.items.len) {
+                    arcInvariant("ARC keep-free liveness start was outside its source graph");
+                }
+                return &graph.nodes.items[node_index].exposed;
+            }
+        } else {
+            if (loop_keep_id >= self.loop_liveness_caches.items.len) {
+                arcInvariant("ARC liveness queried an unknown loop identity");
+            }
+            const cache = &self.loop_liveness_caches.items[loop_keep_id];
+            if (cache.initialized) {
+                if (cache.dirty) {
+                    const keep = loop_keep orelse arcInvariant("ARC dirty loop cache was refreshed without its boundary facts");
+                    try self.refreshLoopReadsBeforeRebind(cache, keep);
+                }
+                const stmt_index = @intFromEnum(start);
+                if (stmt_index >= self.stmt_node_indices.len) arcInvariant("ARC loop liveness queried a generated statement");
+                const node_index = self.stmt_node_indices[stmt_index];
+                if (node_index == no_stmt_node_index or node_index >= cache.rows.len) {
+                    arcInvariant("ARC loop liveness start was outside its source graph");
+                }
+                return if (cache.rows[node_index]) |*cached|
+                    cached
+                else
+                    arcInvariant("ARC loop cache omitted a queried active node");
+            }
+        }
 
-        var graph_arena = std.heap.ArenaAllocator.init(self.store.allocator);
-        defer graph_arena.deinit();
-        const graph_allocator = graph_arena.allocator();
+        if (loop_keep) |keep| {
+            return self.computeLoopReadsBeforeRebind(start, keep, loop_keep_id);
+        }
 
-        var graph = ReadBeforeRebindGraph.init(graph_allocator);
-        var work = std.ArrayList(LIR.CFStmtId).empty;
+        const source_index = @intFromEnum(self.current_source_proc);
+        if (source_index >= self.liveness_graphs.len) arcInvariant("ARC liveness source proc exceeded its graph table");
+        const graph_slot = &self.liveness_graphs[source_index];
+        if (graph_slot.* != null) arcInvariant("ARC keep-free liveness graph existed without its requested row");
+        graph_slot.* = ReadBeforeRebindGraph.init(self.liveness_allocator);
+        var graph = graph_slot.*.?;
+        const graph_allocator = graph.allocator;
+        var work = std.ArrayList(u32).empty;
         // Loop-edge nodes found by a keep-free build seed the backward
         // reachability sweep that decides which statements ever need
         // loop-keyed rows.
@@ -4859,13 +4432,12 @@ const Inserter = struct {
         // loop keep-set, the keep-set semantics belong to one loop body, so
         // root the graph at the queried statement instead of applying that
         // loop's exits to unrelated loops elsewhere in the proc.
-        if (loop_keep == null) {
-            try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
-        }
-        try self.ensureReadBeforeRebindNode(&graph, &work, start);
+        _ = try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
+        _ = try self.ensureReadBeforeRebindNode(&graph, &work, start);
 
-        while (work.pop()) |stmt| {
-            const node_index = graph.indices.get(stmt) orelse unreachable;
+        while (work.pop()) |node_index_u32| {
+            const node_index: usize = node_index_u32;
+            const stmt = graph.nodes.items[node_index].stmt;
 
             switch (self.store.getCFStmt(stmt)) {
                 .assign_ref => |assign| {
@@ -4891,6 +4463,7 @@ const Inserter = struct {
                 },
                 .assign_call_erased => |assign| {
                     self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.closure);
+                    if (assign.reuse_source) |reuse_source| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse_source);
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
                     if (assign.result_desc) |result_desc| {
@@ -4902,18 +4475,13 @@ const Inserter = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, capture);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    }
                     if (assign.reuse) |reuse| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_boxy_desc_ref => |assign| {
                     if (assign.desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.tag_residual_for) |desc| {
-                        if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    }
+                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.captures);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -4977,15 +4545,9 @@ const Inserter = struct {
                     if (assign.target_desc) |target_desc| setReadBeforeRebindDef(&graph, node_index, target_desc);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
-                .boxy_tag_match => |tag_match| {
-                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, tag_match.source);
-                    if (tag_match.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
-                },
                 .assign_call_dict => |assign| {
                     if (assign.dict.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.result_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
@@ -5095,6 +4657,12 @@ const Inserter = struct {
                         try self.attachStrMatchEdgeKills(&graph, node_index, arm.steps, @intCast(arm_index));
                     }
                 },
+                .boxy_tag_match => |tag_match| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, tag_match.source);
+                    if (tag_match.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
+                },
                 .join => |join_stmt| {
                     // Entering a join statement itself continues with the
                     // remainder. The body is not a normal successor; it only
@@ -5102,12 +4670,13 @@ const Inserter = struct {
                     // modeled by entering the collected body below. Still add
                     // the body as an independent root so direct queries for
                     // `groupUsedInPath(join.body, ...)` are cached by this run.
-                    try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
+                    _ = try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
                 },
-                .jump => |jump_stmt| {
-                    const join_bodies = self.join_bodies orelse arcInvariant("ARC read-before-rebind reached jump without collected join bodies");
-                    const target_body = join_bodies.get(jump_stmt.target) orelse arcInvariant("ARC read-before-rebind reached jump to unknown join point");
+                .jump => {
+                    const join_index = self.solution.jumpTargetJoinIndexOf(graph.nodes.items[node_index].stmt);
+                    if (join_index >= self.join_bodies.len) arcInvariant("ARC liveness jump index exceeded its lifted join table");
+                    const target_body = self.join_bodies[join_index].body;
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, target_body);
                 },
                 .ret => |ret_stmt| {
@@ -5115,12 +4684,7 @@ const Inserter = struct {
                 },
                 .loop_continue,
                 .loop_break,
-                => if (loop_keep) |keep| {
-                    self.noteLivenessLoopKeep(&graph.nodes.items[node_index].reads, keep);
-                    try self.loop_keep_reads_consumed.put(loop_keep_id, {});
-                } else {
-                    try loop_edge_nodes.append(graph_allocator, node_index);
-                },
+                => try loop_edge_nodes.append(graph_allocator, node_index),
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
                 .crash,
@@ -5138,7 +4702,7 @@ const Inserter = struct {
             const successor_start = node.successor_start;
             const successor_end = successor_start + @as(usize, node.successor_len);
             for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
+                const successor_index: usize = successor;
                 pred_counts[successor_index] += 1;
             }
         }
@@ -5154,18 +4718,22 @@ const Inserter = struct {
             const successor_start = node.successor_start;
             const successor_end = successor_start + @as(usize, node.successor_len);
             for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
+                const successor_index: usize = successor;
                 const write_index = pred_writes[successor_index];
                 predecessors[write_index] = predecessor_index;
                 pred_writes[successor_index] += 1;
             }
         }
+        graph.predecessor_starts = pred_starts;
+        graph.predecessors = predecessors;
+        graph.loop_edges = try graph_allocator.dupe(usize, loop_edge_nodes.items);
+        graph.reaches_loop_edge = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
 
         if (loop_edge_nodes.items.len != 0) {
             var reached = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
             for (loop_edge_nodes.items) |edge_node| reached.set(edge_node);
             while (loop_edge_nodes.pop()) |reach_index| {
-                try self.reaches_loop_edge.put(graph.nodes.items[reach_index].stmt, {});
+                graph.reaches_loop_edge.set(reach_index);
                 const pred_start = pred_starts[reach_index];
                 const pred_end = pred_starts[reach_index + 1];
                 for (predecessors[pred_start..pred_end]) |predecessor_index| {
@@ -5176,40 +4744,241 @@ const Inserter = struct {
             }
         }
 
-        var scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.liveness_bit_len);
-        var edge_scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.liveness_bit_len);
-        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
-        var node_work = std.ArrayList(usize).empty;
-        try node_work.ensureTotalCapacity(graph_allocator, node_count);
-        for (0..node_count) |node_index| {
-            node_work.appendAssumeCapacity(node_index);
-            in_work.set(node_index);
+        try self.solveKeepFreeLiveness(&graph);
+        graph_slot.* = graph;
+        const start_node = self.stmt_node_indices[@intFromEnum(start)];
+        if (start_node == no_stmt_node_index or start_node >= graph_slot.*.?.nodes.items.len) {
+            arcInvariant("ARC keep-free liveness cache did not include requested start");
+        }
+        return &graph_slot.*.?.nodes.items[start_node].exposed;
+    }
+
+    fn solveKeepFreeLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
+        const allocator = graph.allocator;
+        const node_count = graph.nodes.items.len;
+        const Frame = struct { node: usize, next_successor: usize };
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        var frames = std.ArrayList(Frame).empty;
+        var finish_order = std.ArrayList(usize).empty;
+        for (0..node_count) |start| {
+            if (seen.isSet(start)) continue;
+            seen.set(start);
+            try frames.append(allocator, .{ .node = start, .next_successor = 0 });
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const node = graph.nodes.items[frame.node];
+                if (frame.next_successor < node.successor_len) {
+                    const successor = graph.successors.items[node.successor_start + frame.next_successor];
+                    frame.next_successor += 1;
+                    if (!seen.isSet(successor)) {
+                        seen.set(successor);
+                        try frames.append(allocator, .{ .node = successor, .next_successor = 0 });
+                    }
+                    continue;
+                }
+                try finish_order.append(allocator, frame.node);
+                _ = frames.pop();
+            }
         }
 
+        const no_scc = std.math.maxInt(u32);
+        const scc_of = try allocator.alloc(u32, node_count);
+        @memset(scc_of, no_scc);
+        var scc_nodes = std.ArrayList(usize).empty;
+        var scc_offsets = std.ArrayList(usize).empty;
+        var reverse_work = std.ArrayList(usize).empty;
+        var order_index = finish_order.items.len;
+        while (order_index > 0) {
+            order_index -= 1;
+            const start = finish_order.items[order_index];
+            if (scc_of[start] != no_scc) continue;
+            const scc_id: u32 = @intCast(scc_offsets.items.len);
+            try scc_offsets.append(allocator, scc_nodes.items.len);
+            scc_of[start] = scc_id;
+            try reverse_work.append(allocator, start);
+            while (reverse_work.pop()) |node_index| {
+                try scc_nodes.append(allocator, node_index);
+                const pred_start = graph.predecessor_starts[node_index];
+                const pred_end = graph.predecessor_starts[node_index + 1];
+                for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                    if (scc_of[predecessor] != no_scc) continue;
+                    scc_of[predecessor] = scc_id;
+                    try reverse_work.append(allocator, predecessor);
+                }
+            }
+        }
+        try scc_offsets.append(allocator, scc_nodes.items.len);
+
+        var scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var edge_scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        var node_work = std.ArrayList(usize).empty;
+
+        var scc_cursor = scc_offsets.items.len - 1;
+        while (scc_cursor > 0) {
+            scc_cursor -= 1;
+            const members = scc_nodes.items[scc_offsets.items[scc_cursor]..scc_offsets.items[scc_cursor + 1]];
+            var cyclic = members.len > 1;
+            if (!cyclic) {
+                const node = graph.nodes.items[members[0]];
+                const successor_end = node.successor_start + @as(usize, node.successor_len);
+                for (graph.successors.items[node.successor_start..successor_end]) |successor| {
+                    if (successor == members[0]) {
+                        cyclic = true;
+                        break;
+                    }
+                }
+            }
+            if (!cyclic) {
+                _ = self.recomputeLivenessNode(graph, members[0], &scratch, &edge_scratch);
+                continue;
+            }
+            for (members) |node_index| {
+                if (in_work.isSet(node_index)) continue;
+                in_work.set(node_index);
+                try node_work.append(allocator, node_index);
+            }
+            while (node_work.pop()) |node_index| {
+                in_work.unset(node_index);
+                if (!self.recomputeLivenessNode(graph, node_index, &scratch, &edge_scratch)) continue;
+                const pred_start = graph.predecessor_starts[node_index];
+                const pred_end = graph.predecessor_starts[node_index + 1];
+                for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                    if (scc_of[predecessor] != scc_cursor or in_work.isSet(predecessor)) continue;
+                    in_work.set(predecessor);
+                    try node_work.append(allocator, predecessor);
+                }
+            }
+        }
+    }
+
+    fn recomputeLivenessNode(
+        self: *Inserter,
+        graph: *ReadBeforeRebindGraph,
+        node_index: usize,
+        scratch: *ExactBitSet,
+        edge_scratch: *ExactBitSet,
+    ) bool {
+        const node = &graph.nodes.items[node_index];
+        scratch.unsetAll();
+        const successor_end = node.successor_start + @as(usize, node.successor_len);
+        for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
+            var edge_killed = false;
+            for (node.edge_kills) |kill| {
+                if (kill.successor_offset != successor_offset) continue;
+                if (!edge_killed) {
+                    edge_scratch.unsetAll();
+                    edge_scratch.setUnion(graph.nodes.items[successor].exposed);
+                    edge_killed = true;
+                }
+                edge_scratch.unset(kill.bit);
+            }
+            scratch.setUnion(if (edge_killed) edge_scratch.* else graph.nodes.items[successor].exposed);
+        }
+        if (node.def) |local| {
+            if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
+            if (self.groupBitOf(local)) |bit| scratch.unset(bit);
+            if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
+        }
+        scratch.setUnion(node.reads);
+        if (node.exposed.eql(scratch.*)) return false;
+        node.exposed.unsetAll();
+        node.exposed.setUnion(scratch.*);
+        return true;
+    }
+
+    fn computeLoopReadsBeforeRebind(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        keep: LoopKeep,
+        loop_keep_id: u32,
+    ) ResourceError!*const ExactBitSet {
+        if (loop_keep_id == 0 or loop_keep_id >= self.loop_liveness_caches.items.len) {
+            arcInvariant("ARC loop liveness referenced an unknown loop identity");
+        }
+        const cache = &self.loop_liveness_caches.items[loop_keep_id];
+        if (cache.initialized) arcInvariant("ARC recomputed an initialized direct loop cache");
+        const source_index = @intFromEnum(self.current_source_proc);
+        if (source_index >= self.liveness_graphs.len) arcInvariant("ARC loop liveness source proc exceeded its graph table");
+        const graph = if (self.liveness_graphs[source_index]) |*entry|
+            entry
+        else
+            arcInvariant("ARC loop liveness ran before keep-free graph construction");
+        const start_stmt_index = @intFromEnum(start);
+        if (start_stmt_index >= self.stmt_node_indices.len) arcInvariant("ARC loop liveness queried a generated statement");
+        const start_node = self.stmt_node_indices[start_stmt_index];
+        if (start_node == no_stmt_node_index or start_node >= graph.nodes.items.len) {
+            arcInvariant("ARC loop liveness start was outside its source graph");
+        }
+
+        const allocator = self.emission_allocator;
+        const node_count = graph.nodes.items.len;
+        var active = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        var walk = std.ArrayList(usize).empty;
+        for (cache.region_roots) |root| {
+            const root_stmt_index = @intFromEnum(root);
+            if (root_stmt_index >= self.stmt_node_indices.len) arcInvariant("ARC loop region root was a generated statement");
+            const root_node = self.stmt_node_indices[root_stmt_index];
+            if (root_node == no_stmt_node_index or root_node >= node_count) {
+                arcInvariant("ARC loop region root was outside its source graph");
+            }
+            if (active.isSet(root_node)) continue;
+            active.set(root_node);
+            try walk.append(allocator, root_node);
+        }
+        while (walk.pop()) |node_index| {
+            const node = graph.nodes.items[node_index];
+            const successor_end = node.successor_start + @as(usize, node.successor_len);
+            for (graph.successors.items[node.successor_start..successor_end]) |successor| {
+                if (active.isSet(successor)) continue;
+                active.set(successor);
+                try walk.append(allocator, successor);
+            }
+        }
+        if (!active.isSet(start_node)) arcInvariant("ARC loop liveness query was outside its explicit join regions");
+
+        var keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        self.noteLivenessLoopKeep(&keep_reads, keep.set);
+        cache.consumed_keep_bits = keep_reads.count() != 0;
+
+        const rows = try allocator.alloc(?ExactBitSet, node_count);
+        @memset(rows, null);
+        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        var node_work = std.ArrayList(usize).empty;
+        for (graph.loop_edges) |loop_node| {
+            if (!active.isSet(loop_node)) continue;
+            var row = try graph.nodes.items[loop_node].exposed.clone(allocator);
+            row.setUnion(keep_reads);
+            rows[loop_node] = row;
+            const pred_start = graph.predecessor_starts[loop_node];
+            const pred_end = graph.predecessor_starts[loop_node + 1];
+            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
+                in_work.set(predecessor);
+                try node_work.append(allocator, predecessor);
+            }
+        }
+
+        var scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var edge_scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
         while (node_work.pop()) |node_index| {
             in_work.unset(node_index);
-            const node = &graph.nodes.items[node_index];
-
+            const node = graph.nodes.items[node_index];
             scratch.unsetAll();
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end], 0..) |successor, successor_offset| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
+            const successor_end = node.successor_start + @as(usize, node.successor_len);
+            for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
+                const successor_row = if (rows[successor]) |*row| row else &graph.nodes.items[successor].exposed;
                 var edge_killed = false;
                 for (node.edge_kills) |kill| {
                     if (kill.successor_offset != successor_offset) continue;
                     if (!edge_killed) {
                         edge_scratch.unsetAll();
-                        edge_scratch.setUnion(graph.nodes.items[successor_index].exposed);
+                        edge_scratch.setUnion(successor_row.*);
                         edge_killed = true;
                     }
                     edge_scratch.unset(kill.bit);
                 }
-                if (edge_killed) {
-                    scratch.setUnion(edge_scratch);
-                } else {
-                    scratch.setUnion(graph.nodes.items[successor_index].exposed);
-                }
+                scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
             }
             if (node.def) |local| {
                 if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
@@ -5217,33 +4986,239 @@ const Inserter = struct {
                 if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
             }
             scratch.setUnion(node.reads);
-
-            if (!node.exposed.eql(scratch)) {
-                node.exposed.unsetAll();
-                node.exposed.setUnion(scratch);
-
-                const pred_start = pred_starts[node_index];
-                const pred_end = pred_starts[node_index + 1];
-                for (predecessors[pred_start..pred_end]) |predecessor_index| {
-                    if (in_work.isSet(predecessor_index)) continue;
-                    try node_work.append(graph_allocator, predecessor_index);
-                    in_work.set(predecessor_index);
-                }
+            const previous = if (rows[node_index]) |*row| row else &node.exposed;
+            if (previous.eql(scratch)) continue;
+            if (rows[node_index]) |*row| {
+                row.unsetAll();
+                row.setUnion(scratch);
+            } else {
+                rows[node_index] = try scratch.clone(allocator);
+            }
+            const pred_start = graph.predecessor_starts[node_index];
+            const pred_end = graph.predecessor_starts[node_index + 1];
+            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
+                in_work.set(predecessor);
+                try node_work.append(allocator, predecessor);
             }
         }
 
-        for (graph.nodes.items) |node| {
-            const node_key = ReadBeforeRebindKey{
-                .start = node.stmt,
-                .loop_keep_id = loop_keep_id,
-            };
-            if (self.reads_before_rebind_cache.contains(node_key)) continue;
-            const cached = try node.exposed.clone(self.read_cache_allocator);
-            try self.reads_before_rebind_cache.put(node_key, cached);
+        var active_iter = active.iterator(.{});
+        while (active_iter.next()) |node_index| {
+            if (rows[node_index] == null) {
+                rows[node_index] = try graph.nodes.items[node_index].exposed.clone(allocator);
+            }
+        }
+        cache.rows = rows;
+        cache.active = active;
+        cache.keep_reads = keep_reads;
+        cache.initialized = true;
+        cache.dirty = false;
+        if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
+        return if (cache.rows[start_node]) |*row|
+            row
+        else
+            arcInvariant("ARC loop liveness cache did not include its requested start");
+    }
+
+    /// Applies a changed loop keep-set as an exact boundary delta to the
+    /// retained active subgraph. Keep-sets only shrink, so only loop-edge
+    /// rows that actually lose bits seed the reverse worklist; propagation
+    /// then visits precisely predecessors whose solved row changes.
+    fn refreshLoopReadsBeforeRebind(self: *Inserter, cache: *LoopLivenessCache, keep: LoopKeep) ResourceError!void {
+        if (!cache.initialized or !cache.dirty) arcInvariant("ARC refreshed a loop cache outside its dirty initialized state");
+        const source_index = @intFromEnum(self.current_source_proc);
+        if (source_index >= self.liveness_graphs.len) arcInvariant("ARC loop refresh source proc exceeded its graph table");
+        const graph = if (self.liveness_graphs[source_index]) |*entry|
+            entry
+        else
+            arcInvariant("ARC loop refresh ran without an immutable liveness graph");
+        const active = if (cache.active) |*bits| bits else arcInvariant("ARC initialized loop cache lacked its active subgraph");
+        const old_keep_reads = if (cache.keep_reads) |*bits| bits else arcInvariant("ARC initialized loop cache lacked its boundary row");
+        if (cache.rows.len != graph.nodes.items.len) arcInvariant("ARC loop cache row domain changed after graph construction");
+
+        const allocator = self.emission_allocator;
+        var new_keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        self.noteLivenessLoopKeep(&new_keep_reads, keep.set);
+        var new_iter = new_keep_reads.iterator(.{});
+        while (new_iter.next()) |bit| {
+            if (!old_keep_reads.isSet(bit)) arcInvariant("ARC loop boundary facts grew after their monotone keep-set shrank");
+        }
+        if (old_keep_reads.eql(new_keep_reads)) {
+            cache.dirty = false;
+            cache.consumed_keep_bits = new_keep_reads.count() != 0;
+            if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
+            return;
         }
 
-        return self.reads_before_rebind_cache.getPtr(key) orelse
-            arcInvariant("ARC read-before-rebind cache did not include requested start");
+        var scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var edge_scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, graph.nodes.items.len);
+        var node_work = std.ArrayList(usize).empty;
+
+        for (graph.loop_edges) |loop_node| {
+            if (!active.isSet(loop_node)) continue;
+            scratch.unsetAll();
+            scratch.setUnion(graph.nodes.items[loop_node].exposed);
+            scratch.setUnion(new_keep_reads);
+            const row = if (cache.rows[loop_node]) |*existing| existing else arcInvariant("ARC active loop edge lacked its cached row");
+            if (row.eql(scratch)) continue;
+            row.unsetAll();
+            row.setUnion(scratch);
+            const pred_start = graph.predecessor_starts[loop_node];
+            const pred_end = graph.predecessor_starts[loop_node + 1];
+            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
+                in_work.set(predecessor);
+                try node_work.append(allocator, predecessor);
+            }
+        }
+
+        while (node_work.pop()) |node_index| {
+            in_work.unset(node_index);
+            const node = graph.nodes.items[node_index];
+            scratch.unsetAll();
+            const successor_end = node.successor_start + @as(usize, node.successor_len);
+            for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
+                const successor_row = if (cache.rows[successor]) |*row| row else arcInvariant("ARC active loop predecessor reached an uncached successor");
+                var edge_killed = false;
+                for (node.edge_kills) |kill| {
+                    if (kill.successor_offset != successor_offset) continue;
+                    if (!edge_killed) {
+                        edge_scratch.unsetAll();
+                        edge_scratch.setUnion(successor_row.*);
+                        edge_killed = true;
+                    }
+                    edge_scratch.unset(kill.bit);
+                }
+                scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
+            }
+            if (node.def) |local| {
+                if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
+                if (self.groupBitOf(local)) |bit| scratch.unset(bit);
+                if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
+            }
+            scratch.setUnion(node.reads);
+            const row = if (cache.rows[node_index]) |*existing| existing else arcInvariant("ARC active loop node lacked its cached row");
+            if (row.eql(scratch)) continue;
+            row.unsetAll();
+            row.setUnion(scratch);
+            const pred_start = graph.predecessor_starts[node_index];
+            const pred_end = graph.predecessor_starts[node_index + 1];
+            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
+                in_work.set(predecessor);
+                try node_work.append(allocator, predecessor);
+            }
+        }
+
+        old_keep_reads.unsetAll();
+        old_keep_reads.setUnion(new_keep_reads);
+        cache.consumed_keep_bits = new_keep_reads.count() != 0;
+        cache.dirty = false;
+        if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
+    }
+
+    /// Debug-only independent least-fixed-point recomputation for one loop
+    /// cache. The production update descends from the previous solution via
+    /// the changed boundary; this oracle instead starts at the immutable
+    /// keep-free solution and grows all active rows, so agreement certifies
+    /// both directions of the exact-delta algorithm.
+    fn certifyLoopReadsBeforeRebind(self: *Inserter, cache: *const LoopLivenessCache) ResourceError!void {
+        if (builtin.mode != .Debug) return;
+        const source_index = @intFromEnum(self.current_source_proc);
+        const graph = if (self.liveness_graphs[source_index]) |*entry|
+            entry
+        else
+            arcInvariant("ARC loop-liveness certifier lacked its immutable graph");
+        const active = if (cache.active) |*bits|
+            bits
+        else
+            arcInvariant("ARC loop-liveness certifier lacked its active subgraph");
+        const keep_reads = if (cache.keep_reads) |*bits|
+            bits
+        else
+            arcInvariant("ARC loop-liveness certifier lacked its boundary facts");
+        if (cache.rows.len != graph.nodes.items.len) arcInvariant("ARC loop-liveness certifier saw a row-domain mismatch");
+
+        const allocator = self.emission_allocator;
+        const expected = try allocator.alloc(?ExactBitSet, graph.nodes.items.len);
+        @memset(expected, null);
+        var active_iter = active.iterator(.{});
+        while (active_iter.next()) |node_index| {
+            expected[node_index] = try graph.nodes.items[node_index].exposed.clone(allocator);
+        }
+        var is_loop_edge = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, graph.nodes.items.len);
+        for (graph.loop_edges) |loop_node| {
+            if (!active.isSet(loop_node)) continue;
+            is_loop_edge.set(loop_node);
+            expected[loop_node].?.setUnion(keep_reads.*);
+        }
+
+        var in_work = try active.clone(allocator);
+        var work = std.ArrayList(usize).empty;
+        active_iter = active.iterator(.{});
+        while (active_iter.next()) |node_index| try work.append(allocator, node_index);
+        var scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var edge_scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        while (work.pop()) |node_index| {
+            in_work.unset(node_index);
+            const node = graph.nodes.items[node_index];
+            scratch.unsetAll();
+            if (is_loop_edge.isSet(node_index)) {
+                scratch.setUnion(node.exposed);
+                scratch.setUnion(keep_reads.*);
+            } else {
+                const successor_end = node.successor_start + @as(usize, node.successor_len);
+                for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
+                    const successor_row = if (expected[successor]) |*row|
+                        row
+                    else
+                        arcInvariant("ARC loop-liveness certifier reached an inactive successor");
+                    var edge_killed = false;
+                    for (node.edge_kills) |kill| {
+                        if (kill.successor_offset != successor_offset) continue;
+                        if (!edge_killed) {
+                            edge_scratch.unsetAll();
+                            edge_scratch.setUnion(successor_row.*);
+                            edge_killed = true;
+                        }
+                        edge_scratch.unset(kill.bit);
+                    }
+                    scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
+                }
+                if (node.def) |local| {
+                    if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
+                    if (self.groupBitOf(local)) |bit| scratch.unset(bit);
+                    if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
+                }
+                scratch.setUnion(node.reads);
+            }
+            const row = if (expected[node_index]) |*entry|
+                entry
+            else
+                arcInvariant("ARC loop-liveness certifier omitted an active row");
+            if (row.eql(scratch)) continue;
+            row.unsetAll();
+            row.setUnion(scratch);
+            const pred_start = graph.predecessor_starts[node_index];
+            const pred_end = graph.predecessor_starts[node_index + 1];
+            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
+                in_work.set(predecessor);
+                try work.append(allocator, predecessor);
+            }
+        }
+
+        active_iter = active.iterator(.{});
+        while (active_iter.next()) |node_index| {
+            const actual = if (cache.rows[node_index]) |*row|
+                row
+            else
+                arcInvariant("ARC loop-liveness cache omitted an active row");
+            const independently_solved = expected[node_index].?;
+            if (!actual.eql(independently_solved)) arcInvariant("ARC loop liveness delta disagreed with an independent fixed point");
+        }
     }
 
     /// Value liveness for one raw local (no group extension): answered by
@@ -5252,7 +5227,7 @@ const Inserter = struct {
         self: *Inserter,
         start: LIR.CFStmtId,
         needle: LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         const bit = self.valueUseBitOf(needle) orelse
             arcInvariant("ARC value-use query for a local without a value-use bit");
@@ -5279,24 +5254,31 @@ const Inserter = struct {
     fn livenessRow(
         self: *Inserter,
         start: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
-    ) ResourceError!*const std.bit_set.DynamicBitSetUnmanaged {
-        const loop_keep_id: u32 = if (loop_keep) |keep|
-            self.active_loop_keep_ids.get(@intFromPtr(keep)) orelse
-                arcInvariant("ARC liveness query used an unregistered loop keep-set")
-        else
-            0;
-        if (loop_keep_id == 0) return self.computeReadsBeforeRebind(start, null, 0);
+        loop_keep: ?LoopKeep,
+    ) ResourceError!*const ExactBitSet {
+        const keep = loop_keep orelse return self.computeReadsBeforeRebind(start, null, 0);
+        if (keep.id == 0) arcInvariant("ARC loop keep-set used the keep-free identity");
         const keep_free = try self.computeReadsBeforeRebind(start, null, 0);
-        if (!self.reaches_loop_edge.contains(start)) return keep_free;
-        return self.computeReadsBeforeRebind(start, loop_keep, loop_keep_id);
+        const source_index = @intFromEnum(self.current_source_proc);
+        const graph = if (self.liveness_graphs[source_index]) |*entry|
+            entry
+        else
+            arcInvariant("ARC loop liveness query lacked its immutable source graph");
+        const stmt_index = @intFromEnum(start);
+        if (stmt_index >= self.stmt_node_indices.len) arcInvariant("ARC loop liveness queried a generated statement");
+        const node_index = self.stmt_node_indices[stmt_index];
+        if (node_index == no_stmt_node_index or node_index >= graph.nodes.items.len) {
+            arcInvariant("ARC loop liveness query was outside its source graph");
+        }
+        if (!graph.reaches_loop_edge.isSet(node_index)) return keep_free;
+        return self.computeReadsBeforeRebind(start, keep, keep.id);
     }
 
     fn groupUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
         local: LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         const reads = try self.livenessRow(start, loop_keep);
         return self.groupUsedFromTable(reads, local);
@@ -5307,12 +5289,12 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         local: LIR.LocalId,
         except: LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         const reads = try self.livenessRow(start, loop_keep);
-        const members = self.solution.groupMembers(self.solution.leaderOf(local));
-        for (members) |member| {
-            const member_local: LIR.LocalId = @enumFromInt(member);
+        const leader = self.solution.leaderOf(local);
+        for (self.domain().frame_locals) |member_local| {
+            if (self.solution.leaderOf(member_local) != leader) continue;
             if (member_local == except) continue;
             const bit = self.rawLivenessBitOf(member_local) orelse
                 arcInvariant("ARC refcounted borrow-group member missing its raw liveness bit");
@@ -5342,27 +5324,6 @@ const Inserter = struct {
         return current;
     }
 
-    fn releaseAll(self: *Inserter, owned: *const OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        var keep = try OwnedSet.init(self.store.allocator, owned.len());
-        defer keep.deinit();
-        return try self.releaseDifference(owned, &keep, next);
-    }
-
-    fn releaseDifference(self: *Inserter, owned: *const OwnedSet, keep: *const OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        var current = next;
-        var iter = owned.bits.iterator(.{ .direction = .reverse });
-        while (iter.next()) |i| {
-            if (keep.bits.isSet(i)) continue;
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(i)));
-            if (self.solution.maybeUninitializedCondition(local)) |condition| {
-                current = try self.releaseMaybeInitializedLocal(condition.local, condition.mask, local, current);
-            } else {
-                current = try self.releaseLocalIfRc(local, current);
-            }
-        }
-        return current;
-    }
-
     fn retainLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         return try self.retainLocalIfRcCount(local, 1, next);
     }
@@ -5371,16 +5332,11 @@ const Inserter = struct {
         if (count == 0) return next;
         if (!self.localContainsRefcounted(local)) return next;
         const rc = self.rcHelperForLocal(.incref, local);
-        return try self.store.addCFStmt(.{ .incref = .{
-            .value = local,
-            .rc = rc,
-            .count = count,
-            .atomicity = self.rcAtomicity(local),
-            .next = next,
-        } });
+        const atomicity = self.rcAtomicity(local);
+        return try addCanonicalRetain(self.store, local, rc, atomicity, count, next);
     }
 
-    fn retainStrMatchSourceForCaptures(self: *Inserter, source: LIR.LocalId, steps: LIR.StrMatchStepSpan, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    fn strMatchCaptureRetainCount(self: *const Inserter, steps: LIR.StrMatchStepSpan) u16 {
         var count: u16 = 0;
         const step_borrow = self.store.getStrMatchSteps(steps);
         for (0..GuardedList.borrowLen(step_borrow)) |step_index| {
@@ -5394,11 +5350,35 @@ const Inserter = struct {
                 },
             }
         }
-        return try self.retainLocalIfRcCount(source, count, next);
+        return count;
+    }
+
+    /// Whether this statement's field read is a take in the current
+    /// emission. Takes on containers solved borrowed apply only when the
+    /// variant demand vector overrides the parameter to owned.
+    fn takeApplies(self: *const Inserter, stmt: LIR.CFStmtId) bool {
+        if (self.dismantles.isTake(stmt)) return true;
+        if (self.dismantles.ownedOnlyTakeParam(stmt)) |param| {
+            return self.owned_param_override.contains(param);
+        }
+        return false;
+    }
+
+    /// The dismantle plan for this local's release in the current emission,
+    /// if it has one.
+    fn dismantleFor(self: *const Inserter, local: LIR.LocalId) ?arc_dismantle.Container {
+        if (self.dismantles.containerOf(local)) |container| return container;
+        if (self.dismantles.ownedOnlyContainerOf(local)) |container| {
+            if (self.owned_param_override.contains(local)) return container;
+        }
+        return null;
     }
 
     fn releaseLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.localContainsRefcounted(local)) return next;
+        if (self.dismantleFor(local)) |container| {
+            return try self.dismantleContainer(local, container, next);
+        }
         const rc = self.rcHelperForLocal(.decref, local);
         return try self.store.addCFStmt(.{ .decref = .{
             .value = local,
@@ -5406,6 +5386,43 @@ const Inserter = struct {
             .atomicity = self.rcAtomicity(local),
             .next = next,
         } });
+    }
+
+    /// Release a dismantled container: its taken fields' units were consumed
+    /// by their take reads, so only the residual refcounted fields are read
+    /// into temporaries and released. The temporaries and the container's
+    /// solved arrays never meet: field layouts drive the helpers directly,
+    /// and the container's atomicity covers its stored payloads exactly as
+    /// the whole-struct helper would have.
+    fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        const atomicity = self.rcAtomicity(local);
+        var tail = next;
+        var index = container.residual.len;
+        while (index > 0) {
+            index -= 1;
+            const field = container.residual[index];
+            const rc = self.rcHelperForLayout(.decref, field.layout_idx);
+            if (self.layouts.rcHelperPlan(rc) == .noop) {
+                arcInvariant("ARC dismantle selected a noop RC helper for a refcounted residual field");
+            }
+            const temp = try self.store.addLocal(.{ .layout_idx = field.layout_idx });
+            try self.dismantle_temps.append(self.emission_allocator, temp);
+            tail = try self.store.addCFStmt(.{ .decref = .{
+                .value = temp,
+                .rc = LIR.RcHelper.fromConcrete(rc),
+                .atomicity = atomicity,
+                .next = tail,
+            } });
+            tail = try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = temp,
+                .op = .{ .field = .{
+                    .source = local,
+                    .field_idx = @intCast(field.field_idx),
+                } },
+                .next = tail,
+            } });
+        }
+        return tail;
     }
 
     fn releaseMaybeInitializedLocal(self: *Inserter, condition: LIR.LocalId, condition_mask: u64, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -5479,10 +5496,6 @@ const Inserter = struct {
         };
     }
 
-    fn localMayNeedBoxyRc(self: *const Inserter, local: LIR.LocalId) bool {
-        return self.localContainsRefcounted(local) or self.layoutMayContainBoxyDynamic(self.store.getLocal(local).layout_idx);
-    }
-
     fn layoutMayContainBoxyDynamic(self: *const Inserter, layout_idx: layout_mod.Idx) bool {
         const layout_val = self.layouts.getLayout(layout_idx);
         return switch (layout_val.tag) {
@@ -5523,10 +5536,11 @@ const Inserter = struct {
         if (index >= self.local_contains_refcounted.len) arcInvariant("ARC local refcounted cache did not cover local");
         return self.local_contains_refcounted[index];
     }
-};
 
-const JoinBodyMap = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId);
-const FinalJoinMap = std.AutoArrayHashMapUnmanaged(LIR.JoinPointId, LIR.JoinPoint);
+    fn domain(self: *const Inserter) *const ProcArcDomain {
+        return self.current_domain orelse arcInvariant("ARC operation ran without a proc-local domain");
+    }
+};
 
 fn joinPointLessThan(_: void, a: LIR.JoinPoint, b: LIR.JoinPoint) bool {
     return @intFromEnum(a.id) < @intFromEnum(b.id);
@@ -5540,56 +5554,52 @@ fn localSpanEql(a: LIR.LocalSpan, b: LIR.LocalSpan) bool {
     return a.start == b.start and a.len == b.len;
 }
 
-const RewrittenJoin = struct {
-    keep: OwnedSet,
-    stmt: LIR.CFStmtId,
-};
-
-const RewrittenJoinMap = std.AutoHashMap(LIR.CFStmtId, RewrittenJoin);
-
 const OwnedSet = struct {
     allocator: std.mem.Allocator,
-    bits: std.bit_set.DynamicBitSetUnmanaged,
+    domain: *const ProcArcDomain,
+    bits: ExactBitSet,
 
-    fn init(allocator: std.mem.Allocator, bit_len: usize) ResourceError!OwnedSet {
-        const bits = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, bit_len);
-        return .{ .allocator = allocator, .bits = bits };
+    fn init(allocator: std.mem.Allocator, domain: *const ProcArcDomain) ResourceError!OwnedSet {
+        const bits = try ExactBitSet.initEmpty(allocator, domain.resource_locals.len);
+        return .{ .allocator = allocator, .domain = domain, .bits = bits };
     }
 
     fn deinit(self: *OwnedSet) void {
         self.bits.deinit(self.allocator);
-        self.bits = .{};
     }
 
     fn clone(self: *const OwnedSet) ResourceError!OwnedSet {
         const bits = try self.bits.clone(self.allocator);
-        return .{ .allocator = self.allocator, .bits = bits };
-    }
-
-    fn len(self: *const OwnedSet) usize {
-        return self.bits.capacity();
+        return .{ .allocator = self.allocator, .domain = self.domain, .bits = bits };
     }
 
     fn set(self: *OwnedSet, local: LIR.LocalId) void {
-        self.bits.set(@intFromEnum(local));
+        self.bits.set(self.domain.requiredResourceBitOf(local));
     }
 
     fn unset(self: *OwnedSet, local: LIR.LocalId) void {
-        self.bits.unset(@intFromEnum(local));
+        // Scalars are outside the ownership lattice, so removing one is the
+        // same empty-set operation the former zeroed global bit performed.
+        if (self.domain.resourceBitOf(local)) |bit| self.bits.unset(bit);
     }
 
     fn contains(self: *const OwnedSet, local: LIR.LocalId) bool {
-        return self.bits.isSet(@intFromEnum(local));
+        const bit = self.domain.resourceBitOf(local) orelse return false;
+        return self.bits.isSet(bit);
     }
 
     fn eql(self: *const OwnedSet, other: *const OwnedSet) bool {
-        if (self.len() != other.len()) return false;
+        self.requireSameDomain(other);
         return self.bits.eql(other.bits);
     }
 
     fn intersect(self: *OwnedSet, other: *const OwnedSet) void {
-        if (self.len() != other.len()) arcInvariant("ARC owned-set intersection length mismatch");
+        self.requireSameDomain(other);
         self.bits.setIntersection(other.bits);
+    }
+
+    fn requireSameDomain(self: *const OwnedSet, other: *const OwnedSet) void {
+        if (self.domain != other.domain) arcInvariant("ARC combined ownership sets from different proc domains");
     }
 };
 
@@ -5605,102 +5615,36 @@ fn refOpSource(op: LIR.RefOp) LIR.LocalId {
     };
 }
 
-fn elideImmediateRcPairs(store: *LirStore, start: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-    const new_start = elideImmediateRcPairsAt(store, start);
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
-    defer visited.deinit();
-    var stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer stack.deinit(store.allocator);
-    try stack.append(store.allocator, new_start);
-
-    while (stack.pop()) |current| {
-        if (visited.contains(current)) continue;
-        try visited.put(current, {});
-
-        const stmt = store.getCFStmtPtr(current);
-        switch (stmt.*) {
-            .switch_stmt => |*s| {
-                if (s.continuation) |continuation| {
-                    s.continuation = elideImmediateRcPairsAt(store, continuation);
-                    try stack.append(store.allocator, s.continuation.?);
-                }
-                s.default_branch = elideImmediateRcPairsAt(store, s.default_branch);
-                try stack.append(store.allocator, s.default_branch);
-                const branches = store.getCFSwitchBranchesMut(s.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.atPtr(branches, index);
-                    branch.body = elideImmediateRcPairsAt(store, branch.body);
-                    try stack.append(store.allocator, branch.body);
-                }
-            },
-            .switch_initialized_payload => |*s| {
-                s.initialized_branch = elideImmediateRcPairsAt(store, s.initialized_branch);
-                s.uninitialized_branch = elideImmediateRcPairsAt(store, s.uninitialized_branch);
-                try stack.append(store.allocator, s.initialized_branch);
-                try stack.append(store.allocator, s.uninitialized_branch);
-            },
-            .str_match => |*s| {
-                s.on_match = elideImmediateRcPairsAt(store, s.on_match);
-                s.on_miss = elideImmediateRcPairsAt(store, s.on_miss);
-                try stack.append(store.allocator, s.on_match);
-                try stack.append(store.allocator, s.on_miss);
-            },
-            .boxy_tag_match => |*s| {
-                s.on_match = elideImmediateRcPairsAt(store, s.on_match);
-                s.on_miss = elideImmediateRcPairsAt(store, s.on_miss);
-                try stack.append(store.allocator, s.on_match);
-                try stack.append(store.allocator, s.on_miss);
-            },
-            .str_match_set => |*s| {
-                const arms = store.getStrMatchArmsMut(s.arms);
-                for (0..arms.len) |index| {
-                    const arm = GuardedList.atPtr(arms, index);
-                    arm.on_match = elideImmediateRcPairsAt(store, arm.on_match);
-                    try stack.append(store.allocator, arm.on_match);
-                }
-                s.on_miss = elideImmediateRcPairsAt(store, s.on_miss);
-                try stack.append(store.allocator, s.on_miss);
-            },
-            .join => |*j| {
-                j.body = elideImmediateRcPairsAt(store, j.body);
-                j.remainder = elideImmediateRcPairsAt(store, j.remainder);
-                try stack.append(store.allocator, j.body);
-                try stack.append(store.allocator, j.remainder);
-            },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
-                s.next = elideImmediateRcPairsAt(store, s.next);
-                try stack.append(store.allocator, s.next);
-            },
-            .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-        }
+fn addCanonicalRetain(
+    store: *LirStore,
+    local: LIR.LocalId,
+    rc: LIR.RcHelper,
+    atomicity: LIR.RcAtomicity,
+    count: u16,
+    next: LIR.CFStmtId,
+) ResourceError!LIR.CFStmtId {
+    std.debug.assert(count > 0);
+    var canonical_count = count;
+    var canonical_next = next;
+    switch (store.getCFStmt(next)) {
+        .decref => |release| if (rcRetainReleasePair(.{
+            .value = local,
+            .rc = rc,
+            .atomicity = atomicity,
+        }, release)) {
+            if (count == 1) return release.next;
+            canonical_count = count - 1;
+            canonical_next = release.next;
+        },
+        else => {},
     }
-
-    return new_start;
-}
-
-fn elideImmediateRcPairsAt(store: *LirStore, start: LIR.CFStmtId) LIR.CFStmtId {
-    var current = start;
-    var remaining = store.cfStmtCount() + 1;
-    while (remaining > 0) : (remaining -= 1) {
-        const retain = switch (store.getCFStmt(current)) {
-            .incref => |rc| rc,
-            else => return current,
-        };
-        const release = switch (store.getCFStmt(retain.next)) {
-            .decref => |rc| rc,
-            else => return current,
-        };
-        if (!rcRetainReleasePair(retain, release)) return current;
-
-        if (retain.count == 1) {
-            current = release.next;
-        } else {
-            const stmt = store.getCFStmtPtr(current);
-            stmt.incref.count = retain.count - 1;
-            stmt.incref.next = release.next;
-        }
-    }
-    arcInvariant("ARC immediate RC elision hit a cyclic retain-release chain");
+    return try store.addCFStmt(.{ .incref = .{
+        .value = local,
+        .rc = rc,
+        .count = canonical_count,
+        .atomicity = atomicity,
+        .next = canonical_next,
+    } });
 }
 
 fn rcRetainReleasePair(retain: anytype, release: anytype) bool {
@@ -5727,6 +5671,30 @@ fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
 }
 
+test "exact ARC sets preserve operations at the inline boundary" {
+    const word_bits = @bitSizeOf(usize);
+    for ([_]usize{ word_bits, word_bits + 1 }) |bit_len| {
+        var left = try ExactBitSet.initEmpty(testing.allocator, bit_len);
+        defer left.deinit(testing.allocator);
+        var right = try ExactBitSet.initEmpty(testing.allocator, bit_len);
+        defer right.deinit(testing.allocator);
+
+        left.set(0);
+        left.set(bit_len - 1);
+        right.set(bit_len - 1);
+        left.setIntersection(right);
+        try testing.expectEqual(@as(usize, 1), left.count());
+        try testing.expect(left.isSet(bit_len - 1));
+
+        var cloned = try left.clone(testing.allocator);
+        defer cloned.deinit(testing.allocator);
+        try testing.expect(cloned.eql(left));
+        var iter = cloned.iterator(.{ .direction = .reverse });
+        try testing.expectEqual(bit_len - 1, iter.next().?);
+        try testing.expectEqual(@as(?usize, null), iter.next());
+    }
+}
+
 test "arc insertion boundary exists" {
     std.testing.refAllDecls(@This());
 }
@@ -5741,13 +5709,16 @@ test "RC elision removes adjacent retain release pairs" {
         .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
         .next = ret,
     } });
-    const retain = try f.store.addCFStmt(.{ .incref = .{
-        .value = value,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .incref, .layout_idx = .str }),
-        .next = release,
-    } });
+    const retain = try addCanonicalRetain(
+        &f.store,
+        value,
+        LIR.RcHelper.fromConcrete(.{ .op = .incref, .layout_idx = .str }),
+        .atomic,
+        1,
+        release,
+    );
 
-    try testing.expectEqual(ret, try elideImmediateRcPairs(&f.store, retain));
+    try testing.expectEqual(ret, retain);
 }
 
 test "RC elision lowers adjacent multi retain count" {
@@ -5760,20 +5731,43 @@ test "RC elision lowers adjacent multi retain count" {
         .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
         .next = ret,
     } });
-    const retain = try f.store.addCFStmt(.{ .incref = .{
-        .value = value,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .incref, .layout_idx = .str }),
-        .count = 3,
-        .next = release,
-    } });
-
-    try testing.expectEqual(retain, try elideImmediateRcPairs(&f.store, retain));
+    const retain = try addCanonicalRetain(
+        &f.store,
+        value,
+        LIR.RcHelper.fromConcrete(.{ .op = .incref, .layout_idx = .str }),
+        .atomic,
+        3,
+        release,
+    );
     const stmt = f.store.getCFStmt(retain).incref;
     try testing.expectEqual(@as(u16, 2), stmt.count);
     try testing.expectEqual(ret, stmt.next);
 }
 
 const testing = std.testing;
+
+test "ARC stale plan visit cannot overwrite a newer slot version" {
+    var plans = ArcPlans{};
+    defer plans.plans.deinit(testing.allocator);
+    defer plans.metadata.deinit(testing.allocator);
+    // The stale version returns before either stored statement id is read.
+    const start: LIR.CFStmtId = undefined;
+    try plans.plans.append(testing.allocator, .{ .start = start, .step_count = 7 });
+    try plans.metadata.append(testing.allocator, .{ .version = 2, .scheduled = true });
+
+    var inserter: Inserter = undefined;
+    inserter.arc_plans = &plans;
+    const stale = SolveSegment{
+        .cursor = start,
+        .owned = undefined,
+        .ctx = undefined,
+        .plan_index = 0,
+        .plan_version = 1,
+    };
+
+    try testing.expect(!inserter.beginArcPlanUpdate(&stale));
+    try testing.expectEqual(@as(u32, 7), plans.plans.items[0].step_count);
+}
 
 const ArcTest = struct {
     allocator: std.mem.Allocator,
@@ -5840,10 +5834,17 @@ const ArcTest = struct {
     }
 
     fn addProc(self: *ArcTest, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
+        // Fixtures build the body before registering its proc. Supplying all
+        // locals allocated so far keeps the inventory explicitly complete;
+        // production lowering supplies the exact per-proc subset.
+        const frame_locals = try self.allocator.alloc(LIR.LocalId, self.store.localCount());
+        defer self.allocator.free(frame_locals);
+        for (frame_locals, 0..) |*frame_local, index| frame_local.* = @enumFromInt(@as(u32, @intCast(index)));
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = try self.span(args),
             .body = body,
+            .frame_locals = try self.span(frame_locals),
             .ret_layout = ret_layout,
         });
     }
@@ -6431,6 +6432,300 @@ const ArcTest = struct {
     }
 };
 
+test "ARC preserves erased callable repack reuse" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const capture = try f.local(.str);
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+    const callee_arg = try f.local(.u64);
+
+    const callback = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = try f.span(&.{callee_arg}),
+        .frame_locals = try f.span(&.{callee_arg}),
+        .body = null,
+        .ret_layout = erased_callable,
+    });
+
+    const ret = try f.ret(new_callable);
+    const new_pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = new_callable,
+        .proc = callback,
+        .capture = capture,
+        .capture_layout = .str,
+        .on_drop = .none,
+        .reuse = old_callable,
+        .next = ret,
+    } });
+    const old_pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = old_callable,
+        .proc = callback,
+        .capture = capture,
+        .capture_layout = .str,
+        .on_drop = .none,
+        .next = new_pack,
+    } });
+    const caller = try f.addProc(&.{capture}, old_pack, erased_callable);
+
+    try f.run();
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var found = false;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_packed_erased_fn => |assign| {
+                if (assign.target == new_callable) {
+                    try testing.expect(cursor != new_pack);
+                    try testing.expectEqual(old_callable, assign.reuse.?);
+                    try testing.expect(assign.reuse_unique);
+                    found = true;
+                    break;
+                }
+                cursor = assign.next;
+            },
+            .incref => |rc| cursor = rc.next,
+            .decref => |rc| cursor = rc.next,
+            .decref_if_initialized => |rc| cursor = rc.next,
+            .free => |rc| cursor = rc.next,
+            .ret => break,
+            else => return error.UnexpectedStatement,
+        }
+    }
+    try testing.expect(found);
+}
+
+test "ARC runtime-checks erased callable repack from an ordinary parameter" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+    const capture = try f.local(.u64);
+    const callee_arg = try f.local(.u64);
+
+    const callback = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = try f.span(&.{callee_arg}),
+        .frame_locals = try f.span(&.{callee_arg}),
+        .body = null,
+        .ret_layout = erased_callable,
+    });
+
+    const ret = try f.ret(new_callable);
+    const pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = new_callable,
+        .proc = callback,
+        .capture = capture,
+        .capture_layout = .u64,
+        .on_drop = .none,
+        .reuse = old_callable,
+        .next = ret,
+    } });
+    const caller = try f.addProc(&.{ old_callable, capture }, pack, erased_callable);
+
+    try f.run();
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_packed_erased_fn => |assign| {
+                try testing.expectEqual(old_callable, assign.reuse.?);
+                try testing.expect(!assign.reuse_unique);
+                return;
+            },
+            .incref => |rc| cursor = rc.next,
+            .decref => |rc| cursor = rc.next,
+            .decref_if_initialized => |rc| cursor = rc.next,
+            .free => |rc| cursor = rc.next,
+            else => return error.UnexpectedStatement,
+        }
+    }
+    return error.MissingPackedErasedFn;
+}
+
+test "ARC transfers erased call ownership from an explicit outer source" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const owned_callable = try f.local(erased_callable);
+    const extracted_callable = try f.local(erased_callable);
+    const next_callable = try f.local(erased_callable);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+
+    const ret = try f.ret(next_callable);
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = next_callable,
+        .closure = extracted_callable,
+        .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
+        .reuse_closure = true,
+        .reuse_source = owned_callable,
+        .next = ret,
+    } });
+    const body = try f.assignRefLocal(extracted_callable, owned_callable, call);
+    const caller = try f.addProc(&.{owned_callable}, body, erased_callable);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(owned_callable, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(owned_callable, .decref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_call_erased => |assign| {
+                try testing.expect(assign.reuse_closure);
+                try testing.expectEqual(owned_callable, assign.reuse_source.?);
+                return;
+            },
+            inline .assign_ref, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+            else => return error.UnexpectedStatement,
+        }
+    }
+    return error.MissingErasedCall;
+}
+
+test "ARC retains an erased call reuse source that is read after the call" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const owned_callable = try f.local(erased_callable);
+    const extracted_callable = try f.local(erased_callable);
+    const next_callable = try f.local(erased_callable);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+
+    const ret = try f.ret(next_callable);
+    const later_use = try f.expectStmt(owned_callable, ret);
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = next_callable,
+        .closure = extracted_callable,
+        .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
+        .reuse_closure = true,
+        .reuse_source = owned_callable,
+        .next = later_use,
+    } });
+    const body = try f.assignRefLocal(extracted_callable, owned_callable, call);
+    const caller = try f.addProc(&.{owned_callable}, body, erased_callable);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 1), f.countRc(owned_callable, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(owned_callable, .decref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
+
+    var saw_retain = false;
+    var saw_call = false;
+    var saw_later_use = false;
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_ref => |assign| cursor = assign.next,
+            .incref => |rc| {
+                if (rc.value == owned_callable) {
+                    try testing.expect(!saw_call);
+                    saw_retain = true;
+                }
+                cursor = rc.next;
+            },
+            .assign_call_erased => |assign| {
+                try testing.expect(saw_retain);
+                try testing.expect(assign.reuse_closure);
+                try testing.expectEqual(owned_callable, assign.reuse_source.?);
+                saw_call = true;
+                cursor = assign.next;
+            },
+            .expect => |expect_stmt| {
+                if (expect_stmt.condition == owned_callable) {
+                    try testing.expect(saw_call);
+                    saw_later_use = true;
+                }
+                cursor = expect_stmt.next;
+            },
+            .decref => |rc| {
+                if (rc.value == owned_callable) try testing.expect(saw_later_use);
+                cursor = rc.next;
+            },
+            .decref_if_initialized => |rc| {
+                if (rc.value == owned_callable) try testing.expect(saw_later_use);
+                cursor = rc.next;
+            },
+            .free => |rc| cursor = rc.next,
+            .ret => break,
+            else => return error.UnexpectedStatement,
+        }
+    }
+    try testing.expect(saw_retain);
+    try testing.expect(saw_call);
+    try testing.expect(saw_later_use);
+}
+
+test "ARC retains an erased callable whose repack input is used later" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+    const capture = try f.local(.u64);
+    const callee_arg = try f.local(.u64);
+
+    const callback = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = try f.span(&.{callee_arg}),
+        .frame_locals = try f.span(&.{callee_arg}),
+        .body = null,
+        .ret_layout = erased_callable,
+    });
+
+    const ret = try f.ret(new_callable);
+    const later_use = try f.expectStmt(old_callable, ret);
+    const pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = new_callable,
+        .proc = callback,
+        .capture = capture,
+        .capture_layout = .u64,
+        .on_drop = .none,
+        .reuse = old_callable,
+        .next = later_use,
+    } });
+    const caller = try f.addProc(&.{ old_callable, capture }, pack, erased_callable);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 1), f.countRc(old_callable, .incref));
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_packed_erased_fn => |assign| {
+                try testing.expectEqual(old_callable, assign.reuse.?);
+                try testing.expect(!assign.reuse_unique);
+                return;
+            },
+            .incref => |rc| cursor = rc.next,
+            .decref => |rc| cursor = rc.next,
+            .decref_if_initialized => |rc| cursor = rc.next,
+            .free => |rc| cursor = rc.next,
+            else => return error.UnexpectedStatement,
+        }
+    }
+    return error.MissingPackedErasedFn;
+}
+
 const RcKind = enum { incref, decref, free };
 const RcStopKind = enum { ret, crash };
 
@@ -6491,6 +6786,139 @@ fn setupMutation(reuse_after: bool) Allocator.Error!struct { fixture: ArcTest, o
     _ = try f.addProc(&.{}, body, if (reuse_after) f.list_str else .i64);
     try f.run();
     return .{ .fixture = f, .old_value = old_value, .new_value = new_value, .target = target };
+}
+
+test "ARC proc domain excludes scalar and other-proc locals" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const resource = try f.local(.str);
+    const scalar = try f.local(.i64);
+    const other_proc_resource = try f.local(.str);
+
+    const resource_ret = try f.ret(resource);
+    const resource_body = try f.assignStr(resource, "resource", resource_ret);
+    const resource_proc = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = resource_body,
+        .frame_locals = try f.span(&.{ resource, scalar }),
+        .ret_layout = .str,
+    });
+    const other_ret = try f.ret(other_proc_resource);
+    const other_body = try f.assignStr(other_proc_resource, "other", other_ret);
+    const other_proc = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = other_body,
+        .frame_locals = try f.span(&.{other_proc_resource}),
+        .ret_layout = .str,
+    });
+
+    const local_contains_refcounted = [_]bool{ true, false, true };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{});
+    defer solution.deinit();
+    var global_local_index = [_]u32{ no_proc_local_index, no_proc_local_index, no_proc_local_index };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    {
+        var domain = try ProcArcDomain.init(
+            arena.allocator(),
+            &f.store,
+            &solution,
+            &local_contains_refcounted,
+            &global_local_index,
+            f.store.getProcSpec(resource_proc).frame_locals,
+        );
+        defer domain.clearGlobalIndices();
+        try testing.expectEqual(@as(usize, 2), domain.frame_locals.len);
+        try testing.expectEqual(@as(usize, 1), domain.resource_locals.len);
+        try testing.expectEqual(@as(usize, 1), domain.refcounted_locals.len);
+        try testing.expectEqual(@as(usize, 1), domain.livenessBitLen());
+        try testing.expectEqual(resource, domain.resourceLocalAt(0));
+
+        var owned = try OwnedSet.init(testing.allocator, &domain);
+        defer owned.deinit();
+        try testing.expect(!owned.contains(scalar));
+        owned.unset(scalar);
+        owned.set(resource);
+        try testing.expect(owned.contains(resource));
+    }
+
+    var other_domain = try ProcArcDomain.init(
+        arena.allocator(),
+        &f.store,
+        &solution,
+        &local_contains_refcounted,
+        &global_local_index,
+        f.store.getProcSpec(other_proc).frame_locals,
+    );
+    defer other_domain.clearGlobalIndices();
+    try testing.expectEqual(@as(usize, 1), other_domain.frame_locals.len);
+    try testing.expectEqual(@as(usize, 1), other_domain.resource_locals.len);
+    try testing.expectEqual(other_proc_resource, other_domain.resourceLocalAt(0));
+}
+
+test "ARC proc domain filters module-wide borrow groups to its frame" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const leader = try f.local(.str);
+    const local_alias = try f.local(.str);
+    const local_ret = try f.ret(leader);
+    const use_alias = try f.expectStmt(local_alias, local_ret);
+    const alias_bind = try f.assignRefLocal(local_alias, leader, use_alias);
+    const local_body = try f.assignStr(leader, "local", alias_bind);
+    const local_proc = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = local_body,
+        .frame_locals = try f.span(&.{ leader, local_alias }),
+        .ret_layout = .str,
+    });
+
+    const external_member = try f.local(.str);
+    const external_ret = try f.ret(external_member);
+    const external_body = try f.assignStr(external_member, "external", external_ret);
+    _ = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = external_body,
+        .frame_locals = try f.span(&.{external_member}),
+        .ret_layout = .str,
+    });
+
+    const local_contains_refcounted = [_]bool{ true, true, true };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{});
+    defer solution.deinit();
+    try testing.expectEqual(leader, solution.leaderOf(local_alias));
+
+    // Model another proc spec sharing this solved leader. The module-wide
+    // group has three members, but this proc's liveness domain must contain
+    // only the leader and alias named by its explicit frame.
+    solution.borrowed.set(@intFromEnum(external_member));
+    solution.leader[@intFromEnum(external_member)] = @intFromEnum(leader);
+    solution.alias_source[@intFromEnum(external_member)] = @intFromEnum(leader);
+    try testing.expectEqual(leader, solution.leaderOf(external_member));
+
+    var global_local_index = [_]u32{ no_proc_local_index, no_proc_local_index, no_proc_local_index };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var domain = try ProcArcDomain.init(
+        arena.allocator(),
+        &f.store,
+        &solution,
+        &local_contains_refcounted,
+        &global_local_index,
+        f.store.getProcSpec(local_proc).frame_locals,
+    );
+    defer domain.clearGlobalIndices();
+
+    try testing.expectEqual(@as(usize, 2), domain.frame_locals.len);
+    try testing.expectEqual(@as(usize, 2), domain.resource_locals.len);
+    try testing.expectEqual(@as(usize, 1), domain.group_leaders.len);
+    try testing.expectEqual(@as(usize, 3), domain.livenessBitLen());
 }
 
 test "RC pass-through: non-refcounted i64 block unchanged" {
@@ -6682,6 +7110,35 @@ test "RC shared neutral proc body is rewritten separately for each proc" {
     try testing.expect(first_body != second_body);
 }
 
+test "RC shared neutral join body keeps compact indices per proc" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const value = try f.local(.str);
+    const state = try f.local(.str);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(state);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize = try f.setLocal(state, value, .initialize_join_param, jump);
+    const remainder = try f.assignStr(value, "shared-join", initialize);
+    const shared_body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = ret,
+        .remainder = remainder,
+    } });
+    const first = try f.addProc(&.{}, shared_body, .str);
+    const second = try f.addProc(&.{}, shared_body, .str);
+
+    try f.run();
+
+    const first_body = f.store.getProcSpec(first).body orelse return error.MissingProcBody;
+    const second_body = f.store.getProcSpec(second).body orelse return error.MissingProcBody;
+    try testing.expect(first_body != shared_body);
+    try testing.expect(second_body != shared_body);
+    try testing.expect(first_body != second_body);
+}
+
 test "RC shared neutral branch tail is rewritten separately for each branch" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -6696,6 +7153,10 @@ test "RC shared neutral branch tail is rewritten separately for each branch" {
     _ = try f.addProc(&.{}, body, .str);
 
     try f.run();
+
+    const rewritten = f.walkToSwitch(f.procBody());
+    const branch = GuardedList.at(f.store.getCFSwitchBranches(rewritten.branches), 0);
+    try testing.expect(branch.body != rewritten.default_branch);
 }
 
 test "RC proc_call caller: consumed refcounted arg is not tail-decref'd by caller" {
@@ -7183,7 +7644,11 @@ test "RC join remainder starts from join entry ownership" {
 
     _ = try f.addProc(&.{}, body, f.list_i64);
     try f.run();
-    try f.expectRc(pair, 0, 1, 0);
+    // The extraction is a field take of the dying pair: the read consumes
+    // the pair's stored unit for its only refcounted field, so no whole
+    // release of the pair remains.
+    try f.expectRc(pair, 0, 0, 0);
+    try f.expectRc(extracted, 0, 0, 0);
 }
 
 test "RC join body keeps local born in remainder" {
@@ -7370,10 +7835,14 @@ test "RC borrow group member used in a join body keeps the lender across the jum
 
     _ = try f.addProc(&.{}, start, .i64);
     try f.run();
-    // The field borrow is used only inside the join body, so the pair's
+    // The field read is used only inside the join body, so the pair's
     // liveness group must carry its unit through the jump: the jump releases
-    // nothing and the pair dies after the borrow's last use in the body.
-    try f.expectRc(pair, 0, 1, 0);
+    // nothing and the pair dies after the read's last use in the body. The
+    // read is a field take, so the pair's death dismantles it — one residual
+    // release of the untaken field on a fresh temporary — instead of
+    // releasing the pair whole.
+    try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 1), f.countAllRc());
 }
 
 test "RC switch continuation merge releases branch-divergent owner at the boundary" {
@@ -7914,6 +8383,46 @@ test "uniqueness: call result of a fresh-list callee elides the check" {
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
 }
 
+test "uniqueness: multiply-defined unique call result keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const fresh = try f.local(f.list_i64);
+    const callee_ret = try f.ret(fresh);
+    const callee_body = try f.assignList(fresh, &.{}, callee_ret);
+    const callee = try f.addProc(&.{}, callee_body, f.list_i64);
+
+    // Either branch calls the same unique-returning callee, but the shared
+    // result local has two definitions. The flow-insensitive proof must not
+    // pick one runtime birth and claim that local is statically unique.
+    const cond = try f.local(.bool);
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const continuation = try f.assignI64(elem, 5, append);
+    const then_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = list,
+        .proc = callee,
+        .args = try f.span(&.{}),
+        .next = continuation,
+    } });
+    const else_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = list,
+        .proc = callee,
+        .args = try f.span(&.{}),
+        .next = continuation,
+    } });
+    const body = try f.switchStmt(cond, then_call, else_call, continuation);
+    _ = try f.addProc(&.{cond}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
 test "uniqueness: pass-through callee result keeps the caller's check" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -8013,6 +8522,45 @@ test "uniqueness: specialized variant elides the check on a unique dying argumen
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, appended));
     const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, appended));
+}
+
+test "uniqueness: specialized body clones do not poison local births" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Both the base and specialized callee bodies bind `first`. The first
+    // checked op always returns a unique outer list, so the second op can be
+    // check-free in each body independently even though the cloned bodies
+    // deliberately share their source LocalIds.
+    const param = try f.local(f.list_i64);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const callee_ret = try f.ret(second);
+    const second_op = try f.assignLowLevel(second, &.{first}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), callee_ret);
+    const first_op = try f.assignLowLevel(first, &.{param}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), second_op);
+    const callee = try f.addProc(&.{param}, first_op, f.list_i64);
+
+    // A dying fresh argument requests the unique-parameter specialization.
+    const list = try f.local(f.list_i64);
+    const got = try f.local(f.list_i64);
+    const caller_ret = try f.ret(got);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = got,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = caller_ret,
+    } });
+    const caller_body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, caller_body, f.list_i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, first));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(callee, second));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, first));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, second));
 }
 
 test "uniqueness: without specialization the dying unique argument keeps the callee's check" {
@@ -8334,10 +8882,12 @@ test "RC borrow: payload read consumed by a call stays owned" {
     const body = try f.assignStr(a, "a", assign_b);
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
-    // The consumed read pays one retain at the read and is then moved into
-    // the call.
-    try f.expectRc(field, 1, 0, 0);
-    try f.expectRc(pair, 0, 1, 0);
+    // The consumed read is a field take of the dying pair: it moves the
+    // pair's stored unit into the call with no retain, and the pair's death
+    // releases only the untaken field through a fresh temporary.
+    try f.expectRc(field, 0, 0, 0);
+    try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 1), f.countAllRc());
 }
 
 test "RC borrow: alias of an owned local emits no RC statements" {
@@ -8610,7 +9160,7 @@ test "RC specialization: caller body survives variant proc append" {
 
     // Caller builds an owned string and passes it as its final use. The
     // variant turns the borrowed return into an owned return. It is appended
-    // while this caller is being rewritten, so the caller body must be written
+    // while this caller is being materialized, so the caller body must be written
     // back only after reacquiring its proc-spec pointer.
     const source = try f.local(.str);
     const flag = try f.local(.i64);

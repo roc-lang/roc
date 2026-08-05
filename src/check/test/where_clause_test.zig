@@ -186,7 +186,25 @@ test "where clause - cannot constrain rigid introduced by enclosing annotation" 
     var test_env = try TestEnv.init("EnclosingWhereReceiver", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Constraint in Wrong Annotation");
+    try test_env.assertOneTypeError("Unbound Where Receiver");
+    try std.testing.expectEqual(
+        .where_clause_receiver_not_introduced,
+        std.meta.activeTag(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "where clause - detached receiver cannot introduce itself" {
+    const source =
+        \\foo : {} -> {} where [a.decode : {} -> {}]
+        \\foo = |_| {
+        \\    A : a
+        \\    A.decode({})
+        \\}
+    ;
+    var test_env = try TestEnv.init("DetachedWhereReceiver", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Unbound Where Receiver");
     try std.testing.expectEqual(
         .where_clause_receiver_not_introduced,
         std.meta.activeTag(test_env.checker.problems.problems.items[0]),
@@ -476,4 +494,96 @@ fn hasRuntimeErrorExpr(test_env: *const TestEnv) bool {
         if (test_env.checker.cir.store.getExpr(expr_idx) == .e_runtime_error) return true;
     }
     return false;
+}
+
+test "where alias - constraints apply to the referencing signature" {
+    const source =
+        \\a.Stringable : where [a.to_str : a -> Str]
+        \\
+        \\stringify : a -> Str where [a.Stringable]
+        \\stringify = |value| value.to_str()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefType("a -> Str where [a.to_str : a -> Str]");
+}
+
+test "where alias - naming another where alias applies both constraint sets" {
+    const source =
+        \\a.Showable : where [a.to_str : a -> Str]
+        \\
+        \\a.Sized : where [a.size : a -> U64]
+        \\
+        \\a.Renderable : where [a.Showable, a.Sized]
+        \\
+        \\render : a -> Str where [a.Renderable]
+        \\render = |value| value.to_str()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefType("a -> Str where [a.size : a -> U64, a.to_str : a -> Str]");
+}
+
+test "where alias - a repeated method unifies with the written constraint" {
+    const source =
+        \\a.Stringable : where [a.to_str : a -> Str]
+        \\
+        \\stringify : a -> Str where [a.Stringable, a.to_str : a -> Str]
+        \\stringify = |value| value.to_str()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefType("a -> Str where [a.to_str : a -> Str]");
+}
+
+test "where alias - imported from another module" {
+    const source_a =
+        \\module [Stringable]
+        \\
+        \\a.Stringable : where [a.to_str : a -> Str]
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import A exposing [Stringable]
+        \\
+        \\stringify : a -> Str where [a.Stringable]
+        \\stringify = |value| value.to_str()
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertLastDefType("a -> Str where [a.to_str : a -> Str]");
+}
+
+test "where alias - imported under a module qualifier" {
+    const source_a =
+        \\module [Stringable]
+        \\
+        \\a.Stringable : where [a.to_str : a -> Str]
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import A
+        \\
+        \\stringify : a -> Str where [a.A.Stringable]
+        \\stringify = |value| value.to_str()
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertLastDefType("a -> Str where [a.to_str : a -> Str]");
+}
+
+test "where alias - parameterized alias substitutes its argument" {
+    const source =
+        \\a.Encodable(fmt) : where [a.encode : a, fmt -> fmt]
+        \\
+        \\encode_str : a, Str -> Str where [a.Encodable(Str)]
+        \\encode_str = |value, fmt| value.encode(fmt)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefType("a, Str -> Str where [a.encode : a, Str -> Str]");
 }

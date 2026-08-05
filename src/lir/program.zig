@@ -46,15 +46,26 @@ pub const FnTemplate = struct {
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
-    const_evidence_chain: const_store.ConstRange = .{},
+    evidence: []const const_store.ConstFnEvidence = &.{},
+    evidence_frames: []const const_store.ConstFnEvidenceFrame = &.{},
+    evidence_frame_head: ?u32 = null,
 };
 
-/// Capture field copied from a checked binder into a callable payload.
+/// Capture field copied from a checked binding into a callable payload. `id`
+/// is checked-stage provenance for storing a compile-time result in
+/// `ConstStore`; runtime capture joining was completed before LIR.
 pub const CaptureSlot = struct {
     id: const_store.CaptureId,
     slot: u32,
     ty: const_store.ConstTypeId,
     plan: ConstPlanId,
+    storage: CaptureSlotStorage,
+};
+
+/// Physical storage used by a callable capture slot while storing its value.
+pub const CaptureSlotStorage = enum(u8) {
+    value,
+    recursive_box,
 };
 
 /// One runtime tag variant for a finite callable value.
@@ -288,10 +299,6 @@ pub const Result = struct {
     requested_layouts: std.ArrayList(RequestedLayout),
     const_types: const_store.ConstTypeStore,
     const_type_names: names.NameStore,
-    /// Target-independent evidence copied from Monotype. FnTemplate ranges and
-    /// nested target ranges index these pools until ConstStore materialization.
-    const_evidence_pool: std.ArrayList(const_store.ConstEvidence),
-    const_evidence_chain_pool: std.ArrayList(const_store.ConstRange),
     fn_sets: std.ArrayList(FnSet),
     erased_fns: std.ArrayList(ErasedFns),
     boxy_type_descs: std.ArrayList(BoxyTypeDesc),
@@ -325,8 +332,6 @@ pub const Result = struct {
             .requested_layouts = .empty,
             .const_types = const_store.ConstTypeStore.init(allocator),
             .const_type_names = names.NameStore.init(allocator),
-            .const_evidence_pool = .empty,
-            .const_evidence_chain_pool = .empty,
             .fn_sets = .empty,
             .erased_fns = .empty,
             .boxy_type_descs = .empty,
@@ -384,8 +389,6 @@ pub const Result = struct {
         self.boxy_type_descs.deinit(allocator);
         self.erased_fns.deinit(allocator);
         self.fn_sets.deinit(allocator);
-        self.const_evidence_chain_pool.deinit(allocator);
-        self.const_evidence_pool.deinit(allocator);
         self.const_type_names.deinit();
         self.const_types.deinit();
         self.requested_layouts.deinit(allocator);
@@ -458,6 +461,8 @@ pub fn deinitFnSets(allocator: Allocator, fn_sets: []const FnSet) void {
     for (fn_sets) |fn_set| {
         for (fn_set.variants) |variant| {
             if (variant.captures.len > 0) allocator.free(variant.captures);
+            if (variant.template.evidence.len > 0) allocator.free(variant.template.evidence);
+            if (variant.template.evidence_frames.len > 0) allocator.free(variant.template.evidence_frames);
         }
         if (fn_set.variants.len > 0) allocator.free(fn_set.variants);
     }
@@ -468,6 +473,8 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
     for (erased_fns) |set| {
         for (set.entries) |entry| {
             if (entry.captures.len > 0) allocator.free(entry.captures);
+            if (entry.template.evidence.len > 0) allocator.free(entry.template.evidence);
+            if (entry.template.evidence_frames.len > 0) allocator.free(entry.template.evidence_frames);
         }
         if (set.entries.len > 0) allocator.free(set.entries);
     }

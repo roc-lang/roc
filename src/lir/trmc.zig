@@ -712,7 +712,9 @@ const Detection = struct {
                 (s.result_desc != null and self.descRefTouchesChain(s.result_desc.?, c)),
             .init_uninitialized => |s| c.chainContains(s.target),
             .assign_call => |s| self.spanTouchesChain(s.args, c),
-            .assign_call_erased => |s| c.chainContains(s.closure) or self.spanTouchesChain(s.args, c),
+            .assign_call_erased => |s| c.chainContains(s.closure) or
+                (s.reuse_source != null and c.chainContains(s.reuse_source.?)) or
+                self.spanTouchesChain(s.args, c),
             .assign_boxy_desc_ref => |s| self.descRefTouchesChain(s.desc, c) or
                 (s.tag_residual_for != null and self.descRefTouchesChain(s.tag_residual_for.?, c)) or
                 self.spanTouchesChain(s.captures, c),

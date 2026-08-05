@@ -291,7 +291,7 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "minus") (constraint-fn-var 436)
+						(e-dispatch-call (method "minus") (constraint-fn-var 434)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -303,7 +303,7 @@ main = (added, subtracted, multiplied)
 										(e-lookup-local
 											(p-assign (ident "b"))))))))
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 458)
+						(e-dispatch-call (method "minus") (constraint-fn-var 456)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -328,7 +328,7 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "times") (constraint-fn-var 493)
+						(e-dispatch-call (method "times") (constraint-fn-var 489)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -340,7 +340,7 @@ main = (added, subtracted, multiplied)
 										(e-lookup-local
 											(p-assign (ident "b"))))))))
 					(field (name "y")
-						(e-dispatch-call (method "times") (constraint-fn-var 515)
+						(e-dispatch-call (method "times") (constraint-fn-var 511)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -378,7 +378,7 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "added"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 629)
+		(e-dispatch-call (method "plus") (constraint-fn-var 567)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "v1"))))
@@ -389,7 +389,7 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "subtracted"))
-		(e-dispatch-call (method "minus") (constraint-fn-var 634)
+		(e-dispatch-call (method "minus") (constraint-fn-var 572)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "v1"))))
@@ -400,7 +400,7 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "multiplied"))
-		(e-dispatch-call (method "times") (constraint-fn-var 639)
+		(e-dispatch-call (method "times") (constraint-fn-var 577)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "v1"))))

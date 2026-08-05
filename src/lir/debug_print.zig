@@ -133,6 +133,10 @@ const Printer = struct {
                         try writeBoxyDescRef(result_desc, writer);
                     }
                     if (s.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@intFromEnum(out_desc)});
+                    if (s.reuse_closure) try writer.writeAll(" reuse_closure");
+                    if (s.reuse_source) |reuse_source| {
+                        try writer.print(" reuse_source=l{d}", .{@intFromEnum(reuse_source)});
+                    }
                     try writer.writeByte('\n');
                     current = s.next;
                 },

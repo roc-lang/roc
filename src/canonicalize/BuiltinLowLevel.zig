@@ -7,7 +7,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
-const builtins = @import("builtins");
 
 const CIR = @import("CIR.zig");
 const DependencyGraph = @import("DependencyGraph.zig");
@@ -18,16 +17,74 @@ pub fn isBuiltinModule(env: *const ModuleEnv) bool {
     return env.module_role == .builtin;
 }
 
-/// Returns whether an annotation-only Builtin declaration is handled as an
-/// intrinsic wrapper. The set of intrinsic names is declared in the builtin
-/// registry alongside the rest of the builtin membership data.
-pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool {
-    for (builtins.builtin_registry.intrinsic_annotation_names) |name| {
-        if (env.common.findIdent(name)) |intrinsic| {
-            if (ident.eql(intrinsic)) return true;
+/// Stable compiler-owned identity for each annotation-only Builtin intrinsic.
+pub const IntrinsicId = enum(u8) {
+    str_inspect,
+    structural_eq,
+    parse_tag_union,
+    field_names_rename_fields,
+    field_names_shortest_name,
+    field_names_longest_name,
+    field_names_iter,
+    field_names_for_size,
+    field_name,
+
+    pub const RequestResultSource = union(enum(u8)) {
+        declared_return,
+        argument: u8,
+    };
+
+    /// Arity for intrinsics whose implementation is emitted at each checked
+    /// call site. Null identifies wrappers lowered through another explicit
+    /// checked protocol.
+    pub fn callsiteArity(self: IntrinsicId) ?u8 {
+        return switch (self) {
+            .str_inspect, .structural_eq => null,
+            .parse_tag_union, .field_names_rename_fields, .field_names_for_size => 2,
+            .field_names_shortest_name,
+            .field_names_longest_name,
+            .field_names_iter,
+            .field_name,
+            => 1,
+        };
+    }
+
+    pub const max_callsite_arity = 2;
+
+    /// Explicit request-topology contract for compiler-owned intrinsic calls.
+    pub fn requestResultSource(self: IntrinsicId) RequestResultSource {
+        return switch (self) {
+            .field_names_rename_fields => .{ .argument = 0 },
+            else => .declared_return,
+        };
+    }
+};
+
+/// Producer-owned identity for an annotation-only compiler intrinsic.
+pub fn intrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) ?IntrinsicId {
+    if (ident.eql(env.idents.builtin_str_inspect)) return .str_inspect;
+
+    const entries = [_]struct { name: []const u8, intrinsic: IntrinsicId }{
+        .{ .name = "Builtin.Str.Utf8Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.Encoding.ParseTagUnionSpec.parse", .intrinsic = .parse_tag_union },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.rename_fields", .intrinsic = .field_names_rename_fields },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.shortest_name", .intrinsic = .field_names_shortest_name },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.longest_name", .intrinsic = .field_names_longest_name },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.iter", .intrinsic = .field_names_iter },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.for_size", .intrinsic = .field_names_for_size },
+        .{ .name = "Builtin.Encoding.FieldName.name", .intrinsic = .field_name },
+    };
+    for (entries) |entry| {
+        if (env.common.findIdent(entry.name)) |intrinsic_ident| {
+            if (ident.eql(intrinsic_ident)) return entry.intrinsic;
         }
     }
-    return false;
+    return null;
+}
+
+/// Returns whether an annotation-only Builtin declaration is handled as an intrinsic wrapper.
+pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool {
+    return intrinsicAnnotation(env, ident) != null;
 }
 
 /// Replaces Builtin.roc annotation-only primitive declarations with low-level operation lambdas.
@@ -44,6 +101,8 @@ pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnot
     );
     defer graph.deinit();
 
+    var demand_dependencies = try DependencyGraph.collectDependencies(&graph, env.gpa);
+    errdefer demand_dependencies.deinit(env.gpa);
     const eval_order = try DependencyGraph.computeSCCs(&graph, env.gpa);
     if (env.evaluation_order) |old_order| {
         old_order.deinit();
@@ -51,6 +110,8 @@ pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnot
     }
     const eval_order_ptr = try env.gpa.create(DependencyGraph.EvaluationOrder);
     eval_order_ptr.* = eval_order;
+    env.setTopLevelDemandDependencies(demand_dependencies);
+    demand_dependencies = .{};
     env.evaluation_order = eval_order_ptr;
 }
 
@@ -277,6 +338,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
         try low_level_map.put(list_swap_unsafe_ident, .list_swap);
     }
+    if (env.common.findIdent("list_map_prepare_reuse")) |list_map_prepare_reuse_ident| {
+        try low_level_map.put(list_map_prepare_reuse_ident, .list_map_prepare_reuse);
+    }
     if (env.common.findIdent("list_map_can_reuse")) |list_map_can_reuse_ident| {
         try low_level_map.put(list_map_can_reuse_ident, .list_map_can_reuse);
     }
@@ -392,6 +456,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.from_bits", .{}, .f32_from_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.to_bits", .{}, .f64_to_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.from_bits", .{}, .f64_from_bits);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.to_attos", .{}, .dec_to_attos);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.from_attos", .{}, .dec_from_attos);
 
     // Numeric comparison operations (all numeric types)
     for (numeric_types) |num_type| {
@@ -586,6 +652,14 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_one_bits", .{num_type}, .num_count_one_bits);
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_leading_zero_bits", .{num_type}, .num_count_leading_zero_bits);
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_trailing_zero_bits", .{num_type}, .num_count_trailing_zero_bits);
+    }
+
+    // Little-endian byte-list loads (multi-byte integer types only; a one-byte
+    // load is List.get). The result's layout carries the width, so a single
+    // low-level op serves every one of them.
+    const multibyte_integer_types = [_][]const u8{ "u16", "i16", "u32", "i32", "u64", "i64", "u128", "i128" };
+    for (multibyte_integer_types) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "{s}_from_le_bytes_unchecked", .{num_type}, .num_from_le_bytes_unchecked);
     }
 
     // Bitwise logical operations (integer types only)
@@ -1545,6 +1619,15 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
                 // Track this replaced def index
                 try new_def_indices.append(gpa, def_idx);
+                if (env.provided_low_level_defs.items.items.len > 0) {
+                    const previous = env.provided_low_level_defs.items.items[env.provided_low_level_defs.items.items.len - 1];
+                    std.debug.assert(previous.def_idx < @intFromEnum(def_idx));
+                }
+                _ = try env.provided_low_level_defs.append(gpa, .{
+                    .def_idx = @intFromEnum(def_idx),
+                    .op = low_level_op,
+                    ._padding = 0,
+                });
             }
         }
     }
@@ -1555,4 +1638,16 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
 
     return new_def_indices;
+}
+
+test "intrinsic call-site protocol classifies every intrinsic" {
+    try std.testing.expectEqual(@as(?u8, null), IntrinsicId.str_inspect.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, null), IntrinsicId.structural_eq.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.parse_tag_union.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.field_names_rename_fields.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_shortest_name.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_longest_name.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_iter.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.field_names_for_size.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_name.callsiteArity());
 }

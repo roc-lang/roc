@@ -5,8 +5,11 @@
 //! process entrypoint is the C runtime's `main`.
 
 const builtin = @import("builtin");
+const default_platform_options = @import("default_platform_options");
 
 const RocStr = @import("roc_str_view").RocStr;
+const RocList = @import("roc_str_view").RocList;
+const roc_args = @import("roc_args");
 const shim_symbols = @import("shim_symbols");
 
 const c = switch (builtin.os.tag) {
@@ -34,6 +37,24 @@ const AllocationHeader = extern struct {
     len: usize,
 };
 
+const SourceFrame = extern struct {
+    name_ptr: [*]const u8,
+    name_len: usize,
+    file_ptr: [*]const u8,
+    file_len: usize,
+    line: u32,
+    column: u32,
+};
+
+const windows = if (builtin.os.tag == .windows) struct {
+    extern "kernel32" fn GetCommandLineW() callconv(.winapi) [*:0]u16;
+    extern "shell32" fn CommandLineToArgvW(
+        command_line: [*:0]const u16,
+        argc: *c_int,
+    ) callconv(.winapi) ?[*][*:0]u16;
+    extern "kernel32" fn LocalFree(memory: ?*anyopaque) callconv(.winapi) ?*anyopaque;
+} else struct {};
+
 comptime {
     @export(&runtimeInit, .{ .name = shim_symbols.roc_default_runtime_init });
     @export(&defaultExit, .{ .name = shim_symbols.roc_default_exit });
@@ -41,9 +62,13 @@ comptime {
     @export(&rocDbg, .{ .name = shim_symbols.roc_dbg });
     @export(&rocExpectFailed, .{ .name = shim_symbols.roc_expect_failed });
     @export(&rocCrashed, .{ .name = shim_symbols.roc_crashed });
+    @export(&rocDefaultCrashedWithFrames, .{ .name = shim_symbols.roc_default_crashed_with_frames });
     @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
     @export(&rocRealloc, .{ .name = shim_symbols.roc_realloc });
     @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
+    if (default_platform_options.include_process_entrypoint) {
+        @export(&cMain, .{ .name = "main" });
+    }
 }
 
 /// Set when an inline `expect` fails. A failed inline expect reports and lets
@@ -52,16 +77,33 @@ comptime {
 var inline_expect_failed: bool = false;
 
 /// The Roc entrypoint the synthetic default platform exports.
-const roc_default_start_main: *const fn () callconv(.c) i32 =
-    @extern(*const fn () callconv(.c) i32, .{ .name = shim_symbols.roc_default_start_main });
+const roc_default_start_main: *const fn (RocList) callconv(.c) i32 =
+    @extern(*const fn (RocList) callconv(.c) i32, .{ .name = shim_symbols.roc_default_start_main });
 
 /// The C runtime owns the process entrypoint: it initializes the Roc runtime,
 /// runs the Roc entrypoint, and folds failed inline expects into the status.
-export fn main() callconv(.c) c_int {
+fn cMain(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     runtimeInit();
-    const status = roc_default_start_main();
+    const args = if (comptime builtin.os.tag == .windows)
+        windowsArgs() orelse {
+            writeAll(2, "Unable to read command-line arguments\n");
+            return 1;
+        }
+    else
+        roc_args.fromPosixArgv(@intCast(@max(argc, 0)), argv, &rocAlloc) orelse {
+            writeAll(2, "Unable to allocate command-line arguments\n");
+            return 1;
+        };
+    const status = roc_default_start_main(args);
     if (status == 0 and inline_expect_failed) return 1;
     return status;
+}
+
+fn windowsArgs() ?RocList {
+    var argc: c_int = 0;
+    const argv = windows.CommandLineToArgvW(windows.GetCommandLineW(), &argc) orelse return null;
+    defer _ = windows.LocalFree(@ptrCast(argv));
+    return roc_args.fromWindowsArgv(@intCast(@max(argc, 0)), argv, &rocAlloc);
 }
 
 fn runtimeInit() callconv(.c) void {}
@@ -96,6 +138,15 @@ fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) noreturn {
     writeAll(2, bytes[0..len]);
     writeAll(2, "\n\n");
     c.exit(1);
+}
+
+fn rocDefaultCrashedWithFrames(
+    bytes: [*]const u8,
+    len: usize,
+    _: [*]const SourceFrame,
+    _: usize,
+) callconv(.c) noreturn {
+    rocCrashed(bytes, len);
 }
 
 fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {

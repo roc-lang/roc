@@ -173,14 +173,15 @@ pub const CompletionBuilder = struct {
     /// Add module name completions from all loaded packages/modules in BuildEnv.
     pub fn addModuleNameCompletionsFromEnv(self: *CompletionBuilder, env: *BuildEnv) Allocator.Error!void {
         // Surface builtin modules (Str, List, etc.) even when they are not
-        // present in schedulers. This keeps completions available while
+        // present in coordinator state. This keeps completions available while
         // preserving real backing data for members/types.
         try self.addBuiltinModuleNameCompletions();
 
-        var sched_it = env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            for (sched.modules.items) |module_state| {
+        const coord = env.coordinator orelse return;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |module_state| {
                 const name = module_state.name;
                 if (name.len == 0) continue;
 
@@ -231,19 +232,12 @@ pub const CompletionBuilder = struct {
             try self.addModuleMemberCompletionsFromModuleEnv(env.builtin_modules.builtin_module.env, module_name);
         }
 
-        // Try to find the module in imported modules
-        var sched_it = env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            for (sched.modules.items) |*module_state| {
-                // Check if this module's name matches
-                if (std.mem.eql(u8, module_state.name, module_name)) {
-                    if (module_state.moduleEnv()) |imported_env| {
-                        try self.addModuleMemberCompletionsFromModuleEnv(imported_env, module_name);
-                    }
-                    return;
-                }
+        // Try to find the module in imported modules.
+        if (env.findModuleByName(module_name)) |module_state| {
+            if (module_state.moduleEnv()) |imported_env| {
+                try self.addModuleMemberCompletionsFromModuleEnv(imported_env, module_name);
             }
+            return;
         }
 
         // Fall back to local module env for nominal type associated values.
@@ -410,10 +404,11 @@ pub const CompletionBuilder = struct {
 
     /// Add type completions from all modules in BuildEnv.
     pub fn addTypeCompletionsFromEnv(self: *CompletionBuilder, env: *BuildEnv) Allocator.Error!void {
-        var sched_it = env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            for (sched.modules.items) |*module_state| {
+        const coord = env.coordinator orelse return;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*module_state| {
                 if (module_state.moduleEnv()) |module_env| {
                     try self.addTypeNamesFromModuleEnv(module_env);
                 }
@@ -427,10 +422,11 @@ pub const CompletionBuilder = struct {
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
             switch (stmt) {
-                .s_alias_decl, .s_nominal_decl => {
+                .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
                     const header_idx = switch (stmt) {
                         .s_alias_decl => |a| a.header,
                         .s_nominal_decl => |n| n.header,
+                        .s_where_alias_decl => |w| w.header,
                         else => unreachable,
                     };
                     const header = module_env.store.getTypeHeader(header_idx);
@@ -1720,7 +1716,7 @@ fn getStatementParts(stmt: CIR.Statement) StatementParts {
         .s_dbg => |dbg_stmt| .{ .pattern = null, .expr = dbg_stmt.expr, .expr2 = null },
         .s_return => |return_stmt| .{ .pattern = null, .expr = return_stmt.expr, .expr2 = null },
         .s_crash => .{ .pattern = null, .expr = null, .expr2 = null },
-        .s_import, .s_alias_decl, .s_nominal_decl, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => .{ .pattern = null, .expr = null, .expr2 = null },
+        .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => .{ .pattern = null, .expr = null, .expr2 = null },
     };
 }
 

@@ -156,9 +156,9 @@ EndOfFile,
 {
 	Foo.Bar.baz
 	
-	x : 
+	x :
 	
-	y : 
+	y :
 	
 }
 ~~~

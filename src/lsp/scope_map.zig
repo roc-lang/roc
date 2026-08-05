@@ -140,7 +140,7 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, return_stmt.expr, scope_end, depth + 1);
             },
             // Type declarations, imports, etc. don't introduce variable bindings
-            .s_import, .s_alias_decl, .s_nominal_decl, .s_crash, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
+            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_crash, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
         }
     }
 

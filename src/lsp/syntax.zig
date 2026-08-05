@@ -640,7 +640,7 @@ pub const SyntaxChecker = struct {
         // Prefer current build_env if it exists and has modules
         if (self.build_env) |handle| {
             const env = handle.envPtr();
-            if (env.schedulers.count() > 0) {
+            if (env.hasCompiledModules()) {
                 return env;
             }
         }
@@ -668,20 +668,8 @@ pub const SyntaxChecker = struct {
 
     /// Look up a ModuleEnv by its file path from a specific BuildEnv.
     fn getModuleEnvByPathInEnv(_: *SyntaxChecker, env: *BuildEnv, path: []const u8) ?*ModuleEnv {
-        // Iterate through all schedulers (packages)
-        var sched_it = env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            // Iterate through all modules in this package
-            for (sched.modules.items) |*module_state| {
-                if (std.mem.eql(u8, module_state.path, path)) {
-                    if (module_state.moduleEnv()) |mod_env| {
-                        return mod_env;
-                    }
-                }
-            }
-        }
-        return null;
+        const module_state = env.findModuleByPath(path) orelse return null;
+        return module_state.moduleEnv();
     }
 
     /// Get all imported ModuleEnvs for a given module.
@@ -690,23 +678,24 @@ pub const SyntaxChecker = struct {
     pub fn getImportedModuleEnvs(self: *SyntaxChecker, module_path: []const u8) Allocator.Error!?[]*ModuleEnv {
         const env = self.getModuleLookupEnv() orelse return null;
 
-        // First, find the module and its scheduler
-        var target_sched: ?*compile.package.PackageEnv = null;
-        var target_module_imports: ?[]const u32 = null;
+        // First, find the module and its coordinator package.
+        var target_pkg: ?*compile.coordinator.PackageState = null;
+        var target_module_imports: ?[]const compile.coordinator.LocalImportEdge = null;
 
-        var sched_it = env.schedulers.iterator();
-        outer: while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            for (sched.modules.items) |*module_state| {
+        const coord = env.coordinator orelse return null;
+        var pkg_it = coord.packages.iterator();
+        outer: while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*module_state| {
                 if (std.mem.eql(u8, module_state.path, module_path)) {
-                    target_sched = sched;
+                    target_pkg = pkg;
                     target_module_imports = module_state.imports.items;
                     break :outer;
                 }
             }
         }
 
-        const sched = target_sched orelse return null;
+        const pkg = target_pkg orelse return null;
         const imports = target_module_imports orelse return null;
 
         // Collect ModuleEnvs for all imports
@@ -714,9 +703,9 @@ pub const SyntaxChecker = struct {
         errdefer imported_envs.deinit(self.allocator);
 
         // Local imports (within same package)
-        for (imports) |import_id| {
-            if (import_id < sched.modules.items.len) {
-                const imported_module = &sched.modules.items[import_id];
+        for (imports) |edge| {
+            if (edge.module_id < pkg.modules.items.len) {
+                const imported_module = &pkg.modules.items[edge.module_id];
                 if (imported_module.moduleEnv()) |imp_env| {
                     try imported_envs.append(self.allocator, imp_env);
                 }
@@ -738,18 +727,18 @@ pub const SyntaxChecker = struct {
         var total_modules: usize = 0;
         var exports_computed: usize = 0;
 
-        // Iterate through all schedulers (packages) and build the graph
-        var sched_it = env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
+        const coord = env.coordinator orelse return;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
             const pkg_name = entry.key_ptr.*;
-            const sched = entry.value_ptr.*;
+            const pkg = entry.value_ptr.*;
 
-            self.logDebug(.build, "[DEPS] Processing package '{s}' with {d} modules", .{ pkg_name, sched.modules.items.len });
+            self.logDebug(.build, "[DEPS] Processing package '{s}' with {d} modules", .{ pkg_name, pkg.modules.items.len });
 
-            try self.dependency_graph.buildFromPackageEnv(sched);
+            try self.dependency_graph.buildFromPackageState(pkg);
 
             // Compute and store exports hash for each module with a valid ModuleEnv
-            for (sched.modules.items) |*module_state| {
+            for (pkg.modules.items) |*module_state| {
                 total_modules += 1;
 
                 if (module_state.moduleEnv()) |module_env| {
@@ -1388,7 +1377,7 @@ pub const SyntaxChecker = struct {
             return env.builtin_modules.builtin_module.env;
         }
 
-        // Delegate to module_lookup for scheduler-based lookup
+        // Delegate to module_lookup for Coordinator-owned module lookup.
         if (module_lookup.findModuleByName(env, module_name)) |info| {
             return info.module_env;
         }
@@ -1566,7 +1555,7 @@ pub const SyntaxChecker = struct {
                     // Get the module name from the import
                     const module_name = module_env.common.idents.getText(import_stmt.module_name_tok);
 
-                    // Try to find the module in the schedulers
+                    // Try to find the module in the coordinator state.
                     if (self.findModuleByName(module_name, oom)) |result| {
                         return result;
                     }
@@ -1757,25 +1746,20 @@ pub const SyntaxChecker = struct {
             };
         }
 
-        // Search all schedulers for a module matching this name
-        var sched_it = env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            if (sched.getModuleState(base_name)) |mod_state| {
-                const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
-                return DefinitionResult{
-                    .uri = module_uri,
-                    .range = .{
-                        .start_line = 0,
-                        .start_col = 0,
-                        .end_line = 0,
-                        .end_col = 0,
-                    },
-                };
-            }
+        if (env.findModuleByName(base_name)) |mod_state| {
+            const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
+                oom.* = err;
+                return null;
+            };
+            return DefinitionResult{
+                .uri = module_uri,
+                .range = .{
+                    .start_line = 0,
+                    .start_col = 0,
+                    .end_line = 0,
+                    .end_col = 0,
+                },
+            };
         }
         return null;
     }
@@ -2183,6 +2167,13 @@ pub const SyntaxChecker = struct {
                     }
                     continue;
                 },
+                .s_where_alias_decl => |decl| {
+                    if (extractSymbolFromTypeDecl(module_env, decl.header, stmt_idx, uri, &line_offsets, .interface)) |symbol| {
+                        self.logDebug(.build, "symbols: found where alias symbol '{s}'", .{symbol.name});
+                        try appendOwnedSymbol(allocator, &symbols, symbol);
+                    }
+                    continue;
+                },
                 else => {},
             }
 
@@ -2261,12 +2252,8 @@ pub const SyntaxChecker = struct {
             return env.builtin_modules.builtin_module.env;
         }
 
-        var sched_it = module_lookup_env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            if (sched.getModuleState(module_name)) |mod_state| {
-                if (mod_state.moduleEnv()) |mod_env| return mod_env;
-            }
+        if (module_lookup_env.findModuleByName(module_name)) |mod_state| {
+            if (mod_state.moduleEnv()) |mod_env| return mod_env;
         }
 
         return null;

@@ -50,15 +50,29 @@ pub const Constants = struct {
     /// 24: CommonIdents carries the range_exclusive/range_inclusive method idents.
     /// 25: Canonical node storage records where-clause rigid ownership.
     /// 26: ModuleEnv scheme instantiation evidence was renamed to scheme-use evidence.
-    /// 27: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
-    /// 28: String interpolation constraint metadata moved into the type store.
+    /// 27: Empty-row provenance and checked iterator-step topology changed serialized state.
+    /// 28: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
+    /// 29: String interpolation constraint metadata moved into the type store.
     /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
     /// 31: Canonical expression storage includes compiler-derived method nodes.
     /// 32: Builtin indices include width-specific f32 conversion and math wrappers.
     /// 33: Builtin indices, identifiers, and checked layouts include integer SIMD vectors.
-    /// 34: Platform provides entries include their exact platform-local definition.
-    /// 35: Checked dispatch evidence and Boxy runtime metadata changed serialized compiler state.
-    pub const CACHE_VERSION = 35;
+    /// 34: Combined the empty-row and interpolation checked-artifact layouts.
+    /// 35: Platform requirement roots carry producer-authored dispatch evidence.
+    /// 36: Checked iterator procedure identity includes Str.iter_utf8.
+    /// 37: Nested procedure sites declare their producer-authored evidence source.
+    /// 38: Platform provides entries include their exact platform-local definition.
+    /// 39: ModuleEnv stores exact top-level demand dependencies.
+    /// 41: Encoding protocol names containers by Roc shape: list, tuple, record, dict.
+    /// 42: Checked modules store explicitly rejected static-dispatch obligations.
+    /// 43: Checked type stores persist representatives and structural union ranks.
+    /// 45: Where-clause owners persist rooted annotation ownership semantics.
+    /// 46: Where alias declarations are their own statement kind.
+    /// 47: Type descriptors carry the static-dispatch rejection marker.
+    /// 48: Source imports retain parser-owned bindings and type-module owners
+    ///     instead of reconstructing them from normalized module identities.
+    /// 49: Checked dispatch evidence and Boxy runtime metadata changed serialized compiler state.
+    pub const CACHE_VERSION = 49;
 };
 
 /// Configuration for the Roc cache system.

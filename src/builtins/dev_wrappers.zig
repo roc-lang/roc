@@ -71,24 +71,33 @@ pub fn roc_builtins_hasher_write_u128(seed: u64, domain: u8, low: u64, high: u64
     return hash.hasher_write_u128(seed, domain, low, high);
 }
 
-/// Bit-exact SIMD helper for the correctness-oriented dev backends. The
-/// optimizing LLVM and wasm backends lower the same low-level operations to
-/// native vector instructions instead of calling this function.
+/// Evaluate one 128-bit integer SIMD operation on packed bit patterns.
+///
+/// `src/builtins/simd.zig` defines the bit-exact meaning of every SIMD op
+/// independently of any architecture, so a backend that has no native
+/// instruction sequence for an op on a given target can call this and get the
+/// same answer the native sequence would produce. The dev backend uses it for
+/// the ops whose x86 instructions sit above the x86-64 baseline when compiling
+/// for a `v1` target.
+///
+/// Operands and the result are passed through memory rather than by value:
+/// three `u128` arguments plus a `u128` result do not fit the integer argument
+/// registers, and the caller already has the vectors in a stack slot.
 pub fn roc_builtins_simd_eval(
     out: *u128,
-    descriptor: u32,
-    inputs: *const [3]u128,
+    op: u8,
+    arg_kind: u8,
+    ret_kind: u8,
+    args: *const [3]u128,
 ) callconv(.c) void {
-    const op: simd.Op = @enumFromInt(@as(u8, @truncate(descriptor)));
-    const arg_kind: simd.Kind = @enumFromInt(@as(u3, @truncate(descriptor >> 8)));
-    const ret_kind: simd.Kind = @enumFromInt(@as(u3, @truncate(descriptor >> 16)));
-    out.* = simd.eval(op, arg_kind, ret_kind, inputs[0], inputs[1], inputs[2]);
-}
-
-/// Load 16 consecutive list bytes into a bit-exact SIMD value.
-pub fn roc_builtins_simd_load_16(out: *u128, bytes: ?[*]u8, index: u64) callconv(.c) void {
-    const source = bytes.? + @as(usize, @intCast(index));
-    @memcpy(std.mem.asBytes(out), source[0..16]);
+    out.* = simd.eval(
+        @enumFromInt(op),
+        @enumFromInt(arg_kind),
+        @enumFromInt(ret_kind),
+        args[0],
+        args[1],
+        args[2],
+    );
 }
 
 /// Store a bit-exact SIMD value into 16 consecutive list bytes, cloning first
@@ -131,17 +140,6 @@ pub fn roc_builtins_simd_append_16(
         result = list.listAppendUnsafe(result, @ptrCast(@constCast(byte)), 1, &list.copy_fallback);
     }
     out.* = result;
-}
-
-test "SIMD dev wrapper descriptor and input block" {
-    const equal_op = @intFromEnum(simd.Op.eq_lanes);
-    const byte_kind = @intFromEnum(simd.Kind.u8x16);
-    const descriptor = @as(u32, equal_op) | (@as(u32, byte_kind) << 8) | (@as(u32, byte_kind) << 16);
-    const bytes: u128 = 0x38383838383838383838383838383838;
-    var inputs = [3]u128{ bytes, bytes, 0 };
-    var out: u128 = undefined;
-    roc_builtins_simd_eval(&out, descriptor, &inputs);
-    try std.testing.expectEqual(@as(u128, ~@as(u128, 0)), out);
 }
 
 /// C ABI wrapper for hashing raw F32 bits.

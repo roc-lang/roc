@@ -72,6 +72,7 @@ pub const Scope = struct {
     decls: Span,
     value_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
     type_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
+    import_alias_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
     region: TokenRegion,
 };
 
@@ -161,9 +162,20 @@ pub const PackageHeaderModule = struct {
 
 /// Explicit source import recorded by the parser.
 pub const Import = struct {
+    pub const Origin = enum { local, package };
+    pub const LocalBase = enum { importer, package_root, parent };
+
+    /// Source target for the selected module, excluding nested types. Local
+    /// targets retain their explicit base spelling; package targets include
+    /// their lowercase qualifier.
     module_name: Ident.Idx,
+    /// Binding introduced when this target selects a module directly.
+    module_binding: ?Ident.Idx,
     qualifier: ?Ident.Idx,
-    nested: bool,
+    origin: Origin,
+    base: LocalBase,
+    parent_count: u16,
+    nested_type_path: ?Ident.Idx,
     region: TokenRegion,
 };
 
@@ -186,6 +198,7 @@ pub const DeclKind = enum {
     type_alias,
     nominal,
     @"opaque",
+    where_alias,
     import,
     file_import,
     var_decl,
@@ -269,6 +282,7 @@ pub fn deinit(self: *DeclIndex) void {
     for (self.scopes.items) |*scope| {
         deinitNameBuckets(Ident.Idx, self.gpa, &scope.value_decls);
         deinitNameBuckets(Ident.Idx, self.gpa, &scope.type_decls);
+        deinitNameBuckets(Ident.Idx, self.gpa, &scope.import_alias_decls);
     }
     deinitNameBuckets(AssocValue, self.gpa, &self.assoc_value_decls);
     deinitNameBuckets(TypePathIdx, self.gpa, &self.assoc_owner_value_decls);
@@ -319,6 +333,7 @@ pub fn enterScope(
         .decls = Span.empty(),
         .value_decls = .{},
         .type_decls = .{},
+        .import_alias_decls = .{},
         .region = region,
     });
     try self.scope_decl_builders.append(self.gpa, .empty);
@@ -413,6 +428,7 @@ fn declKindMayBindValue(kind: DeclKind) bool {
         .type_alias,
         .nominal,
         .@"opaque",
+        .where_alias,
         .import,
         .file_import,
         => false,
@@ -424,6 +440,7 @@ fn declKindMayBindType(kind: DeclKind) bool {
         .type_alias,
         .nominal,
         .@"opaque",
+        .where_alias,
         => true,
         .value,
         .value_anno,
@@ -451,6 +468,17 @@ pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident
 pub fn scopeTypeDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
     const scope = &self.scopes.items[@intFromEnum(scope_idx)];
     return scope.type_decls.get(ident) orelse .{};
+}
+
+/// Record the module alias introduced by an import declaration.
+pub fn addImportAliasDecl(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
+    try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(scope_idx)].import_alias_decls, ident, decl_idx);
+}
+
+/// Return all import declarations that introduce an alias in a scope.
+pub fn scopeImportAliasDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
+    const scope = &self.scopes.items[@intFromEnum(scope_idx)];
+    return scope.import_alias_decls.get(ident) orelse .{};
 }
 
 /// Return all associated value declarations for an owner type path and item name.
@@ -718,7 +746,7 @@ test "scopeDeclaresValue records only value-binding declarations" {
         .anno = null,
         .region = TokenRegion.empty(),
     });
-    _ = try index.addDecl(.{
+    const import_decl_idx = try index.addDecl(.{
         .scope = scope_idx,
         .statement = 4,
         .kind = .import,
@@ -728,6 +756,7 @@ test "scopeDeclaresValue records only value-binding declarations" {
         .anno = null,
         .region = TokenRegion.empty(),
     });
+    try index.addImportAliasDecl(scope_idx, import_ident, import_decl_idx);
     _ = try index.addDecl(.{
         .scope = scope_idx,
         .statement = 5,
@@ -747,6 +776,9 @@ test "scopeDeclaresValue records only value-binding declarations" {
     try std.testing.expect(index.scopeDeclaresValue(scope_idx, var_anno_ident));
     try std.testing.expect(!index.scopeDeclaresValue(scope_idx, import_ident));
     try std.testing.expect(!index.scopeDeclaresValue(scope_idx, type_ident));
+    const import_alias_decls = index.scopeImportAliasDecls(scope_idx, import_ident);
+    try std.testing.expectEqual(@as(usize, 1), import_alias_decls.count());
+    try std.testing.expectEqual(import_decl_idx, import_alias_decls.first.?);
 }
 
 test "type dependency spans preserve parser-recorded type references" {

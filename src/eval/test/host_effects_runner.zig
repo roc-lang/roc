@@ -24,6 +24,7 @@ const RuntimeHostEnv = eval.RuntimeHostEnv;
 const LoweredProgram = helpers.LoweredProgram;
 const Interpreter = eval.Interpreter;
 const backend = @import("backend");
+const roc_target = @import("roc_target");
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
 const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
@@ -380,6 +381,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             lowered.view.boxy_erased_arg_desc_offsets,
             lowered.view.boxy_erased_arg_desc_params,
             .preserve,
+            roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         var native_fns = boxyNativeFnTable();
