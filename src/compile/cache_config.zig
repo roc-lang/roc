@@ -10,6 +10,56 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
+const CacheOs = enum { windows, macos, other };
+
+fn cacheOs(os: std.Target.Os.Tag) CacheOs {
+    return switch (os) {
+        .windows => .windows,
+        .macos => .macos,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .linux,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .freebsd,
+        .netbsd,
+        .openbsd,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .other,
+    };
+}
+
 /// Cache configuration constants
 pub const Constants = struct {
     /// Default cache directory name
@@ -115,9 +165,9 @@ pub const CacheConfig = struct {
                 error.EnvironmentVariableMissing => {},
             }
             // Fall back to platform defaults
-            const home_env = switch (builtin.target.os.tag) {
+            const home_env = switch (cacheOs(builtin.target.os.tag)) {
                 .windows => "APPDATA",
-                else => "HOME",
+                .macos, .other => "HOME",
             };
 
             const home_dir = self.roc_ctx.getEnvVar(home_env, allocator) catch |home_err| switch (home_err) {
@@ -126,11 +176,10 @@ pub const CacheConfig = struct {
             };
             defer allocator.free(home_dir);
 
-            const cache_path = switch (builtin.target.os.tag) {
-                .linux => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
+            const cache_path = switch (cacheOs(builtin.target.os.tag)) {
                 .macos => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, "Library", "Caches", getCacheDirName() }),
                 .windows => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, getCacheDirName() }),
-                else => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
+                .other => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
             };
 
             return cache_path;
@@ -266,20 +315,20 @@ pub const CacheStats = struct {
 /// Get the platform-specific cache directory name.
 /// Returns "roc" on Unix and "Roc" on Windows (matches Rust implementation).
 pub fn getCacheDirName() []const u8 {
-    return switch (builtin.target.os.tag) {
+    return switch (cacheOs(builtin.target.os.tag)) {
         .windows => "Roc",
-        else => "roc",
+        .macos, .other => "roc",
     };
 }
 
 /// Get the temporary directory for runtime executables.
 /// This is in the system temp dir, not the persistent cache.
 pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
-    const temp_base = switch (builtin.target.os.tag) {
+    const temp_base = switch (cacheOs(builtin.target.os.tag)) {
         .windows => roc_ctx.getEnvVar("TEMP", allocator) catch
             roc_ctx.getEnvVar("TMP", allocator) catch
             try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        else => roc_ctx.getEnvVar("TMPDIR", allocator) catch
+        .macos, .other => roc_ctx.getEnvVar("TMPDIR", allocator) catch
             try allocator.dupe(u8, "/tmp"),
     };
     defer allocator.free(temp_base);

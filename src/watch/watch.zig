@@ -255,6 +255,56 @@ const EventFilter = enum {
     all_files,
 };
 
+const WatcherOs = enum {
+    macos,
+    linux,
+    windows,
+    kqueue,
+};
+
+const watcher_os: WatcherOs = switch (builtin.os.tag) {
+    .macos => .macos,
+    .linux => .linux,
+    .windows => .windows,
+    .freebsd, .openbsd, .netbsd, .dragonfly => .kqueue,
+    .freestanding,
+    .other,
+    .contiki,
+    .fuchsia,
+    .hermit,
+    .managarm,
+    .haiku,
+    .hurd,
+    .illumos,
+    .plan9,
+    .rtems,
+    .serenity,
+    .driverkit,
+    .ios,
+    .maccatalyst,
+    .tvos,
+    .visionos,
+    .watchos,
+    .uefi,
+    .@"3ds",
+    .ps3,
+    .ps4,
+    .ps5,
+    .psp,
+    .vita,
+    .emscripten,
+    .wasi,
+    .amdhsa,
+    .amdpal,
+    .cuda,
+    .mesa3d,
+    .nvcl,
+    .opencl,
+    .opengl,
+    .vulkan,
+    => @compileError("Unsupported platform for file watching"),
+};
+
 /// High-performance filesystem watcher for .roc files
 /// Monitors directories recursively and invokes callbacks on file changes
 pub const Watcher = struct {
@@ -270,12 +320,11 @@ pub const Watcher = struct {
     startup_failed: std.atomic.Value(bool),
     thread: ?std.Thread,
 
-    impl: switch (builtin.os.tag) {
+    impl: switch (watcher_os) {
         .macos => MacOSData,
         .linux => LinuxData,
         .windows => WindowsData,
-        .freebsd, .openbsd, .netbsd, .dragonfly => KqueueData,
-        else => @compileError("Unsupported platform for file watching"),
+        .kqueue => KqueueData,
     },
 
     const MacOSData = struct {
@@ -381,7 +430,7 @@ pub const Watcher = struct {
             .is_ready = std.atomic.Value(bool).init(false),
             .startup_failed = std.atomic.Value(bool).init(false),
             .thread = null,
-            .impl = switch (builtin.os.tag) {
+            .impl = switch (watcher_os) {
                 .macos => MacOSData{
                     .stream = null,
                     .run_loop = null,
@@ -396,11 +445,10 @@ pub const Watcher = struct {
                     .overlapped_data = std.array_list.Managed(WindowsData.OverlappedData).init(allocator),
                     .stop_event = null,
                 },
-                .freebsd, .openbsd, .netbsd, .dragonfly => KqueueData{
+                .kqueue => KqueueData{
                     .kq = -1,
                     .watches = std.array_list.Managed(KqueueData.VnodeWatch).init(allocator),
                 },
-                else => unreachable,
             },
         };
 
@@ -440,7 +488,7 @@ pub const Watcher = struct {
         }
         self.allocator.free(self.paths);
 
-        switch (builtin.os.tag) {
+        switch (watcher_os) {
             .macos => {},
             .linux => {
                 for (self.impl.watch_descriptors.items) |wd| {
@@ -466,11 +514,10 @@ pub const Watcher = struct {
                 self.impl.overlapped_data.deinit();
                 self.impl.handles.deinit();
             },
-            .freebsd, .openbsd, .netbsd, .dragonfly => {
+            .kqueue => {
                 // stop() already closed the descriptors and emptied the list.
                 self.impl.watches.deinit();
             },
-            else => {},
         }
 
         self.allocator.destroy(self);
@@ -512,7 +559,7 @@ pub const Watcher = struct {
             self.thread = null;
         }
 
-        switch (builtin.os.tag) {
+        switch (watcher_os) {
             .macos => {
                 if (self.impl.stream) |stream| {
                     FSEventStreamStop(stream);
@@ -555,7 +602,7 @@ pub const Watcher = struct {
                 }
                 self.impl.overlapped_data.clearRetainingCapacity();
             },
-            .freebsd, .openbsd, .netbsd, .dragonfly => {
+            .kqueue => {
                 if (self.impl.kq >= 0) {
                     const kq = self.impl.kq;
                     self.impl.kq = -1;
@@ -563,17 +610,15 @@ pub const Watcher = struct {
                 }
                 self.clearKqueueWatchData();
             },
-            else => {},
         }
     }
 
     fn watchLoop(self: *Watcher) void {
-        switch (builtin.os.tag) {
+        switch (watcher_os) {
             .macos => self.watchLoopMacOS(),
             .linux => self.watchLoopLinux(),
             .windows => self.watchLoopWindows(),
-            .freebsd, .openbsd, .netbsd, .dragonfly => self.watchLoopKqueue(),
-            else => unreachable,
+            .kqueue => self.watchLoopKqueue(),
         }
     }
 
@@ -776,7 +821,17 @@ pub const Watcher = struct {
 
             const bytes_read = std.posix.read(self.impl.inotify_fd, &buffer) catch |err| switch (err) {
                 error.WouldBlock => continue,
-                else => {
+                error.InputOutput,
+                error.SystemResources,
+                error.IsDir,
+                error.ConnectionResetByPeer,
+                error.NotOpenForReading,
+                error.SocketUnconnected,
+                error.AccessDenied,
+                error.LockViolation,
+                error.Unexpected,
+                error.Canceled,
+                => {
                     std.log.err("Read error: {}", .{err});
                     continue;
                 },
@@ -1024,7 +1079,16 @@ pub const Watcher = struct {
                     };
                     self.emitEvent(.{ .path = full_path });
                 },
-                else => {},
+                .block_device,
+                .character_device,
+                .named_pipe,
+                .sym_link,
+                .unix_domain_socket,
+                .whiteout,
+                .door,
+                .event_port,
+                .unknown,
+                => {},
             }
         }
     }
@@ -1056,7 +1120,16 @@ pub const Watcher = struct {
                     try self.registerKqueueWatch(child_path, false);
                     if (mode == .emit) self.emitEvent(.{ .path = child_path });
                 },
-                else => {},
+                .block_device,
+                .character_device,
+                .named_pipe,
+                .sym_link,
+                .unix_domain_socket,
+                .whiteout,
+                .door,
+                .event_port,
+                .unknown,
+                => {},
             }
         }
     }
@@ -1086,7 +1159,27 @@ pub const Watcher = struct {
                 );
                 return error.WatchOpenFailed;
             },
-            else => {
+            error.AntivirusInterference,
+            error.AccessDenied,
+            error.PermissionDenied,
+            error.SymLinkLoop,
+            error.FileNotFound,
+            error.SystemResources,
+            error.FileTooBig,
+            error.IsDir,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PathAlreadyExists,
+            error.ReadOnlyFileSystem,
+            error.DeviceBusy,
+            error.FileLocksUnsupported,
+            error.FileBusy,
+            error.WouldBlock,
+            error.NameTooLong,
+            error.BadPathName,
+            error.Canceled,
+            error.Unexpected,
+            => {
                 std.log.warn("Failed to open {s} for watching: {}", .{ path, err });
                 return error.WatchOpenFailed;
             },

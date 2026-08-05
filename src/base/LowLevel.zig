@@ -576,65 +576,11 @@ pub const LowLevel = enum(u16) {
     /// evaluator share the semantic oracle's operation vocabulary without a
     /// module cycle.
     pub fn simdOpIndex(self: LowLevel) ?u8 {
-        return switch (self) {
-            .simd_load_16_unchecked,
-            .simd_store_16_unchecked,
-            .simd_append_16,
-            .simd_splat,
-            .simd_get_lane_unchecked,
-            .simd_with_lane_unchecked,
-            .simd_to_u128_bits,
-            .simd_from_u128_bits,
-            .simd_add_wrap,
-            .simd_sub_wrap,
-            .simd_add_sat,
-            .simd_sub_sat,
-            .simd_neg_wrap,
-            .simd_abs_wrap,
-            .simd_min,
-            .simd_max,
-            .simd_abs_diff,
-            .simd_avg_rounded,
-            .simd_mul_wrap,
-            .simd_mul_high,
-            .simd_mul_q15_sat,
-            .simd_mul_wide_lo,
-            .simd_mul_wide_hi,
-            .simd_dot_pairs,
-            .simd_dot_pairs_sat,
-            .simd_sad,
-            .simd_and,
-            .simd_or,
-            .simd_xor,
-            .simd_not,
-            .simd_bit_select,
-            .simd_eq_lanes,
-            .simd_gt_lanes,
-            .simd_gte_lanes,
-            .simd_bitmask,
-            .simd_shl_wrap,
-            .simd_shr_wrap,
-            .simd_shr_zf_wrap,
-            .simd_shr_rounded,
-            .simd_interleave_lo,
-            .simd_interleave_hi,
-            .simd_even_lanes,
-            .simd_odd_lanes,
-            .simd_reverse_lanes,
-            .simd_table_lookup,
-            .simd_concat_shift_bytes,
-            .simd_widen_lo,
-            .simd_widen_hi,
-            .simd_pairwise_add_widen,
-            .simd_narrow_wrap,
-            .simd_narrow_sat,
-            .simd_sum_lanes,
-            .simd_sum_lanes_wrap,
-            .simd_clmul_lo,
-            .simd_clmul_hi,
-            => @intCast(@intFromEnum(self) - @intFromEnum(LowLevel.simd_load_16_unchecked)),
-            else => null,
-        };
+        const raw = @intFromEnum(self);
+        const first = @intFromEnum(LowLevel.simd_load_16_unchecked);
+        const last = @intFromEnum(LowLevel.simd_clmul_hi);
+        if (raw < first or raw > last) return null;
+        return @intCast(raw - first);
     }
 
     /// Reference-counting behavior exposed by this primitive before LIR ARC
@@ -1418,10 +1364,7 @@ pub const LowLevel = enum(u16) {
     /// Neutral LIR keeps the source operation; ARC uses this explicit mapping
     /// while solving and materializes exactly one of the two operations.
     pub fn arcBorrowedResultVariant(self: LowLevel) ?LowLevel {
-        return switch (self) {
-            .list_sublist => .list_sublist_borrowed,
-            else => null,
-        };
+        return if (self == .list_sublist) .list_sublist_borrowed else null;
     }
 
     /// Ownership signature ARC solves for this neutral low-level statement.
@@ -1435,18 +1378,14 @@ pub const LowLevel = enum(u16) {
     /// Whether this primitive can consume borrowed string views directly,
     /// without first materializing them into RocStr values.
     pub fn acceptsStrViewArgs(self: LowLevel) bool {
-        return switch (self) {
-            .str_count_utf8_bytes,
-            .str_is_eq,
-            .str_contains,
-            .str_starts_with,
-            .str_ends_with,
-            .str_caseless_ascii_equals,
-            .str_drop_prefix,
-            .str_drop_suffix,
-            => true,
-            else => false,
-        };
+        return self == .str_count_utf8_bytes or
+            self == .str_is_eq or
+            self == .str_contains or
+            self == .str_starts_with or
+            self == .str_ends_with or
+            self == .str_caseless_ascii_equals or
+            self == .str_drop_prefix or
+            self == .str_drop_suffix;
     }
 
     fn argMask(comptime args: []const u6) u64 {
@@ -1469,21 +1408,19 @@ pub const LowLevel = enum(u16) {
     };
 
     pub fn numericParseSpec(self: LowLevel) ?NumericParseSpec {
-        return switch (self) {
-            .u8_from_str => .{ .int = .{ .width_bytes = 1, .signed = false } },
-            .i8_from_str => .{ .int = .{ .width_bytes = 1, .signed = true } },
-            .u16_from_str => .{ .int = .{ .width_bytes = 2, .signed = false } },
-            .i16_from_str => .{ .int = .{ .width_bytes = 2, .signed = true } },
-            .u32_from_str => .{ .int = .{ .width_bytes = 4, .signed = false } },
-            .i32_from_str => .{ .int = .{ .width_bytes = 4, .signed = true } },
-            .u64_from_str => .{ .int = .{ .width_bytes = 8, .signed = false } },
-            .i64_from_str => .{ .int = .{ .width_bytes = 8, .signed = true } },
-            .u128_from_str => .{ .int = .{ .width_bytes = 16, .signed = false } },
-            .i128_from_str => .{ .int = .{ .width_bytes = 16, .signed = true } },
-            .f32_from_str => .{ .float = .{ .width_bytes = 4 } },
-            .f64_from_str => .{ .float = .{ .width_bytes = 8 } },
-            .dec_from_str => .dec,
-            else => null,
-        };
+        if (self == .u8_from_str) return .{ .int = .{ .width_bytes = 1, .signed = false } };
+        if (self == .i8_from_str) return .{ .int = .{ .width_bytes = 1, .signed = true } };
+        if (self == .u16_from_str) return .{ .int = .{ .width_bytes = 2, .signed = false } };
+        if (self == .i16_from_str) return .{ .int = .{ .width_bytes = 2, .signed = true } };
+        if (self == .u32_from_str) return .{ .int = .{ .width_bytes = 4, .signed = false } };
+        if (self == .i32_from_str) return .{ .int = .{ .width_bytes = 4, .signed = true } };
+        if (self == .u64_from_str) return .{ .int = .{ .width_bytes = 8, .signed = false } };
+        if (self == .i64_from_str) return .{ .int = .{ .width_bytes = 8, .signed = true } };
+        if (self == .u128_from_str) return .{ .int = .{ .width_bytes = 16, .signed = false } };
+        if (self == .i128_from_str) return .{ .int = .{ .width_bytes = 16, .signed = true } };
+        if (self == .f32_from_str) return .{ .float = .{ .width_bytes = 4 } };
+        if (self == .f64_from_str) return .{ .float = .{ .width_bytes = 8 } };
+        if (self == .dec_from_str) return .dec;
+        return null;
     }
 };

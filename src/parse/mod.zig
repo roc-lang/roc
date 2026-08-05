@@ -536,9 +536,8 @@ test "parser does not create a type path for malformed associated type headers" 
         const name_ident = decl.name_ident orelse continue;
         if (!std.mem.eql(u8, env.getIdent(name_ident), "Broken")) continue;
 
-        switch (decl.kind) {
-            .type_alias, .nominal, .@"opaque" => return error.MalformedHeaderRecordedTypeDecl,
-            else => {},
+        if (decl.kind == .type_alias or decl.kind == .nominal or decl.kind == .@"opaque") {
+            return error.MalformedHeaderRecordedTypeDecl;
         }
     }
 }

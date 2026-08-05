@@ -7,7 +7,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const object = @import("object/mod.zig");
-const RocTarget = @import("roc_target").RocTarget;
+const roc_target = @import("roc_target");
+const RocTarget = roc_target.RocTarget;
 const Relocation = @import("Relocation.zig").Relocation;
 
 /// Generate an object file from code and relocations.
@@ -52,13 +53,14 @@ pub fn generateObjectFileWithDebug(
     const cpu_arch = target.toCpuArch();
     const os_tag = target.toOsTag();
 
-    switch (os_tag) {
+    switch (roc_target.classifyOs(os_tag)) {
         .linux, .freebsd, .openbsd, .netbsd => {
-            const elf_arch: object.elf.Architecture = switch (cpu_arch) {
-                .x86_64 => .x86_64,
-                .aarch64 => .aarch64,
-                else => return error.UnsupportedTarget,
-            };
+            const elf_arch: object.elf.Architecture = if (cpu_arch == .x86_64)
+                .x86_64
+            else if (cpu_arch == .aarch64)
+                .aarch64
+            else
+                return error.UnsupportedTarget;
             var elf = try object.ElfWriter.init(allocator, elf_arch, elfOsabi(os_tag));
             defer elf.deinit();
 
@@ -89,7 +91,7 @@ pub fn generateObjectFileWithDebug(
                         .linked_data => |d| if (std.mem.eql(u8, d.name, sym.name)) {
                             try elf.addTextDataRelocation(rel.getOffset(), sym_idx, d.kind);
                         },
-                        else => {},
+                        .local_data, .jmp_to_return => {},
                     }
                 }
 
@@ -103,11 +105,12 @@ pub fn generateObjectFileWithDebug(
             try elf.write(output);
         },
         .macos => {
-            const macho_arch: object.macho.Architecture = switch (cpu_arch) {
-                .x86_64 => .x86_64,
-                .aarch64 => .aarch64,
-                else => return error.UnsupportedTarget,
-            };
+            const macho_arch: object.macho.Architecture = if (cpu_arch == .x86_64)
+                .x86_64
+            else if (cpu_arch == .aarch64)
+                .aarch64
+            else
+                return error.UnsupportedTarget;
             var macho = try object.MachOWriter.init(allocator, macho_arch);
             defer macho.deinit();
 
@@ -134,7 +137,7 @@ pub fn generateObjectFileWithDebug(
                         .linked_data => |d| if (std.mem.eql(u8, d.name, sym.name)) {
                             try macho.addTextDataRelocation(@intCast(rel.getOffset()), sym_idx, is_macho_external, d.kind);
                         },
-                        else => {},
+                        .local_data, .jmp_to_return => {},
                     }
                 }
 
@@ -148,11 +151,12 @@ pub fn generateObjectFileWithDebug(
             try macho.write(output);
         },
         .windows => {
-            const coff_arch: object.coff.Architecture = switch (cpu_arch) {
-                .x86_64 => .x86_64,
-                .aarch64 => .aarch64,
-                else => return error.UnsupportedTarget,
-            };
+            const coff_arch: object.coff.Architecture = if (cpu_arch == .x86_64)
+                .x86_64
+            else if (cpu_arch == .aarch64)
+                .aarch64
+            else
+                return error.UnsupportedTarget;
             var coff_writer = try object.CoffWriter.init(allocator, coff_arch);
             defer coff_writer.deinit();
 
@@ -178,7 +182,7 @@ pub fn generateObjectFileWithDebug(
                         .linked_data => |d| if (std.mem.eql(u8, d.name, sym.name)) {
                             try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), sym_idx, d.kind);
                         },
-                        else => {},
+                        .local_data, .jmp_to_return => {},
                     }
                 }
 
@@ -211,7 +215,7 @@ pub fn generateObjectFileWithDebug(
 
             try coff_writer.write(output);
         },
-        else => return error.UnsupportedTarget,
+        .other => return error.UnsupportedTarget,
     }
 }
 
@@ -267,10 +271,10 @@ fn elfSection(section: Section) object.elf.Section {
 /// The OSABI a dev-backend object declares for a target OS, matching what LLVM
 /// writes for the same triple so both backends' objects agree in one link.
 fn elfOsabi(os_tag: std.Target.Os.Tag) object.elf.Osabi {
-    return switch (os_tag) {
+    return switch (roc_target.classifyOs(os_tag)) {
         .freebsd => .freebsd,
         .openbsd => .openbsd,
-        else => .none,
+        .macos, .windows, .linux, .netbsd, .other => .none,
     };
 }
 
@@ -291,7 +295,7 @@ fn symbolIsRelocationTarget(
         switch (rel) {
             .linked_function => |function| if (std.mem.eql(u8, function.name, name)) return true,
             .linked_data => |data| if (std.mem.eql(u8, data.name, name)) return true,
-            else => {},
+            .local_data, .jmp_to_return => {},
         }
     }
     for (rodata_relocations) |rel| {
@@ -585,11 +589,13 @@ test "static strings are emitted into readonly object sections for native target
 
 fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, forbidden: []const u8) (Allocator.Error || error{ UnsupportedTarget, InvalidObjectFile, SectionNotFound, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
-    const code = switch (target.toCpuArch()) {
-        .aarch64 => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 }, // ret
-        .x86_64 => &[_]u8{0xC3}, // ret
-        else => return error.UnsupportedTarget,
-    };
+    const cpu_arch = target.toCpuArch();
+    const code = if (cpu_arch == .aarch64)
+        &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 } // ret
+    else if (cpu_arch == .x86_64)
+        &[_]u8{0xC3} // ret
+    else
+        return error.UnsupportedTarget;
     const rodata = required;
     const symbols = [_]Symbol{
         .{
@@ -623,11 +629,11 @@ fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, fo
 }
 
 fn readonlySection(target: RocTarget, object_bytes: []const u8) error{ UnsupportedTarget, InvalidObjectFile, SectionNotFound }![]const u8 {
-    return switch (target.toOsTag()) {
+    return switch (roc_target.classifyOs(target.toOsTag())) {
         .macos => try machoSection(object_bytes, "__const"),
         .windows => try coffSectionData(object_bytes, ".rdata"),
         .linux, .freebsd, .openbsd, .netbsd => try elfSectionData(object_bytes, ".rodata"),
-        else => error.UnsupportedTarget,
+        .other => error.UnsupportedTarget,
     };
 }
 

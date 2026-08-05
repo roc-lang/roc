@@ -2170,13 +2170,11 @@ test "cross-module copy substitutes exact source vars without conflating equal r
         consumer.module_env,
         gpa,
     );
-    const copied_tuple = switch (consumer.module_env.types.resolveVar(copied_tuple_root).desc.content) {
-        .structure => |flat_type| switch (flat_type) {
-            .tuple => |tuple| tuple,
-            else => return error.TestUnexpectedResult,
-        },
-        else => return error.TestUnexpectedResult,
-    };
+    const copied_content = consumer.module_env.types.resolveVar(copied_tuple_root).desc.content;
+    if (copied_content != .structure) return error.TestUnexpectedResult;
+    const copied_flat_type = copied_content.structure;
+    if (copied_flat_type != .tuple) return error.TestUnexpectedResult;
+    const copied_tuple = copied_flat_type.tuple;
     const copied_elems = consumer.module_env.types.sliceVars(copied_tuple.elems);
 
     try std.testing.expectEqual(

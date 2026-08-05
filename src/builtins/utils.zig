@@ -33,10 +33,8 @@ inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
 pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
     if (comptime builtin.mode == .Debug) {
         const ptr_info = @typeInfo(T);
-        const alignment = switch (ptr_info) {
-            .pointer => |p| p.alignment orelse 0,
-            else => @compileError("alignedPtrCast target must be a pointer type"),
-        };
+        if (ptr_info != .pointer) @compileError("alignedPtrCast target must be a pointer type");
+        const alignment = ptr_info.pointer.alignment orelse 0;
         const ptr_int = @intFromPtr(ptr);
         if (alignment > 0 and ptr_int % alignment != 0) {
             // Alignment errors indicate a bug in the caller.

@@ -78,10 +78,8 @@ pub fn validateBuiltinIndices(env: *const ModuleEnv, indices: CIR.BuiltinIndices
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
-        const header_idx = switch (stmt) {
-            .s_nominal_decl => |decl| decl.header,
-            else => continue,
-        };
+        if (stmt != .s_nominal_decl) continue;
+        const header_idx = stmt.s_nominal_decl.header;
         const header = env.store.getTypeHeader(header_idx);
         const name = env.getIdentText(header.name);
         if (isBuiltinContainerName(name)) continue;
@@ -92,11 +90,12 @@ pub fn validateBuiltinIndices(env: *const ModuleEnv, indices: CIR.BuiltinIndices
 fn statementQualifiedName(env: *const ModuleEnv, stmt_idx: CIR.Statement.Idx) ?[]const u8 {
     if (@intFromEnum(stmt_idx) >= env.store.nodes.len()) return null;
     const stmt = env.store.getStatement(stmt_idx);
-    const header_idx = switch (stmt) {
-        .s_nominal_decl => |decl| decl.header,
-        .s_alias_decl => |alias| alias.header,
-        else => return null,
-    };
+    const header_idx = if (stmt == .s_nominal_decl)
+        stmt.s_nominal_decl.header
+    else if (stmt == .s_alias_decl)
+        stmt.s_alias_decl.header
+    else
+        return null;
     const header = env.store.getTypeHeader(header_idx);
     return env.getIdentText(header.name);
 }

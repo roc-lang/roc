@@ -463,11 +463,12 @@ fn findTypeDeclaration(gpa: Allocator, env: *const ModuleEnv, type_name: []const
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
-        const header_idx = switch (stmt) {
-            .s_nominal_decl => |decl| decl.header,
-            .s_alias_decl => |alias| alias.header,
-            else => continue,
-        };
+        const header_idx = if (stmt == .s_nominal_decl)
+            stmt.s_nominal_decl.header
+        else if (stmt == .s_alias_decl)
+            stmt.s_alias_decl.header
+        else
+            continue;
         const header = env.store.getTypeHeader(header_idx);
         const ident_idx = header.name;
         const ident_text = env.getIdentText(ident_idx);
@@ -498,16 +499,13 @@ fn findTypeDeclarationByQualifiedName(env: *const ModuleEnv, qualified_name: []c
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_nominal_decl => |decl| {
-                const header = env.store.getTypeHeader(decl.header);
-                const ident_idx = header.name;
-                const ident_text = env.getIdentText(ident_idx);
-                if (std.mem.eql(u8, ident_text, qualified_name)) {
-                    return stmt_idx;
-                }
-            },
-            else => continue,
+        if (stmt == .s_nominal_decl) {
+            const header = env.store.getTypeHeader(stmt.s_nominal_decl.header);
+            const ident_idx = header.name;
+            const ident_text = env.getIdentText(ident_idx);
+            if (std.mem.eql(u8, ident_text, qualified_name)) {
+                return stmt_idx;
+            }
         }
     }
 

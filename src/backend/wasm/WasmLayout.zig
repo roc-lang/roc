@@ -35,19 +35,18 @@ pub const WasmRepr = union(enum) {
 /// For composite types (records, tuples, tags), returns stack_memory with size 0.
 /// Use wasmReprWithStore for accurate composite sizes.
 pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
-    return switch (layout_idx) {
-        .u8, .i8 => .{ .primitive = .i32 },
-        .u16, .i16 => .{ .primitive = .i32 },
-        .u32, .i32 => .{ .primitive = .i32 },
-        .u64, .i64 => .{ .primitive = .i64 },
-        .f32 => .{ .primitive = .f32 },
-        .f64 => .{ .primitive = .f64 },
-        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .{ .primitive = .v128 },
-        .i128, .u128 => .{ .stack_memory = 16 },
-        .dec => .{ .stack_memory = 16 },
-        .str => .{ .stack_memory = 12 }, // wasm32: ptr(4) + encoded cap(4) + len(4)
-        else => .{ .stack_memory = 0 }, // composite — use wasmReprWithStore for size
-    };
+    if (layout_idx == .u8 or layout_idx == .i8 or layout_idx == .u16 or layout_idx == .i16 or layout_idx == .u32 or layout_idx == .i32) {
+        return .{ .primitive = .i32 };
+    }
+    if (layout_idx == .u64 or layout_idx == .i64) return .{ .primitive = .i64 };
+    if (layout_idx == .f32) return .{ .primitive = .f32 };
+    if (layout_idx == .f64) return .{ .primitive = .f64 };
+    if (layout_idx == .u8x16 or layout_idx == .i8x16 or layout_idx == .u16x8 or layout_idx == .i16x8 or layout_idx == .u32x4 or layout_idx == .i32x4 or layout_idx == .u64x2 or layout_idx == .i64x2) {
+        return .{ .primitive = .v128 };
+    }
+    if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return .{ .stack_memory = 16 };
+    if (layout_idx == .str) return .{ .stack_memory = 12 }; // wasm32: ptr(4) + encoded cap(4) + len(4)
+    return .{ .stack_memory = 0 }; // composite — use wasmReprWithStore for size
 }
 
 /// Map a layout.Idx to its wasm representation using the layout store for

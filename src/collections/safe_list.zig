@@ -1449,11 +1449,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             i = 0;
             while (i < length) : (i += 1) {
                 // Use smaller values to avoid overflow for smaller integer types
-                const multiplier: T = switch (T) {
-                    u8 => 10,
-                    u16 => 1000,
-                    else => 100000,
-                };
+                const multiplier: T = if (T == u8) 10 else if (T == u16) 1000 else 100000;
                 const idx = try list2.append(gpa, @as(T, @intCast(i + 1)) * multiplier);
                 try testing.expectEqual(i, @intFromEnum(idx));
             }
@@ -1534,11 +1530,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             try testing.expectEqual(length, d2.len());
             i = 0;
             while (i < length) : (i += 1) {
-                const multiplier: T = switch (T) {
-                    u8 => 10,
-                    u16 => 1000,
-                    else => 100000,
-                };
+                const multiplier: T = if (T == u8) 10 else if (T == u16) 1000 else 100000;
                 const expected = @as(T, @intCast(i + 1)) * multiplier;
                 const actual = d2.get(@enumFromInt(i)).*;
                 try testing.expectEqual(expected, actual);
@@ -1766,12 +1758,14 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
                 var item: TestType = undefined;
                 inline for (std.meta.fields(TestType), 0..) |field, fi| {
                     const field_type_info = @typeInfo(field.type);
-                    const value = switch (field_type_info) {
-                        .int => @as(field.type, @intCast(@min(i * (fi + 1) + 1, std.math.maxInt(field.type)))),
-                        .float => @as(field.type, @floatFromInt(i * (fi + 1) + 1)),
-                        .bool => @as(field.type, (i + fi) % 2 == 0),
-                        else => @compileError("Unsupported field type in TestType: " ++ @typeName(field.type)),
-                    };
+                    const value = if (field_type_info == .int)
+                        @as(field.type, @intCast(@min(i * (fi + 1) + 1, std.math.maxInt(field.type))))
+                    else if (field_type_info == .float)
+                        @as(field.type, @floatFromInt(i * (fi + 1) + 1))
+                    else if (field_type_info == .bool)
+                        @as(field.type, (i + fi) % 2 == 0)
+                    else
+                        @compileError("Unsupported field type in TestType: " ++ @typeName(field.type));
                     @field(item, field.name) = value;
                 }
                 const idx = try list.append(gpa, item);

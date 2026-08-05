@@ -23,18 +23,19 @@ const win32 = struct {
     const PAGE_READWRITE: DWORD = 0x04;
     const PAGE_EXECUTE_READ: DWORD = 0x20;
 
-    const RuntimeFunction = switch (builtin.cpu.arch) {
-        .x86_64 => extern struct {
+    const RuntimeFunction = if (builtin.cpu.arch == .x86_64)
+        extern struct {
             BeginAddress: DWORD,
             EndAddress: DWORD,
             UnwindData: DWORD,
-        },
-        .aarch64 => extern struct {
+        }
+    else if (builtin.cpu.arch == .aarch64)
+        extern struct {
             BeginAddress: DWORD,
             UnwindData: DWORD,
-        },
-        else => void,
-    };
+        }
+    else
+        void;
 
     extern "kernel32" fn VirtualAlloc(
         lpAddress: LPVOID,
@@ -70,11 +71,9 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
     const allocator = std.heap.smp_allocator;
 
     fn coffArch() error{UnsupportedPlatform}!coff.Architecture {
-        return switch (builtin.cpu.arch) {
-            .x86_64 => .x86_64,
-            .aarch64 => .aarch64,
-            else => error.UnsupportedPlatform,
-        };
+        if (builtin.cpu.arch == .x86_64) return .x86_64;
+        if (builtin.cpu.arch == .aarch64) return .aarch64;
+        return error.UnsupportedPlatform;
     }
 
     fn xdataSize(functions: []const coff.FunctionInfo) (Allocator.Error || error{UnsupportedPlatform})!usize {
@@ -141,18 +140,19 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
 
         for (sorted_functions, xdata_offsets, 0..) |function, xdata_function_offset, i| {
             const xdata_rva: u32 = @intCast(xdata_offset + xdata_function_offset);
-            entries[i] = switch (builtin.cpu.arch) {
-                .x86_64 => .{
+            entries[i] = if (builtin.cpu.arch == .x86_64)
+                .{
                     .BeginAddress = function.start_offset,
                     .EndAddress = function.end_offset,
                     .UnwindData = xdata_rva,
-                },
-                .aarch64 => .{
+                }
+            else if (builtin.cpu.arch == .aarch64)
+                .{
                     .BeginAddress = function.start_offset,
                     .UnwindData = xdata_rva,
-                },
-                else => unreachable,
-            };
+                }
+            else
+                unreachable;
         }
 
         if (win32.RtlAddFunctionTable(entries.ptr, @intCast(entries.len), @intFromPtr(memory.ptr)) == .FALSE) {
@@ -324,10 +324,53 @@ pub const ExecutableMemory = struct {
     }
 };
 
+const MemoryOs = enum { posix, windows, unsupported };
+
+fn classifyMemoryOs(os: std.Target.Os.Tag) MemoryOs {
+    return switch (os) {
+        .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => .posix,
+        .windows => .windows,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .maccatalyst,
+        .visionos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .unsupported,
+    };
+}
+
 /// Allocate memory that can be made executable
 fn allocateMemory(size: usize) (Allocator.Error || error{ MmapFailed, VirtualAllocFailed, UnsupportedPlatform })![]align(std.heap.page_size_min) u8 {
-    switch (builtin.os.tag) {
-        .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
+    switch (comptime classifyMemoryOs(builtin.os.tag)) {
+        .posix => {
             const prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
             const flags = std.posix.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true };
             const result = std.posix.mmap(null, size, prot, flags, -1, 0) catch {
@@ -345,14 +388,14 @@ fn allocateMemory(size: usize) (Allocator.Error || error{ MmapFailed, VirtualAll
             const ptr: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(mem));
             return ptr[0..size];
         },
-        else => return error.UnsupportedPlatform,
+        .unsupported => return error.UnsupportedPlatform,
     }
 }
 
 /// Make the memory executable
 fn protectExecutable(memory: []align(std.heap.page_size_min) u8) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
-    switch (builtin.os.tag) {
-        .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
+    switch (comptime classifyMemoryOs(builtin.os.tag)) {
+        .posix => {
             const prot: std.posix.PROT = .{ .READ = true, .EXEC = true };
             if (std.c.mprotect(@ptrCast(memory.ptr), memory.len, prot) != 0) return error.MprotectFailed;
         },
@@ -365,14 +408,14 @@ fn protectExecutable(memory: []align(std.heap.page_size_min) u8) error{ Mprotect
                 &old_protect,
             ) == .FALSE) return error.VirtualProtectFailed;
         },
-        else => return error.UnsupportedPlatform,
+        .unsupported => return error.UnsupportedPlatform,
     }
 }
 
 /// Free executable memory
 fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
-    switch (builtin.os.tag) {
-        .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
+    switch (comptime classifyMemoryOs(builtin.os.tag)) {
+        .posix => {
             std.posix.munmap(memory);
         },
         .windows => {
@@ -380,7 +423,7 @@ fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
         },
         // allocateMemory returns error.UnsupportedPlatform for other OSes,
         // so freeMemory should never be called on them
-        else => unreachable,
+        .unsupported => unreachable,
     }
 }
 

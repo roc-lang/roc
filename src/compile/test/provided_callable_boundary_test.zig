@@ -56,8 +56,10 @@ fn expectHostAbiCallablesUseErasedRepresentation(
         try std.testing.expectEqual(layout.LayoutTag.erased_callable, layouts.getLayout(arg_layout).tag);
 
         var found_release = false;
-        for (store.getCFStmts()) |stmt| switch (stmt) {
-            .decref => |release| switch (release.rc) {
+        for (store.getCFStmts()) |stmt| {
+            if (stmt != .decref) continue;
+            const release = stmt.decref;
+            switch (release.rc) {
                 .concrete => |helper| if (helper.layout_idx == arg_layout) {
                     try std.testing.expectEqual(
                         @as(std.meta.Tag(layout.RcHelperPlan), .erased_callable_decref),
@@ -67,9 +69,8 @@ fn expectHostAbiCallablesUseErasedRepresentation(
                     found_release = true;
                 },
                 .boxy => {},
-            },
-            else => {},
-        };
+            }
+        }
         try std.testing.expect(found_release);
         found_provided_drop = true;
     }
@@ -185,11 +186,9 @@ fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
         while (work.pop()) |stmt_id| {
             const entry = try visited.getOrPut(stmt_id);
             if (entry.found_existing) continue;
-            switch (store.getCFStmt(stmt_id)) {
-                .assign_packed_erased_fn => |pack| {
-                    if (pack.reuse == reuse_arg) matching_repack_count += 1;
-                },
-                else => {},
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .assign_packed_erased_fn) {
+                if (stmt.assign_packed_erased_fn.reuse == reuse_arg) matching_repack_count += 1;
             }
             try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
         }

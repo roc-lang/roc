@@ -609,10 +609,8 @@ const Pass = struct {
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
-            const switch_stmt = switch (stmt) {
-                .switch_stmt => |s| s,
-                else => continue,
-            };
+            if (stmt != .switch_stmt) continue;
+            const switch_stmt = stmt.switch_stmt;
             const tags = &self.localInfo(switch_stmt.cond).tags;
             if (!tags.hasKnownValues()) continue;
 
@@ -659,18 +657,12 @@ const Pass = struct {
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
-            const assign = switch (stmt) {
-                .assign_ref => |a| a,
-                else => continue,
-            };
-            switch (assign.op) {
-                .discriminant => {},
-                else => continue,
-            }
-            const switch_stmt = switch (self.store.getCFStmt(assign.next)) {
-                .switch_stmt => |s| s,
-                else => continue,
-            };
+            if (stmt != .assign_ref) continue;
+            const assign = stmt.assign_ref;
+            if (assign.op != .discriminant) continue;
+            const next_stmt = self.store.getCFStmt(assign.next);
+            if (next_stmt != .switch_stmt) continue;
+            const switch_stmt = next_stmt.switch_stmt;
             if (switch_stmt.cond != assign.target) continue;
             if (self.useCount(assign.target) != 1) continue;
             const next = self.resolveRedirect(assign.next);

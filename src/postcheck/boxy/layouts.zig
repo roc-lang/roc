@@ -329,30 +329,25 @@ const Builder = struct {
     fn functionChildren(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!?FunctionChildren {
         const identity = try self.functionIdentityRep(rep_id);
         const rep = self.program.representations.items[@intFromEnum(identity)];
-        return switch (rep.kind) {
-            .erased_callable => blk: {
-                const children = self.program.childSlice(rep.children);
-                var args_start: ?u32 = null;
-                var arg_count: u32 = 0;
-                var ret: ?Plan.TypeRepId = null;
-                for (children, 0..) |child, i| {
-                    switch (child.role) {
-                        .function_arg => {
-                            if (args_start == null) args_start = @intCast(i);
-                            arg_count += 1;
-                        },
-                        .function_ret => ret = child.rep,
-                        else => {},
-                    }
-                }
-                break :blk .{
-                    .rep = identity,
-                    .args_start = args_start orelse 0,
-                    .arg_count = arg_count,
-                    .ret = ret orelse boxyLayoutInvariant("function representation had no return child"),
-                };
-            },
-            else => null,
+        if (rep.kind != .erased_callable) return null;
+
+        const children = self.program.childSlice(rep.children);
+        var args_start: ?u32 = null;
+        var arg_count: u32 = 0;
+        var ret: ?Plan.TypeRepId = null;
+        for (children, 0..) |child, i| {
+            if (child.role == .function_arg) {
+                if (args_start == null) args_start = @intCast(i);
+                arg_count += 1;
+            } else if (child.role == .function_ret) {
+                ret = child.rep;
+            }
+        }
+        return .{
+            .rep = identity,
+            .args_start = args_start orelse 0,
+            .arg_count = arg_count,
+            .ret = ret orelse boxyLayoutInvariant("function representation had no return child"),
         };
     }
 
@@ -364,13 +359,15 @@ const Builder = struct {
             depth += 1;
 
             const rep = self.program.representations.items[@intFromEnum(current)];
-            switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
+            if (rep.kind == .alias) {
+                current = self.requiredSingleChild(current, .alias_backing).rep;
+            } else if (rep.kind == .nominal) {
+                switch (rep.kind.nominal) {
                     .transparent => current = self.requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal, .builtin_other => return current,
-                },
-                else => return current,
+                }
+            } else {
+                return current;
             }
         }
     }
@@ -526,17 +523,17 @@ const Builder = struct {
         // the underlying value type, so resolve aliases before classifying.
         const payload_rep_id = self.aliasResolvedRep(child.rep);
         const child_rep = self.program.representations.items[@intFromEnum(payload_rep_id)];
-        switch (child_rep.kind) {
-            .dynamic => return switch (mode) {
+        if (child_rep.kind == .dynamic) {
+            return switch (mode) {
                 .worker => try self.runtimeLayoutForRep(.worker, payload_rep_id),
                 .host => .{ .concrete = try self.dynamicStorageLayout() },
-            },
-            // A boxed erased callable is one flat refcounted allocation whose
-            // data pointer IS the callable value (see builtins.erased_callable),
-            // so Box(fn) shares the callable's layout instead of boxing it.
-            .erased_callable => return try self.runtimeLayoutForRep(mode, payload_rep_id),
-            else => return null,
+            };
         }
+        // A boxed erased callable is one flat refcounted allocation whose
+        // data pointer IS the callable value (see builtins.erased_callable),
+        // so Box(fn) shares the callable's layout instead of boxing it.
+        if (child_rep.kind == .erased_callable) return try self.runtimeLayoutForRep(mode, payload_rep_id);
+        return null;
     }
 
     fn aliasResolvedRep(self: *Builder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
@@ -546,19 +543,19 @@ const Builder = struct {
             if (depth == 1024) boxyLayoutInvariant("alias chain exceeded boxy layout limit");
             depth += 1;
             const rep = self.program.representations.items[@intFromEnum(current)];
-            switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
-                else => return current,
-            }
+            if (rep.kind != .alias) return current;
+            current = self.requiredSingleChild(current, .alias_backing).rep;
         }
     }
 
     fn descriptorPayloadLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!?layout.Idx {
         const rep = self.program.representations.items[@intFromEnum(rep_id)];
         if (rep.descriptor == null) return null;
-        switch (rep.kind) {
-            .alias => return try self.backingDescriptorPayloadLayout(self.requiredSingleChild(rep_id, .alias_backing).rep),
-            .nominal => |kind| switch (kind) {
+        if (rep.kind == .alias) {
+            return try self.backingDescriptorPayloadLayout(self.requiredSingleChild(rep_id, .alias_backing).rep);
+        }
+        if (rep.kind == .nominal) {
+            switch (rep.kind.nominal) {
                 .transparent => if (rep.declared_fields.len == 0) {
                     return try self.backingDescriptorPayloadLayout(self.requiredSingleChild(rep_id, .nominal_backing).rep);
                 },
@@ -566,8 +563,7 @@ const Builder = struct {
                     return try self.backingDescriptorPayloadLayout(child.rep);
                 },
                 .opaque_nominal => {},
-            },
-            else => {},
+            }
         }
         if (rep.kind == .dynamic and rep.tag_variants.len != 0) {
             return try self.tagUnionPayloadLayout(rep_id);
@@ -668,31 +664,32 @@ const GraphBuilder = struct {
 
         const rep = self.parent.program.representations.items[index];
         if (self.descriptor_payload) {
-            switch (rep.kind) {
-                .alias => return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .alias_backing).rep),
-                .nominal => |kind| switch (kind) {
+            if (rep.kind == .alias) {
+                return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .alias_backing).rep);
+            }
+            if (rep.kind == .nominal) {
+                switch (rep.kind.nominal) {
                     .transparent => {
                         if (rep.declared_fields.len == 0) {
                             return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep);
                         }
                     },
                     .opaque_nominal, .builtin_other => {},
-                },
-                .dynamic => if (rep.descriptor != null) {
-                    if (rep.tag_variants.len != 0) {
-                        const node = try self.graph.reserveNode(self.parent.allocator);
-                        self.local_nodes[index] = node;
-                        self.graph.setNode(node, .{ .tag_union = try self.tagPayloads(rep, .descriptor_payload) });
-                        return .{ .local = node };
-                    }
-                    if (repHasRecordFields(self.parent.program, rep)) {
-                        const node = try self.graph.reserveNode(self.parent.allocator);
-                        self.local_nodes[index] = node;
-                        self.graph.setNode(node, .{ .struct_ = try self.recordFields(rep) });
-                        return .{ .local = node };
-                    }
-                },
-                else => {},
+                }
+            }
+            if (rep.kind == .dynamic and rep.descriptor != null) {
+                if (rep.tag_variants.len != 0) {
+                    const node = try self.graph.reserveNode(self.parent.allocator);
+                    self.local_nodes[index] = node;
+                    self.graph.setNode(node, .{ .tag_union = try self.tagPayloads(rep, .descriptor_payload) });
+                    return .{ .local = node };
+                }
+                if (repHasRecordFields(self.parent.program, rep)) {
+                    const node = try self.graph.reserveNode(self.parent.allocator);
+                    self.local_nodes[index] = node;
+                    self.graph.setNode(node, .{ .struct_ = try self.recordFields(rep) });
+                    return .{ .local = node };
+                }
             }
         }
 
@@ -702,9 +699,11 @@ const GraphBuilder = struct {
             return .{ .canonical = runtime.layoutIdx() };
         }
 
-        switch (rep.kind) {
-            .alias => return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .alias_backing).rep),
-            .nominal => |kind| switch (kind) {
+        if (rep.kind == .alias) {
+            return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .alias_backing).rep);
+        }
+        if (rep.kind == .nominal) {
+            switch (rep.kind.nominal) {
                 .transparent => {
                     if (rep.declared_fields.len != 0) {
                         const node = try self.graph.reserveNode(self.parent.allocator);
@@ -716,8 +715,7 @@ const GraphBuilder = struct {
                     return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep);
                 },
                 .opaque_nominal, .builtin_other => {},
-            },
-            else => {},
+            }
         }
 
         const node = try self.graph.reserveNode(self.parent.allocator);
@@ -760,13 +758,11 @@ const GraphBuilder = struct {
         var fields = std.ArrayList(layout.GraphField).empty;
         defer fields.deinit(self.parent.allocator);
         for (children) |child| {
-            switch (child.role) {
-                .record_field => try fields.append(self.parent.allocator, .{
+            if (child.role == .record_field) {
+                try fields.append(self.parent.allocator, .{
                     .index = @intCast(fields.items.len),
                     .child = try self.inputForRep(child.rep),
-                }),
-                .record_ext => {},
-                else => {},
+                });
             }
         }
         return try self.graph.appendFields(self.parent.allocator, fields.items);
@@ -818,12 +814,11 @@ const GraphBuilder = struct {
         var fields = std.ArrayList(layout.GraphField).empty;
         defer fields.deinit(self.parent.allocator);
         for (children) |child| {
-            switch (child.role) {
-                .tuple_elem => |index| try fields.append(self.parent.allocator, .{
-                    .index = @intCast(index),
+            if (child.role == .tuple_elem) {
+                try fields.append(self.parent.allocator, .{
+                    .index = @intCast(child.role.tuple_elem),
                     .child = try self.inputForRep(child.rep),
-                }),
-                else => {},
+                });
             }
         }
         return try self.graph.appendFields(self.parent.allocator, fields.items);
@@ -845,13 +840,12 @@ const GraphBuilder = struct {
         for (self.parent.program.tagVariantSlice(rep.tag_variants)) |variant| {
             payloads.clearRetainingCapacity();
             for (self.parent.program.childSlice(variant.payloads), 0..) |child, index| {
-                switch (child.role) {
-                    .tag_payload => |payload| {
-                        if (payload.tag != variant.name or payload.index != index) {
-                            boxyLayoutInvariant("tag variant payload span did not match its payload child roles");
-                        }
-                    },
-                    else => boxyLayoutInvariant("tag variant payload span included a non-payload child"),
+                if (child.role != .tag_payload) {
+                    boxyLayoutInvariant("tag variant payload span included a non-payload child");
+                }
+                const payload = child.role.tag_payload;
+                if (payload.tag != variant.name or payload.index != index) {
+                    boxyLayoutInvariant("tag variant payload span did not match its payload child roles");
                 }
                 try payloads.append(self.parent.allocator, child.rep);
             }
@@ -925,10 +919,7 @@ fn primitiveLayout(primitive: checked.CheckedPrimitive) layout.Idx {
 
 fn repHasRecordFields(program: *const Plan.ProgramPlan, rep: Plan.TypeRepresentation) bool {
     for (program.childSlice(rep.children)) |child| {
-        switch (child.role) {
-            .record_field => return true,
-            else => {},
-        }
+        if (child.role == .record_field) return true;
     }
     return false;
 }
@@ -941,7 +932,15 @@ fn sameChildRole(a: Plan.ChildRole, b: Plan.ChildRole) bool {
         .tag_ext => b == .tag_ext,
         .list_elem => b == .list_elem,
         .box_payload => b == .box_payload,
-        else => false,
+        .alias_arg,
+        .nominal_arg,
+        .nominal_padding_field,
+        .record_field,
+        .tuple_elem,
+        .function_arg,
+        .function_ret,
+        .tag_payload,
+        => false,
     };
 }
 

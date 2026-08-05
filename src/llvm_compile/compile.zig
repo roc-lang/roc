@@ -23,6 +23,56 @@ const Allocator = std.mem.Allocator;
 
 var temp_path_counter = std.atomic.Value(usize).init(0);
 
+const HostOs = enum {
+    windows,
+    macos,
+    elf,
+    other,
+};
+
+const host_os: HostOs = switch (builtin.os.tag) {
+    .windows => .windows,
+    .macos => .macos,
+    .linux, .freebsd, .openbsd, .netbsd => .elf,
+    .freestanding,
+    .other,
+    .contiki,
+    .fuchsia,
+    .hermit,
+    .managarm,
+    .haiku,
+    .hurd,
+    .illumos,
+    .plan9,
+    .rtems,
+    .serenity,
+    .driverkit,
+    .dragonfly,
+    .ios,
+    .maccatalyst,
+    .tvos,
+    .visionos,
+    .watchos,
+    .uefi,
+    .@"3ds",
+    .ps3,
+    .ps4,
+    .ps5,
+    .psp,
+    .vita,
+    .emscripten,
+    .wasi,
+    .amdhsa,
+    .amdpal,
+    .cuda,
+    .mesa3d,
+    .nvcl,
+    .opencl,
+    .opengl,
+    .vulkan,
+    => .other,
+};
+
 const TempPathError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.RealPathFileAllocError || error{TempDirUnavailable};
 
 // Platform-specific i128 ABI Handling
@@ -40,32 +90,32 @@ const TempPathError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io
 /// Represents an i128 value in the platform-specific ABI format.
 /// On most platforms this is just i128, but Windows uses a 2xi64 vector
 /// and macOS ARM64 uses a 2xi64 array.
-pub const I128Arg = switch (builtin.os.tag) {
+pub const I128Arg = switch (host_os) {
     .windows => extern struct { lo: u64, hi: u64 },
     .macos => if (builtin.cpu.arch == .aarch64)
         extern struct { lo: u64, hi: u64 }
     else
         i128,
-    else => i128,
+    .elf, .other => i128,
 };
 
 /// Convert a platform-specific i128 representation to native i128.
 /// Used when receiving i128 return values from separately compiled Zig builtins.
 pub fn normalizeI128Return(arg: I128Arg) i128 {
-    return switch (builtin.os.tag) {
+    return switch (host_os) {
         .windows => @as(i128, arg.hi) << 64 | @as(i128, arg.lo),
         .macos => if (builtin.cpu.arch == .aarch64)
             @as(i128, arg.hi) << 64 | @as(i128, arg.lo)
         else
             arg,
-        else => arg,
+        .elf, .other => arg,
     };
 }
 
 /// Convert a native i128 to the platform-specific representation.
 /// Used when passing i128 arguments to separately compiled Zig builtins.
 pub fn prepareI128Arg(value: i128) I128Arg {
-    return switch (builtin.os.tag) {
+    return switch (host_os) {
         .windows => .{
             .lo = @truncate(@as(u128, @bitCast(value))),
             .hi = @truncate(@as(u128, @bitCast(value)) >> 64),
@@ -74,7 +124,7 @@ pub fn prepareI128Arg(value: i128) I128Arg {
             .lo = @truncate(@as(u128, @bitCast(value))),
             .hi = @truncate(@as(u128, @bitCast(value)) >> 64),
         } else value,
-        else => value,
+        .elf, .other => value,
     };
 }
 
@@ -315,10 +365,8 @@ fn markDefinitionsDsoLocal(module: *bindings.Module) void {
 }
 
 fn isLocallyLinked(value: *bindings.Value) bool {
-    return switch (value.getLinkage()) {
-        bindings.internal_linkage, bindings.private_linkage => true,
-        else => false,
-    };
+    const linkage = value.getLinkage();
+    return linkage == bindings.internal_linkage or linkage == bindings.private_linkage;
 }
 
 fn removeBuiltinUsedRoots(module: *bindings.Module) void {
@@ -642,9 +690,9 @@ pub fn compileBitcodeModulesToSharedLibrary(allocator: Allocator, io: std.Io, bi
     var pic_options = options;
     pic_options.reloc_mode = .PIC;
     pic_options.use_module_target_triple = true;
-    pic_options.no_target_libcalls = switch (builtin.os.tag) {
+    pic_options.no_target_libcalls = switch (host_os) {
         .macos, .windows => false,
-        else => true,
+        .elf, .other => true,
     };
     pic_options.lower_memory_intrinsics_to_loops = pic_options.no_target_libcalls;
 
@@ -686,7 +734,38 @@ fn recordSharedLibraryLinkForTest(allocator: Allocator, io: std.Io) void {
 
     const existing_owned = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => null,
-        else => return,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.OutOfMemory,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return,
     };
     defer if (existing_owned) |bytes| allocator.free(bytes);
     const existing = existing_owned orelse "";
@@ -724,7 +803,7 @@ fn linkSharedLibrary(
         allocator.free(path);
     };
 
-    switch (builtin.os.tag) {
+    switch (host_os) {
         .macos => {
             try args.append(allocator, "ld64.lld");
             try args.append(allocator, "-dylib");
@@ -744,7 +823,7 @@ fn linkSharedLibrary(
             try args.append(allocator, std.mem.sliceTo(object_path, 0));
             try args.append(allocator, "-lSystem");
         },
-        .linux, .freebsd, .openbsd, .netbsd => {
+        .elf => {
             try args.append(allocator, "ld.lld");
             try args.append(allocator, "-shared");
             // The eval-test-runner is a static-musl binary whose dlopen does not
@@ -765,12 +844,14 @@ fn linkSharedLibrary(
             try args.append(allocator, "lld-link");
             try args.append(allocator, "/dll");
             try args.append(allocator, try std.fmt.allocPrint(arena, "/out:{s}", .{std.mem.sliceTo(shared_lib_path, 0)}));
-            try args.append(allocator, switch (builtin.cpu.arch) {
-                .aarch64 => "/machine:arm64",
-                .x86_64 => "/machine:x64",
-                .x86 => "/machine:x86",
-                else => return Error.LinkFailed,
-            });
+            try args.append(allocator, if (builtin.cpu.arch == .aarch64)
+                "/machine:arm64"
+            else if (builtin.cpu.arch == .x86_64)
+                "/machine:x64"
+            else if (builtin.cpu.arch == .x86)
+                "/machine:x86"
+            else
+                return Error.LinkFailed);
             try args.append(allocator, std.mem.sliceTo(object_path, 0));
             // LLVM emits ___chkstk_ms stack probes for functions with large
             // frames; no Windows system library defines it, so link the same
@@ -839,14 +920,14 @@ fn linkSharedLibrary(
             try args.append(allocator, "/defaultlib:ntdll");
             try args.append(allocator, "/defaultlib:msvcrt");
         },
-        else => return Error.LinkFailed,
+        .other => return Error.LinkFailed,
     }
 
-    const format: embedded_lld.Format = switch (builtin.os.tag) {
+    const format: embedded_lld.Format = switch (host_os) {
         .macos => .macho,
-        .linux, .freebsd, .openbsd, .netbsd => .elf,
+        .elf => .elf,
         .windows => .coff,
-        else => return Error.LinkFailed,
+        .other => return Error.LinkFailed,
     };
 
     embedded_lld.link(allocator, format, args.items, .{}) catch |err| switch (err) {
@@ -913,16 +994,16 @@ fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) TempP
 }
 
 fn objectExtension() []const u8 {
-    return switch (builtin.os.tag) {
+    return switch (host_os) {
         .windows => ".obj",
-        else => ".o",
+        .macos, .elf, .other => ".o",
     };
 }
 
 fn sharedLibraryExtension() []const u8 {
-    return switch (builtin.os.tag) {
+    return switch (host_os) {
         .windows => ".dll",
         .macos => ".dylib",
-        else => ".so",
+        .elf, .other => ".so",
     };
 }

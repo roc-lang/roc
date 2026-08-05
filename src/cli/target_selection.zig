@@ -11,6 +11,39 @@ pub const TargetsConfig = target_mod.TargetsConfig;
 pub const TargetLinkSpec = target_mod.TargetLinkSpec;
 pub const OutputKind = target_mod.OutputKind;
 
+const OutputOs = enum { windows, macos, wasm, other };
+
+fn outputOs(target: RocTarget) OutputOs {
+    return switch (target) {
+        .x64win, .x64v1win, .arm64win, .arm64v1win => .windows,
+        .x64mac, .x64v1mac, .arm64mac => .macos,
+        .wasm32, .wasm32v1 => .wasm,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        .x64musl,
+        .x64glibc,
+        .x64linux,
+        .x64elf,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1musl,
+        .x64v1glibc,
+        .x64v1linux,
+        .x64v1elf,
+        .arm64linux,
+        .arm64musl,
+        .arm64glibc,
+        .arm64v1linux,
+        .arm64v1musl,
+        .arm64v1glibc,
+        .arm32linux,
+        .arm32musl,
+        => .other,
+    };
+}
+
 /// Whether the selected target came from a command default or `--target`.
 pub const SelectionSource = enum {
     default,
@@ -194,36 +227,32 @@ pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8, host_cpu_
 /// Default file extension for the selected output kind and target.
 pub fn defaultBuildOutputExtension(output: OutputKind, target: RocTarget) []const u8 {
     return switch (output) {
-        .exe => switch (target.toOsTag()) {
+        .exe => switch (outputOs(target)) {
             .windows => ".exe",
-            .freestanding => ".wasm",
-            else => "",
+            .wasm => ".wasm",
+            .macos, .other => "",
         },
-        .archive => switch (target.toOsTag()) {
+        .archive => switch (outputOs(target)) {
             .windows => ".lib",
-            else => ".a",
+            .macos, .wasm, .other => ".a",
         },
-        .shared => switch (target.toOsTag()) {
+        .shared => switch (outputOs(target)) {
             .windows => ".dll",
             .macos => ".dylib",
-            .freestanding => ".wasm",
-            else => ".so",
+            .wasm => ".wasm",
+            .other => ".so",
         },
     };
 }
 
 fn expectSelected(result: SelectionResult) error{ExpectedSelectedTarget}!SelectedTarget {
-    return switch (result) {
-        .selected => |selected| selected,
-        else => error.ExpectedSelectedTarget,
-    };
+    if (std.meta.activeTag(result) != .selected) return error.ExpectedSelectedTarget;
+    return result.selected;
 }
 
 fn expectRequiresExecutable(result: SelectionResult) error{ExpectedRequiresExecutableTarget}!SelectedTarget {
-    return switch (result) {
-        .requires_executable => |selected| selected,
-        else => error.ExpectedRequiresExecutableTarget,
-    };
+    if (std.meta.activeTag(result) != .requires_executable) return error.ExpectedRequiresExecutableTarget;
+    return result.requires_executable;
 }
 
 test "explicit build target uses the target's declared output kind" {

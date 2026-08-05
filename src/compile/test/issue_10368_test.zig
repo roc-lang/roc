@@ -39,13 +39,15 @@ fn retainReachesPrepare(
                 current = release.next;
             },
             .assign_ref => |assign| {
-                switch (assign.op) {
-                    .local => |source| if (source == retained_alias) {
+                if (assign.op == .local) {
+                    const source = assign.op.local;
+                    if (source == retained_alias) {
                         retained_alias = assign.target;
                     } else if (assign.target == retained_alias) {
                         return false;
-                    },
-                    else => if (assign.target == retained_alias) return false,
+                    }
+                } else if (assign.target == retained_alias) {
+                    return false;
                 }
                 current = assign.next;
             },
@@ -72,7 +74,32 @@ fn retainReachesPrepare(
             .comptime_branch_taken,
             .incref,
             => |stmt| current = stmt.next,
-            else => return false,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return false,
         }
     }
     return false;
@@ -82,17 +109,16 @@ fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLi
     var prepare_count: usize = 0;
     var retained_prepare_count: usize = 0;
 
-    for (store.getCFStmts()) |stmt| switch (stmt) {
-        .assign_low_level => |assign| if (assign.op == .list_map_prepare_reuse) {
+    for (store.getCFStmts()) |stmt| {
+        if (stmt == .assign_low_level and stmt.assign_low_level.op == .list_map_prepare_reuse) {
+            const assign = stmt.assign_low_level;
             prepare_count += 1;
             try std.testing.expectEqual(@as(u64, 1), assign.rc_effect.consume_args);
             try std.testing.expectEqual(@as(u64, 1), assign.rc_effect.result_aliases_consumed_args);
-        },
-        .incref => |retain| if (retainReachesPrepare(store, retain.next, retain.value)) {
+        } else if (stmt == .incref and retainReachesPrepare(store, stmt.incref.next, stmt.incref.value)) {
             retained_prepare_count += 1;
-        },
-        else => {},
-    };
+        }
+    }
 
     try std.testing.expect(prepare_count >= 2);
     // The first map over the list shared with the second map must preserve the

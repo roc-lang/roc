@@ -218,7 +218,19 @@ pub const DocumentElement = union(enum) {
             .annotated => |a| a.content,
             .raw => |r| r,
             .reflowing_text => |rt| rt,
-            else => null,
+            .line_break,
+            .indent,
+            .space,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .link,
+            .vertical_stack,
+            .horizontal_concat,
+            .source_code_region,
+            .source_code_multi_region,
+            .source_code_with_underlines,
+            => null,
         };
     }
 
@@ -226,7 +238,14 @@ pub const DocumentElement = union(enum) {
     pub fn hasContent(self: DocumentElement) bool {
         return switch (self) {
             .text, .annotated, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region => true,
-            else => false,
+            .line_break,
+            .indent,
+            .space,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .source_code_with_underlines,
+            => false,
         };
     }
 };
@@ -264,7 +283,13 @@ pub const Document = struct {
                     self.allocator.free(underlines.display_region.line_text);
                     if (underlines.display_region.filename) |f| self.allocator.free(f);
                 },
-                else => {},
+                .line_break,
+                .indent,
+                .space,
+                .horizontal_rule,
+                .annotation_start,
+                .annotation_end,
+                => {},
             }
         }
         self.elements.deinit();

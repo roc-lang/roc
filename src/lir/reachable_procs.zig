@@ -177,10 +177,10 @@ const Pass = struct {
                 .init_uninitialized => |s| try self.pushStmt(s.next),
                 .assign_ref => |s| try self.pushStmt(s.next),
                 .assign_literal => |s| {
-                    switch (s.value) {
-                        .proc_ref => |referenced_proc| try self.markProc(referenced_proc),
-                        .static_data => |id| try self.markStaticData(id),
-                        else => {},
+                    if (s.value == .proc_ref) {
+                        try self.markProc(s.value.proc_ref);
+                    } else if (s.value == .static_data) {
+                        try self.markStaticData(s.value.static_data);
                     }
                     try self.pushStmt(s.next);
                 },
@@ -366,10 +366,10 @@ const Pass = struct {
             const stmt = self.store.getCFStmtPtr(stmt_id);
             switch (stmt.*) {
                 .assign_literal => |*s| {
-                    switch (s.value) {
-                        .proc_ref => s.value.proc_ref = self.remapProc(s.value.proc_ref),
-                        .static_data => s.value.static_data = self.remapStaticData(s.value.static_data),
-                        else => {},
+                    if (s.value == .proc_ref) {
+                        s.value.proc_ref = self.remapProc(s.value.proc_ref);
+                    } else if (s.value == .static_data) {
+                        s.value.static_data = self.remapStaticData(s.value.static_data);
                     }
                     const next = s.next;
                     s.next = self.remapStmt(next);
@@ -682,10 +682,10 @@ const Pass = struct {
     fn verifyStmtRefs(self: *Pass, stmt: LIR.CFStmt, proc_count: usize, stmt_count: usize) void {
         switch (stmt) {
             .assign_literal => |s| {
-                switch (s.value) {
-                    .proc_ref => |proc| self.verifyProcRef(proc, proc_count),
-                    .static_data => |id| self.verifyStaticDataRef(id),
-                    else => {},
+                if (s.value == .proc_ref) {
+                    self.verifyProcRef(s.value.proc_ref, proc_count);
+                } else if (s.value == .static_data) {
+                    self.verifyStaticDataRef(s.value.static_data);
                 }
                 self.verifyStmtRef(s.next, stmt_count);
             },

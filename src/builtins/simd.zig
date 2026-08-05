@@ -497,7 +497,7 @@ pub fn eval(op: Op, arg_kind: Kind, ret_kind: Kind, a: u128, b: u128, c: u128) u
         .sum_lanes, .sum_lanes_wrap => sumLanes(arg_kind, a),
         .clmul_lo => carryless(getLane(a, .u64x2, 0), getLane(b, .u64x2, 0)),
         .clmul_hi => carryless(getLane(a, .u64x2, 1), getLane(b, .u64x2, 1)),
-        else => unreachable,
+        .load_16_unchecked, .store_16_unchecked, .append_16 => unreachable,
     };
 }
 

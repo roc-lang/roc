@@ -20,64 +20,50 @@ pub fn handler(comptime ServerType: type) type {
                 return;
             };
 
-            const obj = switch (params) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "documentHighlight params must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(params) != .object) {
+                try self.sendError(id, .invalid_params, "documentHighlight params must be an object");
+                return;
+            }
+            const obj = params.object;
 
             // Extract textDocument.uri
             const text_doc_value = obj.get("textDocument") orelse {
                 try self.sendError(id, .invalid_params, "missing textDocument");
                 return;
             };
-            const text_doc = switch (text_doc_value) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "textDocument must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(text_doc_value) != .object) {
+                try self.sendError(id, .invalid_params, "textDocument must be an object");
+                return;
+            }
+            const text_doc = text_doc_value.object;
             const uri_value = text_doc.get("uri") orelse {
                 try self.sendError(id, .invalid_params, "missing uri");
                 return;
             };
-            const uri = switch (uri_value) {
-                .string => |s| s,
-                else => {
-                    try self.sendError(id, .invalid_params, "uri must be a string");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(uri_value) != .string) {
+                try self.sendError(id, .invalid_params, "uri must be a string");
+                return;
+            }
+            const uri = uri_value.string;
 
             // Extract position
             const position_value = obj.get("position") orelse {
                 try self.sendError(id, .invalid_params, "missing position");
                 return;
             };
-            const position_obj = switch (position_value) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "position must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(position_value) != .object) {
+                try self.sendError(id, .invalid_params, "position must be an object");
+                return;
+            }
+            const position_obj = position_value.object;
 
             const line: u32 = blk: {
                 const v = position_obj.get("line") orelse break :blk 0;
-                break :blk switch (v) {
-                    .integer => |i| @intCast(i),
-                    else => 0,
-                };
+                break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
             };
             const character: u32 = blk: {
                 const v = position_obj.get("character") orelse break :blk 0;
-                break :blk switch (v) {
-                    .integer => |i| @intCast(i),
-                    else => 0,
-                };
+                break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
             };
 
             // Get the document text from the store
@@ -90,7 +76,39 @@ pub fn handler(comptime ServerType: type) type {
             // Try CIR-based highlighting first (scope-aware)
             const cir_highlights = self.syntax_checker.getHighlightsAtPosition(uri, text, line, character) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => null,
+                error.AccessDenied,
+                error.AntivirusInterference,
+                error.BadPathName,
+                error.BuiltinArtifactVersionMismatch,
+                error.Canceled,
+                error.CorruptArtifact,
+                error.CorruptBuiltinArtifact,
+                error.CorruptEmbeddedBuiltins,
+                error.DeviceBusy,
+                error.FileBusy,
+                error.FileNotFound,
+                error.FileSystem,
+                error.FileTooBig,
+                error.InputOutput,
+                error.IsDir,
+                error.NameTooLong,
+                error.NetworkNotFound,
+                error.NoDevice,
+                error.NoSpaceLeft,
+                error.NotDir,
+                error.OperationUnsupported,
+                error.PathAlreadyExists,
+                error.PermissionDenied,
+                error.PipeBusy,
+                error.ProcessFdQuotaExceeded,
+                error.StaleEmbeddedBuiltins,
+                error.SymLinkLoop,
+                error.SystemFdQuotaExceeded,
+                error.SystemResources,
+                error.Unexpected,
+                error.UnrecognizedVolume,
+                error.WriteFailed,
+                => null,
             };
             if (cir_highlights) |result| {
                 defer result.deinit(self.allocator);
@@ -219,10 +237,7 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
 }
 
 fn isIdentifierTag(tag: Token.Tag) bool {
-    return switch (tag) {
-        .LowerIdent, .UpperIdent, .NamedUnderscore => true,
-        else => false,
-    };
+    return tag == .LowerIdent or tag == .UpperIdent or tag == .NamedUnderscore;
 }
 
 const LineOffsets = struct {

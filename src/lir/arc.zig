@@ -511,8 +511,9 @@ fn computeLocalContainsRefcounted(
         for (0..store.cfStmtCount()) |stmt_index| {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = store.getCFStmt(stmt_id);
-            switch (stmt) {
-                .assign_ref => |assign| switch (assign.op) {
+            if (stmt == .assign_ref) {
+                const assign = stmt.assign_ref;
+                switch (assign.op) {
                     .local => |source| changed = markLocalRcIfSourceRc(contains, assign.target, source) or changed,
                     .nominal => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
                     .list_reinterpret => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
@@ -521,21 +522,27 @@ fn computeLocalContainsRefcounted(
                     .tag_payload_struct,
                     .discriminant,
                     => {},
-                },
-                .assign_list => |assign| changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.elems) or changed,
-                .assign_struct => |assign| changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.fields) or changed,
-                .assign_tag => |assign| {
-                    if (assign.payload) |payload| {
-                        changed = markLocalRcIfSourceRc(contains, assign.target, payload) or changed;
-                    }
-                    if (assign.target_desc != null) {
-                        changed = markLocalRc(contains, assign.target) or changed;
-                    }
-                },
-                .assign_boxy_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
-                .assign_boxy_reuse_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
-                .assign_boxy_tag => |assign| changed = markLocalRc(contains, assign.target) or changed,
-                else => {},
+                }
+            } else if (stmt == .assign_list) {
+                const assign = stmt.assign_list;
+                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.elems) or changed;
+            } else if (stmt == .assign_struct) {
+                const assign = stmt.assign_struct;
+                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.fields) or changed;
+            } else if (stmt == .assign_tag) {
+                const assign = stmt.assign_tag;
+                if (assign.payload) |payload| {
+                    changed = markLocalRcIfSourceRc(contains, assign.target, payload) or changed;
+                }
+                if (assign.target_desc != null) {
+                    changed = markLocalRc(contains, assign.target) or changed;
+                }
+            } else if (stmt == .assign_boxy_box) {
+                changed = markLocalRc(contains, stmt.assign_boxy_box.target) or changed;
+            } else if (stmt == .assign_boxy_reuse_box) {
+                changed = markLocalRc(contains, stmt.assign_boxy_reuse_box.target) or changed;
+            } else if (stmt == .assign_boxy_tag) {
+                changed = markLocalRc(contains, stmt.assign_boxy_tag.target) or changed;
             }
         }
     }
@@ -577,24 +584,20 @@ fn computeBorrowAnchorRefcounted(
         for (0..store.cfStmtCount()) |stmt_index| {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = store.getCFStmt(stmt_id);
-            switch (stmt) {
-                .assign_low_level => |assign| {
-                    if (assign.op != .erased_capture_load) continue;
-                    const target_layout = store.getLocal(assign.target).layout_idx;
-                    if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
-                    changed = markLocalRc(anchor, assign.target) or changed;
-                },
-                .assign_ref => |assign| switch (assign.op) {
-                    .field, .tag_payload, .tag_payload_struct => {
-                        const source_index = @intFromEnum(refOpSource(assign.op));
-                        if (source_index >= anchor.len or !anchor[source_index]) continue;
-                        const target_layout = store.getLocal(assign.target).layout_idx;
-                        if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
-                        changed = markLocalRc(anchor, assign.target) or changed;
-                    },
-                    else => {},
-                },
-                else => {},
+            if (stmt == .assign_low_level) {
+                const assign = stmt.assign_low_level;
+                if (assign.op != .erased_capture_load) continue;
+                const target_layout = store.getLocal(assign.target).layout_idx;
+                if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
+                changed = markLocalRc(anchor, assign.target) or changed;
+            } else if (stmt == .assign_ref) {
+                const assign = stmt.assign_ref;
+                if (assign.op != .field and assign.op != .tag_payload and assign.op != .tag_payload_struct) continue;
+                const source_index = @intFromEnum(refOpSource(assign.op));
+                if (source_index >= anchor.len or !anchor[source_index]) continue;
+                const target_layout = store.getLocal(assign.target).layout_idx;
+                if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
+                changed = markLocalRc(anchor, assign.target) or changed;
             }
         }
     }
@@ -1526,7 +1529,7 @@ const Inserter = struct {
                     .on_miss = state.child_results[source_arms.len],
                 } });
             },
-            else => arcInvariant("ARC control materializer received a non-control plan"),
+            .none, .stop, .join, .jump, .terminal => arcInvariant("ARC control materializer received a non-control plan"),
         }
         try self.completeMaterializedPath(state.plan_index, tail, state.result);
     }
@@ -1868,7 +1871,24 @@ const Inserter = struct {
                 .branch_index = marker.branch_index,
                 .next = next,
             } }),
-            else => arcInvariant("ARC solved linear plan contained a non-linear statement"),
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .incref,
+            .decref,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .boxy_tag_match,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => arcInvariant("ARC solved linear plan contained a non-linear statement"),
         };
 
         if (step.pre_release) |release| cloned = try self.materializeReleaseDecision(release, cloned);
@@ -1977,7 +1997,13 @@ const Inserter = struct {
                                     transfer.retain_target = false;
                                 }
                             },
-                            else => transfer.release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                            .discriminant,
+                            .field,
+                            .tag_payload,
+                            .tag_payload_struct,
+                            .list_reinterpret,
+                            .nominal,
+                            => transfer.release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
                         }
                     }
                     // A take read consumes the container's stored unit for
@@ -2613,7 +2639,16 @@ const Inserter = struct {
                 }
                 releases = previous.releases;
             },
-            else => {},
+            .none,
+            .stop,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .boxy_tag_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => {},
         }
         try self.collectReleaseDifferenceInto(&releases, owned, &summary.entry_keep);
         plan.terminal = .{ .join = .{
@@ -2633,7 +2668,16 @@ const Inserter = struct {
             const plan = self.arcPlan(plan_index);
             const terminal = switch (plan.terminal) {
                 .join => |*join| join,
-                else => arcInvariant("ARC registered join arrival plan had another terminal"),
+                .none,
+                .stop,
+                .switch_stmt,
+                .initialized_payload_switch,
+                .str_match,
+                .boxy_tag_match,
+                .str_match_set,
+                .jump,
+                .terminal,
+                => arcInvariant("ARC registered join arrival plan had another terminal"),
             };
             terminal.body_reachable = summary.body_reachable;
             try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.entry_keep);
@@ -2656,7 +2700,16 @@ const Inserter = struct {
                 if (previous.stmt != stmt or previous.join_index != summary.index) arcInvariant("ARC jump plan changed structural identity");
                 releases = previous.releases;
             },
-            else => {},
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .boxy_tag_match,
+            .str_match_set,
+            .terminal,
+            => {},
         }
         try self.collectReleaseDifferenceInto(&releases, owned, &summary.body_keep);
         plan.terminal = .{ .jump = .{
@@ -2673,7 +2726,16 @@ const Inserter = struct {
             const plan = self.arcPlan(plan_index);
             const terminal = switch (plan.terminal) {
                 .jump => |*jump| jump,
-                else => arcInvariant("ARC registered jump plan had another terminal"),
+                .none,
+                .stop,
+                .join,
+                .switch_stmt,
+                .initialized_payload_switch,
+                .str_match,
+                .boxy_tag_match,
+                .str_match_set,
+                .terminal,
+                => arcInvariant("ARC registered jump plan had another terminal"),
             };
             try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.body_keep);
         }
@@ -2697,7 +2759,16 @@ const Inserter = struct {
                 }
                 releases = previous.releases;
             },
-            else => {},
+            .none,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .boxy_tag_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => {},
         }
         try self.collectReleaseDifferenceInto(&releases, owned, &summary.common);
         plan.terminal = .{ .stop = .{
@@ -2745,7 +2816,16 @@ const Inserter = struct {
             const plan = self.arcPlan(plan_index);
             const terminal = switch (plan.terminal) {
                 .stop => |*stop| stop,
-                else => arcInvariant("ARC registered switch-stop plan had another terminal"),
+                .none,
+                .join,
+                .switch_stmt,
+                .initialized_payload_switch,
+                .str_match,
+                .boxy_tag_match,
+                .str_match_set,
+                .jump,
+                .terminal,
+                => arcInvariant("ARC registered switch-stop plan had another terminal"),
             };
             try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.common);
         }
@@ -2766,7 +2846,16 @@ const Inserter = struct {
             const plan = self.arcPlan(plan_index);
             switch (plan.terminal) {
                 .switch_stmt => |*switch_plan| switch_plan.continuation_reachable = summary.reached,
-                else => arcInvariant("ARC registered switch control plan had another terminal"),
+                .none,
+                .stop,
+                .join,
+                .initialized_payload_switch,
+                .str_match,
+                .boxy_tag_match,
+                .str_match_set,
+                .jump,
+                .terminal,
+                => arcInvariant("ARC registered switch control plan had another terminal"),
             }
         }
     }
@@ -2786,7 +2875,16 @@ const Inserter = struct {
                 if (previous.stmt != stmt) arcInvariant("ARC terminal plan changed structural identity");
                 releases = previous.releases;
             },
-            else => {},
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .boxy_tag_match,
+            .str_match_set,
+            .jump,
+            => {},
         }
         if (keep) |kept| {
             try self.collectReleaseDifferenceInto(&releases, owned, kept);
@@ -2820,7 +2918,16 @@ const Inserter = struct {
                 branch_plans = previous.branch_plans;
                 default_plan = previous.default_plan;
             },
-            else => {
+            .none,
+            .stop,
+            .join,
+            .initialized_payload_switch,
+            .str_match,
+            .boxy_tag_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => {
                 branch_plans = try self.solve_allocator.alloc(u32, branch_starts.len);
                 for (0..branch_starts.len) |index| {
                     branch_plans[index] = try self.newArcPlan(GuardedList.at(branch_starts, index).body);
@@ -2857,7 +2964,16 @@ const Inserter = struct {
                 if (previous.stmt != stmt) arcInvariant("ARC initialized-payload plan changed structural shape");
                 break :blk .{ previous.initialized_plan, previous.uninitialized_plan };
             },
-            else => .{ try self.newArcPlan(initialized_start), try self.newArcPlan(uninitialized_start) },
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .str_match,
+            .boxy_tag_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => .{ try self.newArcPlan(initialized_start), try self.newArcPlan(uninitialized_start) },
         };
         if (self.arcPlan(children[0]).start != initialized_start or self.arcPlan(children[1]).start != uninitialized_start) {
             arcInvariant("ARC initialized-payload child plan changed its structured start");
@@ -2877,7 +2993,16 @@ const Inserter = struct {
                 if (previous.stmt != stmt) arcInvariant("ARC string-match plan changed structural shape");
                 break :blk .{ previous.match_plan, previous.miss_plan };
             },
-            else => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .boxy_tag_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
         };
         if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
             arcInvariant("ARC string-match child plan changed its structured start");
@@ -2894,13 +3019,11 @@ const Inserter = struct {
 
     fn prepareBoxyTagMatchPlan(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId, match_start: LIR.CFStmtId, miss_start: LIR.CFStmtId) ResourceError!*ArcPlanTerminal {
         const previous_terminal = self.arcPlan(plan_index).previous_terminal;
-        const children = switch (previous_terminal) {
-            .boxy_tag_match => |previous| blk: {
-                if (previous.stmt != stmt) arcInvariant("ARC Boxy tag-match plan changed structural shape");
-                break :blk .{ previous.match_plan, previous.miss_plan };
-            },
-            else => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
-        };
+        const children = if (previous_terminal == .boxy_tag_match) blk: {
+            const previous = previous_terminal.boxy_tag_match;
+            if (previous.stmt != stmt) arcInvariant("ARC Boxy tag-match plan changed structural shape");
+            break :blk .{ previous.match_plan, previous.miss_plan };
+        } else .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) };
         if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
             arcInvariant("ARC Boxy tag-match child plan changed its structured start");
         }
@@ -2926,7 +3049,16 @@ const Inserter = struct {
                 miss_plan = previous.miss_plan;
                 retain_counts = previous.capture_retain_counts;
             },
-            else => {
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .boxy_tag_match,
+            .jump,
+            .terminal,
+            => {
                 match_plans = try self.solve_allocator.alloc(u32, arms.len);
                 retain_counts = try self.solve_allocator.alloc(u16, arms.len);
                 for (0..arms.len) |index| match_plans[index] = try self.newArcPlan(GuardedList.at(arms, index).on_match);
@@ -5522,9 +5654,9 @@ const Inserter = struct {
                 defer buffer.deinit();
                 debug_print.writeProc(self.store.allocator, self.store, self.layouts, self.current_proc, &buffer.writer) catch {};
                 std.debug.print("\n{s}\n", .{buffer.written()});
-                const ref_source: ?LIR.LocalId = if (self.current_rewrite_stmt) |stmt_id| switch (self.store.getCFStmt(stmt_id)) {
-                    .assign_ref => |assign| refOpSource(assign.op),
-                    else => null,
+                const ref_source: ?LIR.LocalId = if (self.current_rewrite_stmt) |stmt_id| blk: {
+                    const stmt = self.store.getCFStmt(stmt_id);
+                    break :blk if (stmt == .assign_ref) refOpSource(stmt.assign_ref.op) else null;
                 } else null;
                 const ref_source_layout: ?layout_mod.Idx = if (ref_source) |source| self.store.getLocal(source).layout_idx else null;
                 const ref_source_desc: ?LIR.BoxyDescRef = if (ref_source) |source| boxyDescForLocal(self.boxy_rc_descs, source) else null;
@@ -5549,10 +5681,10 @@ const Inserter = struct {
 
     fn rcHelperForLayout(self: *const Inserter, op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
         const layout_val = self.layouts.getLayout(layout_idx);
-        return switch (layout_val.tag) {
-            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx),
-            else => .{ .op = op, .layout_idx = layout_idx },
-        };
+        if (layout_val.tag == .closure) {
+            return self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx);
+        }
+        return .{ .op = op, .layout_idx = layout_idx };
     }
 
     fn layoutMayContainBoxyDynamic(self: *const Inserter, layout_idx: layout_mod.Idx) bool {
@@ -5685,8 +5817,10 @@ fn addCanonicalRetain(
     std.debug.assert(count > 0);
     var canonical_count = count;
     var canonical_next = next;
-    switch (store.getCFStmt(next)) {
-        .decref => |release| if (rcRetainReleasePair(.{
+    const next_stmt = store.getCFStmt(next);
+    if (next_stmt == .decref) {
+        const release = next_stmt.decref;
+        if (rcRetainReleasePair(.{
             .value = local,
             .rc = rc,
             .atomicity = atomicity,
@@ -5694,8 +5828,7 @@ fn addCanonicalRetain(
             if (count == 1) return release.next;
             canonical_count = count - 1;
             canonical_next = release.next;
-        },
-        else => {},
+        }
     }
     return try store.addCFStmt(.{ .incref = .{
         .value = local,
@@ -6140,6 +6273,18 @@ const ArcTest = struct {
                 .assign_call => |assign| cursor = assign.next,
                 .assign_call_erased => |assign| cursor = assign.next,
                 .assign_packed_erased_fn => |assign| cursor = assign.next,
+                inline .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                => |assign| cursor = assign.next,
                 .assign_low_level => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
@@ -6150,7 +6295,20 @@ const ArcTest = struct {
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,
-                else => arcInvariant("ARC test fixture expected a switch_stmt on the linear path"),
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .boxy_tag_match,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => arcInvariant("ARC test fixture expected a switch_stmt on the linear path"),
             }
         }
         arcInvariant("ARC test fixture cycled while walking to a switch_stmt");
@@ -6168,11 +6326,8 @@ const ArcTest = struct {
         var found: ?LIR.CFStmtId = null;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            switch (stmt) {
-                .join => |join_stmt| {
-                    if (join_stmt.id == join_id) found = join_stmt.body;
-                },
-                else => {},
+            if (stmt == .join) {
+                if (stmt.join.id == join_id) found = stmt.join.body;
             }
         }
         return found orelse arcInvariant("ARC test fixture has no matching join body");
@@ -6182,21 +6337,10 @@ const ArcTest = struct {
         var count: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            switch (stmt) {
-                .incref => |rc| {
-                    if (kind == .incref and rc.value == local_id) count += 1;
-                },
-                .decref => |rc| {
-                    if (kind == .decref and rc.value == local_id) count += 1;
-                },
-                .decref_if_initialized => |rc| {
-                    if (kind == .decref and rc.value == local_id) count += 1;
-                },
-                .free => |rc| {
-                    if (kind == .free and rc.value == local_id) count += 1;
-                },
-                else => {},
-            }
+            if (stmt == .incref and kind == .incref and stmt.incref.value == local_id) count += 1;
+            if (stmt == .decref and kind == .decref and stmt.decref.value == local_id) count += 1;
+            if (stmt == .decref_if_initialized and kind == .decref and stmt.decref_if_initialized.value == local_id) count += 1;
+            if (stmt == .free and kind == .free and stmt.free.value == local_id) count += 1;
         }
         return count;
     }
@@ -6207,13 +6351,16 @@ const ArcTest = struct {
         var seen: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            const found: LIR.RcAtomicity = switch (stmt) {
-                .incref => |rc| if (rc.value == local_id) rc.atomicity else continue,
-                .decref => |rc| if (rc.value == local_id) rc.atomicity else continue,
-                .decref_if_initialized => |rc| if (rc.value == local_id) rc.atomicity else continue,
-                .free => |rc| if (rc.value == local_id) rc.atomicity else continue,
-                else => continue,
-            };
+            const found: LIR.RcAtomicity = if (stmt == .incref and stmt.incref.value == local_id)
+                stmt.incref.atomicity
+            else if (stmt == .decref and stmt.decref.value == local_id)
+                stmt.decref.atomicity
+            else if (stmt == .decref_if_initialized and stmt.decref_if_initialized.value == local_id)
+                stmt.decref_if_initialized.atomicity
+            else if (stmt == .free and stmt.free.value == local_id)
+                stmt.free.atomicity
+            else
+                continue;
             seen += 1;
             try testing.expectEqual(expected, found);
         }
@@ -6224,11 +6371,8 @@ const ArcTest = struct {
         var mask: u64 = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            switch (stmt) {
-                .assign_low_level => |assign| {
-                    if (assign.target == target) mask |= assign.unique_args;
-                },
-                else => {},
+            if (stmt == .assign_low_level and stmt.assign_low_level.target == target) {
+                mask |= stmt.assign_low_level.unique_args;
             }
         }
         return mask;
@@ -6253,6 +6397,18 @@ const ArcTest = struct {
                 .assign_call => |assign| cursor = assign.next,
                 .assign_call_erased => |assign| cursor = assign.next,
                 .assign_packed_erased_fn => |assign| cursor = assign.next,
+                inline .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
                 .assign_tag => |assign| cursor = assign.next,
@@ -6262,7 +6418,21 @@ const ArcTest = struct {
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,
-                else => arcInvariant("ARC test fixture expected a low-level op on a linear path"),
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .boxy_tag_match,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => arcInvariant("ARC test fixture expected a low-level op on a linear path"),
             }
         }
         arcInvariant("ARC test fixture cycled while walking to a low-level op");
@@ -6335,10 +6505,7 @@ const ArcTest = struct {
         var count: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            switch (stmt) {
-                .incref, .decref, .decref_if_initialized, .free => count += 1,
-                else => {},
-            }
+            if (stmt == .incref or stmt == .decref or stmt == .decref_if_initialized or stmt == .free) count += 1;
         }
         return count;
     }
@@ -6637,7 +6804,46 @@ test "ARC preserves erased callable repack reuse" {
             .decref_if_initialized => |rc| cursor = rc.next,
             .free => |rc| cursor = rc.next,
             .ret => break,
-            else => return error.UnexpectedStatement,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .crash,
+            => return error.UnexpectedStatement,
         }
     }
     try testing.expect(found);
@@ -6680,19 +6886,27 @@ test "ARC preserves erased call ABI metadata" {
     var cursor = f.store.getProcSpec(caller).body.?;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (f.store.getCFStmt(cursor)) {
-            .assign_call_erased => |rewritten| {
-                try testing.expectEqual(args, rewritten.args);
-                try testing.expectEqual(arg_layouts, rewritten.arg_layouts);
-                try testing.expectEqual(arg_descs, rewritten.arg_descs);
-                try testing.expectEqual(arg_desc_keys, rewritten.arg_desc_keys);
-                try testing.expectEqual(result_desc, rewritten.result_desc.?);
-                try testing.expectEqual(out_desc, rewritten.out_desc.?);
-                try testing.expectEqual(arg_plan, rewritten.arg_plan);
-                return;
-            },
-            inline .incref, .decref, .decref_if_initialized, .free => |rc| cursor = rc.next,
-            else => return error.UnexpectedStatement,
+        const stmt = f.store.getCFStmt(cursor);
+        if (stmt == .assign_call_erased) {
+            const rewritten = stmt.assign_call_erased;
+            try testing.expectEqual(args, rewritten.args);
+            try testing.expectEqual(arg_layouts, rewritten.arg_layouts);
+            try testing.expectEqual(arg_descs, rewritten.arg_descs);
+            try testing.expectEqual(arg_desc_keys, rewritten.arg_desc_keys);
+            try testing.expectEqual(result_desc, rewritten.result_desc.?);
+            try testing.expectEqual(out_desc, rewritten.out_desc.?);
+            try testing.expectEqual(arg_plan, rewritten.arg_plan);
+            return;
+        } else if (stmt == .incref) {
+            cursor = stmt.incref.next;
+        } else if (stmt == .decref) {
+            cursor = stmt.decref.next;
+        } else if (stmt == .decref_if_initialized) {
+            cursor = stmt.decref_if_initialized.next;
+        } else if (stmt == .free) {
+            cursor = stmt.free.next;
+        } else {
+            return error.UnexpectedStatement;
         }
     }
     return error.MissingErasedCall;
@@ -6743,7 +6957,47 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .decref => |rc| cursor = rc.next,
             .decref_if_initialized => |rc| cursor = rc.next,
             .free => |rc| cursor = rc.next,
-            else => return error.UnexpectedStatement,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.UnexpectedStatement,
         }
     }
     return error.MissingPackedErasedFn;
@@ -6789,7 +7043,46 @@ test "ARC transfers erased call ownership from an explicit outer source" {
                 return;
             },
             inline .assign_ref, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
-            else => return error.UnexpectedStatement,
+            .init_uninitialized,
+            .assign_literal,
+            .assign_call,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.UnexpectedStatement,
         }
     }
     return error.MissingErasedCall;
@@ -6865,7 +7158,44 @@ test "ARC retains an erased call reuse source that is read after the call" {
             },
             .free => |rc| cursor = rc.next,
             .ret => break,
-            else => return error.UnexpectedStatement,
+            .init_uninitialized,
+            .assign_literal,
+            .assign_call,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .crash,
+            => return error.UnexpectedStatement,
         }
     }
     try testing.expect(saw_retain);
@@ -6920,7 +7250,47 @@ test "ARC retains an erased callable whose repack input is used later" {
             .decref => |rc| cursor = rc.next,
             .decref_if_initialized => |rc| cursor = rc.next,
             .free => |rc| cursor = rc.next,
-            else => return error.UnexpectedStatement,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.UnexpectedStatement,
         }
     }
     return error.MissingPackedErasedFn;
@@ -6935,10 +7305,10 @@ fn setupUnusedBinding(layout_idx: layout_mod.Idx) Allocator.Error!struct { fixtu
     const value = try f.local(layout_idx);
     const result = try f.local(.i64);
     const ret = try f.ret(result);
-    const body = switch (layout_idx) {
-        .str => try f.assignStr(value, "tmp", ret),
-        else => try f.assignList(value, &.{}, ret),
-    };
+    const body = if (layout_idx == .str)
+        try f.assignStr(value, "tmp", ret)
+    else
+        try f.assignList(value, &.{}, ret);
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
     return .{ .fixture = f, .value = value };
@@ -7783,11 +8153,11 @@ test "RC switch preserves cold default metadata" {
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
 
-    const rewritten_body = f.procBody();
-    const rewritten_switch = switch (f.store.getCFStmt(rewritten_body)) {
-        .assign_literal => |assign| f.store.getCFStmt(assign.next).switch_stmt,
-        else => arcInvariant("ARC cold-default switch test body shape changed"),
-    };
+    const rewritten_body = f.store.getCFStmt(f.procBody());
+    if (rewritten_body != .assign_literal) arcInvariant("ARC cold-default switch test body shape changed");
+    const rewritten_next = f.store.getCFStmt(rewritten_body.assign_literal.next);
+    if (rewritten_next != .switch_stmt) arcInvariant("ARC cold-default switch test body shape changed");
+    const rewritten_switch = rewritten_next.switch_stmt;
     try testing.expect(rewritten_switch.default_is_cold);
 }
 
@@ -7807,10 +8177,9 @@ test "RC direct call preserves cold metadata" {
     _ = try f.addProc(&.{}, call, .i64);
     try f.run();
 
-    const rewritten_call = switch (f.store.getCFStmt(f.procBody())) {
-        .assign_call => |assign| assign,
-        else => arcInvariant("ARC cold-call test body shape changed"),
-    };
+    const rewritten_body = f.store.getCFStmt(f.procBody());
+    if (rewritten_body != .assign_call) arcInvariant("ARC cold-call test body shape changed");
+    const rewritten_call = rewritten_body.assign_call;
     try testing.expect(rewritten_call.is_cold);
 }
 
@@ -9035,7 +9404,24 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .set_local => |a| cursor = a.next,
             .debug => |a| cursor = a.next,
             .expect => |a| cursor = a.next,
-            else => return error.NonLinearPath,
+            .store_struct,
+            .store_tag,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .boxy_tag_match,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.NonLinearPath,
         }
     }
     return error.CyclicPath;
@@ -9491,7 +9877,39 @@ test "RC specialization: caller body survives variant proc append" {
             inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free, .comptime_branch_taken => |stmt| {
                 cursor = stmt.next;
             },
-            else => return error.ExpectedSpecializedCall,
+            .init_uninitialized,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .store_struct,
+            .store_tag,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .decref_if_initialized,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.ExpectedSpecializedCall,
         }
     }
     return error.ExpectedSpecializedCall;

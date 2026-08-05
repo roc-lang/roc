@@ -222,7 +222,7 @@ const AvailableImport = struct {
 fn importStatementIdx(env: *const ModuleEnv, module_name: []const u8) ?CIR.Statement.Idx {
     switch (env.module_kind) {
         .type_module => {},
-        else => return null,
+        .default_app, .app, .package, .platform, .hosted, .module, .malformed => return null,
     }
     const type_ident = env.common.findIdent(module_name) orelse return null;
     const type_node_idx = env.getExposedTypeNodeIndexById(type_ident) orelse return null;

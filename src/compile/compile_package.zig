@@ -333,7 +333,14 @@ fn importedTypeModule(sibling_env: *const ModuleEnv) ?ImportedTypeModule {
     // Regular modules (deprecated_module, etc.) store them under plain names.
     const type_ident_in_module = switch (sibling_env.module_kind) {
         .type_module => |type_ident| type_ident,
-        else => return null,
+        .default_app,
+        .app,
+        .package,
+        .platform,
+        .hosted,
+        .module,
+        .malformed,
+        => return null,
     };
     const type_node_idx = sibling_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse return null;
     return .{

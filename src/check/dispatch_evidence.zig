@@ -61,19 +61,7 @@ pub const PathStep = extern struct {
     /// discriminant. Artifact boundary validation uses this before consumers
     /// call `stepKind`.
     pub fn kindOrNull(self: PathStep) ?Kind {
-        return switch (self.kind) {
-            @intFromEnum(Kind.fn_arg) => .fn_arg,
-            @intFromEnum(Kind.fn_ret) => .fn_ret,
-            @intFromEnum(Kind.alias_arg) => .alias_arg,
-            @intFromEnum(Kind.alias_backing) => .alias_backing,
-            @intFromEnum(Kind.nominal_arg) => .nominal_arg,
-            @intFromEnum(Kind.nominal_backing) => .nominal_backing,
-            @intFromEnum(Kind.tuple_elem) => .tuple_elem,
-            @intFromEnum(Kind.record_field) => .record_field,
-            @intFromEnum(Kind.tag_payload_tag) => .tag_payload_tag,
-            @intFromEnum(Kind.tag_payload_index) => .tag_payload_index,
-            else => null,
-        };
+        return std.enums.fromInt(Kind, self.kind);
     }
 
     pub fn stepKind(self: PathStep) Kind {
@@ -290,12 +278,27 @@ fn walkRowContinuation(
                     try pushChildren(gpa, scratch, entry);
                 },
                 .empty_record => {},
-                else => unreachable,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .tag_union,
+                .empty_tag_union,
+                => unreachable,
             },
             .tag => switch (flat_type) {
                 .tag_union => |tag_union| try pushTagChildren(gpa, scratch, entry, store, tag_union),
                 .empty_tag_union => {},
-                else => unreachable,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => unreachable,
             },
             .none => unreachable,
         },

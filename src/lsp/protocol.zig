@@ -34,12 +34,9 @@ pub const JsonId = union(enum) {
     string: []u8,
 
     pub fn fromJsonValue(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidIdType})!JsonId {
-        return switch (value) {
-            .integer => |num| .{ .integer = num },
-            .float => return error.InvalidIdType,
-            .string => |text| .{ .string = try copyString(allocator, text) },
-            else => error.InvalidIdType,
-        };
+        if (std.meta.activeTag(value) == .integer) return .{ .integer = value.integer };
+        if (std.meta.activeTag(value) == .string) return .{ .string = try copyString(allocator, value.string) };
+        return error.InvalidIdType;
     }
 
     pub fn clone(self: JsonId, allocator: std.mem.Allocator) Allocator.Error!JsonId {
@@ -50,10 +47,7 @@ pub const JsonId = union(enum) {
     }
 
     pub fn deinit(self: *JsonId, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .string => |slice| allocator.free(slice),
-            else => {},
-        }
+        if (std.meta.activeTag(self.*) == .string) allocator.free(self.string);
         self.* = undefined;
     }
 
@@ -92,53 +86,49 @@ pub const InitializeParams = struct {
     capabilities_json: ?[]u8 = null,
 
     pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidParams})!InitializeParams {
-        const obj = switch (value) {
-            .object => |o| o,
-            else => return error.InvalidParams,
-        };
+        if (std.meta.activeTag(value) != .object) return error.InvalidParams;
+        const obj = value.object;
 
         var params = InitializeParams{};
 
         if (obj.get("processId")) |pid_node| {
-            params.process_id = switch (pid_node) {
-                .integer => |num| num,
-                .null => null,
-                else => return error.InvalidParams,
-            };
+            if (std.meta.activeTag(pid_node) == .integer) {
+                params.process_id = pid_node.integer;
+            } else if (std.meta.activeTag(pid_node) != .null) {
+                return error.InvalidParams;
+            }
         }
 
         if (obj.get("rootUri")) |uri_node| {
-            const uri_text = switch (uri_node) {
-                .string => |text| text,
-                .null => null,
-                else => return error.InvalidParams,
-            };
+            const uri_text: ?[]const u8 = if (std.meta.activeTag(uri_node) == .string)
+                uri_node.string
+            else if (std.meta.activeTag(uri_node) == .null)
+                null
+            else
+                return error.InvalidParams;
             if (uri_text) |text| {
                 params.root_uri = try copyString(allocator, text);
             }
         }
 
         if (obj.get("clientInfo")) |client_node| {
-            const client_obj = switch (client_node) {
-                .object => |o| o,
-                else => return error.InvalidParams,
-            };
+            if (std.meta.activeTag(client_node) != .object) return error.InvalidParams;
+            const client_obj = client_node.object;
             const name_value = client_obj.get("name") orelse return error.InvalidParams;
-            const name_string = switch (name_value) {
-                .string => |text| text,
-                else => return error.InvalidParams,
-            };
+            if (std.meta.activeTag(name_value) != .string) return error.InvalidParams;
+            const name_string = name_value.string;
 
             var info = ClientInfo{
                 .name = try copyString(allocator, name_string),
             };
 
             if (client_obj.get("version")) |ver_node| {
-                const ver_text = switch (ver_node) {
-                    .string => |text| try copyString(allocator, text),
-                    .null => null,
-                    else => return error.InvalidParams,
-                };
+                const ver_text: ?[]u8 = if (std.meta.activeTag(ver_node) == .string)
+                    try copyString(allocator, ver_node.string)
+                else if (std.meta.activeTag(ver_node) == .null)
+                    null
+                else
+                    return error.InvalidParams;
                 info.version = ver_text;
             }
 
@@ -207,16 +197,12 @@ pub const TextDocumentIdentifier = struct {
     uri: []u8,
 
     pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidParams})!TextDocumentIdentifier {
-        const obj = switch (value) {
-            .object => |o| o,
-            else => return error.InvalidParams,
-        };
+        if (std.meta.activeTag(value) != .object) return error.InvalidParams;
+        const obj = value.object;
 
         const uri_value = obj.get("uri") orelse return error.InvalidParams;
-        const uri_text = switch (uri_value) {
-            .string => |text| text,
-            else => return error.InvalidParams,
-        };
+        if (std.meta.activeTag(uri_value) != .string) return error.InvalidParams;
+        const uri_text = uri_value.string;
 
         return .{
             .uri = try copyString(allocator, uri_text),
@@ -234,10 +220,8 @@ pub const SemanticTokensParams = struct {
     textDocument: TextDocumentIdentifier,
 
     pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidParams})!SemanticTokensParams {
-        const obj = switch (value) {
-            .object => |o| o,
-            else => return error.InvalidParams,
-        };
+        if (std.meta.activeTag(value) != .object) return error.InvalidParams;
+        const obj = value.object;
 
         const doc_value = obj.get("textDocument") orelse return error.InvalidParams;
 

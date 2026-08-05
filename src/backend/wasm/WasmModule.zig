@@ -1298,7 +1298,7 @@ pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) Stat
         const target = switch (sym.kind) {
             .data => &data_index,
             .function => &function_index,
-            else => continue,
+            .global, .section, .event, .table => continue,
         };
         const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
         try target.record(sym_name, @intCast(i));
@@ -1368,7 +1368,7 @@ fn staticDataRelocationSymbol(
     const kind_index = switch (kind) {
         .data => data_index,
         .function => function_index,
-        else => unreachable,
+        .global, .section, .event, .table => unreachable,
     };
     if (kind_index.first(relocation.target_symbol_name)) |symbol_index| {
         return SymbolIndex.fromRaw(symbol_index);
@@ -2191,17 +2191,17 @@ fn patchFunctionOffsetCodeRelocation(target_bytes: []u8, patch_offset: u32, valu
     const o: usize = @intCast(patch_offset);
     if (o == 0) return logInvalidRelocation("function_offset patch site at offset 0 has no preceding opcode", .{});
 
-    switch (target_bytes[o - 1]) {
-        Op.global_get => {
-            target_bytes[o - 1] = Op.i32_const;
-            overwritePaddedU32(target_bytes, patch_offset, value);
-        },
-        Op.i32_const => overwritePaddedU32(target_bytes, patch_offset, value),
-        else => |opcode| return logInvalidRelocation(
-            "function_offset patch expected global.get or i32.const, found opcode 0x{x}",
-            .{opcode},
-        ),
+    const opcode = target_bytes[o - 1];
+    if (opcode == Op.global_get) {
+        target_bytes[o - 1] = Op.i32_const;
+        overwritePaddedU32(target_bytes, patch_offset, value);
+        return;
     }
+    if (opcode == Op.i32_const) return overwritePaddedU32(target_bytes, patch_offset, value);
+    return logInvalidRelocation(
+        "function_offset patch expected global.get or i32.const, found opcode 0x{x}",
+        .{opcode},
+    );
 }
 
 fn patchFunctionIndexCodeRelocation(
@@ -2218,22 +2218,22 @@ fn patchFunctionIndexCodeRelocation(
     const o: usize = @intCast(patch_offset);
     if (o == 0) return logInvalidRelocation("function_index patch site at offset 0 has no preceding opcode", .{});
 
-    switch (target_bytes[o - 1]) {
-        Op.call => overwritePaddedU32(target_bytes, patch_offset, sym.index),
-        Op.global_get => {
-            target_bytes[o - 1] = Op.i32_const;
-            const table_idx = try self.ensureTableElement(sym.index);
-            overwritePaddedU32(target_bytes, patch_offset, table_idx);
-        },
-        Op.i32_const => {
-            const table_idx = try self.ensureTableElement(sym.index);
-            overwritePaddedU32(target_bytes, patch_offset, table_idx);
-        },
-        else => |opcode| return logInvalidRelocation(
-            "function_index patch expected call, global.get, or i32.const, found opcode 0x{x}",
-            .{opcode},
-        ),
+    const opcode = target_bytes[o - 1];
+    if (opcode == Op.call) return overwritePaddedU32(target_bytes, patch_offset, sym.index);
+    if (opcode == Op.global_get) {
+        target_bytes[o - 1] = Op.i32_const;
+        const table_idx = try self.ensureTableElement(sym.index);
+        overwritePaddedU32(target_bytes, patch_offset, table_idx);
+        return;
     }
+    if (opcode == Op.i32_const) {
+        const table_idx = try self.ensureTableElement(sym.index);
+        return overwritePaddedU32(target_bytes, patch_offset, table_idx);
+    }
+    return logInvalidRelocation(
+        "function_index patch expected call, global.get, or i32.const, found opcode 0x{x}",
+        .{opcode},
+    );
 }
 
 fn patchGlobalIndexCodeRelocation(
@@ -2274,7 +2274,7 @@ fn patchGlobalIndexCodeRelocation(
             const address = segment.offset + sym.data_offset;
             overwritePaddedU32(target_bytes, patch_offset, address);
         },
-        else => return logInvalidRelocation(
+        .section, .event, .table => return logInvalidRelocation(
             "global_index relocation references an unsupported {s} symbol",
             .{@tagName(sym.kind)},
         ),
@@ -2311,12 +2311,19 @@ fn patchResolvedRelocation(
     const required: usize = switch (entry) {
         .index => |idx| switch (idx.type_id) {
             .table_index_i32, .global_index_i32 => 4,
-            else => 5,
+            .function_index_leb,
+            .table_index_sleb,
+            .type_index_leb,
+            .global_index_leb,
+            .event_index_leb,
+            .table_index_rel_sleb,
+            .table_number_leb,
+            => 5,
         },
         .offset => |off| switch (off.type_id) {
             .memory_addr_i32, .section_offset_i32 => 4,
             .function_offset_i32 => if (target == .code) 5 else 4,
-            else => 5,
+            .memory_addr_leb, .memory_addr_sleb, .memory_addr_rel_sleb => 5,
         },
     };
     try checkPatchSite(target_bytes, patch_offset, required);
@@ -2924,7 +2931,14 @@ fn traceLiveFunctions(
                                         }
                                     }
                                 },
-                                else => {},
+                                .table_index_sleb,
+                                .table_index_i32,
+                                .global_index_leb,
+                                .event_index_leb,
+                                .table_index_rel_sleb,
+                                .global_index_i32,
+                                .table_number_leb,
+                                => {},
                             }
                         }
                     },

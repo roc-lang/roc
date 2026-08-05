@@ -284,29 +284,25 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 }
 
 fn assertDenseKey(comptime K: type) void {
-    switch (@typeInfo(K)) {
-        .int, .@"enum" => {},
-        else => @compileError("DenseMap keys must be integer or enum IDs, not " ++ @typeName(K)),
+    const type_info = @typeInfo(K);
+    if (type_info != .int and type_info != .@"enum") {
+        @compileError("DenseMap keys must be integer or enum IDs, not " ++ @typeName(K));
     }
 }
 
 fn keyIndex(key: anytype) usize {
     const K = @TypeOf(key);
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "denseIndex")) return key.denseIndex();
-    return switch (@typeInfo(K)) {
-        .int => @intCast(key),
-        .@"enum" => @intCast(@intFromEnum(key)),
-        else => unreachable,
-    };
+    if (comptime @typeInfo(K) == .int) return @intCast(key);
+    if (comptime @typeInfo(K) == .@"enum") return @intCast(@intFromEnum(key));
+    unreachable;
 }
 
 fn keyFromIndex(comptime K: type, index: usize) K {
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "fromDenseIndex")) return K.fromDenseIndex(index);
-    return switch (@typeInfo(K)) {
-        .int => @intCast(index),
-        .@"enum" => @enumFromInt(index),
-        else => unreachable,
-    };
+    if (comptime @typeInfo(K) == .int) return @intCast(index);
+    if (comptime @typeInfo(K) == .@"enum") return @enumFromInt(index);
+    unreachable;
 }
 
 test "DenseMap directly indexes integer and enum IDs" {

@@ -1,25 +1,27 @@
 //! GNU libc stub generation for test platforms
 
 const std = @import("std");
+const target_mod = @import("../target/mod.zig");
 
 /// Generate assembly stub with essential libc symbols
 pub fn generateComprehensiveStub(
     writer: anytype,
     target_arch: std.Target.Cpu.Arch,
 ) !void {
-    const ptr_width: u32 = switch (target_arch) {
+    const arch_class = target_mod.classifyCpuArch(target_arch);
+    const ptr_width: u32 = switch (arch_class) {
         .x86_64, .aarch64 => 8,
-        else => 4,
+        .aarch64_be, .arm, .wasm32, .other => 4,
     };
 
     try writer.writeAll(".text\n");
 
     // Generate __sysctl symbol
     try writer.print(".balign 8\n.globl __sysctl\n.type __sysctl, %function\n__sysctl:", .{});
-    switch (target_arch) {
+    switch (arch_class) {
         .x86_64 => try writer.writeAll("    xor %rax, %rax\n    ret\n\n"),
         .aarch64 => try writer.writeAll("    mov x0, #0\n    ret\n\n"),
-        else => try writer.writeAll("    ret\n\n"),
+        .aarch64_be, .arm, .wasm32, .other => try writer.writeAll("    ret\n\n"),
     }
 
     // Essential libc symbols that must be present for linking
@@ -85,17 +87,17 @@ pub fn generateComprehensiveStub(
 
         if (std.mem.eql(u8, symbol, "abort")) {
             // abort should exit with code 1
-            switch (target_arch) {
+            switch (arch_class) {
                 .x86_64 => try writer.writeAll("    mov $1, %rdi\n    mov $60, %rax\n    syscall\n\n"),
                 .aarch64 => try writer.writeAll("    mov x0, #1\n    mov x8, #93\n    svc #0\n\n"),
-                else => try writer.writeAll("    ret\n\n"),
+                .aarch64_be, .arm, .wasm32, .other => try writer.writeAll("    ret\n\n"),
             }
         } else {
             // Other symbols return 0 or are no-ops (resolved at runtime)
-            switch (target_arch) {
+            switch (arch_class) {
                 .x86_64 => try writer.writeAll("    xor %rax, %rax\n    ret\n\n"),
                 .aarch64 => try writer.writeAll("    mov x0, #0\n    ret\n\n"),
-                else => try writer.writeAll("    ret\n\n"),
+                .aarch64_be, .arm, .wasm32, .other => try writer.writeAll("    ret\n\n"),
             }
         }
     }

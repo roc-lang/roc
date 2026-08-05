@@ -501,7 +501,7 @@ pub const Store = struct {
                     .none)
             else
                 .{ .named_type = named.def },
-            else => .none,
+            .record, .tuple, .tag_union, .func, .erased, .zst => .none,
         };
     }
 
@@ -1171,17 +1171,14 @@ pub const Store = struct {
         node: Content,
         open: []const TypeId,
     ) ?usize {
-        const named = switch (node) {
-            .named => |named| named,
-            else => return null,
-        };
+        if (node != .named) return null;
+        const named = node.named;
         if (named.kind == .alias) return null;
         const head = namedIdentityHead(name_store, named);
         for (open, 0..) |open_ty, position| {
-            const open_named = switch (self.get(open_ty)) {
-                .named => |open_named| open_named,
-                else => continue,
-            };
+            const open_content = self.get(open_ty);
+            if (open_content != .named) continue;
+            const open_named = open_content.named;
             if (open_named.kind == .alias) continue;
             if (self.namedIdentityMatches(name_store, open_named, named, head)) return position;
         }
@@ -1436,47 +1433,23 @@ fn typeViewEqlInner(
     const gop = try visited.getOrPut(pair);
     if (gop.found_existing) return true;
 
+    if (std.meta.activeTag(lhs_content) != std.meta.activeTag(rhs_content)) return false;
+
     return switch (lhs_content) {
-        .primitive => |lhs| switch (rhs_content) {
-            .primitive => |rhs| lhs == rhs,
-            else => false,
+        .primitive => |lhs| lhs == rhs_content.primitive,
+        .named => |lhs| try namedTypeViewEql(type_view, name_store, lhs, rhs_content.named, visited, mode),
+        .record => |lhs| try fieldSpanViewEql(type_view, name_store, lhs, rhs_content.record, visited, mode),
+        .tuple => |lhs| try typeSpanViewEql(type_view, name_store, lhs, rhs_content.tuple, visited, mode),
+        .tag_union => |lhs| try tagSpanViewEql(type_view, name_store, lhs, rhs_content.tag_union, visited, mode),
+        .list => |lhs| try typeViewEqlInner(type_view, name_store, lhs, rhs_content.list, visited, mode),
+        .box => |lhs| try typeViewEqlInner(type_view, name_store, lhs, rhs_content.box, visited, mode),
+        .func => |lhs| blk: {
+            const rhs = rhs_content.func;
+            if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) break :blk false;
+            break :blk try typeViewEqlInner(type_view, name_store, lhs.ret, rhs.ret, visited, mode);
         },
-        .named => |lhs| switch (rhs_content) {
-            .named => |rhs| try namedTypeViewEql(type_view, name_store, lhs, rhs, visited, mode),
-            else => false,
-        },
-        .record => |lhs| switch (rhs_content) {
-            .record => |rhs| try fieldSpanViewEql(type_view, name_store, lhs, rhs, visited, mode),
-            else => false,
-        },
-        .tuple => |lhs| switch (rhs_content) {
-            .tuple => |rhs| try typeSpanViewEql(type_view, name_store, lhs, rhs, visited, mode),
-            else => false,
-        },
-        .tag_union => |lhs| switch (rhs_content) {
-            .tag_union => |rhs| try tagSpanViewEql(type_view, name_store, lhs, rhs, visited, mode),
-            else => false,
-        },
-        .list => |lhs| switch (rhs_content) {
-            .list => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited, mode),
-            else => false,
-        },
-        .box => |lhs| switch (rhs_content) {
-            .box => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited, mode),
-            else => false,
-        },
-        .func => |lhs| switch (rhs_content) {
-            .func => |rhs| blk: {
-                if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) break :blk false;
-                break :blk try typeViewEqlInner(type_view, name_store, lhs.ret, rhs.ret, visited, mode);
-            },
-            else => false,
-        },
-        .erased => |lhs| switch (rhs_content) {
-            .erased => |rhs| std.mem.eql(u8, lhs.bytes[0..], rhs.bytes[0..]),
-            else => false,
-        },
-        .zst => rhs_content == .zst,
+        .erased => |lhs| std.mem.eql(u8, lhs.bytes[0..], rhs_content.erased.bytes[0..]),
+        .zst => true,
     };
 }
 
@@ -1765,47 +1738,23 @@ fn typeEqlAcrossStoresInner(
     const gop = try visited.getOrPut(pair);
     if (gop.found_existing) return true;
 
+    if (std.meta.activeTag(lhs_content) != std.meta.activeTag(rhs_content)) return false;
+
     return switch (lhs_content) {
-        .primitive => |lhs_primitive| switch (rhs_content) {
-            .primitive => |rhs_primitive| lhs_primitive == rhs_primitive,
-            else => false,
+        .primitive => |lhs| lhs == rhs_content.primitive,
+        .named => |lhs| try namedTypeEqlAcrossStores(name_store, lhs_view, lhs, rhs_view, rhs_content.named, visited),
+        .record => |lhs| try fieldSpanEqlAcrossStores(name_store, lhs_view, lhs, rhs_view, rhs_content.record, visited),
+        .tuple => |lhs| try typeSpanEqlAcrossStores(name_store, lhs_view, lhs, rhs_view, rhs_content.tuple, visited),
+        .tag_union => |lhs| try tagSpanEqlAcrossStores(name_store, lhs_view, lhs, rhs_view, rhs_content.tag_union, visited),
+        .list => |lhs| try typeEqlAcrossStoresInner(name_store, lhs_view, lhs, rhs_view, rhs_content.list, visited),
+        .box => |lhs| try typeEqlAcrossStoresInner(name_store, lhs_view, lhs, rhs_view, rhs_content.box, visited),
+        .func => |lhs_func| blk: {
+            const rhs_func = rhs_content.func;
+            if (!try typeSpanEqlAcrossStores(name_store, lhs_view, lhs_func.args, rhs_view, rhs_func.args, visited)) break :blk false;
+            break :blk try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_func.ret, rhs_view, rhs_func.ret, visited);
         },
-        .named => |lhs_named| switch (rhs_content) {
-            .named => |rhs_named| try namedTypeEqlAcrossStores(name_store, lhs_view, lhs_named, rhs_view, rhs_named, visited),
-            else => false,
-        },
-        .record => |lhs_fields| switch (rhs_content) {
-            .record => |rhs_fields| try fieldSpanEqlAcrossStores(name_store, lhs_view, lhs_fields, rhs_view, rhs_fields, visited),
-            else => false,
-        },
-        .tuple => |lhs_items| switch (rhs_content) {
-            .tuple => |rhs_items| try typeSpanEqlAcrossStores(name_store, lhs_view, lhs_items, rhs_view, rhs_items, visited),
-            else => false,
-        },
-        .tag_union => |lhs_tags| switch (rhs_content) {
-            .tag_union => |rhs_tags| try tagSpanEqlAcrossStores(name_store, lhs_view, lhs_tags, rhs_view, rhs_tags, visited),
-            else => false,
-        },
-        .list => |lhs_elem| switch (rhs_content) {
-            .list => |rhs_elem| try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_elem, rhs_view, rhs_elem, visited),
-            else => false,
-        },
-        .box => |lhs_elem| switch (rhs_content) {
-            .box => |rhs_elem| try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_elem, rhs_view, rhs_elem, visited),
-            else => false,
-        },
-        .func => |lhs_func| switch (rhs_content) {
-            .func => |rhs_func| blk: {
-                if (!try typeSpanEqlAcrossStores(name_store, lhs_view, lhs_func.args, rhs_view, rhs_func.args, visited)) break :blk false;
-                break :blk try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_func.ret, rhs_view, rhs_func.ret, visited);
-            },
-            else => false,
-        },
-        .erased => |lhs_digest| switch (rhs_content) {
-            .erased => |rhs_digest| std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]),
-            else => false,
-        },
-        .zst => rhs_content == .zst,
+        .erased => |lhs| std.mem.eql(u8, lhs.bytes[0..], rhs_content.erased.bytes[0..]),
+        .zst => true,
     };
 }
 

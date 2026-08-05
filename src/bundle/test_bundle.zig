@@ -829,7 +829,17 @@ test "blake3 hash detects corruption" {
             error.HashMismatch, error.DecompressionFailed, error.InvalidTarHeader => {
                 // Any of these errors are acceptable - corruption was detected
             },
-            else => return err,
+            error.UnexpectedEndOfStream,
+            error.ReadFailed,
+            error.FileCreateFailed,
+            error.DirectoryCreateFailed,
+            error.FileWriteFailed,
+            error.InvalidFilename,
+            error.FileTooLarge,
+            error.InvalidPath,
+            error.NoDataExtracted,
+            error.OutOfMemory,
+            => return err,
         }
     }
 }

@@ -473,38 +473,38 @@ pub fn BorrowPtrConst(comptime T: type, comptime list_name: []const u8) type {
 /// Returns the length of a slice or guarded span borrow.
 pub fn borrowLen(borrow: anytype) usize {
     const Borrow = @TypeOf(borrow);
-    return switch (@typeInfo(Borrow)) {
-        .pointer => |ptr| switch (ptr.size) {
+    const borrow_info = @typeInfo(Borrow);
+    if (borrow_info == .pointer) {
+        const ptr = borrow_info.pointer;
+        return switch (ptr.size) {
             .slice => borrow.len,
-            .one => switch (@typeInfo(ptr.child)) {
-                .array => |array| array.len,
-                else => 1,
-            },
-            else => @compileError("borrowLen expected a slice, array pointer, or guarded span"),
-        },
-        .@"struct" => borrow.len,
-        else => @compileError("borrowLen expected a slice or guarded span"),
-    };
+            .one => if (@typeInfo(ptr.child) == .array) @typeInfo(ptr.child).array.len else 1,
+            .many, .c => @compileError("borrowLen expected a slice, array pointer, or guarded span"),
+        };
+    }
+    if (borrow_info == .@"struct") return borrow.len;
+    @compileError("borrowLen expected a slice or guarded span");
 }
 
 /// Reads one element from a slice or guarded span borrow.
 pub fn at(borrow: anytype, index: usize) BorrowElement(@TypeOf(borrow)) {
     const Borrow = @TypeOf(borrow);
-    return switch (@typeInfo(Borrow)) {
-        .pointer => |ptr| switch (ptr.size) {
+    const borrow_info = @typeInfo(Borrow);
+    if (borrow_info == .pointer) {
+        const ptr = borrow_info.pointer;
+        return switch (ptr.size) {
             .slice => borrow[index],
-            .one => switch (@typeInfo(ptr.child)) {
-                .array => |array| if (array.len == 0) unreachable else borrow[index],
-                else => blk: {
-                    std.debug.assert(index == 0);
-                    break :blk borrow.*;
-                },
+            .one => if (@typeInfo(ptr.child) == .array)
+                if (@typeInfo(ptr.child).array.len == 0) unreachable else borrow[index]
+            else blk: {
+                std.debug.assert(index == 0);
+                break :blk borrow.*;
             },
-            else => @compileError("at expected a slice, array pointer, or guarded span"),
-        },
-        .@"struct" => borrow.at(index),
-        else => @compileError("at expected a slice or guarded span"),
-    };
+            .many, .c => @compileError("at expected a slice, array pointer, or guarded span"),
+        };
+    }
+    if (borrow_info == .@"struct") return borrow.at(index);
+    @compileError("at expected a slice or guarded span");
 }
 
 /// Copies a slice or guarded span borrow into owned memory.
@@ -520,66 +520,63 @@ pub fn dupe(allocator: Allocator, comptime T: type, borrow: anytype) Allocator.E
 /// Returns a mutable element pointer from a slice or guarded mutable span borrow.
 pub fn atPtr(borrow: anytype, index: usize) *BorrowElement(@TypeOf(borrow)) {
     const Borrow = @TypeOf(borrow);
-    return switch (@typeInfo(Borrow)) {
-        .pointer => |ptr| switch (ptr.size) {
+    const borrow_info = @typeInfo(Borrow);
+    if (borrow_info == .pointer) {
+        const ptr = borrow_info.pointer;
+        return switch (ptr.size) {
             .slice => &borrow[index],
-            .one => switch (@typeInfo(ptr.child)) {
-                .array => &borrow[index],
-                else => blk: {
-                    std.debug.assert(index == 0);
-                    break :blk borrow;
-                },
+            .one => if (@typeInfo(ptr.child) == .array) &borrow[index] else blk: {
+                std.debug.assert(index == 0);
+                break :blk borrow;
             },
-            else => @compileError("atPtr expected a mutable slice, array pointer, or guarded mutable span"),
-        },
-        .@"struct" => borrow.atPtr(index),
-        else => @compileError("atPtr expected a mutable slice or guarded mutable span"),
-    };
+            .many, .c => @compileError("atPtr expected a mutable slice, array pointer, or guarded mutable span"),
+        };
+    }
+    if (borrow_info == .@"struct") return borrow.atPtr(index);
+    @compileError("atPtr expected a mutable slice or guarded mutable span");
 }
 
 /// Reads the element behind a raw pointer or guarded pointer borrow.
 pub fn ptrGet(ptr_borrow: anytype) PtrBorrowElement(@TypeOf(ptr_borrow)) {
     const PtrBorrow = @TypeOf(ptr_borrow);
-    return switch (@typeInfo(PtrBorrow)) {
-        .pointer => ptr_borrow.*,
-        .@"struct" => ptr_borrow.get(),
-        else => @compileError("ptrGet expected a pointer or guarded pointer"),
-    };
+    const ptr_borrow_info = @typeInfo(PtrBorrow);
+    if (ptr_borrow_info == .pointer) return ptr_borrow.*;
+    if (ptr_borrow_info == .@"struct") return ptr_borrow.get();
+    @compileError("ptrGet expected a pointer or guarded pointer");
 }
 
 /// Writes the element behind a raw pointer or guarded pointer borrow.
 pub fn ptrSet(ptr_borrow: anytype, value: PtrBorrowElement(@TypeOf(ptr_borrow))) void {
     const PtrBorrow = @TypeOf(ptr_borrow);
-    switch (@typeInfo(PtrBorrow)) {
-        .pointer => ptr_borrow.* = value,
-        .@"struct" => ptr_borrow.set(value),
-        else => @compileError("ptrSet expected a pointer or guarded pointer"),
+    const ptr_borrow_info = @typeInfo(PtrBorrow);
+    if (ptr_borrow_info == .pointer) {
+        ptr_borrow.* = value;
+    } else if (ptr_borrow_info == .@"struct") {
+        ptr_borrow.set(value);
+    } else {
+        @compileError("ptrSet expected a pointer or guarded pointer");
     }
 }
 
 fn BorrowElement(comptime Borrow: type) type {
-    return switch (@typeInfo(Borrow)) {
-        .pointer => |ptr| blk: {
-            switch (ptr.size) {
-                .slice => break :blk ptr.child,
-                .one => switch (@typeInfo(ptr.child)) {
-                    .array => |array| break :blk array.child,
-                    else => break :blk ptr.child,
-                },
-                else => @compileError("expected slice, array pointer, or guarded span"),
-            }
-        },
-        .@"struct" => @typeInfo(@TypeOf(Borrow.at)).@"fn".return_type.?,
-        else => @compileError("expected slice or guarded span"),
-    };
+    const borrow_info = @typeInfo(Borrow);
+    if (borrow_info == .pointer) {
+        const ptr = borrow_info.pointer;
+        return switch (ptr.size) {
+            .slice => ptr.child,
+            .one => if (@typeInfo(ptr.child) == .array) @typeInfo(ptr.child).array.child else ptr.child,
+            .many, .c => @compileError("expected slice, array pointer, or guarded span"),
+        };
+    }
+    if (borrow_info == .@"struct") return @typeInfo(@TypeOf(Borrow.at)).@"fn".return_type.?;
+    @compileError("expected slice or guarded span");
 }
 
 fn PtrBorrowElement(comptime PtrBorrow: type) type {
-    return switch (@typeInfo(PtrBorrow)) {
-        .pointer => |ptr| ptr.child,
-        .@"struct" => @typeInfo(@TypeOf(PtrBorrow.get)).@"fn".return_type.?,
-        else => @compileError("expected pointer or guarded pointer"),
-    };
+    const ptr_borrow_info = @typeInfo(PtrBorrow);
+    if (ptr_borrow_info == .pointer) return ptr_borrow_info.pointer.child;
+    if (ptr_borrow_info == .@"struct") return @typeInfo(@TypeOf(PtrBorrow.get)).@"fn".return_type.?;
+    @compileError("expected pointer or guarded pointer");
 }
 
 fn assertRangeInBounds(comptime list_name: []const u8, current_len: usize, start: usize, len_: usize) void {

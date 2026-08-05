@@ -638,7 +638,26 @@ fn registerTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.
 
     switch (self.cir.store.getStatement(decl_idx)) {
         .s_alias_decl, .s_nominal_decl => {},
-        else => unreachable,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => unreachable,
     }
 
     try self.type_decl_statements.ensureUnusedCapacity(self.gpa, 1);
@@ -3695,7 +3714,26 @@ fn poisonInvalidTypeDeclarations(self: *Self, poisoned: []bool) std.mem.Allocato
                 self.types.markNominalDeclInvalid(nominal_idx);
                 break :blk nominal.backing;
             },
-            else => unreachable,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => unreachable,
         };
 
         try self.types.setVarContent(ModuleEnv.varFrom(decl_idx), .err);
@@ -3847,7 +3885,16 @@ fn resolvePendingTupleAccess(
                 }
                 return true;
             },
-            else => {
+            .record,
+            .record_unbound,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => {
                 _ = try self.problems.appendProblem(self.gpa, .{ .invalid_tuple_access = .{
                     .region = pending.region,
                     .elem_index = pending.elem_index,
@@ -4048,7 +4095,7 @@ fn instantiateVarHelp(
             const fresh_constraints_len = switch (fresh_resolved.desc.content) {
                 .flex => |flex| flex.constraints.len(),
                 .rigid => |rigid| rigid.constraints.len(),
-                else => 0,
+                .alias, .structure, .err => 0,
             };
             if (fresh_constraints_len > 0) {
                 try self.scratch_evidence_pairs.append(self.gpa, .{
@@ -4059,7 +4106,7 @@ fn instantiateVarHelp(
                 const old_constraints_range = switch (old_resolved.desc.content) {
                     .flex => |flex| flex.constraints,
                     .rigid => |rigid| rigid.constraints,
-                    else => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    .alias, .structure, .err => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
                 for (self.types.sliceStaticDispatchConstraints(old_constraints_range)) |old_constraint| {
                     // `var_map` keys are resolved roots (see `Instantiator`).
@@ -4139,13 +4186,12 @@ fn instantiateVarHelp(
     // already-shared vars and therefore copied no constrained vars. The
     // checked-module producer still needs the scheme root for that use.
     const value_use_source: ?CIR.Expr.Idx = if (nested_function_use == null and self.evidence_target_site == null)
-        if (self.instantiation_source_expr) |source_expr| switch (self.cir.store.nodes.get(@enumFromInt(@intFromEnum(source_expr))).tag) {
-            .expr_var,
-            .expr_external_lookup,
-            .expr_required_lookup,
-            .expr_field_access,
-            => source_expr,
-            else => null,
+        if (self.instantiation_source_expr) |source_expr| blk: {
+            const tag = self.cir.store.nodes.get(@enumFromInt(@intFromEnum(source_expr))).tag;
+            break :blk if (tag == .expr_var or tag == .expr_external_lookup or tag == .expr_required_lookup or tag == .expr_field_access)
+                source_expr
+            else
+                null;
         } else null
     else
         null;
@@ -4353,7 +4399,7 @@ fn builtinNumTypeIdent(self: *const Self, num_kind: CIR.NumKind) Ident.Idx {
         .f32 => self.cir.idents.f32_type,
         .f64 => self.cir.idents.f64_type,
         .dec => self.cir.idents.dec_type,
-        else => unreachable,
+        .num_unbound, .int_unbound => unreachable,
     };
 }
 
@@ -4402,7 +4448,7 @@ fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
             .f32 => "Num.F32",
             .f64 => "Num.F64",
             .dec => "Num.Dec",
-            else => unreachable,
+            .num_unbound, .int_unbound => unreachable,
         },
     };
 }
@@ -4687,15 +4733,32 @@ fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u
     if (raw_decl >= source_env.store.nodes.len()) return null;
 
     const node: CIR.Node.Idx = @enumFromInt(raw_decl);
-    switch (source_env.store.nodes.get(node).tag) {
-        .statement_alias_decl, .statement_nominal_decl => {},
-        else => return null,
-    }
+    const node_tag = source_env.store.nodes.get(node).tag;
+    if (node_tag != .statement_alias_decl and node_tag != .statement_nominal_decl) return null;
     const statement_idx: CIR.Statement.Idx = @enumFromInt(raw_decl);
     const header_idx = switch (source_env.store.getStatement(statement_idx)) {
         .s_alias_decl => |alias| alias.header,
         .s_nominal_decl => |nominal| nominal.header,
-        else => return null,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => return null,
     };
     const header = source_env.store.getTypeHeader(header_idx);
     return builtinNominalDeclForIdentInEnv(source_env, header.name);
@@ -4762,7 +4825,7 @@ fn builtinNominalDeclForBuiltinSourceDecl(self: *const Self, source_decl: ?u32) 
 fn builtinNumKindFromBuiltinSourceDecl(self: *const Self, source_decl: ?u32) ?CIR.NumKind {
     return switch (self.builtinNominalDeclForBuiltinSourceDecl(source_decl) orelse return null) {
         .num => |num_kind| num_kind,
-        else => null,
+        .list, .box, .dict, .set, .try_type, .fields, .field, .numeral => null,
     };
 }
 
@@ -4772,7 +4835,7 @@ fn mkBuiltinNumberTypeContentFromKind(
 ) Allocator.Error!Content {
     return switch (num_kind) {
         .num_unbound, .int_unbound => unreachable,
-        else => try self.mkNumberTypeContent(num_kind),
+        .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.mkNumberTypeContent(num_kind),
     };
 }
 
@@ -4795,7 +4858,26 @@ fn findLocalTypeDeclByNameInSpan(
         const header_idx = switch (stmt) {
             .s_alias_decl => |alias| alias.header,
             .s_nominal_decl => |nominal| nominal.header,
-            else => continue,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => continue,
         };
 
         const header = self.cir.store.getTypeHeader(header_idx);
@@ -4877,13 +4959,21 @@ fn recordOpenLiteralVar(
                 }),
                 .quote, .interpolation => {},
             },
-            else => {},
+            .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {},
         }
     }
 
     if (has_literal) {
         try self.open_literal_vars.append(self.gpa, literal_var);
     }
+}
+
+fn contentConstraintRange(content: Content) ?StaticDispatchConstraint.SafeList.Range {
+    return switch (content) {
+        .flex => |flex| flex.constraints,
+        .rigid => |rigid| rigid.constraints,
+        .alias, .structure, .err => null,
+    };
 }
 
 /// Create a flex variable with a from_numeral constraint for numeric literals.
@@ -5504,7 +5594,26 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
                 try self.setVarRank(stmt_var, &env);
                 try self.predeclareNominalDecl(stmt_var, nominal, &env);
             },
-            else => {},
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
         }
     }
 
@@ -5527,7 +5636,23 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
                 try self.setVarRank(stmt_var, &env);
                 try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
             },
-            else => {
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_type_var_alias,
+            => {
                 // All other stmt types are invalid at the top level
             },
         }
@@ -7296,16 +7421,12 @@ fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(self: *Self, scheme_roots: 
     for (self.ambiguity_candidates.items[self.ambiguity_candidates_def_start..]) |*candidate| {
         if (candidate.judged) continue;
         const resolved = self.types.resolveVar(candidate.var_);
-        const constraints_range = switch (resolved.desc.content) {
-            .flex => |flex| flex.constraints,
-            .rigid => |rigid| rigid.constraints,
-            else => {
-                // Grounded to a concrete type (the constraint was or will be
-                // discharged by ordinary solving) or poisoned to an error —
-                // either way, never ambiguous.
-                candidate.judged = true;
-                continue;
-            },
+        const constraints_range = contentConstraintRange(resolved.desc.content) orelse {
+            // Grounded to a concrete type (the constraint was or will be
+            // discharged by ordinary solving) or poisoned to an error —
+            // either way, never ambiguous.
+            candidate.judged = true;
+            continue;
         };
         if (constraints_range.len() == 0) {
             candidate.judged = true;
@@ -7365,11 +7486,7 @@ fn judgeResidualAmbiguityCandidates(self: *Self) Allocator.Error!void {
         if (candidate.judged) continue;
         candidate.judged = true;
         const resolved = self.types.resolveVar(candidate.var_);
-        const constraints_range = switch (resolved.desc.content) {
-            .flex => |flex| flex.constraints,
-            .rigid => |rigid| rigid.constraints,
-            else => continue,
-        };
+        const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
         if (constraints_range.len() == 0) continue;
         try self.judgeAmbiguityCandidate(candidate.*, resolved.var_, resolved.desc.rank, constraints_range);
     }
@@ -7383,14 +7500,12 @@ fn findStaticDispatchUseForConstraint(
     const expr_idx = constraintIntroExpr(constraint) orelse return null;
     if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return null;
 
-    switch (self.cir.store.getExpr(expr_idx)) {
-        .e_dispatch_call => |dispatch_call| {
-            if (!dispatch_call.method_name.eql(method_name)) return null;
-        },
-        .e_type_dispatch_call => |dispatch_call| {
-            if (!dispatch_call.method_name.eql(method_name)) return null;
-        },
-        else => return null,
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr != .e_dispatch_call and expr != .e_type_dispatch_call) return null;
+    if (expr == .e_dispatch_call) {
+        if (!expr.e_dispatch_call.method_name.eql(method_name)) return null;
+    } else {
+        if (!expr.e_type_dispatch_call.method_name.eql(method_name)) return null;
     }
 
     return .{
@@ -7443,11 +7558,7 @@ fn applyAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
 /// a receiver they grounded or erred is silently acquitted.
 fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(verdict.var_);
-    const constraints_range = switch (resolved.desc.content) {
-        .flex => |flex| flex.constraints,
-        .rigid => |rigid| rigid.constraints,
-        else => return,
-    };
+    const constraints_range = contentConstraintRange(resolved.desc.content) orelse return;
     if (constraints_range.len() == 0) return;
     if (self.reported_dispatch_vars.contains(resolved.var_)) return;
 
@@ -7524,10 +7635,9 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
             if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
-            const call = switch (self.cir.store.getExpr(expr_idx)) {
-                .e_call => |c| c,
-                else => continue,
-            };
+            const expr = self.cir.store.getExpr(expr_idx);
+            if (expr != .e_call) continue;
+            const call = expr.e_call;
 
             var arg_region: ?Region = null;
             for (self.cir.store.sliceExpr(call.args)) |arg_idx| {
@@ -7668,11 +7778,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
     for (self.ambiguity_verdicts.items) |verdict| {
         if (verdict.source != .creation) continue;
         const resolved = self.types.resolveVar(verdict.var_);
-        const constraints_range = switch (resolved.desc.content) {
-            .flex => |flex| flex.constraints,
-            .rigid => |rigid| rigid.constraints,
-            else => continue,
-        };
+        const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
         if (constraints_range.len() == 0) continue;
         if (self.reported_dispatch_vars.contains(resolved.var_)) continue;
         try self.ambiguity_verdict_vars.put(resolved.var_, {});
@@ -7693,11 +7799,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
 
         const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
         if (!self.ambiguity_verdict_vars.contains(resolved.var_)) continue;
-        const constraints_range = switch (resolved.desc.content) {
-            .flex => |flex| flex.constraints,
-            .rigid => |rigid| rigid.constraints,
-            else => continue,
-        };
+        const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
         if (self.reported_dispatch_vars.contains(resolved.var_)) continue;
 
         // Re-select the constraint to report at the settled state (see
@@ -7753,11 +7855,7 @@ fn collectReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)
         // because instantiating the parameter instantiates the whole constraint
         // chain. (This is the spec's "recurse fully into arg structure".)
         .flex, .rigid => {
-            const constraints_range = switch (resolved.desc.content) {
-                .flex => |flex| flex.constraints,
-                .rigid => |rigid| rigid.constraints,
-                else => unreachable,
-            };
+            const constraints_range = contentConstraintRange(resolved.desc.content) orelse unreachable;
             const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
             for (constraints) |constraint| {
                 try self.collectReachableVars(constraint.fn_var, out);
@@ -7863,7 +7961,7 @@ fn collectDataReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, v
             },
             .empty_record, .empty_tag_union => {},
         },
-        else => {},
+        .flex, .rigid, .err => {},
     }
 }
 
@@ -7952,7 +8050,7 @@ fn varIsFunctionType(self: *Self, var_: Var) bool {
             },
             .structure => |flat| return switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => true,
-                else => false,
+                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => false,
             },
             .err, .flex, .rigid => return false,
         }
@@ -7970,7 +8068,7 @@ fn zeroArgFunctionReturnVar(self: *Self, var_: Var) ?Var {
             },
             .structure => |flat| return switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| if (func.args.len() == 0) func.ret else null,
-                else => null,
+                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => null,
             },
             .err, .flex, .rigid => return null,
         }
@@ -8007,7 +8105,7 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
                     .fn_pure => .pure,
                     .fn_effectful => .effectful,
                     .fn_unbound => if (func.effect_deps.len() == 0) .unresolved else .pure,
-                    else => unreachable,
+                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => unreachable,
                 };
                 if (result == .effectful) break :blk result;
 
@@ -8024,7 +8122,7 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
                 }
                 break :blk result;
             },
-            else => .pure,
+            .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => .pure,
         },
     };
 
@@ -8059,12 +8157,10 @@ fn staticDispatchAllowsHoistedRoot(self: *Self, dispatcher_var: Var, callable_va
 }
 
 fn exprHasEffectfulFunctionBody(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
-    return switch (self.cir.store.getExpr(expr_idx)) {
-        .e_lambda => self.lambdaBodyIsEffectful(expr_idx),
-        .e_closure => |closure| self.lambdaBodyIsEffectful(closure.lambda_idx),
-        .e_hosted_lambda => true,
-        else => false,
-    };
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr == .e_lambda) return self.lambdaBodyIsEffectful(expr_idx);
+    if (expr == .e_closure) return self.lambdaBodyIsEffectful(expr.e_closure.lambda_idx);
+    return expr == .e_hosted_lambda;
 }
 
 fn lambdaBodyIsEffectful(self: *Self, lambda_idx: CIR.Expr.Idx) Allocator.Error!bool {
@@ -8100,10 +8196,9 @@ fn defInOnStackGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
 /// body never performs an effect. Calls to defs of already-finished groups
 /// are not exempt — their effectfulness is settled.
 fn callTargetIsInFlightRecursiveRef(self: *const Self, func_expr_idx: CIR.Expr.Idx) bool {
-    const pattern_idx = switch (self.cir.store.getExpr(func_expr_idx)) {
-        .e_lookup_local => |lookup| lookup.pattern_idx,
-        else => return false,
-    };
+    const func_expr = self.cir.store.getExpr(func_expr_idx);
+    if (func_expr != .e_lookup_local) return false;
+    const pattern_idx = func_expr.e_lookup_local.pattern_idx;
     if (self.local_processing_ptrns.contains(pattern_idx)) return true;
     const processing_def = self.topLevelPattern(pattern_idx) orelse return false;
     return switch (processing_def.status) {
@@ -8626,7 +8721,7 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
     const input = self.platform_requirements orelse return;
     switch (self.cir.module_kind) {
         .app, .default_app => {},
-        else => return,
+        .type_module, .package, .platform, .hosted, .module, .malformed => return,
     }
 
     // For-clause aliases live in the platform root's module-level scope, so a
@@ -8869,25 +8964,22 @@ fn collectForClauseAliasBindings(
         for (aliases) |alias| {
             if (forClauseAliasBinding(bindings.items, alias.alias_stmt_idx) != null) continue;
             const alias_statement = input.env.store.getStatement(alias.alias_stmt_idx);
-            const alias_anno = switch (alias_statement) {
-                .s_alias_decl => |decl| decl.anno,
-                else => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("platform requirement for-clause alias referenced a non-alias statement", .{});
-                    }
-                    unreachable;
-                },
-            };
+            if (alias_statement != .s_alias_decl) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("platform requirement for-clause alias referenced a non-alias statement", .{});
+                }
+                unreachable;
+            }
+            const alias_anno = alias_statement.s_alias_decl.anno;
             const platform_alias_resolved = input.env.types.resolveVar(ModuleEnv.varFrom(alias.alias_stmt_idx));
-            const platform_alias = switch (platform_alias_resolved.desc.content) {
-                .alias => |resolved_alias| resolved_alias,
-                else => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("platform requirement for-clause alias statement had no alias type", .{});
-                    }
-                    unreachable;
-                },
-            };
+            const platform_alias_content = platform_alias_resolved.desc.content;
+            if (platform_alias_content != .alias) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("platform requirement for-clause alias statement had no alias type", .{});
+                }
+                unreachable;
+            }
+            const platform_alias = platform_alias_content.alias;
             const platform_alias_source = copy_import.AliasSource{
                 .origin_module = platform_alias.origin_module,
                 .source_decl = platform_alias.source_decl.toOptional() orelse {
@@ -8971,7 +9063,26 @@ fn topLevelTagConstructorRegionByIdent(self: *Self, ident: Ident.Idx) ?Region {
         const anno_idx = switch (stmt) {
             .s_alias_decl => |alias| alias.anno,
             .s_nominal_decl => |nominal| nominal.anno,
-            else => continue,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => continue,
         };
         if (self.typeAnnoTagRegionByIdent(anno_idx, ident)) |region| return region;
     }
@@ -9024,7 +9135,12 @@ fn typeAnnoTagRegionByIdent(self: *Self, anno_idx: CIR.TypeAnno.Idx, wanted: Ide
             return self.typeAnnoTagRegionByIdent(func.ret, wanted);
         },
         .parens => |parens| return self.typeAnnoTagRegionByIdent(parens.anno, wanted),
-        else => return null,
+        .rigid_var,
+        .rigid_var_lookup,
+        .underscore,
+        .lookup,
+        .malformed,
+        => return null,
     }
 }
 
@@ -9075,7 +9191,7 @@ fn generateForClauseAliasApplication(
             try self.unifyWith(anno_var, .err, env);
             return;
         },
-        else => {
+        .flex, .rigid, .structure => {
             std.debug.assert(false);
             try self.unifyWith(anno_var, .err, env);
             return;
@@ -9764,7 +9880,7 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const Var, env: *Env)
         const resolved = self.types.resolveVar(root);
         const flat = switch (resolved.desc.content) {
             .structure => |flat| flat,
-            else => continue,
+            .flex, .rigid, .alias, .err => continue,
         };
         if (try self.functionEffectState(resolved.var_) != .effectful) continue;
         switch (flat) {
@@ -9779,7 +9895,7 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const Var, env: *Env)
                 _ = try self.unifyInContext(resolved.var_, effectful, env, .type_annotation);
             },
             .fn_effectful => {},
-            else => continue,
+            .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => continue,
         }
     }
 }
@@ -9843,7 +9959,26 @@ fn generateStmtTypeDeclType(
 
     switch (decl) {
         .s_alias_decl, .s_nominal_decl => _ = try self.registerTypeDecl(decl_idx),
-        else => {},
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => {},
     }
 
     switch (decl) {
@@ -9859,7 +9994,24 @@ fn generateStmtTypeDeclType(
         .s_runtime_error => {
             try self.unifyWith(decl_var, .err, env);
         },
-        else => {
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_type_anno,
+        .s_type_var_alias,
+        => {
             // Do nothing
         },
     }
@@ -9877,7 +10029,25 @@ fn ensureTypeDeclGenerated(
             // re-entering one means the declaration is cyclic.
             .s_alias_decl, .s_where_alias_decl => false,
             .s_nominal_decl => true,
-            else => true,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => true,
         },
         .not_generated => {},
     }
@@ -10232,7 +10402,16 @@ fn generateHeaderVars(
             .underscore, .malformed => {
                 try self.unifyWith(header_var, .err, env);
             },
-            else => {
+            .apply,
+            .rigid_var_lookup,
+            .lookup,
+            .tag_union,
+            .tag,
+            .tuple,
+            .record,
+            .@"fn",
+            .parens,
+            => {
                 // The canonicalizer should only produce rigid_var, underscore, or malformed
                 // for header args. If we hit this, there's a compiler bug.
                 std.debug.assert(false);
@@ -10483,14 +10662,43 @@ fn resolveWhereAliasReference(
         .apply => |apply| .{ apply.name, apply.base },
         // Canonicalization already reported why this name has no referent.
         .malformed => return null,
-        else => unreachable, // canonicalization only builds a name reference here
+        .rigid_var,
+        .rigid_var_lookup,
+        .underscore,
+        .tag_union,
+        .tag,
+        .tuple,
+        .record,
+        .@"fn",
+        .parens,
+        => unreachable, // canonicalization only builds a name reference here
     };
 
     switch (base_ref) {
         .local => |local| {
             const decl = switch (self.cir.store.getStatement(local.decl_idx)) {
                 .s_where_alias_decl => |decl| decl,
-                else => return try self.reportNotAWhereAlias(name, region),
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_alias_decl,
+                .s_nominal_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => return try self.reportNotAWhereAlias(name, region),
             };
 
             if (!try self.ensureTypeDeclGenerated(local.decl_idx, env)) {
@@ -10517,7 +10725,27 @@ fn resolveWhereAliasReference(
             };
             const decl = switch (ext_ref.other_cir.store.getStatement(@enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx)))) {
                 .s_where_alias_decl => |decl| decl,
-                else => return try self.reportNotAWhereAlias(name, region),
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_alias_decl,
+                .s_nominal_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => return try self.reportNotAWhereAlias(name, region),
             };
 
             // Each parameter is copied on its own. Every type variable a where
@@ -10616,7 +10844,16 @@ fn whereAliasReferenceArgs(self: *Self, alias: std.meta.fieldInfo(CIR.WhereClaus
         // A name canonicalization could not resolve carries no arguments; it is
         // reported when the reference is resolved.
         .lookup, .malformed => &.{},
-        else => unreachable, // canonicalization only builds a name reference here
+        .rigid_var,
+        .rigid_var_lookup,
+        .underscore,
+        .tag_union,
+        .tag,
+        .tuple,
+        .record,
+        .@"fn",
+        .parens,
+        => unreachable, // canonicalization only builds a name reference here
     };
 }
 
@@ -10657,7 +10894,7 @@ fn instantiateWhereAliasConstraint(
 fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
     return switch (self.types.resolveVar(var_).desc.content) {
         .rigid => |rigid| rigid,
-        else => null,
+        .flex, .alias, .structure, .err => null,
     };
 }
 
@@ -11419,7 +11656,14 @@ fn validateRecordExt(
                     return try self.validateRecordExtFields(fields, current, names, env, region, visited);
                 },
                 .empty_record => return true,
-                else => {
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .tag_union,
+                .empty_tag_union,
+                => {
                     try self.reportInvalidAliasRow(.record, current, env, region);
                     return false;
                 },
@@ -11498,7 +11742,15 @@ fn validateTagUnionExt(
                     current = tag_union.ext;
                 },
                 .empty_tag_union => return true,
-                else => {
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => {
                     try self.reportInvalidAliasRow(.tag_union, current, env, region);
                     return false;
                 },
@@ -12125,7 +12377,7 @@ fn checkPatternHelp(
                 // For unannotated literals, create a flex var with from_numeral constraint
                 .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, env),
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
-                else => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(num.kind), env),
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(num.kind), env),
             }
         },
         .frac_f32_literal => {
@@ -12165,7 +12417,23 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     switch (pattern) {
         .assign => |assign| return assign.ident,
         .as => |as_pattern| return as_pattern.ident,
-        else => return null,
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => return null,
     }
 }
 
@@ -12804,26 +13072,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const seg_expr = self.cir.store.getExpr(seg_expr_idx);
 
                 // String literal segments are already Str type
-                switch (seg_expr) {
-                    .e_str_segment => {
-                        does_fx = try self.checkExpr(seg_expr_idx, env, child_expected) or does_fx;
-                    },
-                    else => {
-                        has_interpolation = true;
-                        does_fx = try self.checkExpr(seg_expr_idx, env, child_expected) or does_fx;
-                        const seg_var = ModuleEnv.varFrom(seg_expr_idx);
+                if (seg_expr == .e_str_segment) {
+                    does_fx = try self.checkExpr(seg_expr_idx, env, child_expected) or does_fx;
+                } else {
+                    has_interpolation = true;
+                    does_fx = try self.checkExpr(seg_expr_idx, env, child_expected) or does_fx;
+                    const seg_var = ModuleEnv.varFrom(seg_expr_idx);
 
-                        // Interpolated expressions must be of type Str
-                        const seg_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(seg_expr_idx));
-                        const expected_str_var = try self.freshStr(env, seg_region);
+                    // Interpolated expressions must be of type Str
+                    const seg_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(seg_expr_idx));
+                    const expected_str_var = try self.freshStr(env, seg_region);
 
-                        const unify_result = try self.unify(expected_str_var, seg_var, env);
-                        if (!unify_result.isOk()) {
-                            // Unification failed - mark as error
-                            try self.unifyWith(seg_var, .err, env);
-                            did_err = true;
-                        }
-                    },
+                    const unify_result = try self.unify(expected_str_var, seg_var, env);
+                    if (!unify_result.isOk()) {
+                        // Unification failed - mark as error
+                        try self.unifyWith(seg_var, .err, env);
+                        did_err = true;
+                    }
                 }
 
                 // Check if it errored (for non-interpolation segments)
@@ -12856,7 +13121,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
                 .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env),
-                else => try self.unifyWith(expr_var, try self.mkNumberTypeContent(num.kind), env),
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent(num.kind), env),
             }
         },
         .e_num_from_numeral => {
@@ -13430,13 +13695,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .fn_pure => |func| break :blk func,
                                     .fn_unbound => |func| break :blk func,
                                     .fn_effectful => |func| break :blk func,
-                                    else => break :blk null,
+                                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => break :blk null,
                                 }
                             },
                             .alias => |alias| {
                                 var_ = self.types.getAliasBackingVar(alias);
                             },
-                            else => break :blk null,
+                            .flex, .rigid, .err => break :blk null,
                         }
                     }
                 } else {
@@ -13719,13 +13984,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .structure => |flat_type| {
                                         switch (flat_type) {
                                             .fn_pure, .fn_unbound, .fn_effectful => |func| break :inner_blk func,
-                                            else => break :inner_blk null,
+                                            .record,
+                                            .record_unbound,
+                                            .tuple,
+                                            .nominal_type,
+                                            .empty_record,
+                                            .tag_union,
+                                            .empty_tag_union,
+                                            => break :inner_blk null,
                                         }
                                     },
                                     .alias => |alias| {
                                         var_ = self.types.getAliasBackingVar(alias);
                                     },
-                                    else => break :inner_blk null,
+                                    .flex, .rigid, .err => break :inner_blk null,
                                 }
                             }
                         };
@@ -13897,9 +14169,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 .structure => |flat| switch (flat) {
                                     .fn_unbound => .unresolved,
                                     .fn_pure, .fn_effectful => .pure,
-                                    else => .unresolved,
+                                    .record,
+                                    .record_unbound,
+                                    .tuple,
+                                    .nominal_type,
+                                    .empty_record,
+                                    .tag_union,
+                                    .empty_tag_union,
+                                    => .unresolved,
                                 },
-                                else => .unresolved,
+                                .flex, .rigid, .alias, .err => .unresolved,
                             };
                         } else try self.functionEffectState(func_var);
                         switch (call_effect_state) {
@@ -13933,7 +14212,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         );
                     }
                 },
-                else => {
+                .binop, .unary_op, .string_interpolation => {
                     // The canonicalizer currently only produces apply, record_builder, or range for e_call expressions.
                     // Other call types (binop, unary_op, string_interpolation) are
                     // represented as different expression types. If we hit this, there's a compiler bug.
@@ -14443,17 +14722,11 @@ fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
     defer trace.end();
 
     const func_expr = self.cir.store.getExpr(expr_idx);
-    switch (func_expr) {
-        .e_lookup_local => |lookup| {
-            // Get the pattern that defines this identifier
-            const pattern = self.cir.store.getPattern(lookup.pattern_idx);
-            switch (pattern) {
-                .assign => |assign| return assign.ident,
-                else => return null,
-            }
-        },
-        else => return null,
-    }
+    if (func_expr != .e_lookup_local) return null;
+    // Get the pattern that defines this identifier
+    const pattern = self.cir.store.getPattern(func_expr.e_lookup_local.pattern_idx);
+    if (pattern != .assign) return null;
+    return pattern.assign.ident;
 }
 
 fn validateToInspectMethodTypes(self: *Self, env: *Env) Allocator.Error!void {
@@ -14464,39 +14737,33 @@ fn validateToInspectMethodTypes(self: *Self, env: *Env) Allocator.Error!void {
 
         const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
         const expr = self.cir.store.getExpr(expr_idx);
-        switch (expr) {
-            .e_call => |call| {
-                if (!self.exprIsBuiltinStrInspect(call.func)) continue;
-                const args = self.cir.store.sliceExpr(call.args);
-                if (args.len != 1) continue;
-                try self.validateToInspectMethodTypeForArg(
-                    args[0],
-                    env,
-                    self.cir.store.getExprRegion(args[0]),
-                );
-            },
-            else => {},
-        }
+        if (expr != .e_call) continue;
+        const call = expr.e_call;
+        if (!self.exprIsBuiltinStrInspect(call.func)) continue;
+        const args = self.cir.store.sliceExpr(call.args);
+        if (args.len != 1) continue;
+        try self.validateToInspectMethodTypeForArg(
+            args[0],
+            env,
+            self.cir.store.getExprRegion(args[0]),
+        );
     }
 }
 
 fn exprIsBuiltinStrInspect(self: *Self, expr_idx: CIR.Expr.Idx) bool {
     const expr = self.cir.store.getExpr(expr_idx);
-    switch (expr) {
-        .e_lookup_local => |lookup| {
-            const ident = self.getPatternIdent(lookup.pattern_idx) orelse return false;
-            return ident.eql(self.cir.idents.builtin_str_inspect);
-        },
-        .e_lookup_external => |ext| {
-            const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return false;
-            if (module_idx >= self.imported_modules.len) return false;
-            const other_env = self.imported_modules[module_idx];
-            const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, ext.target_node_idx));
-            const ident = patternIdentInModule(other_env, def_idx) orelse return false;
-            return ident.eql(other_env.idents.builtin_str_inspect);
-        },
-        else => return false,
+    if (expr == .e_lookup_local) {
+        const ident = self.getPatternIdent(expr.e_lookup_local.pattern_idx) orelse return false;
+        return ident.eql(self.cir.idents.builtin_str_inspect);
     }
+    if (expr != .e_lookup_external) return false;
+    const ext = expr.e_lookup_external;
+    const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return false;
+    if (module_idx >= self.imported_modules.len) return false;
+    const other_env = self.imported_modules[module_idx];
+    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, ext.target_node_idx));
+    const ident = patternIdentInModule(other_env, def_idx) orelse return false;
+    return ident.eql(other_env.idents.builtin_str_inspect);
 }
 
 fn validateToInspectMethodTypeForArg(
@@ -14518,7 +14785,7 @@ fn validateToInspectMethodTypeForArg(
     switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.validateNominalToInspectMethodType(arg_var, nominal, env, region),
-            else => {},
+            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
         },
         .alias => |alias| try self.validateAliasToInspectMethodType(arg_var, alias, env, region),
         .flex,
@@ -14529,10 +14796,9 @@ fn validateToInspectMethodTypeForArg(
 }
 
 fn exprIsTopLevelLookup(self: *Self, expr_idx: CIR.Expr.Idx) bool {
-    return switch (self.cir.store.getExpr(expr_idx)) {
-        .e_lookup_local => |lookup| self.patternIsTopLevelDef(lookup.pattern_idx),
-        else => false,
-    };
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr != .e_lookup_local) return false;
+    return self.patternIsTopLevelDef(expr.e_lookup_local.pattern_idx);
 }
 
 fn validateNominalToInspectMethodType(
@@ -14834,10 +15100,8 @@ fn ownerModuleEnvSourceDeclMatches(candidate: *const ModuleEnv, source_decl: u32
     if (source_decl >= candidate.store.nodes.len()) return false;
 
     const node: CIR.Node.Idx = @enumFromInt(source_decl);
-    switch (candidate.store.nodes.get(node).tag) {
-        .statement_alias_decl, .statement_nominal_decl => {},
-        else => return false,
-    }
+    const node_tag = candidate.store.nodes.get(node).tag;
+    if (node_tag != .statement_alias_decl and node_tag != .statement_nominal_decl) return false;
     return true;
 }
 
@@ -14913,7 +15177,23 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
     return switch (pattern) {
         .assign => |assign| assign.ident,
         .as => |as_pattern| as_pattern.ident,
-        else => null,
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => null,
     };
 }
 
@@ -14939,17 +15219,14 @@ const AnnoVars = struct {
 /// Used for both generalization (value restriction) and cycle detection (deferred
 /// generalization only applies to function defs).
 fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
-    return switch (expr) {
-        .e_closure => |closure| {
-            std.debug.assert(store.getExpr(closure.lambda_idx) == .e_lambda);
-            return true;
-        },
-        .e_lambda => true,
-        .e_anno_only => true,
-        .e_derived_method => true,
-        .e_hosted_lambda => true,
-        else => false,
-    };
+    if (expr == .e_closure) {
+        std.debug.assert(store.getExpr(expr.e_closure.lambda_idx) == .e_lambda);
+        return true;
+    }
+    return expr == .e_lambda or
+        expr == .e_anno_only or
+        expr == .e_derived_method or
+        expr == .e_hosted_lambda;
 }
 
 /// Should this expression generalize in its current binding context — i.e. push
@@ -15003,38 +15280,34 @@ fn isGeneralizableValueBinding(
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
-    return switch (self.cir.store.getExpr(expr_idx)) {
-        .e_crash,
-        .e_ellipsis,
-        .e_expect_err,
-        .e_break,
-        => true,
-        .e_block => |block| self.exprAlwaysCrashes(block.final_expr),
-        .e_if => |if_expr| {
-            const branches = self.cir.store.sliceIfBranches(if_expr.branches);
-            for (branches) |branch_idx| {
-                const branch = self.cir.store.getIfBranch(branch_idx);
-                if (!self.exprAlwaysCrashes(branch.body)) return false;
-            }
-            return self.exprAlwaysCrashes(if_expr.final_else);
-        },
-        else => false,
-    };
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr == .e_crash or expr == .e_ellipsis or expr == .e_expect_err or expr == .e_break) return true;
+    if (expr == .e_block) return self.exprAlwaysCrashes(expr.e_block.final_expr);
+    if (expr == .e_if) {
+        const if_expr = expr.e_if;
+        const branches = self.cir.store.sliceIfBranches(if_expr.branches);
+        for (branches) |branch_idx| {
+            const branch = self.cir.store.getIfBranch(branch_idx);
+            if (!self.exprAlwaysCrashes(branch.body)) return false;
+        }
+        return self.exprAlwaysCrashes(if_expr.final_else);
+    }
+    return false;
 }
 
 fn exprIsAllCrashConditional(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
-    return switch (self.cir.store.getExpr(expr_idx)) {
-        .e_if => |if_expr| {
-            const branches = self.cir.store.sliceIfBranches(if_expr.branches);
-            for (branches) |branch_idx| {
-                const branch = self.cir.store.getIfBranch(branch_idx);
-                if (!self.exprAlwaysCrashes(branch.body)) return false;
-            }
-            return self.exprAlwaysCrashes(if_expr.final_else);
-        },
-        .e_block => |block| self.exprIsAllCrashConditional(block.final_expr),
-        else => false,
-    };
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr == .e_if) {
+        const if_expr = expr.e_if;
+        const branches = self.cir.store.sliceIfBranches(if_expr.branches);
+        for (branches) |branch_idx| {
+            const branch = self.cir.store.getIfBranch(branch_idx);
+            if (!self.exprAlwaysCrashes(branch.body)) return false;
+        }
+        return self.exprAlwaysCrashes(if_expr.final_else);
+    }
+    if (expr == .e_block) return self.exprIsAllCrashConditional(expr.e_block.final_expr);
+    return false;
 }
 
 fn exhaustiveBuiltinIdents(self: *const Self, open_cache: *exhaustive.NominalOpenCache) exhaustive.BuiltinIdents {
@@ -15100,42 +15373,36 @@ fn collectConstructedTagsForExpr(
     out: *std.ArrayList(Ident.Idx),
 ) Allocator.Error!bool {
     const expr = self.cir.store.getExpr(expr_idx);
-    switch (expr) {
-        .e_zero_argument_tag => |tag| {
-            try appendUniqueIdent(self.gpa, out, tag.name);
-            return true;
-        },
-        .e_tag => |tag| {
-            try appendUniqueIdent(self.gpa, out, tag.name);
-            return true;
-        },
-        .e_nominal => |nominal| {
-            return self.collectConstructedTagsForExpr(nominal.backing_expr, out);
-        },
-        .e_nominal_external => |nominal| {
-            return self.collectConstructedTagsForExpr(nominal.backing_expr, out);
-        },
-        .e_block => |block| {
-            return self.collectConstructedTagsForExpr(block.final_expr, out);
-        },
-        .e_if => |if_expr| {
-            const branches = self.cir.store.sliceIfBranches(if_expr.branches);
-            for (branches) |branch_idx| {
-                const branch = self.cir.store.getIfBranch(branch_idx);
-                if (!try self.collectConstructedTagsForExpr(branch.body, out)) return false;
-            }
-            return self.collectConstructedTagsForExpr(if_expr.final_else, out);
-        },
-        .e_match => |match_expr| {
-            const branches = self.cir.store.sliceMatchBranches(match_expr.branches);
-            for (branches) |branch_idx| {
-                const branch = self.cir.store.getMatchBranch(branch_idx);
-                if (!try self.collectConstructedTagsForExpr(branch.value, out)) return false;
-            }
-            return true;
-        },
-        else => return false,
+    if (expr == .e_zero_argument_tag) {
+        try appendUniqueIdent(self.gpa, out, expr.e_zero_argument_tag.name);
+        return true;
     }
+    if (expr == .e_tag) {
+        try appendUniqueIdent(self.gpa, out, expr.e_tag.name);
+        return true;
+    }
+    if (expr == .e_nominal) return self.collectConstructedTagsForExpr(expr.e_nominal.backing_expr, out);
+    if (expr == .e_nominal_external) return self.collectConstructedTagsForExpr(expr.e_nominal_external.backing_expr, out);
+    if (expr == .e_block) return self.collectConstructedTagsForExpr(expr.e_block.final_expr, out);
+    if (expr == .e_if) {
+        const if_expr = expr.e_if;
+        const branches = self.cir.store.sliceIfBranches(if_expr.branches);
+        for (branches) |branch_idx| {
+            const branch = self.cir.store.getIfBranch(branch_idx);
+            if (!try self.collectConstructedTagsForExpr(branch.body, out)) return false;
+        }
+        return self.collectConstructedTagsForExpr(if_expr.final_else, out);
+    }
+    if (expr == .e_match) {
+        const match_expr = expr.e_match;
+        const branches = self.cir.store.sliceMatchBranches(match_expr.branches);
+        for (branches) |branch_idx| {
+            const branch = self.cir.store.getMatchBranch(branch_idx);
+            if (!try self.collectConstructedTagsForExpr(branch.value, out)) return false;
+        }
+        return true;
+    }
+    return false;
 }
 
 fn collectAbsentCtorPayloadBlockers(
@@ -15174,7 +15441,7 @@ fn payloadVarCanResolveToEmpty(content: Content) bool {
     return switch (content) {
         .flex => |flex| flex.constraints.len() == 0 and if (flex.name) |name| name.attributes.ignored else true,
         .rigid => |rigid| rigid.constraints.len() == 0 and rigid.name.attributes.ignored,
-        else => false,
+        .alias, .structure, .err => false,
     };
 }
 
@@ -15477,10 +15744,11 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // A record-destructure binding gets a dedicated context so the
                 // report can suggest `field: _` or `..` when the pattern is too
                 // narrow for the value (the pattern is the first/expected arg).
-                const decl_pattern_result = switch (self.cir.store.getPattern(decl_stmt.pattern)) {
-                    .record_destructure => try self.unifyInContext(decl_pattern_var, decl_expr_var, env, .record_destructure),
-                    else => try self.unify(decl_pattern_var, decl_expr_var, env),
-                };
+                const decl_pattern = self.cir.store.getPattern(decl_stmt.pattern);
+                const decl_pattern_result = if (decl_pattern == .record_destructure)
+                    try self.unifyInContext(decl_pattern_var, decl_expr_var, env, .record_destructure)
+                else
+                    try self.unify(decl_pattern_var, decl_expr_var, env);
 
                 if (decl_pattern_result.isOk()) {
                     try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
@@ -15794,7 +16062,26 @@ fn typeDispatchOwnerVar(self: *Self, stmt_idx: CIR.Statement.Idx) Var {
     return switch (stmt) {
         .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
         .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
-        else => @panic("type dispatch owner statement was not a type-var alias or type alias"),
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_runtime_error,
+        => @panic("type dispatch owner statement was not a type-var alias or type alias"),
     };
 }
 
@@ -15834,9 +16121,9 @@ fn singleParameterWrapperPayload(self: *Self, wrapper_var: Var) ?Var {
                 if (args.len != 1) break :blk null;
                 break :blk args[0];
             },
-            else => null,
+            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
         },
-        else => null,
+        .flex, .rigid, .err => null,
     };
 }
 
@@ -15849,10 +16136,10 @@ fn functionTypeFromVar(self: *Self, fn_var: Var) ?Func {
         switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| return func,
-                else => return null,
+                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
             },
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            else => return null,
+            .flex, .rigid, .err => return null,
         }
     }
 }
@@ -15871,10 +16158,10 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
                     if (args.len != 2) return null;
                     return .{ .ok = args[0], .err = args[1] };
                 },
-                else => return null,
+                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return null,
             },
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            else => return null,
+            .flex, .rigid, .err => return null,
         }
     }
 }
@@ -15886,10 +16173,9 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
 /// produced); dispatch calls and value-carried functions are never direct
 /// hosted calls, so `?` on them gets no widening.
 fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
-    const call = switch (self.cir.store.getExpr(cond_idx)) {
-        .e_call => |call| call,
-        else => return false,
-    };
+    const expr = self.cir.store.getExpr(cond_idx);
+    if (expr != .e_call) return false;
+    const call = expr.e_call;
     const callable_def = self.hoistedCallableDefForExpr(self.cir, call.func) orelse return false;
     const def = callable_def.module.store.getDef(callable_def.def);
     return callable_def.module.store.getExpr(def.expr) == .e_hosted_lambda;
@@ -15987,7 +16273,7 @@ fn actualTagRowIsIncludedInExpected(
                 }
                 return try self.actualTagRowIsIncludedInExpected(tag_union.ext, expected_var, visited_actual);
             },
-            else => return false,
+            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
         },
         .err => return true,
         .flex, .rigid => return false,
@@ -16035,7 +16321,7 @@ fn findVisibleTagInRow(
                 return try self.findVisibleTagInRow(tag_union.ext, tag_name, visited);
             },
             .empty_tag_union => return null,
-            else => return null,
+            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
         },
         .err, .flex, .rigid => return null,
     }
@@ -16668,7 +16954,17 @@ fn checkBinopExpr(
                     .div => self.cir.idents.div_by,
                     .div_trunc => self.cir.idents.div_trunc_by,
                     .rem => self.cir.idents.rem_by,
-                    else => unreachable,
+                    .lt,
+                    .gt,
+                    .le,
+                    .ge,
+                    .eq,
+                    .ne,
+                    .@"and",
+                    .@"or",
+                    .range_exclusive,
+                    .range_inclusive,
+                    => unreachable,
                 };
 
             const lhs_is_numeric = self.isBuiltinNumericNominal(lhs_var);
@@ -16749,7 +17045,19 @@ fn checkBinopExpr(
                     .gt => .{ self.cir.idents.is_gt, try self.freshBool(env, expr_region) },
                     .le => .{ self.cir.idents.is_lte, try self.freshBool(env, expr_region) },
                     .ge => .{ self.cir.idents.is_gte, try self.freshBool(env, expr_region) },
-                    else => unreachable,
+                    .add,
+                    .sub,
+                    .mul,
+                    .div,
+                    .rem,
+                    .eq,
+                    .ne,
+                    .div_trunc,
+                    .@"and",
+                    .@"or",
+                    .range_exclusive,
+                    .range_inclusive,
+                    => unreachable,
                 };
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
@@ -16785,7 +17093,21 @@ fn checkBinopExpr(
             const method_name = switch (binop.op) {
                 .range_exclusive => self.cir.idents.range_exclusive,
                 .range_inclusive => self.cir.idents.range_inclusive,
-                else => unreachable,
+                .add,
+                .sub,
+                .mul,
+                .div,
+                .rem,
+                .lt,
+                .gt,
+                .le,
+                .ge,
+                .eq,
+                .ne,
+                .div_trunc,
+                .@"and",
+                .@"or",
+                => unreachable,
             };
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
@@ -16904,7 +17226,21 @@ fn checkBinopExpr(
             const binop_ctx: problem.Context.BinopContext.Binop = switch (binop.op) {
                 .@"and" => .@"and",
                 .@"or" => .@"or",
-                else => unreachable,
+                .add,
+                .sub,
+                .mul,
+                .div,
+                .rem,
+                .lt,
+                .gt,
+                .le,
+                .ge,
+                .eq,
+                .ne,
+                .div_trunc,
+                .range_exclusive,
+                .range_inclusive,
+                => unreachable,
             };
             const lhs_result = try self.unifyInContext(lhs_fresh_bool, lhs_var, env, .{ .binop_lhs = .{
                 .operator = binop_ctx,
@@ -16952,7 +17288,17 @@ fn reportDefinitelyInvalidNumericBinopOperand(
         .div => .div,
         .rem => .div,
         .div_trunc => .div,
-        else => return false,
+        .lt,
+        .gt,
+        .le,
+        .ge,
+        .eq,
+        .ne,
+        .@"and",
+        .@"or",
+        .range_exclusive,
+        .range_inclusive,
+        => return false,
     };
 
     const ctx: problem.Context = switch (side) {
@@ -17123,8 +17469,10 @@ fn publishBinopDispatchExpr(
     region: Region,
     constraint_fn_var: Var,
 ) Allocator.Error!void {
-    switch (self.cir.store.getExpr(expr_idx)) {
-        .e_binop => |binop| switch (binop.op) {
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr == .e_binop) {
+        const binop = expr.e_binop;
+        switch (binop.op) {
             .eq, .ne => {
                 self.cir.store.replaceExprWithMethodEq(
                     expr_idx,
@@ -17135,7 +17483,19 @@ fn publishBinopDispatchExpr(
                 );
             },
             .@"and", .@"or" => {},
-            else => {
+            .add,
+            .sub,
+            .mul,
+            .div,
+            .rem,
+            .lt,
+            .gt,
+            .le,
+            .ge,
+            .div_trunc,
+            .range_exclusive,
+            .range_inclusive,
+            => {
                 const args = try self.cir.store.appendExprSpan(&.{binop.rhs});
                 try self.cir.store.replaceExprWithDispatchCall(
                     expr_idx,
@@ -17147,8 +17507,7 @@ fn publishBinopDispatchExpr(
                     .{ .binop = binop.op },
                 );
             },
-        },
-        else => {},
+        }
     }
 }
 
@@ -17205,11 +17564,13 @@ fn publishUnaryDispatchExpr(
     region: Region,
     constraint_fn_var: Var,
 ) Allocator.Error!void {
-    const receiver: CIR.Expr.Idx, const surface_origin: CIR.Expr.SurfaceOrigin = switch (self.cir.store.getExpr(expr_idx)) {
-        .e_unary_minus => |unary| .{ unary.expr, .unary_minus },
-        .e_unary_not => |unary| .{ unary.expr, .unary_not },
-        else => return,
-    };
+    const expr = self.cir.store.getExpr(expr_idx);
+    const receiver: CIR.Expr.Idx, const surface_origin: CIR.Expr.SurfaceOrigin = if (expr == .e_unary_minus)
+        .{ expr.e_unary_minus.expr, .unary_minus }
+    else if (expr == .e_unary_not)
+        .{ expr.e_unary_not.expr, .unary_not }
+    else
+        return;
     try self.cir.store.replaceExprWithDispatchCall(
         expr_idx,
         receiver,
@@ -17508,45 +17869,44 @@ fn rewriteDerivedIsEqMethodCallAsStructuralEq(
 ) bool {
     const expr_idx = constraintIntroExpr(constraint) orelse return true;
 
-    switch (self.cir.store.getExpr(expr_idx)) {
-        .e_method_call => |method_call| {
-            const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 1) return false;
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr == .e_method_call) {
+        const method_call = expr.e_method_call;
+        const args = self.cir.store.sliceExpr(method_call.args);
+        if (args.len != 1) return false;
 
-            self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.origin.binopNegated());
-        },
-        .e_dispatch_call => |method_call| {
-            if (method_call.constraint_fn_var != constraint.fn_var) return true;
-            const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 1) return false;
+        self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.origin.binopNegated());
+    } else if (expr == .e_dispatch_call) {
+        const method_call = expr.e_dispatch_call;
+        if (method_call.constraint_fn_var != constraint.fn_var) return true;
+        const args = self.cir.store.sliceExpr(method_call.args);
+        if (args.len != 1) return false;
 
-            self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.origin.binopNegated());
-        },
-        .e_type_method_call => |method_call| {
-            const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 2) return false;
+        self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.origin.binopNegated());
+    } else if (expr == .e_type_method_call) {
+        const method_call = expr.e_type_method_call;
+        const args = self.cir.store.sliceExpr(method_call.args);
+        if (args.len != 2) return false;
 
-            self.cir.store.replaceExprWithStructuralEq(expr_idx, args[0], args[1], constraint.origin.binopNegated());
-        },
-        .e_type_dispatch_call => |method_call| {
-            if (method_call.constraint_fn_var != constraint.fn_var) return true;
-            const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 2) return false;
+        self.cir.store.replaceExprWithStructuralEq(expr_idx, args[0], args[1], constraint.origin.binopNegated());
+    } else if (expr == .e_type_dispatch_call) {
+        const method_call = expr.e_type_dispatch_call;
+        if (method_call.constraint_fn_var != constraint.fn_var) return true;
+        const args = self.cir.store.sliceExpr(method_call.args);
+        if (args.len != 2) return false;
 
-            self.cir.store.replaceExprWithStructuralEq(expr_idx, args[0], args[1], constraint.origin.binopNegated());
-        },
-        .e_method_eq => |eq| {
-            if (eq.constraint_fn_var != constraint.fn_var) return true;
-            self.cir.store.replaceExprWithStructuralEq(expr_idx, eq.lhs, eq.rhs, constraint.origin.binopNegated());
-        },
-        .e_binop => |binop| {
-            if (binop.op != .eq and binop.op != .ne) return true;
-            self.cir.store.replaceExprWithStructuralEq(expr_idx, binop.lhs, binop.rhs, constraint.origin.binopNegated());
-        },
-        .e_structural_eq => |eq| {
-            self.cir.store.replaceExprWithStructuralEq(expr_idx, eq.lhs, eq.rhs, constraint.origin.binopNegated());
-        },
-        else => {},
+        self.cir.store.replaceExprWithStructuralEq(expr_idx, args[0], args[1], constraint.origin.binopNegated());
+    } else if (expr == .e_method_eq) {
+        const eq = expr.e_method_eq;
+        if (eq.constraint_fn_var != constraint.fn_var) return true;
+        self.cir.store.replaceExprWithStructuralEq(expr_idx, eq.lhs, eq.rhs, constraint.origin.binopNegated());
+    } else if (expr == .e_binop) {
+        const binop = expr.e_binop;
+        if (binop.op != .eq and binop.op != .ne) return true;
+        self.cir.store.replaceExprWithStructuralEq(expr_idx, binop.lhs, binop.rhs, constraint.origin.binopNegated());
+    } else if (expr == .e_structural_eq) {
+        const eq = expr.e_structural_eq;
+        self.cir.store.replaceExprWithStructuralEq(expr_idx, eq.lhs, eq.rhs, constraint.origin.binopNegated());
     }
 
     return true;
@@ -17565,37 +17925,36 @@ fn rewriteDerivedMethodCallAsStructuralHash(
 ) bool {
     const expr_idx = constraintIntroExpr(constraint) orelse return true;
 
-    switch (self.cir.store.getExpr(expr_idx)) {
-        .e_method_call => |method_call| {
-            const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 1) return false;
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr == .e_method_call) {
+        const method_call = expr.e_method_call;
+        const args = self.cir.store.sliceExpr(method_call.args);
+        if (args.len != 1) return false;
 
-            self.cir.store.replaceExprWithStructuralHash(expr_idx, method_call.receiver, args[0]);
-        },
-        .e_dispatch_call => |method_call| {
-            if (method_call.constraint_fn_var != constraint.fn_var) return true;
-            const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 1) return false;
+        self.cir.store.replaceExprWithStructuralHash(expr_idx, method_call.receiver, args[0]);
+    } else if (expr == .e_dispatch_call) {
+        const method_call = expr.e_dispatch_call;
+        if (method_call.constraint_fn_var != constraint.fn_var) return true;
+        const args = self.cir.store.sliceExpr(method_call.args);
+        if (args.len != 1) return false;
 
-            self.cir.store.replaceExprWithStructuralHash(expr_idx, method_call.receiver, args[0]);
-        },
-        .e_type_method_call => |method_call| {
-            const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 2) return false;
+        self.cir.store.replaceExprWithStructuralHash(expr_idx, method_call.receiver, args[0]);
+    } else if (expr == .e_type_method_call) {
+        const method_call = expr.e_type_method_call;
+        const args = self.cir.store.sliceExpr(method_call.args);
+        if (args.len != 2) return false;
 
-            self.cir.store.replaceExprWithStructuralHash(expr_idx, args[0], args[1]);
-        },
-        .e_type_dispatch_call => |method_call| {
-            if (method_call.constraint_fn_var != constraint.fn_var) return true;
-            const args = self.cir.store.sliceExpr(method_call.args);
-            if (args.len != 2) return false;
+        self.cir.store.replaceExprWithStructuralHash(expr_idx, args[0], args[1]);
+    } else if (expr == .e_type_dispatch_call) {
+        const method_call = expr.e_type_dispatch_call;
+        if (method_call.constraint_fn_var != constraint.fn_var) return true;
+        const args = self.cir.store.sliceExpr(method_call.args);
+        if (args.len != 2) return false;
 
-            self.cir.store.replaceExprWithStructuralHash(expr_idx, args[0], args[1]);
-        },
-        .e_structural_hash => |h| {
-            self.cir.store.replaceExprWithStructuralHash(expr_idx, h.value, h.hasher);
-        },
-        else => {},
+        self.cir.store.replaceExprWithStructuralHash(expr_idx, args[0], args[1]);
+    } else if (expr == .e_structural_hash) {
+        const h = expr.e_structural_hash;
+        self.cir.store.replaceExprWithStructuralHash(expr_idx, h.value, h.hasher);
     }
 
     return true;
@@ -17610,31 +17969,30 @@ fn rewriteDerivedMethodCallAsStructuralHash(
 fn rewriteEqBinopAsMethodEq(self: *Self, constraint: StaticDispatchConstraint) void {
     if (constraint.origin != .desugared_binop) return;
     const expr_idx = constraintIntroExpr(constraint) orelse return;
-    switch (self.cir.store.getExpr(expr_idx)) {
-        .e_binop => |binop| {
-            if (binop.op != .eq and binop.op != .ne) return;
-            self.cir.store.replaceExprWithMethodEq(
-                expr_idx,
-                binop.lhs,
-                binop.rhs,
-                constraint.origin.binopNegated(),
-                constraint.fn_var,
-            );
-        },
-        .e_method_eq => |eq| {
-            // A discharge of an instantiated copy carries the copy's fn var;
-            // the node must keep the scheme-pristine fn var stamped at plan
-            // creation, so only the node's own constraint may restamp it.
-            if (eq.constraint_fn_var != constraint.fn_var) return;
-            self.cir.store.replaceExprWithMethodEq(
-                expr_idx,
-                eq.lhs,
-                eq.rhs,
-                constraint.origin.binopNegated(),
-                constraint.fn_var,
-            );
-        },
-        else => {},
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr == .e_binop) {
+        const binop = expr.e_binop;
+        if (binop.op != .eq and binop.op != .ne) return;
+        self.cir.store.replaceExprWithMethodEq(
+            expr_idx,
+            binop.lhs,
+            binop.rhs,
+            constraint.origin.binopNegated(),
+            constraint.fn_var,
+        );
+    } else if (expr == .e_method_eq) {
+        const eq = expr.e_method_eq;
+        // A discharge of an instantiated copy carries the copy's fn var;
+        // the node must keep the scheme-pristine fn var stamped at plan
+        // creation, so only the node's own constraint may restamp it.
+        if (eq.constraint_fn_var != constraint.fn_var) return;
+        self.cir.store.replaceExprWithMethodEq(
+            expr_idx,
+            eq.lhs,
+            eq.rhs,
+            constraint.origin.binopNegated(),
+            constraint.fn_var,
+        );
     }
 }
 
@@ -17801,12 +18159,12 @@ fn resolveAssociatedLookup(
         const owner = self.types.resolveVar(owner_var);
         switch (owner.desc.content) {
             .alias => |alias| owner_var = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| break nominal,
-                else => {
+            .structure => |flat| {
+                if (flat != .nominal_type) {
                     try self.associated_lookup_cache.put(self.gpa, cache_key, null);
                     return null;
-                },
+                }
+                break flat.nominal_type;
             },
             .err, .flex, .rigid => {
                 try self.associated_lookup_cache.put(self.gpa, cache_key, null);
@@ -19342,7 +19700,7 @@ fn structureHasPendingOpenLiteralForDerivedParse(
             }
             break :blk false;
         },
-        else => false,
+        .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
     };
 }
 
@@ -19383,10 +19741,10 @@ fn tagExtHasPendingOpenLiteralForDerivedParse(
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
             .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedParse(tag_union, env, visited),
-            else => false,
+            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
         },
         .alias => |alias| try self.tagExtHasPendingOpenLiteralForDerivedParse(self.types.getAliasBackingVar(alias), env, visited),
-        else => false,
+        .flex, .rigid, .err => false,
     };
 }
 
@@ -19459,7 +19817,7 @@ fn structureHasPendingOpenLiteralForDerivedEncode(
             }
             break :blk false;
         },
-        else => false,
+        .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
     };
 }
 
@@ -19501,10 +19859,10 @@ fn tagExtHasPendingOpenLiteralForDerivedEncode(
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
             .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedEncode(tag_union, env, visited),
-            else => false,
+            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
         },
         .alias => |alias| try self.tagExtHasPendingOpenLiteralForDerivedEncode(self.types.getAliasBackingVar(alias), env, visited),
-        else => false,
+        .flex, .rigid, .err => false,
     };
 }
 
@@ -19676,7 +20034,7 @@ const numeral_default_candidates = blk: {
 /// name: a new target fails to compile until NumKind has a matching tag).
 fn numKindFromNumeralTarget(target: exact_numeral.Target) CIR.NumKind {
     return switch (target) {
-        inline else => |t| @field(CIR.NumKind, @tagName(t)),
+        inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |t| @field(CIR.NumKind, @tagName(t)),
     };
 }
 
@@ -19944,7 +20302,7 @@ fn rangeNumeralDigitsFit(
             .from_literal => |lit| {
                 if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) return false;
             },
-            else => {},
+            .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {},
         }
     }
     return true;
@@ -19966,7 +20324,7 @@ fn candidateSatisfiesRangeConstraints(
     while (constraints_iter.next()) |constraint| {
         switch (constraint.origin) {
             .from_literal => {},
-            else => {
+            .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {
                 if (!try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, candidate_var, env)) {
                     return false;
                 }
@@ -20032,7 +20390,31 @@ fn appendReturnConstraint(
 ) std.mem.Allocator.Error!void {
     switch (ctx) {
         .early_return, .try_operator => {},
-        else => unreachable,
+        .none,
+        .fn_call_arity,
+        .fn_call_arg,
+        .if_condition,
+        .if_branch,
+        .match_pattern,
+        .match_alt_binder,
+        .match_branch,
+        .list_entry,
+        .interpolation_part,
+        .type_annotation,
+        .record_destructure,
+        .binop_lhs,
+        .binop_rhs,
+        .record_access,
+        .record_update,
+        .try_operator_expr,
+        .statement_value,
+        .nominal_constructor,
+        .fn_args_bound_var,
+        .platform_requirement,
+        .method_type,
+        .expect,
+        .recursive_def,
+        => unreachable,
     }
 
     std.debug.assert(self.return_constraint_frames.items.len > 0);
@@ -20062,7 +20444,31 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
             .try_operator => {
                 _ = try self.unifyInContext(constraint.expected, constraint.actual, env, .try_operator);
             },
-            else => unreachable,
+            .none,
+            .fn_call_arity,
+            .fn_call_arg,
+            .if_condition,
+            .if_branch,
+            .match_pattern,
+            .match_alt_binder,
+            .match_branch,
+            .list_entry,
+            .interpolation_part,
+            .type_annotation,
+            .record_destructure,
+            .binop_lhs,
+            .binop_rhs,
+            .record_access,
+            .record_update,
+            .try_operator_expr,
+            .statement_value,
+            .nominal_constructor,
+            .fn_args_bound_var,
+            .platform_requirement,
+            .method_type,
+            .expect,
+            .recursive_def,
+            => unreachable,
         }
     }
 
@@ -20242,14 +20648,10 @@ fn localProcedureMethodBinding(self: *const Self, method_lookup: StaticDispatchM
     const raw_node = @intFromEnum(method_lookup.binding.type_node_idx);
     if (raw_node >= self.cir.store.nodes.len()) return false;
     if (self.cir.store.nodes.get(@enumFromInt(raw_node)).tag != .statement_decl) return false;
-    const decl = switch (self.cir.store.getStatement(@enumFromInt(raw_node))) {
-        .s_decl => |decl| decl,
-        else => return false,
-    };
-    return switch (self.cir.store.getExpr(decl.expr)) {
-        .e_lambda, .e_closure => true,
-        else => false,
-    };
+    const stmt = self.cir.store.getStatement(@enumFromInt(raw_node));
+    if (stmt != .s_decl) return false;
+    const expr = self.cir.store.getExpr(stmt.s_decl.expr);
+    return expr == .e_lambda or expr == .e_closure;
 }
 
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
@@ -21293,7 +21695,11 @@ fn interpolationPartConstraintsAcceptBuiltinStr(
                 .quote, .interpolation => continue,
                 .numeral => return false,
             },
-            else => {},
+            .desugared_binop,
+            .desugared_unaryop,
+            .method_call,
+            .where_clause,
+            => {},
         }
 
         if (!try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, expected_str_var, env)) {
@@ -21307,11 +21713,7 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
     const resolved_expr = self.types.resolveVar(part.var_);
     if (resolved_expr.desc.content == .err) return false;
 
-    const constraints_range = switch (resolved_expr.desc.content) {
-        .flex => |flex| flex.constraints,
-        .rigid => |rigid| rigid.constraints,
-        else => StaticDispatchConstraint.SafeList.Range.empty(),
-    };
+    const constraints_range = contentConstraintRange(resolved_expr.desc.content) orelse StaticDispatchConstraint.SafeList.Range.empty();
 
     const compatible = blk: {
         var probe = try self.beginCommitProbe(env);
@@ -21494,18 +21896,12 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocato
 
 fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
     if (!nominal_type.originIsBuiltin()) return false;
-    return switch (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) {
-        .box => true,
-        else => false,
-    };
+    return (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) == .box;
 }
 
 fn nominalIsBuiltinListType(self: *Self, nominal_type: types_mod.NominalType) bool {
     if (!nominal_type.originIsBuiltin()) return false;
-    return switch (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) {
-        .list => true,
-        else => false,
-    };
+    return (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) == .list;
 }
 
 fn nominalListPayloadVar(self: *Self, nominal_type: types_mod.NominalType) ?Var {
@@ -21517,10 +21913,7 @@ fn nominalListPayloadVar(self: *Self, nominal_type: types_mod.NominalType) ?Var 
 
 fn nominalIsBuiltinSetType(self: *Self, nominal_type: types_mod.NominalType) bool {
     if (!nominal_type.originIsBuiltin()) return false;
-    return switch (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) {
-        .set => true,
-        else => false,
-    };
+    return (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) == .set;
 }
 
 fn nominalSetPayloadVar(self: *Self, nominal_type: types_mod.NominalType) ?Var {
@@ -21532,10 +21925,7 @@ fn nominalSetPayloadVar(self: *Self, nominal_type: types_mod.NominalType) ?Var {
 
 fn nominalIsBuiltinDictType(self: *Self, nominal_type: types_mod.NominalType) bool {
     if (!nominal_type.originIsBuiltin()) return false;
-    return switch (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) {
-        .dict => true,
-        else => false,
-    };
+    return (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) == .dict;
 }
 
 const DictKeyValueVars = struct {
@@ -21575,7 +21965,7 @@ fn varContainsOpenRowInHostBoundaryInternal(
     const resolved = self.types.resolveVar(var_);
     switch (resolved.desc.content) {
         .flex, .rigid, .err => return false,
-        else => {},
+        .alias, .structure => {},
     }
     if (visited.contains(resolved.var_)) return false;
     try visited.put(resolved.var_, {});
@@ -21685,7 +22075,14 @@ fn recordExtIsClosedForHostBoundary(
                     return false;
                 },
                 .empty_record => return true,
-                else => return false,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .tag_union,
+                .empty_tag_union,
+                => return false,
             },
             .flex, .rigid => return false,
             .err => return true,
@@ -21717,7 +22114,15 @@ fn tagUnionExtIsClosedForHostBoundary(
                     current = tag_union.ext;
                 },
                 .empty_tag_union => return true,
-                else => return false,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => return false,
             },
             .flex, .rigid => return false,
             .err => return true,
@@ -21748,7 +22153,14 @@ fn varContainsUnboxedFunctionInHostedSignatureInternal(
                 if (try self.varContainsUnboxedFunctionInternal(func.ret, false, visited)) break :blk true;
                 break :blk false;
             },
-            else => try self.flatTypeContainsUnboxedFunction(s, false, visited),
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => try self.flatTypeContainsUnboxedFunction(s, false, visited),
         },
         .alias => |alias| try self.varContainsUnboxedFunctionInHostedSignatureInternal(self.types.getAliasBackingVar(alias), allow_top_fn, visited),
         .flex, .rigid, .err => false,
@@ -21929,7 +22341,14 @@ fn typeSupportsStringRenderedDictKey(self: *Self, flat_type: types_mod.FlatType)
             self.nominalIsBuiltinNumberType(nominal),
         .tag_union => |tag_union| try self.tagUnionIsClosedAndUnit(tag_union),
         .empty_tag_union => false,
-        else => false,
+        .record,
+        .record_unbound,
+        .tuple,
+        .fn_pure,
+        .fn_effectful,
+        .fn_unbound,
+        .empty_record,
+        => false,
     };
 }
 
@@ -21947,10 +22366,19 @@ fn varIsClosedUnitTagUnion(self: *Self, var_: Var) std.mem.Allocator.Error!bool 
     return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |structure| switch (structure) {
             .tag_union => |tag_union| try self.tagUnionIsClosedAndUnit(tag_union),
-            else => false,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .empty_tag_union,
+            => false,
         },
         .alias => |alias| try self.varIsClosedUnitTagUnion(self.types.getAliasBackingVar(alias)),
-        else => false,
+        .flex, .rigid, .err => false,
     };
 }
 
@@ -21968,7 +22396,15 @@ fn tagExtIsClosedAndUnit(self: *Self, ext_var: Var) std.mem.Allocator.Error!bool
         .structure => |structure| switch (structure) {
             .empty_tag_union => true,
             .tag_union => |tag_union| try self.tagUnionIsClosedAndUnit(tag_union),
-            else => false,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => false,
         },
         .alias => |alias| try self.tagExtIsClosedAndUnit(self.types.getAliasBackingVar(alias)),
         .err => true,
@@ -21988,10 +22424,19 @@ fn varResolvesToBuiltinScalarNominal(self: *const Self, var_: Var) bool {
             .nominal_type => |nominal| self.nominalIsBuiltinBoolType(nominal) or
                 self.nominalIsBuiltinStrType(nominal) or
                 (self.builtinNumKindFromNominalType(nominal) != null),
-            else => false,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => false,
         },
         .alias => |alias| self.varResolvesToBuiltinScalarNominal(self.types.getAliasBackingVar(alias)),
-        else => false,
+        .flex, .rigid, .err => false,
     };
 }
 
@@ -22073,7 +22518,7 @@ fn typeSupportsDerivedParse(
         .empty_record => .supported,
         .empty_tag_union => .unsupported,
         .nominal_type => |nominal| try self.nominalSupportsDerivedParseShape(nominal, env, region),
-        else => .unsupported,
+        .fn_pure, .fn_effectful, .fn_unbound => .unsupported,
     };
 }
 
@@ -22102,7 +22547,15 @@ fn derivedParseExtHasAnyTag(self: *Self, ext_var: Var) Allocator.Error!DerivedSu
         .structure => |structure| switch (structure) {
             .empty_tag_union => .unsupported,
             .tag_union => |tag_union| try self.derivedParseTagUnionHasAnyTag(tag_union),
-            else => .unsupported,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => .unsupported,
         },
         .alias => |alias| try self.derivedParseExtHasAnyTag(self.types.getAliasBackingVar(alias)),
         .err => .supported,
@@ -22121,7 +22574,15 @@ fn varSupportsDerivedParseTagExt(
         .structure => |structure| switch (structure) {
             .empty_tag_union => .supported,
             .tag_union => |tag_union| try self.typeSupportsDerivedParse(.{ .tag_union = tag_union }, env, region),
-            else => .unsupported,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => .unsupported,
         },
         .alias => |alias| try self.varSupportsDerivedParseTagExt(self.types.getAliasBackingVar(alias), env, region),
         .err, .flex => .supported,
@@ -22144,7 +22605,7 @@ fn varSupportsDerivedParseField(
             .tuple => |tuple| try self.typeSupportsDerivedParse(.{ .tuple = tuple }, env, region),
             .empty_record => .supported,
             .empty_tag_union => .unsupported,
-            else => .unsupported,
+            .fn_pure, .fn_effectful, .fn_unbound => .unsupported,
         },
         .alias => |alias| try self.varSupportsDerivedParseField(self.types.getAliasBackingVar(alias), env, region),
         .err => .supported,
@@ -22302,7 +22763,12 @@ fn typeSupportsDerivedEncode(
             break :blk support;
         },
         .empty_record => .supported,
-        else => .unsupported,
+        .nominal_type,
+        .fn_pure,
+        .fn_effectful,
+        .fn_unbound,
+        .empty_tag_union,
+        => .unsupported,
     };
 }
 
@@ -22335,7 +22801,7 @@ fn varSupportsDerivedEncodeShape(
             .tuple => |tuple| try self.typeSupportsDerivedEncode(.{ .tuple = tuple }, encoding_var, env, region),
             .empty_record => .supported,
             .empty_tag_union => .unsupported,
-            else => .unsupported,
+            .fn_pure, .fn_effectful, .fn_unbound => .unsupported,
         },
         .alias => |alias| try self.varSupportsDerivedEncodeShape(self.types.getAliasBackingVar(alias), encoding_var, env, region),
         .err => .supported,
@@ -22355,7 +22821,15 @@ fn varSupportsDerivedEncodeTagExt(
         .structure => |structure| switch (structure) {
             .empty_tag_union => .supported,
             .tag_union => |tag_union| try self.typeSupportsDerivedEncode(.{ .tag_union = tag_union }, encoding_var, env, region),
-            else => .unsupported,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => .unsupported,
         },
         .alias => |alias| try self.varSupportsDerivedEncodeTagExt(self.types.getAliasBackingVar(alias), encoding_var, env, region),
         .err => .supported,
@@ -22403,7 +22877,16 @@ fn missingTryInfoForVar(
     return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.missingTryInfoFromNominal(nominal),
-            else => null,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => null,
         },
         .alias => |alias| try self.missingTryInfoForVar(self.types.getAliasBackingVar(alias)),
         .err => null,
@@ -22458,7 +22941,7 @@ fn unboundTryInfoFromNominal(
     const try_info = (try self.builtinTryInfoFromNominal(nominal)) orelse return null;
     return switch (self.types.resolveVar(try_info.err_var).desc.content) {
         .flex => try_info,
-        else => null,
+        .rigid, .alias, .structure, .err => null,
     };
 }
 
@@ -22466,7 +22949,16 @@ fn unboundTryInfoForVar(self: *Self, var_: Var) Allocator.Error!?BuiltinTryInfo 
     return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.unboundTryInfoFromNominal(nominal),
-            else => null,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => null,
         },
         .alias => |alias| try self.unboundTryInfoForVar(self.types.getAliasBackingVar(alias)),
         .err, .flex, .rigid => null,
@@ -22495,7 +22987,16 @@ fn varIsExactUnitTagUnion(
                 const text = self.cir.getIdentStoreConst().getText(tag_names[0]);
                 break :blk Ident.textEql(text, tag_text);
             },
-            else => false,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .empty_tag_union,
+            => false,
         },
         .err, .flex, .rigid => false,
     };
@@ -22513,7 +23014,16 @@ fn varIsBuiltinStr(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| self.nominalIsBuiltinStrType(nominal),
-            else => false,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => false,
         },
         .alias => |alias| try self.varIsBuiltinStr(self.types.getAliasBackingVar(alias)),
         .err => true,
@@ -22523,10 +23033,7 @@ fn varIsBuiltinStr(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
 
 fn nominalIsBuiltinTryType(self: *const Self, nominal_type: types_mod.NominalType) bool {
     if (!nominal_type.originIsBuiltin()) return false;
-    return switch (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) {
-        .try_type => true,
-        else => false,
-    };
+    return (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) == .try_type;
 }
 
 fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
@@ -22544,7 +23051,7 @@ const BuiltinFromNumeralLiteralProblem = enum {
 fn numeralTargetFromNumKind(num_kind: CIR.NumKind) ?exact_numeral.Target {
     return switch (num_kind) {
         .num_unbound, .int_unbound => null,
-        inline else => |k| @field(exact_numeral.Target, @tagName(k)),
+        inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |k| @field(exact_numeral.Target, @tagName(k)),
     };
 }
 
@@ -22696,10 +23203,19 @@ fn validateResolvedOpenNumeralLiterals(
         const nominal_type = switch (resolved.desc.content) {
             .structure => |flat_type| switch (flat_type) {
                 .nominal_type => |nominal| nominal,
-                else => continue,
+                .record,
+                .record_unbound,
+                .tuple,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => continue,
             },
             .err => continue,
-            else => continue,
+            .flex, .rigid, .alias => continue,
         };
         const num_kind = self.builtinNumKindFromNominalType(nominal_type) orelse continue;
         _ = try self.reportInvalidBuiltinFromNumeralInfo(resolved.var_, num_kind, entry.constraint.origin.numeralInfo().?, env);
@@ -22793,7 +23309,16 @@ fn literalTargetIsBuiltinDirect(
                 .numeral => self.nominalIsBuiltinNumberType(nominal),
                 .quote => self.nominalIsBuiltinStrType(nominal),
             },
-            else => false,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => false,
         },
         .err, .flex, .rigid => false,
     };
@@ -22885,19 +23410,28 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
             const callable = self.types.resolveVar(fn_var);
             const target_shape = switch (target.desc.content) {
                 .structure => |structure| @tagName(structure),
-                else => @tagName(target.desc.content),
+                .flex, .rigid, .alias, .err => @tagName(target.desc.content),
             };
             const callable_shape = switch (callable.desc.content) {
                 .structure => |structure| @tagName(structure),
-                else => @tagName(callable.desc.content),
+                .flex, .rigid, .alias, .err => @tagName(callable.desc.content),
             };
             const target_name = switch (target.desc.content) {
                 .structure => |structure| switch (structure) {
                     .nominal_type => |nominal| self.cir.getIdent(nominal.ident.ident_idx),
-                    else => "<unnamed>",
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => "<unnamed>",
                 },
                 .alias => |alias| self.cir.getIdent(alias.ident.ident_idx),
-                else => "<unnamed>",
+                .flex, .rigid, .err => "<unnamed>",
             };
             std.debug.panic(
                 "live concrete {s} literal plan for node {d} has no checked builtin or custom resolution (target var {d}: {s} {s}, callable var {d}: {s})",
@@ -23059,7 +23593,15 @@ fn collectDerivedMapTags(
                 }
                 break :blk try self.collectDerivedMapTags(tag_union.ext, tags, open_ext, visited);
             },
-            else => false,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => false,
         },
         .flex, .rigid => {
             if (open_ext.* != null) return false;
@@ -23160,7 +23702,7 @@ fn collectDerivedMapTypeVars(
             return;
         },
         .err => return,
-        else => {},
+        .alias, .structure => {},
     }
     if (visited.contains(resolved.var_)) return;
     try visited.put(resolved.var_, {});
@@ -23256,7 +23798,7 @@ fn analyzeDerivedMap(
             if (!try self.declaredMapArgsAreEligible(alias_args, env, region)) return null;
             backing_var = self.types.getAliasBackingVar(alias);
         },
-        else => {},
+        .flex, .rigid, .err => {},
     }
 
     var open_ext: ?Var = null;
@@ -23798,25 +24340,19 @@ fn isGeneratedStructuralCodecMethodBinding(method: StaticDispatchMethodBinding) 
     const raw_node = @intFromEnum(method.binding.type_node_idx);
     if (raw_node >= method.env.store.nodes.len()) return false;
 
-    const annotation_idx: CIR.Annotation.Idx, const expr_idx: CIR.Expr.Idx = switch (method.env.store.nodes.get(method.binding.type_node_idx).tag) {
-        .def => blk: {
-            const def = method.env.store.getDef(method.binding.def_idx);
-            break :blk .{ def.annotation orelse return false, def.expr };
-        },
-        .statement_decl => blk: {
-            const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
-            const decl = switch (method.env.store.getStatement(statement)) {
-                .s_decl => |decl| decl,
-                else => return false,
-            };
-            break :blk .{ decl.anno orelse return false, decl.expr };
-        },
-        else => return false,
-    };
-    switch (method.env.store.getExpr(expr_idx)) {
-        .e_anno_only, .e_hosted_lambda => {},
-        else => return false,
-    }
+    const node_tag = method.env.store.nodes.get(method.binding.type_node_idx).tag;
+    const annotation_idx: CIR.Annotation.Idx, const expr_idx: CIR.Expr.Idx = if (node_tag == .def) blk: {
+        const def = method.env.store.getDef(method.binding.def_idx);
+        break :blk .{ def.annotation orelse return false, def.expr };
+    } else if (node_tag == .statement_decl) blk: {
+        const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
+        const stmt = method.env.store.getStatement(statement);
+        if (stmt != .s_decl) return false;
+        const decl = stmt.s_decl;
+        break :blk .{ decl.anno orelse return false, decl.expr };
+    } else return false;
+    const expr_tag = std.meta.activeTag(method.env.store.getExpr(expr_idx));
+    if (expr_tag != .e_anno_only and expr_tag != .e_hosted_lambda) return false;
     const annotation = method.env.store.getAnnotation(annotation_idx);
     return method.env.store.getTypeAnno(annotation.anno) == .underscore;
 }
@@ -24195,7 +24731,16 @@ fn parseDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8
                 }
                 return null;
             },
-            else => null,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => null,
         },
         .alias => |alias| try self.parseDictKeyMethodText(self.types.getAliasBackingVar(alias)),
         .err => null,
@@ -24229,7 +24774,16 @@ fn encodeDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u
                 }
                 return null;
             },
-            else => null,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => null,
         },
         .alias => |alias| try self.encodeDictKeyMethodText(self.types.getAliasBackingVar(alias)),
         .err => null,
@@ -24318,7 +24872,16 @@ fn parseFormatMethodVarForEncoding(
                     .dispatcher_name = nominal.ident.ident_idx,
                 };
             },
-            else => null,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => null,
         },
         .alias => |alias| blk: {
             const original_env, _ = self.ownerEnvForOriginModule(
@@ -24374,9 +24937,18 @@ fn reportDerivedParseMissingMethodAt(
         .alias => .nominal,
         .structure => |structure| switch (structure) {
             .nominal_type => .nominal,
-            else => return .unsupported,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return .unsupported,
         },
-        else => return .unsupported,
+        .flex, .err => return .unsupported,
     };
     var derived_constraint = constraint;
     derived_constraint.fn_name = method_name;
@@ -24676,7 +25248,15 @@ fn constrainDerivedParserErrorRowIncludes(
 
                 break :blk try self.constrainDerivedParserErrorRowIncludes(parent_err_var, tag_union.ext, env, region);
             },
-            else => .unsupported,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => .unsupported,
         },
         .alias => |alias| try self.constrainDerivedParserErrorRowIncludes(parent_err_var, self.types.getAliasBackingVar(alias), env, region),
         .flex => blk: {
@@ -24825,7 +25405,7 @@ fn validateDerivedParseVar(
                 break :blk .ok;
             },
             .empty_tag_union => .unsupported,
-            else => .unsupported,
+            .fn_pure, .fn_effectful, .fn_unbound => .unsupported,
         },
         .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited, context, failure_expr),
         .err => .ok,
@@ -24907,17 +25487,17 @@ fn collectDerivedRecordFieldVars(
         guard.tick();
         switch (self.types.resolveVar(current).desc.content) {
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |structure| switch (structure) {
-                .record => |record| {
+            .structure => |structure| {
+                if (structure == .record) {
+                    const record = structure.record;
                     try field_vars.appendSlice(self.gpa, self.types.getRecordFieldsSlice(record.fields).items(.var_));
                     current = record.ext;
-                },
-                .record_unbound => |fields| {
-                    try field_vars.appendSlice(self.gpa, self.types.getRecordFieldsSlice(fields).items(.var_));
+                } else if (structure == .record_unbound) {
+                    try field_vars.appendSlice(self.gpa, self.types.getRecordFieldsSlice(structure.record_unbound).items(.var_));
                     return .ok;
-                },
-                .empty_record => return .ok,
-                else => return .unsupported,
+                } else if (structure == .empty_record) {
+                    return .ok;
+                } else return .unsupported;
             },
             .err => return .ok,
             .flex, .rigid => return .unsupported,
@@ -24988,7 +25568,16 @@ fn varIsOptionalParseField(
     return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.nominalIsOptionalParseField(nominal),
-            else => false,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => false,
         },
         .alias => |alias| try self.varIsOptionalParseField(self.types.getAliasBackingVar(alias)),
         .err => true,
@@ -25055,7 +25644,15 @@ fn validateDerivedParseTagExt(
         .structure => |structure| switch (structure) {
             .empty_tag_union => .ok,
             .tag_union => |tag_union| try self.validateDerivedParseTagUnion(ext_var, tag_union, encoding_var, state_var, err_var, constraint, env, region, visited, failure_expr),
-            else => .unsupported,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => .unsupported,
         },
         .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited, failure_expr),
         .err => .ok,
@@ -25465,7 +26062,7 @@ fn validateDerivedEncodeVar(
             },
             .empty_record => try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, false),
             .empty_tag_union => .unsupported,
-            else => .unsupported,
+            .fn_pure, .fn_effectful, .fn_unbound => .unsupported,
         },
         .alias => |alias| try self.validateDerivedEncodeVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
         .err => .ok,
@@ -25588,7 +26185,15 @@ fn validateDerivedEncodeTagExt(
         .structure => |structure| switch (structure) {
             .empty_tag_union => .ok,
             .tag_union => |tag_union| try self.validateDerivedEncodeTagUnion(tag_union, encoding_var, state_var, err_var, constraint, env, region, visited),
-            else => .unsupported,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => .unsupported,
         },
         .alias => |alias| try self.validateDerivedEncodeTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
         .err => .ok,
@@ -25993,7 +26598,11 @@ fn checkFlexVarConstraintCompatibility(
                 .numeral => if (default_target == .dec) continue,
                 .quote, .interpolation => if (default_target == .str) continue,
             },
-            else => {},
+            .desugared_binop,
+            .desugared_unaryop,
+            .method_call,
+            .where_clause,
+            => {},
         }
 
         // Validate the exact method type, not only its name. A default owner can
@@ -26607,7 +27216,26 @@ pub fn createImportMapping(
                     const header_idx = switch (stmt) {
                         .s_nominal_decl => |decl| decl.header,
                         .s_alias_decl => |alias| alias.header,
-                        else => null,
+                        .s_decl,
+                        .s_var,
+                        .s_var_uninitialized,
+                        .s_reassign,
+                        .s_crash,
+                        .s_dbg,
+                        .s_expr,
+                        .s_expect,
+                        .s_for,
+                        .s_while,
+                        .s_infinite_loop,
+                        .s_breakable_loop,
+                        .s_break,
+                        .s_return,
+                        .s_import,
+                        .s_where_alias_decl,
+                        .s_type_anno,
+                        .s_type_var_alias,
+                        .s_runtime_error,
+                        => null,
                     };
                     if (header_idx) |hdr_idx| {
                         const header = builtin_env.store.getTypeHeader(hdr_idx);

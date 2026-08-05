@@ -29,11 +29,12 @@ fn blockStatementAt(test_env: *TestEnv, expr_idx: CIR.Expr.Idx, index: usize) Wh
 
 fn firstLambdaBodyStatement(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) WhileLoopTestError!CIR.Statement {
     const expr = test_env.getCanonicalExpr(expr_idx);
-    const lambda_idx = switch (expr) {
-        .e_lambda => expr_idx,
-        .e_closure => |closure| closure.lambda_idx,
-        else => return error.ExpectedLambda,
-    };
+    const lambda_idx = if (expr == .e_lambda)
+        expr_idx
+    else if (expr == .e_closure)
+        expr.e_closure.lambda_idx
+    else
+        return error.ExpectedLambda;
 
     const lambda = test_env.getCanonicalExpr(lambda_idx);
     try testing.expectEqual(.e_lambda, std.meta.activeTag(lambda));
@@ -47,11 +48,12 @@ fn expectInnerClosureCaptures(
     expected_names: []const []const u8,
 ) WhileLoopTestError!void {
     const outer = test_env.getCanonicalExpr(expr_idx);
-    const outer_lambda_idx = switch (outer) {
-        .e_lambda => expr_idx,
-        .e_closure => |closure| closure.lambda_idx,
-        else => return error.ExpectedLambda,
-    };
+    const outer_lambda_idx = if (outer == .e_lambda)
+        expr_idx
+    else if (outer == .e_closure)
+        outer.e_closure.lambda_idx
+    else
+        return error.ExpectedLambda;
     const outer_lambda = test_env.getCanonicalExpr(outer_lambda_idx);
     try testing.expectEqual(.e_lambda, std.meta.activeTag(outer_lambda));
 
@@ -67,11 +69,12 @@ fn expectInnerClosureCaptures(
         for (captures) |capture_idx| {
             const capture = test_env.module_env.store.getCapture(capture_idx);
             const pattern = test_env.module_env.store.getPattern(capture.pattern_idx);
-            const ident = switch (pattern) {
-                .assign => |assign| assign.ident,
-                .as => |as_pattern| as_pattern.ident,
-                else => continue,
-            };
+            const ident = if (pattern == .assign)
+                pattern.assign.ident
+            else if (pattern == .as)
+                pattern.as.ident
+            else
+                continue;
             if (std.mem.eql(u8, test_env.module_env.getIdent(ident), expected_name)) {
                 found = true;
                 break;

@@ -740,11 +740,8 @@ pub fn selectPlatformEntrypointRoots(
     errdefer selected.deinit(allocator);
 
     for (requests) |request| {
-        switch (request.kind) {
-            .provided_export,
-            .platform_required_binding,
-            => try selected.append(allocator, request),
-            else => {},
+        if (request.kind == .provided_export or request.kind == .platform_required_binding) {
+            try selected.append(allocator, request);
         }
     }
 

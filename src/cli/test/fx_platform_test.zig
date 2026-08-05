@@ -99,7 +99,7 @@ fn runNativeBackendHostSelfTest(
                 return error.NativeBackendBuildFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("roc build {s} terminated abnormally: {}\n", .{ opt_flag, build_result.term });
             std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
             std.debug.print("STDERR: {s}\n", .{build_result.stderr});
@@ -175,7 +175,7 @@ fn buildAndRunDevBackendApp(
                 return error.NativeBackendBuildFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("roc build --opt=dev terminated abnormally: {}\n", .{build_result.term});
             std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
             std.debug.print("STDERR: {s}\n", .{build_result.stderr});
@@ -210,7 +210,7 @@ fn expectInterpreterRuntimeStackOverflow() FxPlatformTestError!void {
             try testing.expect(std.mem.find(u8, run_result.stderr, "This Roc program overflowed its stack memory") != null);
             try testing.expect(std.mem.find(u8, run_result.stderr, "divided by zero") == null);
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Unexpected interpreter termination: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.UnexpectedTermination;
@@ -248,7 +248,7 @@ fn expectDevRuntimeStackOverflow() FxPlatformTestError!void {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.StackOverflowNotHandled;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Unexpected dev termination: {}\n", .{run_result.term});
             return error.UnexpectedTermination;
         },
@@ -273,7 +273,7 @@ fn expectInterpreterRuntimeDivisionByZero() FxPlatformTestError!void {
             try testing.expect(std.mem.find(u8, run_result.stderr, "I64 division by zero") != null);
             try testing.expect(std.mem.find(u8, run_result.stderr, "overflowed its stack memory") == null);
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Unexpected interpreter termination: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.UnexpectedTermination;
@@ -311,7 +311,7 @@ fn expectDevRuntimeDivisionByZero() FxPlatformTestError!void {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.DivisionByZeroNotHandled;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Unexpected dev termination: {}\n", .{run_result.term});
             return error.UnexpectedTermination;
         },
@@ -360,7 +360,7 @@ fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []cons
                 return error.UnexpectedExitCode;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("provided boxed callable drop test terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -431,7 +431,7 @@ test "provided static data exports are host-linkable readonly constants" {
                 return error.StaticDataHostTestFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("static data host test terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -630,7 +630,7 @@ test "fx platform check unused state var reports correct errors" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             return error.RunFailed;
         },
@@ -765,7 +765,7 @@ test "custom platform and package qualifiers work in default roc command" {
                 return error.RunFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("\n❌ Run terminated abnormally: {}\n", .{run_result.term});
             return error.AbnormalTermination;
         },
@@ -863,7 +863,7 @@ test "fx platform run from different cwd" {
                 return error.RunFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1040,7 +1040,7 @@ test "fx platform test_type_mismatch" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1081,7 +1081,7 @@ test "fx platform issue8433" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1164,8 +1164,8 @@ test "run handles a checked type mismatch in function args" {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.TestUnexpectedResult;
         },
-        else => |term| {
-            std.debug.print("Unexpected termination: {}\n", .{term});
+        .stopped, .unknown => {
+            std.debug.print("Unexpected termination: {}\n", .{run_result.term});
             return error.TestUnexpectedResult;
         },
     }
@@ -1423,7 +1423,7 @@ test "fx platform inline expect fails in dev backend binary" {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.SegFault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("ERROR: dev backend binary terminated abnormally: {}\n", .{run_result.term});
             return error.RunFailed;
         },
@@ -1592,7 +1592,7 @@ test "fx platform divergent if with all crash branches does not hit postcheck in
     const did_abort = switch (build_result.term) {
         .exited => |code| code == 134,
         .signal => true,
-        else => true,
+        .stopped, .unknown => true,
     };
     try testing.expect(!did_abort);
     try testing.expect(std.mem.find(u8, build_result.stderr, "postcheck invariant violated") == null);
@@ -1638,7 +1638,7 @@ test "fx platform issue8826 app vs platform type mismatch" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;
@@ -1808,7 +1808,7 @@ test "fx platform issue9118 try operator on tuple in type method (interpreter)" 
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.Segfault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;
@@ -1860,7 +1860,7 @@ test "fx platform issue9118 try operator on tuple in type method (dev backend)" 
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.Segfault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;
@@ -1921,7 +1921,7 @@ test "default app resolves a sibling type module imported with exposing" {
                 return error.RunFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("roc terminated abnormally: {}\nSTDERR: {s}\n", .{ result.term, result.stderr });
             return error.RunFailed;
         },

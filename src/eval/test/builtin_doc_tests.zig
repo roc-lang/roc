@@ -20,7 +20,48 @@ const testing = std.testing;
 /// reference that hits a compiler invariant) doesn't kill the whole test.
 const has_fork = switch (builtin.os.tag) {
     .windows => false,
-    else => true,
+    .freestanding,
+    .other,
+    .contiki,
+    .fuchsia,
+    .hermit,
+    .managarm,
+    .haiku,
+    .hurd,
+    .illumos,
+    .plan9,
+    .rtems,
+    .serenity,
+    .driverkit,
+    .freebsd,
+    .ios,
+    .linux,
+    .macos,
+    .netbsd,
+    .openbsd,
+    .dragonfly,
+    .maccatalyst,
+    .tvos,
+    .visionos,
+    .watchos,
+    .uefi,
+    .@"3ds",
+    .ps3,
+    .ps4,
+    .ps5,
+    .psp,
+    .vita,
+    .emscripten,
+    .wasi,
+    .amdhsa,
+    .amdpal,
+    .cuda,
+    .mesa3d,
+    .nvcl,
+    .opencl,
+    .opengl,
+    .vulkan,
+    => true,
 };
 
 const eval_mod = @import("eval");
@@ -750,7 +791,7 @@ fn reproduceWithBinary(
 
     const binary_failed = switch (term) {
         .exited => |code| code != 0,
-        else => true,
+        .signal, .stopped, .unknown => true,
     };
     return binary_failed;
 }
@@ -823,7 +864,7 @@ test "Builtin.roc doc code blocks check and evaluate" {
                 const message = switch (result) {
                     .failed => |msg| msg,
                     .crashed => |sig| try std.fmt.allocPrint(allocator, "in-memory evaluation crashed with signal {d}", .{sig}),
-                    else => unreachable,
+                    .success => unreachable,
                 };
                 const repro = reproduceWithBinary(allocator, block, i) catch |err| blk: {
                     std.debug.print(
@@ -932,7 +973,7 @@ test "runInChild retries waitpid on EINTR" {
     // Free any owned message regardless of outcome shape.
     switch (outcome) {
         .failed => |msg| std.testing.allocator.free(msg),
-        else => {},
+        .success, .crashed, .fork_unavailable => {},
     }
 
     // Sanity: the child actually managed to signal us (otherwise the EINTR

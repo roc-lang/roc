@@ -31,12 +31,19 @@ const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 const PatternBinderId = checked_ids.PatternBinderId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
 
+const DispatchExprTag = enum {
+    e_dispatch_call,
+    e_interpolation,
+    e_type_dispatch_call,
+    e_method_eq,
+};
+
 fn typeDispatchOwnerVar(module: TypedCIR.Module, stmt_idx: CIR.Statement.Idx) Var {
-    return switch (module.getStatement(stmt_idx)) {
-        .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
-        .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
-        else => @panic("type dispatch owner statement was not a type-var alias or type alias"),
-    };
+    const stmt = module.getStatement(stmt_idx);
+    const tag = std.meta.activeTag(stmt);
+    if (tag == .s_type_var_alias) return ModuleEnv.varFrom(stmt.s_type_var_alias.type_var_anno);
+    if (tag == .s_alias_decl) return ModuleEnv.varFrom(stmt_idx);
+    @panic("type dispatch owner statement was not a type-var alias or type alias");
 }
 
 /// Public `ProcedureTemplateLookup` declaration.
@@ -131,10 +138,7 @@ pub const BuiltinOwner = enum(u8) {
 /// a finite backing record. Later stages consult this to keep that closure a
 /// lambda set (inline captures) instead of erasing it to a boxed callable.
 pub fn isIteratorOwner(owner: BuiltinOwner) bool {
-    return switch (owner) {
-        .iter, .stream => true,
-        else => false,
-    };
+    return owner == .iter or owner == .stream;
 }
 
 /// Semantic identity assigned to compiler-owned iterator procedures while
@@ -195,10 +199,8 @@ pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?I
     const env = module.moduleEnvConst();
     if (env.module_role != .builtin) return null;
     const def = module.def(def_idx);
-    const ident = switch (def.pattern.data) {
-        .assign => |assign| assign.ident,
-        else => return null,
-    };
+    if (std.meta.activeTag(def.pattern.data) != .assign) return null;
+    const ident = def.pattern.data.assign.ident;
     const text = module.getIdent(ident);
 
     const exact = [_]struct { []const u8, IteratorProcedureId }{
@@ -296,12 +298,8 @@ fn procedureRuntimeTargetForDef(
     if (iteratorProcedureForDef(module, def_idx)) |iterator| return .{ .graph_participating = .{
         .iterator_procedure = iterator,
     } };
-    switch (method_owner) {
-        .builtin => |owner| switch (owner) {
-            .iter, .stream => return .{ .graph_participating = .{} },
-            else => {},
-        },
-        .nominal => {},
+    if (std.meta.activeTag(method_owner) == .builtin and isIteratorOwner(method_owner.builtin)) {
+        return .{ .graph_participating = .{} };
     }
     if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| return .{ .low_level = op };
     return .procedure;
@@ -309,10 +307,9 @@ fn procedureRuntimeTargetForDef(
 
 /// Exact compiler-intrinsic identity for an annotation-only builtin procedure.
 pub fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?can.BuiltinLowLevel.IntrinsicId {
-    const expr_ident = switch (module.def(def_idx).expr.data) {
-        .e_anno_only => |anno| anno.ident,
-        else => return null,
-    };
+    const expr_data = module.def(def_idx).expr.data;
+    if (std.meta.activeTag(expr_data) != .e_anno_only) return null;
+    const expr_ident = expr_data.e_anno_only.ident;
     const env = module.moduleEnvConst();
     if (!can.BuiltinLowLevel.isBuiltinModule(env)) return null;
     return can.BuiltinLowLevel.intrinsicAnnotation(env, expr_ident);
@@ -499,10 +496,9 @@ fn methodTargetCallableVar(
         .local_proc => blk: {
             const raw_node = @intFromEnum(binding.type_node_idx);
             const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
-            const decl = switch (module.getStatement(statement)) {
-                .s_decl => |decl| decl,
-                else => unreachable,
-            };
+            const statement_data = module.getStatement(statement);
+            if (std.meta.activeTag(statement_data) != .s_decl) unreachable;
+            const decl = statement_data.s_decl;
             break :blk module.exprType(decl.expr);
         },
     };
@@ -513,10 +509,9 @@ fn generatedStructuralTargetForMethodBinding(
     binding: ModuleEnv.MethodBinding,
 ) ?StructuralKind {
     const expr_idx = methodBindingExpr(module, binding) orelse return null;
-    const kind = switch (module.expr(expr_idx).data) {
-        .e_derived_method => |derived| derived.kind,
-        else => return null,
-    };
+    const expr_data = module.expr(expr_idx).data;
+    if (std.meta.activeTag(expr_data) != .e_derived_method) return null;
+    const kind = expr_data.e_derived_method.kind;
 
     return switch (kind) {
         .equality => .equality,
@@ -543,18 +538,14 @@ fn methodBindingExpr(
         unreachable;
     }
 
-    return switch (module.nodeTag(binding.type_node_idx)) {
-        .def => module.moduleEnvConst().store.getDef(binding.def_idx).expr,
-        .statement_decl => blk: {
-            const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
-            const decl = switch (module.getStatement(statement)) {
-                .s_decl => |decl| decl,
-                else => return null,
-            };
-            break :blk decl.expr;
-        },
-        else => null,
-    };
+    const node_tag = module.nodeTag(binding.type_node_idx);
+    if (node_tag == .def) return module.moduleEnvConst().store.getDef(binding.def_idx).expr;
+    if (node_tag != .statement_decl) return null;
+
+    const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
+    const statement_data = module.getStatement(statement);
+    if (std.meta.activeTag(statement_data) != .s_decl) return null;
+    return statement_data.s_decl.expr;
 }
 
 fn localProcedureTargetForMethodBinding(
@@ -576,10 +567,9 @@ fn localProcedureTargetForMethodBinding(
     if (module.nodeTag(binding.type_node_idx) != .statement_decl) return null;
 
     const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
-    const decl = switch (module.getStatement(statement)) {
-        .s_decl => |decl| decl,
-        else => return null,
-    };
+    const statement_data = module.getStatement(statement);
+    if (std.meta.activeTag(statement_data) != .s_decl) return null;
+    const decl = statement_data.s_decl;
 
     if (!localProcedureExpr(module, decl.expr)) return null;
 
@@ -612,10 +602,8 @@ fn localProcedureTargetForMethodBinding(
 }
 
 fn localProcedureExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
-    return switch (module.expr(expr_idx).data) {
-        .e_lambda, .e_closure => true,
-        else => false,
-    };
+    const tag = std.meta.activeTag(module.expr(expr_idx).data);
+    return tag == .e_lambda or tag == .e_closure;
 }
 
 const ReferencedProcedureTarget = struct {
@@ -641,10 +629,9 @@ fn referencedProcedureTargetForMethodBinding(
     // at most once before repeating, so the node count bounds the walk.
     var remaining: usize = module.nodeCount();
     while (remaining > 0) : (remaining -= 1) {
-        const pattern_idx = switch (module.expr(expr_idx).data) {
-            .e_lookup_local => |lookup| lookup.pattern_idx,
-            else => return null,
-        };
+        const expr_data = module.expr(expr_idx).data;
+        if (std.meta.activeTag(expr_data) != .e_lookup_local) return null;
+        const pattern_idx = expr_data.e_lookup_local.pattern_idx;
         if (defForBoundPattern(module_env, pattern_idx)) |target_def_idx| {
             if (local_templates.entryForDef(target_def_idx)) |template_entry| {
                 return .{
@@ -701,10 +688,9 @@ fn statementDeclForBoundPattern(module: TypedCIR.Module, pattern_idx: CIR.Patter
     while (raw_node < module.nodeCount()) : (raw_node += 1) {
         if (module.nodeTag(@enumFromInt(raw_node)) != .statement_decl) continue;
         const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
-        const decl = switch (module.getStatement(statement)) {
-            .s_decl => |decl| decl,
-            else => continue,
-        };
+        const statement_data = module.getStatement(statement);
+        if (std.meta.activeTag(statement_data) != .s_decl) continue;
+        const decl = statement_data.s_decl;
         if (decl.pattern == pattern_idx) return .{ .statement = statement, .pattern = decl.pattern, .expr = decl.expr };
     }
     return null;
@@ -731,18 +717,19 @@ fn methodOwnerForRegistryEntry(
         unreachable;
     };
     const stmt = owner_env.store.getStatement(owner.owner);
-    const header_idx = switch (stmt) {
-        .s_nominal_decl => |nominal| nominal.header,
-        .s_alias_decl => |alias| alias.header,
-        else => {
-            if (@import("builtin").mode == .Debug) {
-                std.debug.panic(
-                    "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
-                    .{@intFromEnum(owner.owner)},
-                );
-            }
-            unreachable;
-        },
+    const stmt_tag = std.meta.activeTag(stmt);
+    const header_idx = if (stmt_tag == .s_nominal_decl)
+        stmt.s_nominal_decl.header
+    else if (stmt_tag == .s_alias_decl)
+        stmt.s_alias_decl.header
+    else {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
+                .{@intFromEnum(owner.owner)},
+            );
+        }
+        unreachable;
     };
     const header = owner_env.store.getTypeHeader(header_idx);
     return .{ .nominal = .{
@@ -817,11 +804,13 @@ fn builtinOwnerForRegistryEntry(
     if (module_env.module_role != .builtin) return null;
 
     const stmt = module_env.store.getStatement(owner_stmt);
-    const type_ident = switch (stmt) {
-        .s_nominal_decl => |nominal| module_env.store.getTypeHeader(nominal.header).name,
-        .s_alias_decl => |alias| module_env.store.getTypeHeader(alias.header).name,
-        else => return null,
-    };
+    const stmt_tag = std.meta.activeTag(stmt);
+    const type_ident = if (stmt_tag == .s_nominal_decl)
+        module_env.store.getTypeHeader(stmt.s_nominal_decl.header).name
+    else if (stmt_tag == .s_alias_decl)
+        module_env.store.getTypeHeader(stmt.s_alias_decl.header).name
+    else
+        return null;
 
     if (type_ident.eql(common.bool) or type_ident.eql(common.bool_type)) return .bool;
     if (type_ident.eql(common.str) or type_ident.eql(common.builtin_str)) return .str;
@@ -1518,14 +1507,10 @@ pub const StaticDispatchPlanTable = struct {
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const tag = module.nodeTag(@enumFromInt(node_idx));
-            switch (tag) {
-                .expr_dispatch_call,
-                .expr_interpolation,
-                .expr_type_dispatch_call,
-                .expr_method_eq,
-                => {},
-                else => continue,
-            }
+            if (tag != .expr_dispatch_call and
+                tag != .expr_interpolation and
+                tag != .expr_type_dispatch_call and
+                tag != .expr_method_eq) continue;
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
             const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
@@ -1533,8 +1518,10 @@ pub const StaticDispatchPlanTable = struct {
             const checked_expr_data = checked_bodies.expr(checked_expr).data;
             const idents = module.identStoreConst();
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
-            switch (expr.data) {
-                .e_dispatch_call => |dispatch_call| {
+            const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable;
+            switch (dispatch_expr_tag) {
+                .e_dispatch_call => {
+                    const dispatch_call = expr.data.e_dispatch_call;
                     const explicit_args = module.sliceExpr(dispatch_call.args);
                     const args = try allocator.alloc(StaticDispatchOperand, explicit_args.len + 1);
                     defer allocator.free(args);
@@ -1558,11 +1545,10 @@ pub const StaticDispatchPlanTable = struct {
                         .constraint_fn_var = dispatch_call.constraint_fn_var,
                     });
                 },
-                .e_interpolation => |interpolation| {
-                    const checked_interpolation = switch (checked_expr_data) {
-                        .interpolation => |checked_interpolation| checked_interpolation,
-                        else => continue,
-                    };
+                .e_interpolation => {
+                    const interpolation = expr.data.e_interpolation;
+                    if (std.meta.activeTag(checked_expr_data) != .interpolation) continue;
+                    const checked_interpolation = checked_expr_data.interpolation;
                     const args = try allocator.alloc(StaticDispatchOperand, 2);
                     defer allocator.free(args);
                     args[0] = .{ .checked_expr = checked_interpolation.first };
@@ -1586,7 +1572,8 @@ pub const StaticDispatchPlanTable = struct {
                         .constraint_fn_var = constraint_fn_var,
                     });
                 },
-                .e_type_dispatch_call => |dispatch_call| {
+                .e_type_dispatch_call => {
+                    const dispatch_call = expr.data.e_type_dispatch_call;
                     const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, module.sliceExpr(dispatch_call.args));
                     defer allocator.free(args);
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
@@ -1605,7 +1592,8 @@ pub const StaticDispatchPlanTable = struct {
                         .constraint_fn_var = dispatch_call.constraint_fn_var,
                     });
                 },
-                .e_method_eq => |eq| {
+                .e_method_eq => {
+                    const eq = expr.data.e_method_eq;
                     const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, &.{ eq.lhs, eq.rhs });
                     defer allocator.free(args);
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
@@ -1627,7 +1615,6 @@ pub const StaticDispatchPlanTable = struct {
                         .constraint_fn_var = eq.constraint_fn_var,
                     });
                 },
-                else => unreachable,
             }
             try by_expr.put(allocator, expr_idx, plan_id);
         }
@@ -1680,18 +1667,17 @@ pub const StaticDispatchPlanTable = struct {
             const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
                 continue;
-            switch (checked_bodies.expr(checked_expr).data) {
-                .numeral => {},
-                .runtime_error => continue,
-                else => {
-                    if (@import("builtin").mode == .Debug) {
-                        std.debug.panic(
-                            "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression ({s})",
-                            .{ numeral_plan.node_idx, @tagName(std.meta.activeTag(checked_bodies.expr(checked_expr).data)) },
-                        );
-                    }
-                    unreachable;
-                },
+            const checked_expr_data = checked_bodies.expr(checked_expr).data;
+            const checked_expr_tag = std.meta.activeTag(checked_expr_data);
+            if (checked_expr_tag == .runtime_error) continue;
+            if (checked_expr_tag != .numeral) {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression ({s})",
+                        .{ numeral_plan.node_idx, @tagName(checked_expr_tag) },
+                    );
+                }
+                unreachable;
             }
             const literal = module_env.numeralLiteralForNode(node) orelse {
                 if (@import("builtin").mode == .Debug) {
@@ -1744,25 +1730,28 @@ pub const StaticDispatchPlanTable = struct {
             const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
                 continue;
-            const literal = switch (checked_bodies.expr(checked_expr).data) {
-                .str_from_quote => |quote| quote.literal,
-                .str, .str_segment => if (@import("builtin").mode == .Debug) {
+            const checked_expr_data = checked_bodies.expr(checked_expr).data;
+            const checked_expr_tag = std.meta.activeTag(checked_expr_data);
+            if (checked_expr_tag == .runtime_error) continue;
+            if (checked_expr_tag == .str or checked_expr_tag == .str_segment) {
+                if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
                         "checked static dispatch invariant violated: non-builtin quote target {d} lost its from_quote expression",
                         .{quote_plan.node_idx},
                     );
-                } else unreachable,
-                .runtime_error => continue,
-                else => {
-                    if (@import("builtin").mode == .Debug) {
-                        std.debug.panic(
-                            "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression ({s})",
-                            .{ quote_plan.node_idx, @tagName(std.meta.activeTag(checked_bodies.expr(checked_expr).data)) },
-                        );
-                    }
-                    unreachable;
-                },
-            };
+                }
+                unreachable;
+            }
+            if (checked_expr_tag != .str_from_quote) {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression ({s})",
+                        .{ quote_plan.node_idx, @tagName(checked_expr_tag) },
+                    );
+                }
+                unreachable;
+            }
+            const literal = checked_expr_data.str_from_quote.literal;
             var args = [_]StaticDispatchOperand{.{ .generated_quote = literal }};
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
@@ -1789,11 +1778,13 @@ pub const StaticDispatchPlanTable = struct {
             const iterable_idx: CIR.Expr.Idx = @enumFromInt(for_plan.iterable_idx);
 
             if (checked_bodies.exprIdForSource(iterable_idx) == null) continue;
-            const for_has_checked_node = switch (module.nodeTag(for_node_idx)) {
-                .expr_for => checked_bodies.exprIdForSource(@enumFromInt(for_plan.node_idx)) != null,
-                .statement_for => checked_bodies.statementIdForSource(@enumFromInt(for_plan.node_idx)) != null,
-                else => false,
-            };
+            const for_node_tag = module.nodeTag(for_node_idx);
+            const for_has_checked_node = if (for_node_tag == .expr_for)
+                checked_bodies.exprIdForSource(@enumFromInt(for_plan.node_idx)) != null
+            else if (for_node_tag == .statement_for)
+                checked_bodies.statementIdForSource(@enumFromInt(for_plan.node_idx)) != null
+            else
+                false;
             if (!for_has_checked_node) continue;
 
             const iterable_expr = checkedExprIdForSource(checked_bodies, iterable_idx);
@@ -2017,13 +2008,17 @@ const StaticDispatchConstraintIndex = struct {
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-            const constraint_fn_var: ?Var = switch (module.nodeTag(@enumFromInt(node_idx))) {
-                .expr_dispatch_call => module.expr(expr_idx).data.e_dispatch_call.constraint_fn_var,
-                .expr_interpolation => module.expr(expr_idx).data.e_interpolation.constraint_fn_var,
-                .expr_type_dispatch_call => module.expr(expr_idx).data.e_type_dispatch_call.constraint_fn_var,
-                .expr_method_eq => module.expr(expr_idx).data.e_method_eq.constraint_fn_var,
-                else => null,
-            };
+            const node_tag = module.nodeTag(@enumFromInt(node_idx));
+            const constraint_fn_var: ?Var = if (node_tag == .expr_dispatch_call)
+                module.expr(expr_idx).data.e_dispatch_call.constraint_fn_var
+            else if (node_tag == .expr_interpolation)
+                module.expr(expr_idx).data.e_interpolation.constraint_fn_var
+            else if (node_tag == .expr_type_dispatch_call)
+                module.expr(expr_idx).data.e_type_dispatch_call.constraint_fn_var
+            else if (node_tag == .expr_method_eq)
+                module.expr(expr_idx).data.e_method_eq.constraint_fn_var
+            else
+                null;
             if (constraint_fn_var) |fn_var| {
                 const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
                 if (module.nodeTag(@enumFromInt(node_idx)) == .expr_interpolation and
@@ -2185,10 +2180,10 @@ fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
         }
         unreachable;
     }
-    return switch (checked_types.store.payload(ty)) {
-        .nominal => |nominal| if (nominal.builtin) |builtin_owner| builtin_owner == .bool else false,
-        else => false,
-    };
+    const payload = checked_types.store.payload(ty);
+    if (std.meta.activeTag(payload) != .nominal) return false;
+    const builtin_owner = payload.nominal.builtin orelse return false;
+    return builtin_owner == .bool;
 }
 
 /// Public `methodOwnerForCheckedType` declaration: the method owner of a
@@ -2209,36 +2204,30 @@ pub fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?Met
             }
             unreachable;
         }
-        switch (checked_types.store.payloads.items[raw]) {
-            .alias => |alias| {
-                if (remaining == 0) {
-                    if (@import("builtin").mode == .Debug) {
-                        std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
-                    }
-                    unreachable;
-                }
-                remaining -= 1;
-                current = alias.backing;
-            },
-            else => |payload| return methodOwnerForCheckedPayload(payload),
+        const payload = checked_types.store.payloads.items[raw];
+        if (std.meta.activeTag(payload) != .alias) return methodOwnerForCheckedPayload(payload);
+        if (remaining == 0) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
+            }
+            unreachable;
         }
+        remaining -= 1;
+        current = payload.alias.backing;
     }
 }
 
 fn methodOwnerForCheckedPayload(payload: anytype) ?MethodOwner {
-    return switch (payload) {
-        .nominal => |nominal| blk: {
-            const nominal_owner: MethodOwner = .{ .nominal = .{
-                .module = nominal.origin_module,
-                .type_name = nominal.name,
-                .source_decl = nominal.source_decl,
-            } };
-            const builtin = nominal.builtin orelse break :blk nominal_owner;
-            if (builtin == .try_) break :blk nominal_owner;
-            break :blk .{ .builtin = builtinOwnerForCheckedBuiltin(builtin) };
-        },
-        else => null,
-    };
+    if (std.meta.activeTag(payload) != .nominal) return null;
+    const nominal = payload.nominal;
+    const nominal_owner: MethodOwner = .{ .nominal = .{
+        .module = nominal.origin_module,
+        .type_name = nominal.name,
+        .source_decl = nominal.source_decl,
+    } };
+    const builtin = nominal.builtin orelse return nominal_owner;
+    if (builtin == .try_) return nominal_owner;
+    return .{ .builtin = builtinOwnerForCheckedBuiltin(builtin) };
 }
 
 /// Public `builtinOwnerForCheckedBuiltin` declaration: the registry owner key
@@ -2353,12 +2342,14 @@ fn checkedFunctionReturnTypeId(
         }
         unreachable;
     }
-    return switch (checked_types.store.payload(callable_ty)) {
-        .function => |func| func.ret,
-        else => if (@import("builtin").mode == .Debug) {
+    const payload = checked_types.store.payload(callable_ty);
+    if (std.meta.activeTag(payload) != .function) {
+        if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: for-loop dispatch constraint was not a function", .{});
-        } else unreachable,
-    };
+        }
+        unreachable;
+    }
+    return payload.function.ret;
 }
 
 fn staticDispatchOperandsForSlice(

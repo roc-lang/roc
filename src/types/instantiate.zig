@@ -69,7 +69,7 @@ pub fn instantiateNominalBacking(
         // rigid; the template cannot reference it by name.
         switch (formal_resolved.desc.content) {
             .rigid => |rigid| try rigid_subs.put(store.gpa, rigid.name, arg),
-            else => {},
+            .flex, .alias, .structure, .err => {},
         }
     }
 
@@ -262,7 +262,7 @@ pub const Instantiator = struct {
 
                 return fresh_var;
             },
-            else => {
+            .flex, .alias, .structure, .err => {
                 // Generate the content
 
                 // Remember this substitution for recursive references
