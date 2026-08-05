@@ -1,10 +1,11 @@
 //! Direct-indexed maps for dense compiler identifiers.
 //!
 //! Compiler IDs name rows in owning stores and are therefore array indices, not
-//! hash keys. `DenseMap` keeps a paged optional-value column indexed by that ID.
-//! Paging avoids materializing the untouched prefix of a store-global ID domain
-//! for a short-lived local scope. A compact occupied-index column makes clearing
-//! and iteration proportional to live entries instead of the largest ID seen.
+//! hash keys. `DenseMap` keeps paged ID-to-position columns and stores only live
+//! values in a compact dense column. Paging avoids materializing the untouched
+//! prefix of a store-global ID domain for a short-lived local scope. Compact key
+//! and value columns make clearing and iteration proportional to live entries
+//! instead of the largest ID seen, without initializing value-sized sparse pages.
 //! The type intentionally mirrors the small managed `AutoHashMap` surface used by
 //! compiler passes so callers do not need to trade direct indexing for convenience.
 
@@ -23,17 +24,8 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         const chunk_len = 1 << chunk_shift;
         const chunk_mask = chunk_len - 1;
 
-        const Occupied = struct {
-            value: V,
-            active_position: u32,
-        };
-
-        const Slot = union(enum) {
-            empty,
-            value: Occupied,
-        };
-
-        const Chunk = [chunk_len]Slot;
+        const empty_position = std.math.maxInt(u32);
+        const SparseChunk = [chunk_len]u32;
 
         /// Entry returned by map iterators.
         pub const Entry = struct {
@@ -54,8 +46,9 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         };
 
         allocator: Allocator,
-        chunks: std.ArrayList(?*Chunk) = .empty,
+        sparse_chunks: std.ArrayList(?*SparseChunk) = .empty,
         active_indices: std.ArrayList(usize) = .empty,
+        values: std.ArrayList(V) = .empty,
 
         pub fn init(allocator: Allocator) Self {
             return .{ .allocator = allocator };
@@ -63,8 +56,9 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         pub fn deinit(self: *Self) void {
             self.freeChunks();
-            self.chunks.deinit(self.allocator);
+            self.sparse_chunks.deinit(self.allocator);
             self.active_indices.deinit(self.allocator);
+            self.values.deinit(self.allocator);
             self.* = undefined;
         }
 
@@ -73,7 +67,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         }
 
         pub fn capacity(self: *const Self) usize {
-            return self.active_indices.capacity;
+            return @min(self.active_indices.capacity, self.values.capacity);
         }
 
         pub fn contains(self: *const Self, key: K) bool {
@@ -87,20 +81,14 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         pub fn getPtr(self: *Self, key: K) ?*V {
             const index = keyIndex(key);
-            const slot = self.slotPtr(index) orelse return null;
-            return switch (slot.*) {
-                .empty => null,
-                .value => |*occupied| &occupied.value,
-            };
+            const position = self.densePosition(index) orelse return null;
+            return &self.values.items[position];
         }
 
         pub fn getPtrConst(self: *const Self, key: K) ?*const V {
             const index = keyIndex(key);
-            const slot = self.slotPtrConst(index) orelse return null;
-            return switch (slot.*) {
-                .empty => null,
-                .value => |*occupied| &occupied.value,
-            };
+            const position = self.densePosition(index) orelse return null;
+            return &self.values.items[position];
         }
 
         pub fn put(self: *Self, key: K, value: V) Allocator.Error!void {
@@ -120,25 +108,21 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         pub fn getOrPut(self: *Self, key: K) Allocator.Error!GetOrPutResult {
             const index = keyIndex(key);
-            const slot = try self.ensureSlot(index);
+            if (self.densePosition(index)) |existing| return .{
+                .value_ptr = &self.values.items[existing],
+                .found_existing = true,
+            };
 
-            return switch (slot.*) {
-                .empty => blk: {
-                    const active_position: u32 = @intCast(self.active_indices.items.len);
-                    try self.active_indices.append(self.allocator, index);
-                    slot.* = .{ .value = .{
-                        .value = undefined,
-                        .active_position = active_position,
-                    } };
-                    break :blk .{
-                        .value_ptr = &slot.value.value,
-                        .found_existing = false,
-                    };
-                },
-                .value => |*occupied| .{
-                    .value_ptr = &occupied.value,
-                    .found_existing = true,
-                },
+            const slot = try self.ensureSparseSlot(index);
+            try self.active_indices.ensureUnusedCapacity(self.allocator, 1);
+            try self.values.ensureUnusedCapacity(self.allocator, 1);
+            const position: u32 = @intCast(self.active_indices.items.len);
+            self.active_indices.appendAssumeCapacity(index);
+            self.values.appendAssumeCapacity(undefined);
+            slot.* = position;
+            return .{
+                .value_ptr = &self.values.items[position],
+                .found_existing = false,
             };
         }
 
@@ -154,48 +138,40 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         pub fn remove(self: *Self, key: K) bool {
             const index = keyIndex(key);
-            const slot = self.slotPtr(index) orelse return false;
-
-            return switch (slot.*) {
-                .empty => false,
-                .value => |occupied| blk: {
-                    self.removeActive(slot, occupied.active_position);
-                    break :blk true;
-                },
-            };
+            const position = self.densePosition(index) orelse return false;
+            self.removeActive(index, position);
+            return true;
         }
 
         pub fn fetchRemove(self: *Self, key: K) ?KV {
             const index = keyIndex(key);
-            const slot = self.slotPtr(index) orelse return null;
-
-            return switch (slot.*) {
-                .empty => null,
-                .value => |occupied| blk: {
-                    const value = occupied.value;
-                    self.removeActive(slot, occupied.active_position);
-                    break :blk .{ .key = key, .value = value };
-                },
-            };
+            const position = self.densePosition(index) orelse return null;
+            const value = self.values.items[position];
+            self.removeActive(index, position);
+            return .{ .key = key, .value = value };
         }
 
         pub fn ensureTotalCapacity(self: *Self, expected_count: usize) Allocator.Error!void {
             try self.active_indices.ensureTotalCapacity(self.allocator, expected_count);
+            try self.values.ensureTotalCapacity(self.allocator, expected_count);
         }
 
         pub fn ensureUnusedCapacity(self: *Self, additional_count: usize) Allocator.Error!void {
             try self.active_indices.ensureUnusedCapacity(self.allocator, additional_count);
+            try self.values.ensureUnusedCapacity(self.allocator, additional_count);
         }
 
         pub fn clearRetainingCapacity(self: *Self) void {
-            for (self.active_indices.items) |index| self.slotPtr(index).?.* = .empty;
+            for (self.active_indices.items) |index| self.sparseSlotPtr(index).?.* = empty_position;
             self.active_indices.clearRetainingCapacity();
+            self.values.clearRetainingCapacity();
         }
 
         pub fn clearAndFree(self: *Self) void {
             self.freeChunks();
-            self.chunks.clearAndFree(self.allocator);
+            self.sparse_chunks.clearAndFree(self.allocator);
             self.active_indices.clearAndFree(self.allocator);
+            self.values.clearAndFree(self.allocator);
         }
 
         pub fn iterator(self: *Self) Iterator {
@@ -217,11 +193,11 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
             pub fn next(self: *Iterator) ?Entry {
                 if (self.position >= self.map.active_indices.items.len) return null;
-                const index = self.map.active_indices.items[self.position];
+                const position = self.position;
                 self.position += 1;
-                const occupied = &self.map.slotPtr(index).?.value;
+                const index = self.map.active_indices.items[position];
                 self.key = keyFromIndex(K, index);
-                return .{ .key_ptr = &self.key, .value_ptr = &occupied.value };
+                return .{ .key_ptr = &self.key, .value_ptr = &self.map.values.items[position] };
             }
         };
 
@@ -239,56 +215,68 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             position: usize = 0,
 
             pub fn next(self: *ValueIterator) ?*V {
-                if (self.position >= self.map.active_indices.items.len) return null;
-                const index = self.map.active_indices.items[self.position];
+                if (self.position >= self.map.values.items.len) return null;
+                const position = self.position;
                 self.position += 1;
-                return &self.map.slotPtr(index).?.value.value;
+                return &self.map.values.items[position];
             }
         };
 
-        fn ensureSlot(self: *Self, index: usize) Allocator.Error!*Slot {
+        fn ensureSparseSlot(self: *Self, index: usize) Allocator.Error!*u32 {
             const chunk_index = index >> chunk_shift;
-            if (chunk_index >= self.chunks.items.len) {
-                const old_len = self.chunks.items.len;
-                try self.chunks.resize(self.allocator, chunk_index + 1);
-                @memset(self.chunks.items[old_len..], null);
+            if (chunk_index >= self.sparse_chunks.items.len) {
+                const old_len = self.sparse_chunks.items.len;
+                try self.sparse_chunks.resize(self.allocator, chunk_index + 1);
+                @memset(self.sparse_chunks.items[old_len..], null);
             }
 
-            if (self.chunks.items[chunk_index] == null) {
-                const chunk = try self.allocator.create(Chunk);
-                @memset(chunk, .empty);
-                self.chunks.items[chunk_index] = chunk;
+            if (self.sparse_chunks.items[chunk_index] == null) {
+                const chunk = try self.allocator.create(SparseChunk);
+                @memset(chunk, empty_position);
+                self.sparse_chunks.items[chunk_index] = chunk;
             }
 
-            return &self.chunks.items[chunk_index].?[index & chunk_mask];
+            return &self.sparse_chunks.items[chunk_index].?[index & chunk_mask];
         }
 
-        fn slotPtr(self: *Self, index: usize) ?*Slot {
+        fn sparseSlotPtr(self: *Self, index: usize) ?*u32 {
             const chunk_index = index >> chunk_shift;
-            if (chunk_index >= self.chunks.items.len) return null;
-            const chunk = self.chunks.items[chunk_index] orelse return null;
+            if (chunk_index >= self.sparse_chunks.items.len) return null;
+            const chunk = self.sparse_chunks.items[chunk_index] orelse return null;
             return &chunk[index & chunk_mask];
         }
 
-        fn slotPtrConst(self: *const Self, index: usize) ?*const Slot {
+        fn sparseSlotPtrConst(self: *const Self, index: usize) ?*const u32 {
             const chunk_index = index >> chunk_shift;
-            if (chunk_index >= self.chunks.items.len) return null;
-            const chunk = self.chunks.items[chunk_index] orelse return null;
+            if (chunk_index >= self.sparse_chunks.items.len) return null;
+            const chunk = self.sparse_chunks.items[chunk_index] orelse return null;
             return &chunk[index & chunk_mask];
         }
 
-        fn removeActive(self: *Self, slot: *Slot, active_position: u32) void {
-            const position: usize = active_position;
-            const last_index = self.active_indices.pop().?;
-            if (position < self.active_indices.items.len) {
+        fn densePosition(self: *const Self, index: usize) ?usize {
+            const raw_position = (self.sparseSlotPtrConst(index) orelse return null).*;
+            if (raw_position == empty_position) return null;
+            const dense_position: usize = raw_position;
+            std.debug.assert(dense_position < self.active_indices.items.len);
+            std.debug.assert(self.active_indices.items[dense_position] == index);
+            return dense_position;
+        }
+
+        fn removeActive(self: *Self, index: usize, position: usize) void {
+            const last_position = self.active_indices.items.len - 1;
+            if (position < last_position) {
+                const last_index = self.active_indices.items[last_position];
                 self.active_indices.items[position] = last_index;
-                self.slotPtr(last_index).?.value.active_position = @intCast(position);
+                self.values.items[position] = self.values.items[last_position];
+                self.sparseSlotPtr(last_index).?.* = @intCast(position);
             }
-            slot.* = .empty;
+            _ = self.active_indices.pop().?;
+            _ = self.values.pop().?;
+            self.sparseSlotPtr(index).?.* = empty_position;
         }
 
         fn freeChunks(self: *Self) void {
-            for (self.chunks.items) |maybe_chunk| {
+            for (self.sparse_chunks.items) |maybe_chunk| {
                 if (maybe_chunk) |chunk| self.allocator.destroy(chunk);
             }
         }
@@ -359,5 +347,34 @@ test "DenseMap directly indexes integer and enum IDs" {
     defer sparse_map.deinit();
     try sparse_map.put(1_000_000, 9);
     try std.testing.expectEqual(@as(?u8, 9), sparse_map.get(1_000_000));
-    try std.testing.expect(sparse_map.chunks.items.len < 4_000);
+    try std.testing.expect(sparse_map.sparse_chunks.items.len < 4_000);
+    try std.testing.expectEqual(@as(usize, 1), sparse_map.values.items.len);
+}
+
+test "DenseMap swap-removes and clears compact values" {
+    const TestId = enum(u32) { _ };
+    const LargeValue = [1024]u8;
+    var map = DenseMap(TestId, LargeValue).init(std.testing.allocator);
+    defer map.deinit();
+
+    try map.put(@enumFromInt(300), [_]u8{1} ** 1024);
+    try map.put(@enumFromInt(700), [_]u8{2} ** 1024);
+    try std.testing.expectEqual(@as(usize, 2), map.values.items.len);
+    try std.testing.expect(map.remove(@enumFromInt(300)));
+    try std.testing.expectEqual(@as(usize, 1), map.values.items.len);
+    try std.testing.expectEqual(@as(u8, 2), map.get(@enumFromInt(700)).?[0]);
+
+    map.clearRetainingCapacity();
+    try std.testing.expectEqual(@as(usize, 0), map.count());
+    try std.testing.expectEqual(@as(?LargeValue, null), map.get(@enumFromInt(700)));
+
+    try map.put(@enumFromInt(300), [_]u8{3} ** 1024);
+    try std.testing.expectEqual(@as(u8, 3), map.get(@enumFromInt(300)).?[0]);
+    try std.testing.expectEqual(@as(usize, 1), map.values.items.len);
+
+    var set = DenseMap(TestId, void).init(std.testing.allocator);
+    defer set.deinit();
+    try set.put(@enumFromInt(900), {});
+    try std.testing.expect(set.contains(@enumFromInt(900)));
+    try std.testing.expect(set.remove(@enumFromInt(900)));
 }

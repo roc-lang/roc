@@ -104,9 +104,12 @@ Per-ID data is a parallel column on the owning store, or a
 `collections.DenseMap` when the column is dynamic or scoped. A short-lived
 scope over a larger ID domain uses a paged, reusable, epoch-based, or explicitly
 remapped dense column so that clearing and iteration remain proportional to the
-live scope. The size of the owning ID domain is not a reason to hash an ID.
-Direct columns avoid hashing, table growth, repeated key storage, allocator
-traffic, and duplicate per-consumer indexing work.
+live scope. `DenseMap`'s sparse pages contain only ID-to-dense-position rows;
+its values occupy a compact live-entry column, so opening a sparse page never
+initializes a page of potentially large values. The size of the owning ID domain
+is not a reason to hash an ID. Direct columns avoid hashing, table growth,
+repeated key storage, allocator traffic, and duplicate per-consumer indexing
+work.
 
 The suffix `...Key` is reserved for structural or composite identity for which
 a dense owner-relative ID cannot preserve the required identity. Examples
