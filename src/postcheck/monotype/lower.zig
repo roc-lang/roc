@@ -7331,6 +7331,19 @@ const Builder = struct {
                         } else {
                             census.bump("deferred_identity_directed_differs");
                         }
+                        // The identity digest above erases representation by
+                        // design; this second comparison keeps it, so the
+                        // population whose requests carry representation the
+                        // directed statement does not — minted tiers, erased
+                        // callables — is measured rather than invisible
+                        // (reunify.md 13.2e).
+                        const directed_full = self.program.types.typeDigest(&self.program.names, directed_root);
+                        const sealed_full = self.program.types.typeDigest(&self.program.names, fn_ty);
+                        if (std.mem.eql(u8, &directed_full.bytes, &sealed_full.bytes)) {
+                            census.bump("deferred_representation_directed_agrees");
+                        } else {
+                            census.bump("deferred_representation_directed_differs");
+                        }
                     } else {
                         census.bump("deferred_identity_directed_absent");
                     }
