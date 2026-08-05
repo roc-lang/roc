@@ -2228,7 +2228,7 @@ pub const Evaluator = struct {
                 @memcpy(out[di..], list[di + 1 ..]);
                 return .{ .list = out };
             },
-            .list_sublist => {
+            .list_sublist, .list_sublist_borrowed => {
                 const list = args[0].list;
                 const record = args[1].record;
                 // The sublist parameter record carries `start` and `len` fields;

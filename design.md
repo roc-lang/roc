@@ -5423,6 +5423,16 @@ generates constraints per statement:
   borrow arg 0); the result's mode is then solved like a payload read, with
   the lifetime constraint tied to those args. Ops whose results never alias
   a retained arg produce fresh owned results as today.
+  A low-level operation may also declare one explicit ARC-only borrowed-result
+  variant. Neutral LIR retains the ordinary source operation, but constraint
+  generation uses the borrowed variant's `RcEffect`. After modes solve, an
+  actually borrowed result materializes the borrowed operation and its effect;
+  an owned result materializes the ordinary consuming operation and its
+  effect. If the ordinary operation needs to consume an argument whose solved
+  binding is borrowed, ARC emits one retain immediately before the operation
+  to supply that consumed unit. Every post-ARC statement therefore contains
+  the exact concrete operation and effect the backend executes. The variant
+  mapping is static low-level-op data, and only ARC may select from it.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
@@ -5482,8 +5492,10 @@ before solving and never weakened:
 - hosted procs: every refcounted arg owned by the host, result owned. This
   keeps the LirImage And Hosted Functions contract unchanged.
 - erased-callable procs (`ProcAbi.erased_callable`): all-owned, as above.
-- low-level ops: their `RcEffect` is the signature; it is explicit static
-  data on the op, never inferred.
+- low-level ops: each concrete operation's `RcEffect` is its signature; it is
+  explicit static data on the op, never inferred. An ARC-only borrowed-result
+  variant is likewise an explicit operation and signature, selected only by
+  the ARC rule above.
 
 ### Interprocedural Solving
 
@@ -5582,8 +5594,10 @@ plans when keep/common states change. Once the fixed point converges, direct
 call demands are mapped to final variants and every reachable plan is complete.
 
 Each plan records every concrete move/retain/release decision and call-variant
-or uniqueness choice. Materialization receives neither ownership state nor
-liveness and only follows completed plans to rebuild statement chains:
+or uniqueness choice. For a low-level operation with an ARC-only borrowed
+variant, the plan also records the selected concrete operation and `RcEffect`.
+Materialization receives neither ownership state nor liveness and only follows
+completed plans to rebuild statement chains:
 
 - borrowed occurrence: no statements.
 - owned occurrence that is not the final occurrence on its path: `incref`

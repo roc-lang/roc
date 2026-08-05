@@ -5454,7 +5454,7 @@ pub const Interpreter = struct {
                 @memcpy(elem_ptr[0..info.width], args[2].ptr[0..info.width]);
                 break :blk self.rocListToValue(rl, ll.ret_layout);
             },
-            .list_sublist => blk: {
+            .list_sublist, .list_sublist_borrowed => blk: {
                 if (args.len != 2 or ll.arg_layouts.len != 2) {
                     return self.runtimeError("list_sublist expected 2 arguments");
                 }
@@ -5476,6 +5476,11 @@ pub const Interpreter = struct {
                 if (info.width == 0) {
                     const result_len = zstSublistLen(source_list.len(), start, len);
                     break :blk self.rocListToValue(canonicalZstList(result_len), ll.ret_layout);
+                }
+
+                if (ll.op == .list_sublist_borrowed) {
+                    const result = builtins.list.listSublistBorrowed(source_list, info.width, start, len, elems_rc, &self.roc_ops);
+                    break :blk self.rocListToValue(result, ll.ret_layout);
                 }
 
                 var crash_boundary = self.enterCrashBoundary();
