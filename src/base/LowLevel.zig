@@ -62,9 +62,6 @@ pub const LowLevel = enum(u16) {
     list_concat,
     list_append_range_within,
     list_copy_range_within,
-    list_cursor_unsafe,
-    cursor_append_unsafe,
-    list_seal_cursor_unsafe,
     list_append_range_within_unsafe,
     list_append_sublist,
     list_append_le_bytes,
@@ -816,15 +813,6 @@ pub const LowLevel = enum(u16) {
             };
         }
 
-        /// Retains the masked arguments (a copy of each gains a reference)
-        /// while producing a plain scalar result.
-        pub fn retainsArgs(mask: u64) RcEffect {
-            return .{
-                .may_retain_or_release = mask != 0,
-                .retain_args = mask,
-            };
-        }
-
         pub fn retainsSharingArgs(mask: u64) RcEffect {
             return .{
                 .may_retain_or_release = mask != 0,
@@ -948,15 +936,6 @@ pub const LowLevel = enum(u16) {
             // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
             .list_map_write_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{2})),
 
-            // Stores a copy of the element through a raw fill cursor inside a
-            // uniquely owned list the loop promotion pass proved writable, so
-            // the buffer's copy gains a reference like an appended element.
-            .cursor_append_unsafe => RcEffect.retainsArgs(argMask(&.{1})),
-
-            // Rewrites the length of a unique non-slice list from its fill
-            // cursor without touching element ownership.
-            .list_seal_cursor_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), 0),
-
             .list_swap => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_set,
@@ -1049,7 +1028,6 @@ pub const LowLevel = enum(u16) {
             .list_len,
             .list_slack_unique,
             .list_owned_unique,
-            .list_cursor_unsafe,
             .bool_not,
             .dict_pseudo_seed,
             .hasher_finish,
