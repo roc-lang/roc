@@ -57,7 +57,7 @@ main = Json.to_str(Latitude.(51.5))
 
 The method `encode_f64` has the type:
 
-    F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+    F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 
 But I need it to have the type:
 
