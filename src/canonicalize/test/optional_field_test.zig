@@ -643,14 +643,12 @@ test "literal defaults of every accepted shape canonicalize with their defaults 
     try std.testing.expectEqual(@as(usize, 0), diagnostics.len);
 
     const statement_idx = env.store.statementAt(env.type_decls, 0);
-    const anno_idx = switch (env.store.getStatement(statement_idx)) {
-        .s_alias_decl => |alias| alias.anno,
-        else => return error.ExpectedAliasDeclaration,
-    };
-    const record = switch (env.store.getTypeAnno(anno_idx)) {
-        .record => |record| record,
-        else => return error.ExpectedRecordAnnotation,
-    };
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_alias_decl) return error.ExpectedAliasDeclaration;
+    const anno_idx = statement.s_alias_decl.anno;
+    const anno = env.store.getTypeAnno(anno_idx);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const record = anno.record;
     const fields = env.store.sliceAnnoRecordFields(record.fields);
     try std.testing.expectEqual(@as(usize, 6), fields.len);
     for (fields) |field_idx| {

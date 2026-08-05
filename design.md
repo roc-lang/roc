@@ -3494,7 +3494,13 @@ complete):
   (no checked row in hand); `Builder.optionalFieldSlot` recognizes an
   optional slot by an EXACT match on the reserved labels — a lossless
   read-back of the encoding, not a shape heuristic — and renders the
-  payload or `<missing>`. A user-annotated `[Missing, Present(τ)]` field
+  payload or `<missing>`. Derived JSON codecs read the labels the same
+  way (`optionalFieldSlot` in the encode/parse record-field ladders): an
+  encoded `#Present` slot emits its field with the payload's encoder and
+  `#Missing` omits the field; a parsed record materializes `#Missing`
+  for an absent `?:` field and wraps a present one in `#Present` — the
+  slot-kind sibling of the Try(τ, [Missing]) codec convention, pinned by
+  test/cli/JsonOptionalFieldKinds.roc. A user-annotated `[Missing, Present(τ)]` field
   is an ordinary tag union everywhere (inspect renders `Present(5)` as
   `Present(5)`); the reserved-label union shares its LAYOUT (two
   variants, variant 0 zero-sized) but not its identity. Every other

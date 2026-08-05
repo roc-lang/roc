@@ -13030,6 +13030,9 @@ const BodyContext = struct {
                 if (try self.missingTryInfo(shape_ty)) |info| {
                     return try self.collectSerializationPlanInputs(kind, info.ok_ty, encoding_ty, plan, inputs);
                 }
+                if (self.builder.optionalFieldSlot(shape_ty)) |slot| {
+                    return try self.collectSerializationPlanInputs(kind, slot.payload_ty, encoding_ty, plan, inputs);
+                }
                 if ((try self.customParserLookup(shape_ty)) != null or self.parseScalarMethodName(shape_ty) != null) return;
             },
             .encoder => {
@@ -21521,6 +21524,9 @@ const BodyContext = struct {
         if (try self.missingTryInfo(shape_ty)) |info| {
             return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_ty, encoding_expr, encoding_ty, str_ty);
         }
+        if (self.builder.optionalFieldSlot(shape_ty)) |slot| {
+            return try self.buildParserConstructionPrecomputedPlan(plan, slot.payload_ty, encoding_expr, encoding_ty, str_ty);
+        }
         if ((try self.customParserLookup(shape_ty)) != null) return;
         if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
@@ -23298,8 +23304,11 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const maybe_missing_try = try self.missingTryInfo(field.ty);
+        const maybe_slot = self.builder.optionalFieldSlot(field.ty);
         const field_parse_ty = if (maybe_missing_try) |info|
             info.ok_ty
+        else if (maybe_slot) |slot|
+            slot.payload_ty
         else
             field.ty;
         const parse_ok_ty = try self.parseResultOkType(field_parse_ty, state_ty);
@@ -23318,6 +23327,10 @@ const BodyContext = struct {
         const parsed_value_local = try self.addLocal(self.builder.symbols.fresh(), field_parse_ty);
         const field_value = if (maybe_missing_try != null)
             try self.tryOk(field.ty, try self.localExpr(parsed_value_local, field_parse_ty))
+        else if (maybe_slot) |slot|
+            // A matched `?:` field parses at the slot's Present payload type
+            // and wraps in the `#Present` tag (design.md "Field Kinds").
+            try self.optionalSlotPresentExpr(field.ty, slot, try self.localExpr(parsed_value_local, field_parse_ty))
         else
             try self.localExpr(parsed_value_local, field_parse_ty);
         const field_value_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
@@ -25161,7 +25174,8 @@ const BodyContext = struct {
         defer self.allocator.free(field_locals);
         for (record_fields, 0..) |field, index| {
             field_locals[index] = try self.addLocal(self.builder.symbols.fresh(), field.ty);
-            const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null;
+            const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null or
+                self.builder.optionalFieldSlot(field.ty) != null;
             if (!field_can_be_missing) {
                 const field_try_ty = try self.tryTypeLike(ret_ty, field.ty, ret_info.err_ty);
                 field_try_tys[index] = field_try_ty;
@@ -25195,7 +25209,8 @@ const BodyContext = struct {
         var field_index = record_fields.len;
         while (field_index > 0) {
             field_index -= 1;
-            const field_can_be_missing = (try self.missingTryInfo(record_fields[field_index].ty)) != null;
+            const field_can_be_missing = (try self.missingTryInfo(record_fields[field_index].ty)) != null or
+                self.builder.optionalFieldSlot(record_fields[field_index].ty) != null;
             body = if (field_can_be_missing)
                 try self.finishOptionalRecordFieldFromPresencePayload(
                     body,
@@ -32129,7 +32144,6 @@ const BodyContext = struct {
         } });
     }
 
-
     fn optionalSlotPresentExpr(
         self: *BodyContext,
         slot_ty: Type.TypeId,
@@ -37557,6 +37571,24 @@ const BodyContext = struct {
             );
         }
 
+        if (self.builder.optionalFieldSlot(field.ty)) |slot| {
+            return try self.lowerEncodeSlotOptionalRecordFieldFrom(
+                shape_ty,
+                value_expr,
+                encoding_expr,
+                encoding_ty,
+                state_expr,
+                method,
+                precomputed_plan,
+                record_fields,
+                renamed_field_locals,
+                field_writer_expr,
+                field_index,
+                field_value_expr,
+                slot,
+            );
+        }
+
         return try self.lowerEncodePresentRecordFieldFrom(
             shape_ty,
             value_expr,
@@ -37716,6 +37748,81 @@ const BodyContext = struct {
         var branches = std.ArrayList(DraftBranch).empty;
         defer branches.deinit(self.allocator);
         try branches.append(self.allocator, .{ .pat = ok_pat, .body = ok_body });
+        try branches.append(self.allocator, .{ .pat = missing_pat, .body = missing_body });
+
+        const field_try = try self.addExpr(.{ .ty = method.container_result_ty, .data = .{ .match_ = .{
+            .scrutinee = field_value_expr,
+            .branches = try self.addBranchSpan(branches.items),
+        } } });
+        const after_field_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
+        const rest_body = try self.lowerEncodeRecordFieldNamesFrom(
+            shape_ty,
+            value_expr,
+            encoding_expr,
+            encoding_ty,
+            try self.localExpr(after_field_local, method.container_state_ty),
+            method,
+            precomputed_plan,
+            record_fields,
+            renamed_field_locals,
+            field_writer_expr,
+            field_index + 1,
+        );
+        return try self.sequenceEncodeTry(field_try, method.container_result_ty, after_field_local, rest_body, method.container_result_ty);
+    }
+
+    /// The `?:` slot-kind sibling of `lowerEncodeOptionalRecordFieldFrom`
+    /// (design.md "Field Kinds (All-Dynamic Optional Fields)"): a `#Present`
+    /// slot encodes its payload with the ordinary present-field emitter and a
+    /// `#Missing` slot omits the field, passing the encoder state through
+    /// untouched. The slot union is structural (no nominal wrapper), so the
+    /// match is directly on the reserved-label tags.
+    fn lowerEncodeSlotOptionalRecordFieldFrom(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        value_expr: DraftExprId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: DraftExprId,
+        method: EncodeContainerMethod,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+        record_fields: []const Type.Field,
+        renamed_field_locals: []const DraftLocalId,
+        field_writer_expr: DraftExprId,
+        field_index: usize,
+        field_value_expr: DraftExprId,
+        slot: Builder.OptionalSlotInfo,
+    ) Allocator.Error!DraftExprId {
+        const field_ty = record_fields[field_index].ty;
+
+        const payload_local = try self.addLocal(self.builder.symbols.fresh(), slot.payload_ty);
+        const payload_pat = try self.bindPat(payload_local, slot.payload_ty);
+        const present_pat = try self.addPat(.{ .ty = field_ty, .data = .{ .tag = .{
+            .name = slot.present_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{payload_pat}),
+        } } });
+        const present_body = try self.lowerEncodePresentRecordField(
+            encoding_expr,
+            encoding_ty,
+            state_expr,
+            method,
+            precomputed_plan,
+            renamed_field_locals,
+            field_writer_expr,
+            field_index,
+            slot.payload_ty,
+            try self.localExpr(payload_local, slot.payload_ty),
+        );
+
+        const missing_pat = try self.addPat(.{ .ty = field_ty, .data = .{ .tag = .{
+            .name = slot.missing_tag.name,
+            .payloads = .empty(),
+        } } });
+        const missing_body = try self.tryOk(method.container_result_ty, state_expr);
+
+        var branches = std.ArrayList(DraftBranch).empty;
+        defer branches.deinit(self.allocator);
+        try branches.append(self.allocator, .{ .pat = present_pat, .body = present_body });
         try branches.append(self.allocator, .{ .pat = missing_pat, .body = missing_body });
 
         const field_try = try self.addExpr(.{ .ty = method.container_result_ty, .data = .{ .match_ = .{
@@ -37951,6 +38058,9 @@ const BodyContext = struct {
     fn encodeRecordFieldPayloadType(self: *BodyContext, field_ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (try self.missingTryInfo(field_ty)) |optional_info| {
             return optional_info.ok_ty;
+        }
+        if (self.builder.optionalFieldSlot(field_ty)) |slot| {
+            return slot.payload_ty;
         }
         return field_ty;
     }
@@ -38437,6 +38547,10 @@ const BodyContext = struct {
         if (try self.missingTryInfo(ty)) |info| {
             if (!allow_missing) return false;
             return try self.parseFieldTypeIsSupported(info.ok_ty, false);
+        }
+        if (self.builder.optionalFieldSlot(ty)) |slot| {
+            if (!allow_missing) return false;
+            return try self.parseFieldTypeIsSupported(slot.payload_ty, false);
         }
         if (self.tryNullInfo(ty)) |info| {
             return try self.parseFieldTypeIsSupported(info.ok_payload_ty, false);
@@ -40724,8 +40838,10 @@ const BodyContext = struct {
         field_local: DraftLocalId,
     ) Allocator.Error!DraftExprId {
         const field_ty = field.ty;
-        const optional_info = (try self.missingTryInfo(field_ty)) orelse
-            Common.invariant("optional record finish requested for a non-optional Try field");
+        const maybe_try_info = try self.missingTryInfo(field_ty);
+        if (maybe_try_info == null and self.builder.optionalFieldSlot(field_ty) == null) {
+            Common.invariant("optional record finish requested for a field that is neither Try-optional nor a `?:` slot");
+        }
         const payload_local = record_slots.payload_locals[field_index];
         const payload_ty = record_slots.payload_tys[field_index];
         if (!self.sameType(payload_ty, field_ty)) {
@@ -40735,8 +40851,12 @@ const BodyContext = struct {
             Common.invariant("record finish field local type differed from optional field type");
         }
 
-        const missing_tag = try self.tagUnionValueWithoutPayload(optional_info.err_ty, "Missing");
-        const missing_field = try self.tryErr(field_ty, missing_tag);
+        const missing_field = if (maybe_try_info) |optional_info|
+            try self.tryErr(field_ty, try self.tagUnionValueWithoutPayload(optional_info.err_ty, "Missing"))
+        else
+            // An absent `?:` field materializes the slot's `#Missing` tag
+            // (design.md "Field Kinds (All-Dynamic Optional Fields)").
+            try self.optionalSlotMissingExpr(field_ty);
         const present_field = try self.localExpr(payload_local, payload_ty);
         const presence_word = recordPresenceWordIndex(field_index);
         const is_present_expr = try self.localExpr(record_slots.presence_locals[presence_word], record_slots.presence_tys[presence_word]);

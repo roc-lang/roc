@@ -2587,10 +2587,9 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
 /// fully validates the sub-patterns against the binder's Try type.
 fn fieldKindIsOptional(type_store: *TypeStore, presence: types.RecordField.Presence) bool {
     const presence_var = presence.presenceVar() orelse return false;
-    return switch (type_store.resolveVar(presence_var).desc.content) {
-        .field_presence => |field_presence| field_presence == .optional,
-        else => false,
-    };
+    const content = type_store.resolveVar(presence_var).desc.content;
+    if (content != .field_presence) return false;
+    return content.field_presence == .optional;
 }
 
 /// Get the element type from a List type.

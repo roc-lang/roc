@@ -7212,82 +7212,86 @@ fn defaultNonLiteralNode(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!?E
     try self.scratch_expr_ids.append(root);
     while (self.scratch_expr_ids.top() > walk_top) {
         const expr_idx = self.scratch_expr_ids.pop() orelse unreachable;
-        switch (self.env.store.getExpr(expr_idx)) {
-            // Numeric literals (the numeral table variants store their exact
-            // value in ModuleEnv; they are still literals).
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_num_from_numeral,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            => {},
-            // A negated numeral. When the minus is not folded into the token,
-            // it canonicalizes as `e_unary_minus` over the numeric literal;
-            // exactly that shape counts. Negation of anything else (including
-            // a nested negation) is an operation, not a literal.
-            .e_unary_minus => |unary| switch (self.env.store.getExpr(unary.expr)) {
-                .e_num,
-                .e_frac_f32,
-                .e_frac_f64,
-                .e_dec,
-                .e_dec_small,
-                .e_num_from_numeral,
-                .e_typed_int,
-                .e_typed_frac,
-                .e_typed_num_from_numeral,
-                => {},
-                else => return expr_idx,
-            },
-            // String literals. An interpolated string canonicalizes to
-            // `e_interpolation` (which references bindings and dispatches),
-            // so it falls to the rejecting arm below; a plain string is a
-            // span of `e_str_segment`s.
-            .e_str_segment => {},
-            .e_str => |str| {
-                for (self.env.store.sliceExpr(str.span)) |segment| {
-                    try self.scratch_expr_ids.append(segment);
-                }
-            },
-            // Tag literals, including the nominal wrapper Can itself puts
-            // around a tag/record/tuple literal that resolves to a nominal
-            // type (e.g. a bare `True`): the wrapper names a type
-            // declaration, not a value, so it cannot form a value cycle.
-            .e_zero_argument_tag => {},
-            .e_tag => |tag| {
-                for (self.env.store.sliceExpr(tag.args)) |arg| {
-                    try self.scratch_expr_ids.append(arg);
-                }
-            },
-            .e_nominal => |nominal| try self.scratch_expr_ids.append(nominal.backing_expr),
-            .e_nominal_external => |nominal| try self.scratch_expr_ids.append(nominal.backing_expr),
-            // Aggregate literals whose components must all be literals. A
-            // record UPDATE (`{ ..base, .. }`) is not a record literal.
-            .e_empty_list, .e_empty_record => {},
-            .e_list => |list| {
-                for (self.env.store.sliceExpr(list.elems)) |elem| {
-                    try self.scratch_expr_ids.append(elem);
-                }
-            },
-            .e_tuple => |tuple| {
-                for (self.env.store.sliceExpr(tuple.elems)) |elem| {
-                    try self.scratch_expr_ids.append(elem);
-                }
-            },
-            .e_record => |record| {
-                if (record.ext != null) return expr_idx;
-                for (self.env.store.sliceRecordFields(record.fields)) |field_idx| {
-                    const field = self.env.store.getRecordField(field_idx);
-                    try self.scratch_expr_ids.append(field.value);
-                }
-            },
-            // Everything else — name references, calls, operators, lambdas,
-            // control flow, blocks — is not a literal.
-            else => return expr_idx,
+        const expr = self.env.store.getExpr(expr_idx);
+        const tag = std.meta.activeTag(expr);
+        // Numeric literals (the numeral table variants store their exact
+        // value in ModuleEnv; they are still literals).
+        if (tag == .e_num or tag == .e_frac_f32 or tag == .e_frac_f64 or
+            tag == .e_dec or tag == .e_dec_small or tag == .e_num_from_numeral or
+            tag == .e_typed_int or tag == .e_typed_frac or tag == .e_typed_num_from_numeral)
+        {
+            continue;
         }
+        // A negated numeral. When the minus is not folded into the token,
+        // it canonicalizes as `e_unary_minus` over the numeric literal;
+        // exactly that shape counts. Negation of anything else (including
+        // a nested negation) is an operation, not a literal.
+        if (tag == .e_unary_minus) {
+            const inner = std.meta.activeTag(self.env.store.getExpr(expr.e_unary_minus.expr));
+            if (inner == .e_num or inner == .e_frac_f32 or inner == .e_frac_f64 or
+                inner == .e_dec or inner == .e_dec_small or inner == .e_num_from_numeral or
+                inner == .e_typed_int or inner == .e_typed_frac or inner == .e_typed_num_from_numeral)
+            {
+                continue;
+            }
+            return expr_idx;
+        }
+        // String literals. An interpolated string canonicalizes to
+        // `e_interpolation` (which references bindings and dispatches),
+        // so it falls to the rejecting return below; a plain string is a
+        // span of `e_str_segment`s.
+        if (tag == .e_str_segment) continue;
+        if (tag == .e_str) {
+            for (self.env.store.sliceExpr(expr.e_str.span)) |segment| {
+                try self.scratch_expr_ids.append(segment);
+            }
+            continue;
+        }
+        // Tag literals, including the nominal wrapper Can itself puts
+        // around a tag/record/tuple literal that resolves to a nominal
+        // type (e.g. a bare `True`): the wrapper names a type
+        // declaration, not a value, so it cannot form a value cycle.
+        if (tag == .e_zero_argument_tag) continue;
+        if (tag == .e_tag) {
+            for (self.env.store.sliceExpr(expr.e_tag.args)) |arg| {
+                try self.scratch_expr_ids.append(arg);
+            }
+            continue;
+        }
+        if (tag == .e_nominal) {
+            try self.scratch_expr_ids.append(expr.e_nominal.backing_expr);
+            continue;
+        }
+        if (tag == .e_nominal_external) {
+            try self.scratch_expr_ids.append(expr.e_nominal_external.backing_expr);
+            continue;
+        }
+        // Aggregate literals whose components must all be literals. A
+        // record UPDATE (`{ ..base, .. }`) is not a record literal.
+        if (tag == .e_empty_list or tag == .e_empty_record) continue;
+        if (tag == .e_list) {
+            for (self.env.store.sliceExpr(expr.e_list.elems)) |elem| {
+                try self.scratch_expr_ids.append(elem);
+            }
+            continue;
+        }
+        if (tag == .e_tuple) {
+            for (self.env.store.sliceExpr(expr.e_tuple.elems)) |elem| {
+                try self.scratch_expr_ids.append(elem);
+            }
+            continue;
+        }
+        if (tag == .e_record) {
+            if (expr.e_record.ext != null) return expr_idx;
+            for (self.env.store.sliceRecordFields(expr.e_record.fields)) |field_idx| {
+                const field = self.env.store.getRecordField(field_idx);
+                try self.scratch_expr_ids.append(field.value);
+            }
+            continue;
+        }
+        // Everything else — name references, calls, operators, lambdas,
+        // control flow, blocks — is not a literal.
+        return expr_idx;
     }
     return null;
 }

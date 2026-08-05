@@ -1456,9 +1456,9 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
                 // identifier pattern binds a top-level definition. `as` patterns
                 // have a name but still carry non-identifier sub-binders, so they
                 // are rejected too.
-                .binds_top_level_ident = switch (ast.store.getPattern(decl.pattern)) {
-                    .ident, .var_ident => true,
-                    else => false,
+                .binds_top_level_ident = blk: {
+                    const pattern = ast.store.getPattern(decl.pattern);
+                    break :blk pattern == .ident or pattern == .var_ident;
                 },
             },
             .@"var" => |v| .{

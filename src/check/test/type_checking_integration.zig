@@ -1186,24 +1186,16 @@ fn resolveOnlyFieldKindContent(test_env: *TestEnv, def_name: []const u8) error{ 
     for (defs_slice) |def_idx| {
         const def = test_env.module_env.store.getDef(def_idx);
         const ptrn = test_env.module_env.store.getPattern(def.pattern);
-        switch (ptrn) {
-            .assign => |assign| {
-                if (!std.mem.eql(u8, def_name, idents.getText(assign.ident))) continue;
-                const resolved = test_env.module_env.types.resolveVar(ModuleEnv.varFrom(def_idx));
-                const record = switch (resolved.desc.content) {
-                    .structure => |flat| switch (flat) {
-                        .record => |record| record,
-                        else => return error.TestUnexpectedResult,
-                    },
-                    else => return error.TestUnexpectedResult,
-                };
-                const fields = test_env.module_env.types.getRecordFieldsSlice(record.fields);
-                try testing.expectEqual(@as(usize, 1), fields.len);
-                const kind_var = fields.items(.presence)[0].presenceVar() orelse return error.TestUnexpectedResult;
-                return test_env.module_env.types.resolveVar(kind_var).desc.content;
-            },
-            else => return error.TestUnexpectedResult,
-        }
+        if (ptrn != .assign) return error.TestUnexpectedResult;
+        if (!std.mem.eql(u8, def_name, idents.getText(ptrn.assign.ident))) continue;
+        const resolved = test_env.module_env.types.resolveVar(ModuleEnv.varFrom(def_idx));
+        if (resolved.desc.content != .structure) return error.TestUnexpectedResult;
+        if (resolved.desc.content.structure != .record) return error.TestUnexpectedResult;
+        const record = resolved.desc.content.structure.record;
+        const fields = test_env.module_env.types.getRecordFieldsSlice(record.fields);
+        try testing.expectEqual(@as(usize, 1), fields.len);
+        const kind_var = fields.items(.presence)[0].presenceVar() orelse return error.TestUnexpectedResult;
+        return test_env.module_env.types.resolveVar(kind_var).desc.content;
     }
     return error.TestUnexpectedResult;
 }

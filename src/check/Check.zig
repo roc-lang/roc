@@ -19542,7 +19542,7 @@ fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
                 _ = try self.unify(pending.presence_var, required_var, env);
                 _ = try self.unify(pending.binder_var, pending.payload_var, env);
             },
-            else => {
+            .rigid, .alias, .structure, .err => {
                 // `.err` and other poisoned contents: the kind mismatch was
                 // already reported; bind the binder to the payload so its
                 // uses don't cascade (err absorbs).
