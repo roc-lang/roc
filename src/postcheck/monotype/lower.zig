@@ -411,19 +411,24 @@ pub fn run(
 
     const procedures_started_ns = if (options.timing) |timing| timing.start() else 0;
     if (options.timing) |timing| timing.startProcedureBreakdown();
-    var root_index: usize = 0;
-    while (root_index < roots.requests.len) {
-        if (roots.requests[root_index].procedure_template == null) {
-            try builder.lowerRoot(roots.requests[root_index]);
-            root_index += 1;
-            continue;
-        }
+    switch (roots.procedure_template_root_grouping) {
+        .isolated => for (roots.requests) |request| try builder.lowerRoot(request),
+        .shared_adjacent => {
+            var root_index: usize = 0;
+            while (root_index < roots.requests.len) {
+                if (roots.requests[root_index].procedure_template == null) {
+                    try builder.lowerRoot(roots.requests[root_index]);
+                    root_index += 1;
+                    continue;
+                }
 
-        const batch_start = root_index;
-        while (root_index < roots.requests.len and roots.requests[root_index].procedure_template != null) {
-            root_index += 1;
-        }
-        try builder.lowerTemplateRootBatch(roots.requests[batch_start..root_index]);
+                const batch_start = root_index;
+                while (root_index < roots.requests.len and roots.requests[root_index].procedure_template != null) {
+                    root_index += 1;
+                }
+                try builder.lowerTemplateRootBatch(roots.requests[batch_start..root_index]);
+            }
+        },
     }
     if (options.timing) |timing| timing.finishProcedureBreakdown();
     if (options.timing) |timing| timing.finish(procedures_started_ns, .procedure_specialization);

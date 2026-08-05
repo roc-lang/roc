@@ -10616,6 +10616,10 @@ fn lowerCheckedSourceToLir(
                 .test_plan => |plan| plan.metadata,
                 else => &.{},
             },
+            .procedure_template_root_grouping = switch (roots) {
+                .test_plan => .shared_adjacent,
+                else => .isolated,
+            },
         },
         .{
             .target_usize = target_usize,

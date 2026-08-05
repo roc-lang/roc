@@ -158,6 +158,9 @@ const LowerMonotypeOptions = struct {
     specialization_cache: MonoLower.SpecializationCacheControl = .{},
     loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
+    diagnostics: ?*MonoLower.Diagnostics = null,
+    root_selection: enum { all, test_expects } = .all,
+    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -182,17 +185,33 @@ fn lowerMonotypeModuleWithOptions(
         view_index += 1;
     }
 
+    var selected_test_roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    defer selected_test_roots.deinit(allocator);
+    const root_requests = switch (options.root_selection) {
+        .all => resources.checked_artifact.root_requests.requests,
+        .test_expects => blk: {
+            for (resources.checked_artifact.root_requests.requests) |request| {
+                if (request.kind == .test_expect) try selected_test_roots.append(allocator, request);
+            }
+            break :blk selected_test_roots.items;
+        },
+    };
+
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{
+            .requests = root_requests,
+            .procedure_template_root_grouping = options.procedure_template_root_grouping,
+        },
         .{
             .specialization_cache = options.specialization_cache,
             .loaded_specialization_shards = options.loaded_specialization_shards,
             .specialization_counters = options.specialization_counters,
+            .diagnostics = options.diagnostics,
         },
     );
     errdefer mono.deinit();
@@ -1846,6 +1865,37 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .nominal_backing_reuses = 1,
         .nominal_backing_instantiations = 86,
     });
+}
+
+test "test roots share template work only when explicitly grouped" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\expect identity(1) == 1
+        \\expect identity(2) == 2
+        \\
+        \\main = 0
+    ;
+
+    var isolated_diagnostics = MonoLower.Diagnostics{};
+    var isolated = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &isolated_diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer isolated.deinit(allocator);
+
+    var shared_diagnostics = MonoLower.Diagnostics{};
+    var shared = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &shared_diagnostics,
+        .root_selection = .test_expects,
+        .procedure_template_root_grouping = .shared_adjacent,
+    });
+    defer shared.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 0), isolated_diagnostics.body.cross_root_template_reuses);
+    try std.testing.expect(shared_diagnostics.body.cross_root_template_reuses > 0);
 }
 
 test "issue 10529 open Try chain with named local callback stays bounded" {

@@ -3502,15 +3502,17 @@ nested Monotype functions, each with a different monomorphic function type.
 Each independently sealed specialization group owns an instantiation graph:
 union-find nodes with explicit row-extension links, created by instantiating
 checked types on first touch. An ordinary procedure body begins a group by
-itself. Adjacent explicit procedure-template roots may share one group so a
-callee request proven equivalent under the complete graph-local specialization
-identity is reused before a second root replays that request. Every root still
-uses a fresh instantiation scope, owns its own body and durable specialization
-record, and contributes its own checked relations; sharing the graph never
-authorizes importing a checked node from another scope. The reuse key includes
-callable family, method scope, checked source-function key, exact evidence
-topology, lexical context, and the exact function request interface. A
-different or still-unproven request remains independent.
+itself. The root producer may explicitly mark adjacent procedure-template roots
+as one shared group so a callee request proven equivalent under the complete
+graph-local specialization identity is reused before a second root replays that
+request. Test plans select this grouping; ordinary build and platform roots are
+independently sealed. Every root still uses a fresh instantiation scope, owns
+its own body and durable specialization record, and contributes its own checked
+relations; sharing the graph never authorizes importing a checked node from
+another scope. The reuse key includes callable family, method scope, checked
+source-function key, exact evidence topology, lexical context, and the exact
+function request interface. A different or still-unproven request remains
+independent.
 
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
