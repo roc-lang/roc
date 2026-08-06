@@ -63,34 +63,29 @@ TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ I'm having trouble with this bool operation. ──────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  1 + update_data                                                           │
- │      ‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └────────────────────────────────────────── let_polymorphism_records.md:48:6 ┘
+-- ❌ TYPE MISMATCH -------------------------- let_polymorphism_records.md:48:6
 
-    Both sides of `and` must be `Bool` values, but the right side is:
+I'm having trouble with this bool operation.
 
-        { data: a, ..b }, a -> { data: a, ..b }
+1 + update_data
+    ^^^^^^^^^^^
 
-    Note: Roc does not have "truthiness". You must convert values to bools
-    yourself.
+Both sides of `and` must be `Bool` values, but the right side is:
 
+    { data: a, ..b }, a -> { data: a, ..b }
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  str = "hello"                                                             │
- │        ‾‾‾‾‾‾‾                                                             │
- └─────────────────────────────────────────── let_polymorphism_records.md:8:7 ┘
+Note: Roc does not have "truthiness". You must convert values to bools yourself.
 
-    The type was determined to be:
+-- ❌ TYPE MISMATCH --------------------------- let_polymorphism_records.md:8:7
 
-        Dec
+This string literal is being used where a non-string type is needed.
 
+str = "hello"
+      ^^^^^^^
+
+The type was determined to be:
+
+    Dec
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -15,33 +15,29 @@ WRONG MATCH ARROW - wrong_arrow.md:2:8:2:8
 WRONG MATCH ARROW - wrong_arrow.md:3:13:3:13
 # PROBLEMS
 
-┌───────────────────┐
-│ WRONG MATCH ARROW ├─ I was parsing a match branch, and I found `->` where ──┐
-└┬──────────────────┘  Roc uses `=>`.                                         │
- │                                                                            │
- │  [] -> Err(EmptyList)                                                      │
- │     ‾                                                                      │
- └──────────────────────────────────────────────────────── wrong_arrow.md:2:8 ┘
+-- ❌ WRONG MATCH ARROW ------------------------------------ wrong_arrow.md:2:8
 
-    Match branches use a fat arrow between the pattern and the branch body.
+I was parsing a match branch, and I found `->` where Roc uses `=>`.
 
-    For example:
-        Ok(value) => value
+[] -> Err(EmptyList)
+   ^
 
+Match branches use a fat arrow between the pattern and the branch body.
 
-┌───────────────────┐
-│ WRONG MATCH ARROW ├─ I was parsing a match branch, and I found `->` where ──┐
-└┬──────────────────┘  Roc uses `=>`.                                         │
- │                                                                            │
- │  [.., e] -> Ok(e)                                                          │
- │          ‾                                                                 │
- └─────────────────────────────────────────────────────── wrong_arrow.md:3:13 ┘
+For example:
+    Ok(value) => value
 
-    Match branches use a fat arrow between the pattern and the branch body.
+-- ❌ WRONG MATCH ARROW ----------------------------------- wrong_arrow.md:3:13
 
-    For example:
-        Ok(value) => value
+I was parsing a match branch, and I found `->` where Roc uses `=>`.
 
+[.., e] -> Ok(e)
+        ^
+
+Match branches use a fat arrow between the pattern and the branch body.
+
+For example:
+    Ok(value) => value
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

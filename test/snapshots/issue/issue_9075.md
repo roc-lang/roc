@@ -16,22 +16,20 @@ main = "${y}"
 TYPE MISMATCH - issue_9075.md:6:11:6:12
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  main = "${y}"                                                             │
- │            ‾                                                               │
- └──────────────────────────────────────────────────────── issue_9075.md:6:11 ┘
+-- ❌ TYPE MISMATCH ---------------------------------------- issue_9075.md:6:11
 
-    It has the type:
+This expression is used in an unexpected way.
 
-        Dec
+main = "${y}"
+          ^
 
-    But you are trying to use it as:
+It has the type:
 
-        Str
+    Dec
 
+But you are trying to use it as:
+
+    Str
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,LowerIdent,

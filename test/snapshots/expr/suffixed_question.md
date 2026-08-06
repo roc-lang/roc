@@ -11,22 +11,20 @@ Stdout.line???
 UNEXPECTED EXPRESSION SYNTAX - suffixed_question.md:1:14:1:15
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  Stdout.line???                                                            │
- │               ‾                                                            │
- └───────────────────────────────────────────────── suffixed_question.md:1:14 ┘
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------------------ suffixed_question.md:1:14
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing an expression, and this token cannot start an expression here.
 
-    For example:
-        add(1, 2)
+Stdout.line???
+             ^
 
-    I found `?` here.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
+For example:
+    add(1, 2)
+
+I found `?` here.
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceDotLowerIdent,OpDoubleQuestion,NoSpaceOpQuestion,

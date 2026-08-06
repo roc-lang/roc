@@ -44,435 +44,385 @@ DECLARATION HAS NO VALUE - record_different_fields_error.md:6:5:6:21
 MISSING METHOD - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
 
-┌───────────────────┐
-│ STRAY DOLLAR SIGN ├─ Dollar sign ($) is only allowed at the very ───────────┐
-└┬──────────────────┘  beginning of a name, not in the middle or at the end.  │
- │                                                                            │
- │  field$special: "dollar",                                                  │
- │       ‾                                                                    │
- └───────────────────────────────────── record_different_fields_error.md:6:10 ┘
+-- ❌ STRAY DOLLAR SIGN ----------------- record_different_fields_error.md:6:10
 
+Dollar sign ($) is only allowed at the very beginning of a name, not in the
+middle or at the end.
 
+field$special: "dollar",
+     ^
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  _privateField: "leading underscore",                                      │
- │                 ‾                                                          │
- └───────────────────────────────────── record_different_fields_error.md:2:20 ┘
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+-- ❌ UNEXPECTED TYPE SYNTAX ------------ record_different_fields_error.md:2:20
 
-    For example:
-        List(U64)
+I was parsing a type annotation, and this token cannot start a type here.
 
-    I found `"` here.
+_privateField: "leading underscore",
+               ^
 
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  _privateField: "leading underscore",                                      │
- │                  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
- └───────────────────────────────────── record_different_fields_error.md:2:21 ┘
+For example:
+    List(U64)
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I found `"` here.
 
-    For example:
-        add(1, 2)
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:2:21
 
-    I found `leading underscore` here.
+I was parsing an expression, and this token cannot start an expression here.
 
+_privateField: "leading underscore",
+                ^^^^^^^^^^^^^^^^^^
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  _privateField: "leading underscore",                                      │
- │                                    ‾                                       │
- └───────────────────────────────────── record_different_fields_error.md:2:39 ┘
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+For example:
+    add(1, 2)
 
-    For example:
-        add(1, 2)
+I found `leading underscore` here.
 
-    I found `"` here.
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:2:39
 
+I was parsing an expression, and this token cannot start an expression here.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  _privateField: "leading underscore",                                      │
- │                                     ‾                                      │
- └───────────────────────────────────── record_different_fields_error.md:2:40 ┘
+_privateField: "leading underscore",
+                                  ^
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    For example:
-        add(1, 2)
+For example:
+    add(1, 2)
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I found `"` here.
 
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:2:40
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  field_: "trailing underscore",                                            │
- │          ‾                                                                 │
- └───────────────────────────────────── record_different_fields_error.md:3:13 ┘
+I was parsing an expression, and this token cannot start an expression here.
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+_privateField: "leading underscore",
+                                   ^
 
-    For example:
-        List(U64)
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    I found `"` here.
+For example:
+    add(1, 2)
 
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  field_: "trailing underscore",                                            │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
- └───────────────────────────────────── record_different_fields_error.md:3:14 ┘
+-- ❌ UNEXPECTED TYPE SYNTAX ------------ record_different_fields_error.md:3:13
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing a type annotation, and this token cannot start a type here.
 
-    For example:
-        add(1, 2)
+field_: "trailing underscore",
+        ^
 
-    I found `trailing underscore` here.
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
+For example:
+    List(U64)
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  field_: "trailing underscore",                                            │
- │                              ‾                                             │
- └───────────────────────────────────── record_different_fields_error.md:3:33 ┘
+I found `"` here.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:3:14
 
-    For example:
-        add(1, 2)
+I was parsing an expression, and this token cannot start an expression here.
 
-    I found `"` here.
+field_: "trailing underscore",
+         ^^^^^^^^^^^^^^^^^^^
 
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  field_: "trailing underscore",                                            │
- │                               ‾                                            │
- └───────────────────────────────────── record_different_fields_error.md:3:34 ┘
+For example:
+    add(1, 2)
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I found `trailing underscore` here.
 
-    For example:
-        add(1, 2)
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:3:33
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I was parsing an expression, and this token cannot start an expression here.
 
+field_: "trailing underscore",
+                            ^
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  PascalCase: "pascal",                                                     │
- │            ‾                                                               │
- └───────────────────────────────────── record_different_fields_error.md:4:15 ┘
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+For example:
+    add(1, 2)
 
-    For example:
-        add(1, 2)
+I found `"` here.
 
-    I found `:` here.
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:3:34
 
+I was parsing an expression, and this token cannot start an expression here.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  PascalCase: "pascal",                                                     │
- │                      ‾                                                     │
- └───────────────────────────────────── record_different_fields_error.md:4:25 ┘
+field_: "trailing underscore",
+                             ^
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    For example:
-        add(1, 2)
+For example:
+    add(1, 2)
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:4:15
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  kebab-case: "kebab",                                                      │
- │            ‾                                                               │
- └───────────────────────────────────── record_different_fields_error.md:5:15 ┘
+I was parsing an expression, and this token cannot start an expression here.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+PascalCase: "pascal",
+          ^
 
-    For example:
-        add(1, 2)
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    I found `:` here.
+For example:
+    add(1, 2)
 
+I found `:` here.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  kebab-case: "kebab",                                                      │
- │                     ‾                                                      │
- └───────────────────────────────────── record_different_fields_error.md:5:24 ┘
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:4:25
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing an expression, and this token cannot start an expression here.
 
-    For example:
-        add(1, 2)
+PascalCase: "pascal",
+                    ^
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
+For example:
+    add(1, 2)
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  field$special: "dollar",                                                  │
- │                 ‾                                                          │
- └───────────────────────────────────── record_different_fields_error.md:6:20 ┘
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:5:15
 
-    For example:
-        List(U64)
+I was parsing an expression, and this token cannot start an expression here.
 
-    I found `"` here.
+kebab-case: "kebab",
+          ^
 
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  field$special: "dollar",                                                  │
- │                  ‾‾‾‾‾‾                                                    │
- └───────────────────────────────────── record_different_fields_error.md:6:21 ┘
+For example:
+    add(1, 2)
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I found `:` here.
 
-    For example:
-        add(1, 2)
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:5:24
 
-    I found `dollar` here.
+I was parsing an expression, and this token cannot start an expression here.
 
+kebab-case: "kebab",
+                   ^
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  field$special: "dollar",                                                  │
- │                        ‾                                                   │
- └───────────────────────────────────── record_different_fields_error.md:6:27 ┘
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+For example:
+    add(1, 2)
 
-    For example:
-        add(1, 2)
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-    I found `"` here.
+-- ❌ UNEXPECTED TYPE SYNTAX ------------ record_different_fields_error.md:6:20
 
+I was parsing a type annotation, and this token cannot start a type here.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  field$special: "dollar",                                                  │
- │                         ‾                                                  │
- └───────────────────────────────────── record_different_fields_error.md:6:28 ┘
+field$special: "dollar",
+               ^
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
-    For example:
-        add(1, 2)
+For example:
+    List(U64)
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I found `"` here.
 
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:6:21
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  field@symbol: "at symbol",                                                │
- │       ‾‾‾‾‾‾‾                                                              │
- └───────────────────────────────────── record_different_fields_error.md:7:10 ┘
+I was parsing an expression, and this token cannot start an expression here.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+field$special: "dollar",
+                ^^^^^^
 
-    For example:
-        add(1, 2)
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    I found `@symbol` here.
+For example:
+    add(1, 2)
 
+I found `dollar` here.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  field@symbol: "at symbol",                                                │
- │              ‾                                                             │
- └───────────────────────────────────── record_different_fields_error.md:7:17 ┘
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:6:27
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing an expression, and this token cannot start an expression here.
 
-    For example:
-        add(1, 2)
+field$special: "dollar",
+                      ^
 
-    I found `:` here.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
+For example:
+    add(1, 2)
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  field@symbol: "at symbol",                                                │
- │                           ‾                                                │
- └───────────────────────────────────── record_different_fields_error.md:7:30 ┘
+I found `"` here.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:6:28
 
-    For example:
-        add(1, 2)
+I was parsing an expression, and this token cannot start an expression here.
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+field$special: "dollar",
+                       ^
 
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  _privateField: "leading underscore",                                      │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └────────────────────────────────────── record_different_fields_error.md:2:5 ┘
+For example:
+    add(1, 2)
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:7:10
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  field_: "trailing underscore",                                            │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └────────────────────────────────────── record_different_fields_error.md:3:5 ┘
+I was parsing an expression, and this token cannot start an expression here.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+field@symbol: "at symbol",
+     ^^^^^^^
 
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
-└┬──────────────┘  used.                                                      │
- │                                                                            │
- │  PascalCase: "pascal",                                                     │
- │  ‾‾‾‾‾‾‾‾‾‾                                                                │
- └────────────────────────────────────── record_different_fields_error.md:4:5 ┘
+For example:
+    add(1, 2)
 
-    It has the type:
+I found `@symbol` here.
 
-        [PascalCase, ..]
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:7:17
 
-    Since this expression is used as a statement, it must evaluate to `{}`.
-    If you don't need the value, you can ignore it with `_ =`.
+I was parsing an expression, and this token cannot start an expression here.
 
+field@symbol: "at symbol",
+            ^
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  PascalCase: "pascal",                                                     │
- │              ‾‾‾‾‾‾‾‾                                                      │
- └───────────────────────────────────── record_different_fields_error.md:4:17 ┘
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    The value's type, which does not have a method named `from_quote`, is:
+For example:
+    add(1, 2)
 
-        {}
+I found `:` here.
 
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------ record_different_fields_error.md:7:30
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  kebab-case: "kebab",                                                      │
- │              ‾‾‾‾‾‾‾                                                       │
- └───────────────────────────────────── record_different_fields_error.md:5:17 ┘
+I was parsing an expression, and this token cannot start an expression here.
 
-    The value's type, which does not have a method named `from_quote`, is:
+field@symbol: "at symbol",
+                         ^
 
-        {}
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
+For example:
+    add(1, 2)
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  field$special: "dollar",                                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └────────────────────────────────────── record_different_fields_error.md:6:5 ┘
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+-- ⚠️ DECLARATION HAS NO VALUE ----------- record_different_fields_error.md:2:5
 
+This declaration has a type annotation but no implementation.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  field@symbol: "at symbol",                                                │
- │                ‾‾‾‾‾‾‾‾‾‾‾                                                 │
- └───────────────────────────────────── record_different_fields_error.md:7:19 ┘
+_privateField: "leading underscore",
+^^^^^^^^^^^^^^^^
 
-    The value's type, which does not have a method named `from_quote`, is:
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
-        {}
+-- ⚠️ DECLARATION HAS NO VALUE ----------- record_different_fields_error.md:3:5
 
+This declaration has a type annotation but no implementation.
+
+field_: "trailing underscore",
+^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ❌ TYPE MISMATCH ---------------------- record_different_fields_error.md:4:5
+
+This expression produces a value, but it's not being used.
+
+PascalCase: "pascal",
+^^^^^^^^^^
+
+It has the type:
+
+    [PascalCase, ..]
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+-- ❌ MISSING METHOD -------------------- record_different_fields_error.md:4:17
+
+This `from_quote` method is being called on a value whose type doesn't have
+that method.
+
+PascalCase: "pascal",
+            ^^^^^^^^
+
+The value's type, which does not have a method named `from_quote`, is:
+
+    {}
+
+-- ❌ MISSING METHOD -------------------- record_different_fields_error.md:5:17
+
+This `from_quote` method is being called on a value whose type doesn't have
+that method.
+
+kebab-case: "kebab",
+            ^^^^^^^
+
+The value's type, which does not have a method named `from_quote`, is:
+
+    {}
+
+-- ⚠️ DECLARATION HAS NO VALUE ----------- record_different_fields_error.md:6:5
+
+This declaration has a type annotation but no implementation.
+
+field$special: "dollar",
+^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ❌ MISSING METHOD -------------------- record_different_fields_error.md:7:19
+
+This `from_quote` method is being called on a value whose type doesn't have
+that method.
+
+field@symbol: "at symbol",
+              ^^^^^^^^^^^
+
+The value's type, which does not have a method named `from_quote`, is:
+
+    {}
 # TOKENS
 ~~~zig
 OpenCurly,

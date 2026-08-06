@@ -27,44 +27,38 @@ TYPE MISMATCH - nominal_primitive_literal_construction.md:9:9:9:14
 TYPE MISMATCH - nominal_primitive_literal_construction.md:15:13:15:19
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  uid = 0                                                                   │
- │        ‾                                                                   │
- └───────────────────────────── nominal_primitive_literal_construction.md:4:7 ┘
+-- ❌ TYPE MISMATCH ------------- nominal_primitive_literal_construction.md:4:7
 
-    Other code expects this to have the type:
+This number is being used where a non-number type is needed.
 
-        UserId
+uid = 0
+      ^
 
+Other code expects this to have the type:
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  token = "abc"                                                             │
- │          ‾‾‾‾‾                                                             │
- └───────────────────────────── nominal_primitive_literal_construction.md:9:9 ┘
+    UserId
 
-    The type was determined to be:
+-- ❌ TYPE MISMATCH ------------- nominal_primitive_literal_construction.md:9:9
 
-        Token
+This string literal is being used where a non-string type is needed.
 
+token = "abc"
+        ^^^^^
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  goodValue = "test"                                                        │
- │              ‾‾‾‾‾‾                                                        │
- └─────────────────────────── nominal_primitive_literal_construction.md:15:13 ┘
+The type was determined to be:
 
-    The type was determined to be:
+    Token
 
-        GoodDerived
+-- ❌ TYPE MISMATCH ----------- nominal_primitive_literal_construction.md:15:13
 
+This string literal is being used where a non-string type is needed.
+
+goodValue = "test"
+            ^^^^^^
+
+The type was determined to be:
+
+    GoodDerived
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,UpperIdent,

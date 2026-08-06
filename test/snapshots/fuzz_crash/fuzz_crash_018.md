@@ -15,63 +15,55 @@ UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0 b:S                                                                     │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_018.md:1:1 ┘
+-- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_018.md:1:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+0 b:S
+^
 
-    I found `0` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  .R                                                                        │
- │  ‾‾                                                                        │
- └───────────────────────────────────────────────────── fuzz_crash_018.md:2:1 ┘
+I found `0` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+-- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_018.md:2:1
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `.R` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+.R
+^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `S` is not declared in this scope. ─────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  0 b:S                                                                     │
- │      ‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_018.md:1:5 ┘
+For example:
+    answer = 42
+
+I found `.R` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
+
+-- ❌ UNDECLARED TYPE ----------------------------------- fuzz_crash_018.md:1:5
+
+The type `S` is not declared in this scope.
+
+0 b:S
+    ^
 
 
+-- ⚠️ DECLARATION HAS NO VALUE -------------------------- fuzz_crash_018.md:1:3
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  0 b:S                                                                     │
- │    ‾‾‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_018.md:1:3 ┘
+This declaration has a type annotation but no implementation.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+0 b:S
+  ^^^
 
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 # TOKENS
 ~~~zig
 Int,LowerIdent,OpColon,UpperIdent,

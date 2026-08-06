@@ -208,1002 +208,838 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:66
 MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 # PROBLEMS
 
-┌─────────────────────┐
-│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
-└┬────────────────────┘  before the branch body.                              │
- │                                                                            │
- │  match a {lue  {                                                           │
- │                ‾                                                           │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:52:16 ┘
+-- ❌ MISSING MATCH ARROW ----------------------------- fuzz_crash_020.md:52:16
 
-    Add `=>` after the pattern or guard.
+I was parsing a match branch, and I expected `=>` before the branch body.
 
-    For example:
-        Err(msg) => crash msg
+match a {lue  {
+              ^
 
-    I reached the end of the file before this construct was complete.
+Add `=>` after the pattern or guard.
 
+For example:
+    Err(msg) => crash msg
 
-┌─────────────────────┐
-│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
-└┬────────────────────┘  before the branch body.                              │
- │                                                                            │
- │  1 "for" => 20[1, ] # t                                                    │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:58:4 ┘
+I reached the end of the file before this construct was complete.
 
-    Add `=>` after the pattern or guard.
+-- ❌ MISSING MATCH ARROW ------------------------------ fuzz_crash_020.md:58:4
 
-    For example:
-        Err(msg) => crash msg
+I was parsing a match branch, and I expected `=>` before the branch body.
 
-    I reached the end of the file before this construct was complete.
+1 "for" => 20[1, ] # t
+^
 
+Add `=>` after the pattern or guard.
 
-┌─────────────────────┐
-│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
-└┬────────────────────┘  before the branch body.                              │
- │                                                                            │
- │  ment                                                                      │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:59:3 ┘
+For example:
+    Err(msg) => crash msg
 
-    Add `=>` after the pattern or guard.
+I reached the end of the file before this construct was complete.
 
-    For example:
-        Err(msg) => crash msg
+-- ❌ MISSING MATCH ARROW ------------------------------ fuzz_crash_020.md:59:3
 
-    I reached the end of the file before this construct was complete.
+I was parsing a match branch, and I expected `=>` before the branch body.
 
+ment
+^
 
-┌─────────────────────┐
-│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
-└┬────────────────────┘  before the branch body.                              │
- │                                                                            │
- │  [1, 2, 3,est]123                                                          │
- │               ‾                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:60:16 ┘
+Add `=>` after the pattern or guard.
 
-    Add `=>` after the pattern or guard.
+For example:
+    Err(msg) => crash msg
 
-    For example:
-        Err(msg) => crash msg
+I reached the end of the file before this construct was complete.
 
-    I reached the end of the file before this construct was complete.
+-- ❌ MISSING MATCH ARROW ----------------------------- fuzz_crash_020.md:60:16
 
+I was parsing a match branch, and I expected `=>` before the branch body.
 
-┌─────────────────────┐
-│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
-└┬────────────────────┘  before the branch body.                              │
- │                                                                            │
- │  ] 23                                                                      │
- │    ‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:62:5 ┘
+[1, 2, 3,est]123
+             ^
 
-    Add `=>` after the pattern or guard.
+Add `=>` after the pattern or guard.
 
-    For example:
-        Err(msg) => crash msg
+For example:
+    Err(msg) => crash msg
 
-    I reached the end of the file before this construct was complete.
+I reached the end of the file before this construct was complete.
 
+-- ❌ MISSING MATCH ARROW ------------------------------ fuzz_crash_020.md:62:5
 
-┌─────────────────────┐
-│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
-└┬────────────────────┘  before the branch body.                              │
- │                                                                            │
- │  3.1 314                                                                   │
- │      ‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:63:7 ┘
+I was parsing a match branch, and I expected `=>` before the branch body.
 
-    Add `=>` after the pattern or guard.
+] 23
+  ^
 
-    For example:
-        Err(msg) => crash msg
+Add `=>` after the pattern or guard.
 
-    I reached the end of the file before this construct was complete.
+For example:
+    Err(msg) => crash msg
 
+I reached the end of the file before this construct was complete.
 
-┌─────────────────────┐
-│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
-└┬────────────────────┘  before the branch body.                              │
- │                                                                            │
- │  (1, 2, 3)123                                                              │
- │           ‾                                                                │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:66:12 ┘
+-- ❌ MISSING MATCH ARROW ------------------------------ fuzz_crash_020.md:63:7
 
-    Add `=>` after the pattern or guard.
+I was parsing a match branch, and I expected `=>` before the branch body.
 
-    For example:
-        Err(msg) => crash msg
+3.1 314
+    ^
 
-    I reached the end of the file before this construct was complete.
+Add `=>` after the pattern or guard.
 
+For example:
+    Err(msg) => crash msg
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  ...                                                                       │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:83:2 ┘
+I reached the end of the file before this construct was complete.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+-- ❌ MISSING MATCH ARROW ----------------------------- fuzz_crash_020.md:66:12
 
-    For example:
-        person.name
-        pair.0
+I was parsing a match branch, and I expected `=>` before the branch body.
 
-    I found `...` here.
+(1, 2, 3)123
+         ^
 
+Add `=>` after the pattern or guard.
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `Stdot` was not found in this Roc project. ──┐
-└┬─────────────────┘                                                          │
- │                                                                            │
- │  import Stdot                                                              │
- │          exposing [ #tem                                                   │
- │  Cust]                                                                     │
- │                                                                            │
- └───────────────────────────────────────────────────── fuzz_crash_020.md:6:1 ┘
+For example:
+    Err(msg) => crash msg
 
+I reached the end of the file before this construct was complete.
 
+-- ❌ EXPECTED RECORD ACCESSOR ------------------------- fuzz_crash_020.md:83:2
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `Bae` was not found in this Roc project. ────┐
-└┬─────────────────┘                                                          │
- │                                                                            │
- │  import Bae as Gooe                                                        │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:10:1 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+...
+^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `Ba` was not found in this Roc project. ─────┐
-└┬─────────────────┘                                                          │
- │                                                                            │
- │  import                                                                    │
- │      Ba                                                                    │
- │                                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:11:1 ┘
+For example:
+    person.name
+    pair.0
 
+I found `...` here.
 
+-- ❌ MOD NOT FOUND ---------------------------------- fuzz_crash_020.md:6:1
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Lis` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Map(a, b) : Lis, (ab) -> List(b)                                          │
- │              ‾‾‾                                                           │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:13:13 ┘
+The mod `Stdot` was not found in this Roc project.
 
+import Stdot
+        exposing [ #tem
+Cust]
 
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `ab` is not declared in ──────┐
-└┬─────────────────────────┘  this scope.                                     │
- │                                                                            │
- │  Map(a, b) : Lis, (ab) -> List(b)                                          │
- │                    ‾‾                                                      │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:13:19 ┘
+-- ❌ MOD NOT FOUND --------------------------------- fuzz_crash_020.md:10:1
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+The mod `Bae` was not found in this Roc project.
 
+import Bae as Gooe
+^^^^^^^^^^^^^^^^^^
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `ab` is not declared in ──────┐
-└┬─────────────────────────┘  this scope.                                     │
- │                                                                            │
- │  (ab) -> # row                                                             │
- │   ‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:19:4 ┘
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+-- ❌ MOD NOT FOUND --------------------------------- fuzz_crash_020.md:11:1
 
+The mod `Ba` was not found in this Roc project.
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `b` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  List(   b ) #z)                                                           │
- │          ‾                                                                 │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:20:12 ┘
+import
+    Ba
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
 
+-- ❌ UNDECLARED TYPE --------------------------------- fuzz_crash_020.md:13:13
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `O` is not declared in this scope. ─────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Som : { foo : O, bar : g }                                                │
- │                ‾                                                           │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:24:15 ┘
+The type `Lis` is not declared in this scope.
 
+Map(a, b) : Lis, (ab) -> List(b)
+            ^^^
 
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `g` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  Som : { foo : O, bar : g }                                                │
- │                         ‾                                                  │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:24:24 ┘
+-- ❌ UNDECLARED TYPE VARIABLE ------------------------ fuzz_crash_020.md:13:19
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+The type variable `ab` is not declared in this scope.
 
+Map(a, b) : Lis, (ab) -> List(b)
+                  ^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `U6` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  one : U6                                                                  │
- │        ‾‾                                                                  │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:37:7 ┘
+Type variables must be introduced in a type annotation before they can be used.
 
+-- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_020.md:19:4
 
+The type variable `ab` is not declared in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `num` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  if num {                                                                  │
- │     ‾‾‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:40:5 ┘
+(ab) -> # row
+ ^^
 
-    Is it misspelled, or is there an import missing?
+Type variables must be introduced in a type annotation before they can be used.
 
+-- ❌ UNDECLARED TYPE VARIABLE ------------------------ fuzz_crash_020.md:20:12
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `s` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  s exp0                                                                    │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:42:4 ┘
+The type variable `b` is not declared in this scope.
 
-    Is it misspelled, or is there an import missing?
+List(   b ) #z)
+        ^
 
+Type variables must be introduced in a type annotation before they can be used.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `exp0` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  s exp0                                                                    │
- │    ‾‾‾‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:42:6 ┘
+-- ❌ UNDECLARED TYPE --------------------------------- fuzz_crash_020.md:24:15
 
-    Is it misspelled, or is there an import missing?
+The type `O` is not declared in this scope.
 
+Som : { foo : O, bar : g }
+              ^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `r` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  r                                                                         │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:45:3 ┘
 
-    Is it misspelled, or is there an import missing?
+-- ❌ UNDECLARED TYPE VARIABLE ------------------------ fuzz_crash_020.md:24:24
 
+The type variable `g` is not declared in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  x                                                                         │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:53:2 ┘
+Som : { foo : O, bar : g }
+                       ^
 
-    Is it misspelled, or is there an import missing?
+Type variables must be introduced in a type annotation before they can be used.
 
+-- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_020.md:37:7
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `lue` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  match a {lue  {                                                           │
- │           ‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:52:11 ┘
+The type `U6` is not declared in this scope.
 
-    If you don't need this variable, prefix it with an underscore like `_lue`
-    to suppress this warning.
+one : U6
+      ^^
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Blue=> {x                                                                 │
- │          ‾                                                                 │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:55:11 ┘
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:40:5
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `num` in this scope.
 
+if num {
+   ^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `er` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  er #ent                                                                   │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:57:2 ┘
+Is it misspelled, or is there an import missing?
 
-    If you don't need this variable, prefix it with an underscore like `_er` to
-    suppress this warning.
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:42:4
 
+Nothing is named `s` in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ment` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  ment                                                                      │
- │  ‾‾‾‾                                                                      │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:59:3 ┘
+s exp0
+^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:42:6
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `est` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  [1, 2, 3,est]123                                                          │
- │           ‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:60:12 ┘
+Nothing is named `exp0` in this scope.
 
-    If you don't need this variable, prefix it with an underscore like `_est`
-    to suppress this warning.
+s exp0
+  ^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `nt` in this scope. ──────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  nt                                                                        │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:72:2 ┘
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:45:3
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `r` in this scope.
 
+r
+^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Listlt` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  main! : Listlt({}, _)                                                     │
- │          ‾‾‾‾‾‾                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:74:9 ┘
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:53:2
 
+Nothing is named `x` in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `blaue` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  expect blaue                                                              │
- │         ‾‾‾‾‾                                                              │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:78:9 ┘
+x
+^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+-- ⚠️ UNUSED VARIABLE --------------------------------- fuzz_crash_020.md:52:11
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  ...                                                                       │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:83:2 ┘
+Variable `lue` is defined here and then never used:
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+match a {lue  {
+         ^^^
 
+If you don't need this variable, prefix it with an underscore like `_lue` to
+suppress this warning.
 
-┌──────────────────────┐
-│ CRASH EXPECTS STRING ├─ The `crash` keyword expects a string literal as ────┐
-└┬─────────────────────┘  its argument.                                       │
- │                                                                            │
- │  )crash ke"Unr!" #)                                                        │
- │   ‾‾‾‾‾‾‾‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:86:3 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:55:11
 
-    For example: `crash "Something went wrong"`
+Nothing is named `x` in this scope.
 
+Blue=> {x
+        ^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `d` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  i= "H, ${d}"                                                              │
- │           ‾                                                                │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:87:11 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+-- ⚠️ UNUSED VARIABLE ---------------------------------- fuzz_crash_020.md:57:2
 
+Variable `er` is defined here and then never used:
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `list` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  for n in list {                                                           │
- │           ‾‾‾‾                                                             │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:92:11 ┘
+er #ent
+^^
 
-    Is it misspelled, or is there an import missing?
+If you don't need this variable, prefix it with an underscore like `_er` to
+suppress this warning.
 
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:59:3
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  line!("Ag ${n} to ${er}")                                                 │
- │  ‾‾‾‾‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:93:2 ┘
+Nothing is named `ment` in this scope.
 
-    Is it misspelled, or is there an import missing?
+ment
+^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ber` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  ber + n                                                                   │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:94:3 ┘
+-- ⚠️ UNUSED VARIABLE --------------------------------- fuzz_crash_020.md:60:12
 
-    Is it misspelled, or is there an import missing?
+Variable `est` is defined here and then never used:
 
+[1, 2, 3,est]123
+         ^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `tag` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
- │                                  ‾‾‾                                       │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:96:34 ┘
+If you don't need this variable, prefix it with an underscore like `_est` to
+suppress this warning.
 
-    Is it misspelled, or is there an import missing?
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:72:2
 
+Nothing is named `nt` in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `world` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
- │                                               ‾‾‾‾‾                        │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:96:47 ┘
+nt
+^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+-- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_020.md:74:9
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ned` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
- │                                                      ‾‾‾                   │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:96:54 ┘
+The type `Listlt` is not declared in this scope.
 
-    Is it misspelled, or is there an import missing?
+main! : Listlt({}, _)
+        ^^^^^^
 
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `t` is being redeclared here. ─────────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:97:2 ┘
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:78:9
 
-    In this scope, `t` was already defined here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    88 │  t = [                                                               │
-       │  ‾                                                                   │
-       └────────────────────────────────────────────── fuzz_crash_020.md:88:1 ┘
+Nothing is named `blaue` in this scope.
 
+expect blaue
+       ^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `tag` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
- │                     ‾‾‾                                                    │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:97:21 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+-- ❌ UNRECOGNIZED SYNTAX ------------------------------ fuzz_crash_020.md:83:2
 
+I don't recognize this syntax.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `nd` in this scope. ──────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
- │                              ‾‾                                            │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:97:30 ┘
+...
+^^^
 
-    Is it misspelled, or is there an import missing?
+This might be a syntax error, an unsupported language feature, or a typo.
 
+-- ❌ CRASH EXPECTS STRING ----------------------------- fuzz_crash_020.md:86:3
 
-┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value `t` is assigned to itself, ───────┐
-└┬─────────────────────────────┘  which would cause an infinite loop at       │
- │                                runtime.                                    │
- │                                                                            │
- │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
- │                                  ‾                                         │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:97:34 ┘
+The `crash` keyword expects a string literal as its argument.
 
-    Only functions can reference themselves (for recursion). For non-function
-    values, the right-hand side must be fully computable without referring to
-    the value being assigned.
+)crash ke"Unr!" #)
+ ^^^^^^^^
 
+For example: `crash "Something went wrong"`
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `m` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  m (                                                                       │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:98:2 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:87:11
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `d` in this scope.
 
+i= "H, ${d}"
+         ^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ag1` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  "World",ag1,                                                              │
- │          ‾‾‾                                                               │
- └────────────────────────────────────────────────── fuzz_crash_020.md:100:11 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:92:11
 
+Nothing is named `list` in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ne` in this scope. ──────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  (ne, tuple),                                                              │
- │   ‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:102:4 ┘
+for n in list {
+         ^^^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:93:2
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `tuple` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  (ne, tuple),                                                              │
- │       ‾‾‾‾‾                                                                │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:102:8 ┘
+Nothing is named `line!` in this scope.
 
-    Is it misspelled, or is there an import missing?
+line!("Ag ${n} to ${er}")
+^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.n… │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:105:2 ┘
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:94:3
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `ber` in this scope.
 
+ber + n
+^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `e_fn` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                   │
- │           ‾‾‾‾                                                             │
- └────────────────────────────────────────────────── fuzz_crash_020.md:105:55 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:96:34
 
+Nothing is named `tag` in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `arg1` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  … 3 e_fn(arg1)?.od()?.ned()?.recd?                                        │
- │           ‾‾‾‾                                                             │
- └────────────────────────────────────────────────── fuzz_crash_020.md:105:60 ┘
+rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+                                ^^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:96:47
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `r` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  r(nu) # xpr                                                               │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:108:4 ┘
+Nothing is named `world` in this scope.
 
-    Is it misspelled, or is there an import missing?
+rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+                                             ^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `nu` in this scope. ──────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  r(nu) # xpr                                                               │
- │    ‾‾                                                                      │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:108:6 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:96:54
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `ned` in this scope.
 
+rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+                                                    ^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `w` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  w = "d"                                                                   │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:76:2 ┘
+Is it misspelled, or is there an import missing?
 
-    If you don't need this variable, prefix it with an underscore like `_w` to
-    suppress this warning.
+-- ⚠️ DUPLICATE DEFINITION ----------------------------- fuzz_crash_020.md:97:2
 
+The name `t` is being redeclared here:
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `i` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  i= "H, ${d}"                                                              │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:87:2 ┘
+t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+^
 
-    If you don't need this variable, prefix it with an underscore like `_i` to
-    suppress this warning.
+-- ℹ️ DETAILS ------------------------------------------ fuzz_crash_020.md:88:1
 
+In this scope, `t` was already defined here:
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rd` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:96:2 ┘
+t = [
+^
 
-    If you don't need this variable, prefix it with an underscore like `_rd` to
-    suppress this warning.
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:97:21
 
+Nothing is named `tag` in this scope.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `t` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:97:2 ┘
+t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+                   ^^^
 
-    If you don't need this variable, prefix it with an underscore like `_t` to
-    suppress this warning.
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:97:30
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `V` is not declared in this scope. ─────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  t : V((a,c))                                                              │
- │      ‾                                                                     │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:116:5 ┘
+Nothing is named `nd` in this scope.
 
+t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+                            ^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  foo == 1                                                                  │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:119:2 ┘
+-- ❌ INVALID ASSIGNMENT TO ITSELF -------------------- fuzz_crash_020.md:97:34
 
-    Is it misspelled, or is there an import missing?
+The value `t` is assigned to itself, which would cause an infinite loop at
+runtime.
 
+t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+                                ^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `h` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  h == foo                                                                  │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:120:1 ┘
+Only functions can reference themselves (for recursion). For non-function
+values, the right-hand side must be fully computable without referring to the
+value being assigned.
 
-    Is it misspelled, or is there an import missing?
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:98:2
 
+Nothing is named `m` in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  h == foo                                                                  │
- │       ‾‾‾                                                                  │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:120:6 ┘
+m (
+^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------ fuzz_crash_020.md:100:11
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `main!` is ──────────┐
-└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this mod.                                     │
- │                                                                            │
- │  app [main!] { pf: platform "c" }                                          │
- │       ‾‾‾‾‾                                                                │
- └───────────────────────────────────────────────────── fuzz_crash_020.md:2:6 ┘
+Nothing is named `ag1` in this scope.
 
-    You can fix this by either defining `main!` in this mod, or by removing
-    it from the list of exposed values.
+"World",ag1,
+        ^^^
 
+Is it misspelled, or is there an import missing?
 
-┌──────────────┐
-│ TOO FEW ARGS ├─ The type List expects 1 argument, but got 0 instead. ───────┐
-└┬─────────────┘                                                              │
- │                                                                            │
- │  List( #rg                                                                 │
- │  ),                                                                        │
- │                                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:17:3 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:102:4
 
+Nothing is named `ne` in this scope.
 
+(ne, tuple),
+ ^^
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  line : ( # Cm                                                             │
- │  ) # Co                                                                    │
- │                                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:22:1 ┘
+Is it misspelled, or is there an import missing?
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:102:8
 
+Nothing is named `tuple` in this scope.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  one : U6                                                                  │
- │  ‾‾‾‾‾‾‾‾                                                                  │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:37:1 ┘
+(ne, tuple),
+     ^^^^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:105:2
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  1                                                                         │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:39:2 ┘
+Nothing is named `b` in this scope.
 
-    The value's type, which does not have a method named `from_numeral`, is:
+b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+^
 
-        {}
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------ fuzz_crash_020.md:105:55
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  1 "for" => 20[1, ] # t                                                    │
- │    ‾‾‾‾‾                                                                   │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:58:6 ┘
+Nothing is named `e_fn` in this scope.
 
-    The value's type, which does not have a method named `from_quote`, is:
+b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+                                                     ^^^^
 
-        [Blue, ..]
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------ fuzz_crash_020.md:105:60
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The fifth branch of this `match` does not match the ───────┐
-└┬──────────────┘  previous ones.                                             │
- │                                                                            │
- │  match a {lue  {                                                           │
- │  x                                                                         │
- │      }                                                                     │
- │      Blue=> {x                                                             │
- │          }                                                                 │
- │  er #ent                                                                   │
- │          1 "for" => 20[1, ] # t                                            │
- │      ment                                                                  │
- │      [1, 2, 3,est]123                                                      │
- │      [                                                                     │
- │      ] 23                                                                  │
- │      3.1 314                                                               │
- │      3.14 | 6.28 => 314                                                    │
- │      (1, ) => 123                                                          │
- │      (1, 2, 3)123                                                          │
- │      {  } => 12                                                            │
- │      Ok(123) => 12                                                         │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:52:17 ┘
+Nothing is named `arg1` in this scope.
 
-    This fifth branch is trying to match:
+b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+                                                          ^^^^
 
-        List(f)
-          where [
-            f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
-            f.is_eq : f, f -> Bool,
-          ]
+Is it misspelled, or is there an import missing?
 
-    But the expression between the `match` parenthesis has the type:
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:108:4
 
-        [Blue, ..]
+Nothing is named `r` in this scope.
 
-    These can never match! Either the pattern or expression has a problem.
+r(nu) # xpr
+^
 
+Is it misspelled, or is there an import missing?
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  main! : Listlt({}, _)                                                     │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:74:1 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:108:6
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+Nothing is named `nu` in this scope.
 
+r(nu) # xpr
+  ^^
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  y : {}                                                                    │
- │  ‾‾‾‾‾‾                                                                    │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:113:1 ┘
+Is it misspelled, or is there an import missing?
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+-- ⚠️ UNUSED VARIABLE ---------------------------------- fuzz_crash_020.md:76:2
 
+Variable `w` is defined here and then never used:
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  )crash ke"Unr!" #)                                                        │
- │           ‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:86:11 ┘
+w = "d"
+^
 
-    The value's type, which does not have a method named `from_quote`, is:
+If you don't need this variable, prefix it with an underscore like `_w` to
+suppress this warning.
 
-        {}
+-- ⚠️ UNUSED VARIABLE ---------------------------------- fuzz_crash_020.md:87:2
 
+Variable `i` is defined here and then never used:
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
-└┬──────────────┘  used.                                                      │
- │                                                                            │
- │  m (                                                                       │
- │      123,                                                                  │
- │      "World",ag1,                                                          │
- │      O, # nt                                                               │
- │      (ne, tuple),                                                          │
- │      [1, 2, 3],                                                            │
- │  )                                                                         │
- │                                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:98:4 ┘
+i= "H, ${d}"
+^
 
-    It has the type:
+If you don't need this variable, prefix it with an underscore like `_i` to
+suppress this warning.
 
-        (f, j, Error, [O, ..], (Error, Error), List(l))
-          where [
-            f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
-            j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),
-            l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),
-          ]
+-- ⚠️ UNUSED VARIABLE ---------------------------------- fuzz_crash_020.md:96:2
 
-    Since this expression is used as a statement, it must evaluate to `{}`.
-    If you don't need the value, you can ignore it with `_ =`.
+Variable `rd` is defined here and then never used:
 
+rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+^^
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
-└┬──────────────┘  used.                                                      │
- │                                                                            │
- │  b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.n… │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                      │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:105:2 ┘
+If you don't need this variable, prefix it with an underscore like `_rd` to
+suppress this warning.
 
-    It has the type:
+-- ⚠️ UNUSED VARIABLE ---------------------------------- fuzz_crash_020.md:97:2
 
-        Bool
+Variable `t` is defined here and then never used:
 
-    Since this expression is used as a statement, it must evaluate to `{}`.
-    If you don't need the value, you can ignore it with `_ =`.
+t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+^
 
+If you don't need this variable, prefix it with an underscore like `_t` to
+suppress this warning.
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  line!("Ag ${n} to ${er}")                                                 │
- │                      ‾‾                                                    │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:93:22 ┘
+-- ❌ UNDECLARED TYPE --------------------------------- fuzz_crash_020.md:116:5
 
-    It has the type:
+The type `V` is not declared in this scope.
 
-        Dec
+t : V((a,c))
+    ^
 
-    But you are trying to use it as:
 
-        Str
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:119:2
 
+Nothing is named `foo` in this scope.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  t : V((a,c))                                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:116:1 ┘
+foo == 1
+^^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:120:1
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
-└┬──────────────┘  used.                                                      │
- │                                                                            │
- │  foo == 1                                                                  │
- │  ‾‾‾‾‾‾‾‾                                                                  │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:119:2 ┘
+Nothing is named `h` in this scope.
 
-    It has the type:
+h == foo
+^
 
-        Bool
+Is it misspelled, or is there an import missing?
 
-    Since this expression is used as a statement, it must evaluate to `{}`.
-    If you don't need the value, you can ignore it with `_ =`.
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:120:6
 
+Nothing is named `foo` in this scope.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `od` on an ─────┐
-└┬───────────────┘  unresolved type variable, but unresolved type variables   │
- │                  have no methods.                                          │
- │                                                                            │
- │  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                   │
- │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └────────────────────────────────────────────────── fuzz_crash_020.md:105:55 ┘
+h == foo
+     ^^^
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+Is it misspelled, or is there an import missing?
 
+-- ❌ EXPOSED BUT NOT DEFINED --------------------------- fuzz_crash_020.md:2:6
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `ned` on an ────┐
-└┬───────────────┘  unresolved type variable, but unresolved type variables   │
- │                  have no methods.                                          │
- │                                                                            │
- │  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                   │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └────────────────────────────────────────────────── fuzz_crash_020.md:105:55 ┘
+The mod header says that `main!` is exposed, but it is not defined anywhere
+in this mod.
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+app [main!] { pf: platform "c" }
+     ^^^^^
 
+You can fix this by either defining `main!` in this mod, or by removing it
+from the list of exposed values.
+
+-- ❌ TOO FEW ARGS ------------------------------------- fuzz_crash_020.md:17:3
+
+The type List expects 1 argument, but got 0 instead.
+
+List( #rg
+),
+
+
+-- ⚠️ DECLARATION HAS NO VALUE ------------------------- fuzz_crash_020.md:22:1
+
+This declaration has a type annotation but no implementation.
+
+line : ( # Cm
+) # Co
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ⚠️ DECLARATION HAS NO VALUE ------------------------- fuzz_crash_020.md:37:1
+
+This declaration has a type annotation but no implementation.
+
+one : U6
+^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ❌ MISSING METHOD ----------------------------------- fuzz_crash_020.md:39:2
+
+This `from_numeral` method is being called on a value whose type doesn't have
+that method.
+
+1
+^
+
+The value's type, which does not have a method named `from_numeral`, is:
+
+    {}
+
+-- ❌ MISSING METHOD ----------------------------------- fuzz_crash_020.md:58:6
+
+This `from_quote` method is being called on a value whose type doesn't have
+that method.
+
+1 "for" => 20[1, ] # t
+  ^^^^^
+
+The value's type, which does not have a method named `from_quote`, is:
+
+    [Blue, ..]
+
+-- ❌ TYPE MISMATCH ----------------------------------- fuzz_crash_020.md:52:17
+
+The fifth branch of this `match` does not match the previous ones.
+
+match a {lue  {
+x
+    }
+    Blue=> {x
+        }
+er #ent
+        1 "for" => 20[1, ] # t
+    ment
+    [1, 2, 3,est]123
+    [
+    ] 23
+    3.1 314
+    3.14 | 6.28 => 314
+    (1, ) => 123
+    (1, 2, 3)123
+    {  } => 12
+    Ok(123) => 12
+}
+
+This fifth branch is trying to match:
+
+    List(f)
+      where [
+        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+        f.is_eq : f, f -> Bool,
+      ]
+
+But the expression between the `match` parenthesis has the type:
+
+    [Blue, ..]
+
+These can never match! Either the pattern or expression has a problem.
+
+-- ⚠️ DECLARATION HAS NO VALUE ------------------------- fuzz_crash_020.md:74:1
+
+This declaration has a type annotation but no implementation.
+
+main! : Listlt({}, _)
+^^^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ⚠️ DECLARATION HAS NO VALUE ------------------------ fuzz_crash_020.md:113:1
+
+This declaration has a type annotation but no implementation.
+
+y : {}
+^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ❌ MISSING METHOD ---------------------------------- fuzz_crash_020.md:86:11
+
+This `from_quote` method is being called on a value whose type doesn't have
+that method.
+
+)crash ke"Unr!" #)
+         ^^^^^^
+
+The value's type, which does not have a method named `from_quote`, is:
+
+    {}
+
+-- ❌ TYPE MISMATCH ------------------------------------ fuzz_crash_020.md:98:4
+
+This expression produces a value, but it's not being used.
+
+m (
+    123,
+    "World",ag1,
+    O, # nt
+    (ne, tuple),
+    [1, 2, 3],
+)
+
+It has the type:
+
+    (f, j, Error, [O, ..], (Error, Error), List(l))
+      where [
+        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+        j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),
+        l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),
+      ]
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+-- ❌ TYPE MISMATCH ----------------------------------- fuzz_crash_020.md:105:2
+
+This expression produces a value, but it's not being used.
+
+b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+
+    Bool
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+-- ❌ TYPE MISMATCH ----------------------------------- fuzz_crash_020.md:93:22
+
+This expression is used in an unexpected way.
+
+line!("Ag ${n} to ${er}")
+                    ^^
+
+It has the type:
+
+    Dec
+
+But you are trying to use it as:
+
+    Str
+
+-- ⚠️ DECLARATION HAS NO VALUE ------------------------ fuzz_crash_020.md:116:1
+
+This declaration has a type annotation but no implementation.
+
+t : V((a,c))
+^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ❌ TYPE MISMATCH ----------------------------------- fuzz_crash_020.md:119:2
+
+This expression produces a value, but it's not being used.
+
+foo == 1
+^^^^^^^^
+
+It has the type:
+
+    Bool
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+-- ❌ MISSING METHOD --------------------------------- fuzz_crash_020.md:105:55
+
+This is trying to dispatch a method named `od` on an unresolved type variable,
+but unresolved type variables have no methods.
+
+b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+                                                     ^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
+
+-- ❌ MISSING METHOD --------------------------------- fuzz_crash_020.md:105:55
+
+This is trying to dispatch a method named `ned` on an unresolved type variable,
+but unresolved type variables have no methods.
+
+b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+                                                     ^^^^^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

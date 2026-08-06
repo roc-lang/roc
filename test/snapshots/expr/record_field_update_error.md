@@ -13,51 +13,45 @@ UNEXPECTED TYPE SYNTAX - record_field_update_error.md:1:17:1:19
 DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  { person & age: 31 }                                                      │
- │           ‾                                                                │
- └───────────────────────────────────────── record_field_update_error.md:1:10 ┘
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ---------- record_field_update_error.md:1:10
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing an expression, and this token cannot start an expression here.
 
-    For example:
-        add(1, 2)
+{ person & age: 31 }
+         ^
 
-    I found `&` here.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
+For example:
+    add(1, 2)
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  { person & age: 31 }                                                      │
- │                  ‾‾                                                        │
- └───────────────────────────────────────── record_field_update_error.md:1:17 ┘
+I found `&` here.
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+-- ❌ UNEXPECTED TYPE SYNTAX ---------------- record_field_update_error.md:1:17
 
-    For example:
-        List(U64)
+I was parsing a type annotation, and this token cannot start a type here.
 
-    I found `31` here.
+{ person & age: 31 }
+                ^^
 
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  { person & age: 31 }                                                      │
- │             ‾‾‾‾‾‾‾                                                        │
- └───────────────────────────────────────── record_field_update_error.md:1:12 ┘
+For example:
+    List(U64)
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+I found `31` here.
 
+-- ⚠️ DECLARATION HAS NO VALUE -------------- record_field_update_error.md:1:12
+
+This declaration has a type annotation but no implementation.
+
+{ person & age: 31 }
+           ^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,Int,CloseCurly,

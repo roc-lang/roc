@@ -34,48 +34,42 @@ TYPE MISMATCH - annotations.md:19:35:19:40
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  failPairDiffTypes = mkPair("1", 2)                                        │
- │                             ‾‾‾                                            │
- └────────────────────────────────────────────────────── annotations.md:16:28 ┘
+-- ❌ TYPE MISMATCH -------------------------------------- annotations.md:16:28
 
-    The type was determined to be:
+This string literal is being used where a non-string type is needed.
 
-        U8
+failPairDiffTypes = mkPair("1", 2)
+                           ^^^
 
+The type was determined to be:
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  failPairDiffTypes2 = Pair.Pair(1, "str")                                  │
- │                                    ‾‾‾‾‾                                   │
- └────────────────────────────────────────────────────── annotations.md:19:35 ┘
+    U8
 
-    The type was determined to be:
+-- ❌ TYPE MISMATCH -------------------------------------- annotations.md:19:35
 
-        U64
+This string literal is being used where a non-string type is needed.
 
+failPairDiffTypes2 = Pair.Pair(1, "str")
+                                  ^^^^^
 
-┌─────────────────────┐
-│ INVALID NOMINAL TAG ├─ I'm having trouble with this nominal tag. ───────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  mkPairInvalid = |x, y| Pair.Pair(x, y)                                    │
- │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                    │
- └────────────────────────────────────────────────────── annotations.md:22:24 ┘
+The type was determined to be:
 
-    The tag is:
+    U64
 
-        Pair(a, b)
+-- ❌ INVALID NOMINAL TAG -------------------------------- annotations.md:22:24
 
-    But the nominal type needs it to be:
+I'm having trouble with this nominal tag.
 
-        Pair(a, a)
+mkPairInvalid = |x, y| Pair.Pair(x, y)
+                       ^^^^^^^^^^^^^^^
 
+The tag is:
+
+    Pair(a, b)
+
+But the nominal type needs it to be:
+
+    Pair(a, a)
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,CloseSquare,

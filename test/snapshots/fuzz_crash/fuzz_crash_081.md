@@ -12,35 +12,31 @@ EXPECTED RECORD ACCESSOR - fuzz_crash_081.md:1:6:1:7
 UNRECOGNIZED SYNTAX - fuzz_crash_081.md:1:5:1:9
 # PROBLEMS
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  x = 0.()                                                                  │
- │       ‾                                                                    │
- └───────────────────────────────────────────────────── fuzz_crash_081.md:1:6 ┘
+-- ❌ EXPECTED RECORD ACCESSOR -------------------------- fuzz_crash_081.md:1:6
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        person.name
-        pair.0
+x = 0.()
+     ^
 
-    I found `.` here.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  x = 0.()                                                                  │
- │      ‾‾‾‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_081.md:1:5 ┘
+I found `.` here.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+-- ❌ UNRECOGNIZED SYNTAX ------------------------------- fuzz_crash_081.md:1:5
 
+I don't recognize this syntax.
+
+x = 0.()
+    ^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,Dot,NoSpaceOpenRound,CloseRound,

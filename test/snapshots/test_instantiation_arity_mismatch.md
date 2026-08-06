@@ -16,18 +16,16 @@ type=expr
 TOO MANY ARGS - test_instantiation_arity_mismatch.md:5:5:5:19
 # PROBLEMS
 
-┌───────────────┐
-│ TOO MANY ARGS ├─ The `identity` function expects 1 argument, but it got 2 ──┐
-└┬──────────────┘  instead.                                                   │
- │                                                                            │
- │  identity(1, 2)                                                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
- └────────────────────────────────── test_instantiation_arity_mismatch.md:5:5 ┘
+-- ❌ TOO MANY ARGS ------------------ test_instantiation_arity_mismatch.md:5:5
 
-    The `identity` function has the type:
+The `identity` function expects 1 argument, but it got 2 instead.
 
-        (a, b) -> (a, b)
+identity(1, 2)
+^^^^^^^^^^^^^^
 
+The `identity` function has the type:
+
+    (a, b) -> (a, b)
 # TOKENS
 ~~~zig
 OpenCurly,

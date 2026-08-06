@@ -26,23 +26,22 @@ main! = |_| {}
 TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  item = 42                                                                 │
- │         ‾‾                                                                 │
- └────────────────────────────────────────────────── type_var_mismatch.md:7:9 ┘
+-- ❌ TYPE MISMATCH ---------------------------------- type_var_mismatch.md:7:9
 
-    The type was determined to be non-numeric here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    11 │   result = List.first(list).ok_or(item)                              │
-       │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
-       └────────────────────────────────────────── type_var_mismatch.md:11:11 ┘
-    Other code expects this to have the type:
+This number is being used where a non-number type is needed.
 
-        item
+item = 42
+       ^^
 
+-- ℹ️ DETAILS -------------------------------------- type_var_mismatch.md:11:11
+
+The type was determined to be non-numeric here:
+
+result = List.first(list).ok_or(item)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Other code expects this to have the type:
+
+    item
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

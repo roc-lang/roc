@@ -12,27 +12,23 @@ EMPTY TUPLE NOT ALLOWED - formatter_idempotence_issue_8851_comment2.md:1:3:1:5
 NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
 # PROBLEMS
 
-┌─────────────────────────┐
-│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
-└┬────────────────────────┘  it is empty.                                     │
- │                                                                            │
- │  a=()->b()()()                                                             │
- │    ‾‾                                                                      │
- └────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:3 ┘
+-- ❌ EMPTY TUPLE NOT ALLOWED ----- formatter_idempotence_issue_8851_comment2.md:1:3
 
-    If you want to represent nothing, try using an empty record: `{}`.
+I am part way through parsing this tuple, but it is empty.
 
+a=()->b()()()
+  ^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  a=()->b()()()                                                             │
- │        ‾                                                                   │
- └────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:7 ┘
+If you want to represent nothing, try using an empty record: `{}`.
 
-    Is it misspelled, or is there an import missing?
+-- ❌ NAME NOT IN SCOPE ------ formatter_idempotence_issue_8851_comment2.md:1:7
 
+Nothing is named `b` in this scope.
+
+a=()->b()()()
+      ^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,CloseRound,OpArrow,LowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,

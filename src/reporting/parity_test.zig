@@ -449,11 +449,10 @@ test "byte-identity pins per render target" {
     const cyan = "\x1b[36m";
     try testing.expectEqualStrings(
         "Expected " ++ blue ++ "Str" ++ rst ++ " but got " ++ red ++ "U64" ++ rst ++ ".\n" ++
-            "    " ++ cyan ++ "main" ++ rst ++ "\n" ++
-            " " ++ sec ++ " ┌" ++ ("─" ** 65) ++ " " ++ rst ++ "pin.roc" ++ sec ++ ":1:5\n" ++ rst ++
-            " " ++ sec ++ " │\n" ++ rst ++
-            sec ++ "1 │ " ++ rst ++ red ++ "x = magic 42" ++ rst ++ "\n" ++
-            sec ++ "  │ " ++ rst ++ "    " ++ red ++ "^^^^^" ++ rst ++ "\n",
+            "    " ++ cyan ++ "main" ++ rst ++ "\n\n" ++
+            cyan ++ "-- ℹ️ LOCATION " ++ ("-" ** 52) ++ " " ++ cyan ++ "pin.roc" ++ sec ++ ":1:5" ++ rst ++ "\n" ++
+            "1 │ " ++ rst ++ red ++ "x = magic 42" ++ rst ++ "\n" ++
+            "  │ " ++ rst ++ "    " ++ red ++ "^^^^^" ++ rst ++ "\n",
         outputs.terminal_ansi,
     );
 
@@ -461,9 +460,8 @@ test "byte-identity pins per render target" {
     // code span in place of color.
     try testing.expectEqualStrings(
         "Expected Str but got U64.\n" ++
-            "    `main`\n" ++
-            "  ┌" ++ ("─" ** 65) ++ " pin.roc:1:5\n" ++
-            "  │\n" ++
+            "    `main`\n\n" ++
+            "-- ℹ️ LOCATION " ++ ("-" ** 52) ++ " pin.roc:1:5\n" ++
             "1 │ x = magic 42\n" ++
             "  │     ^^^^^\n",
         outputs.terminal_plain,

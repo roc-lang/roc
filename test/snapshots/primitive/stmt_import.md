@@ -15,94 +15,85 @@ TYPE APPLICATION NEEDS PARENTHESES - stmt_import.md:1:27:1:28
 DUPLICATE DEFINITION - stmt_import.md:1:1:1:17
 # PROBLEMS
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  import json.Json [foo, BAR]                                               │
- │                   ‾                                                        │
- └─────────────────────────────────────────────────────── stmt_import.md:1:18 ┘
+-- ❌ UNEXPECTED STATEMENT -------------------------------- stmt_import.md:1:18
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+import json.Json [foo, BAR]
+                 ^
 
-    I found `[` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  import json.Json [foo, BAR]                                               │
- │                    ‾‾‾                                                     │
- └─────────────────────────────────────────────────────── stmt_import.md:1:19 ┘
+I found `[` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+-- ❌ UNEXPECTED STATEMENT -------------------------------- stmt_import.md:1:19
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `foo` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+import json.Json [foo, BAR]
+                  ^^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  import json.Json [foo, BAR]                                               │
- │                       ‾                                                    │
- └─────────────────────────────────────────────────────── stmt_import.md:1:22 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `foo` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    For example:
-        answer = 42
+-- ❌ UNEXPECTED STATEMENT -------------------------------- stmt_import.md:1:22
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I was parsing a statement, and this token cannot start a statement here.
 
+import json.Json [foo, BAR]
+                     ^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  import json.Json [foo, BAR]                                               │
- │                            ‾                                               │
- └─────────────────────────────────────────────────────── stmt_import.md:1:27 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    answer = 42
 
-    For example:
-        List(U8)
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+-- ❌ TYPE APPLICATION NEEDS PARENTHESES ------------------ stmt_import.md:1:27
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json [foo, BAR]                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────────────────────────── stmt_import.md:1:1 ┘
+import json.Json [foo, BAR]
+                          ^
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json [foo, BAR]                                          │
-      │  ‾                                                                    │
-      └─────────────────────────────────────────────────── stmt_import.md:1:1 ┘
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
+For example:
+    List(U8)
+
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
+
+-- ⚠️ DUPLICATE DEFINITION --------------------------------- stmt_import.md:1:1
+
+The name `Json` is being redeclared here:
+
+import json.Json [foo, BAR]
+^^^^^^^^^^^^^^^^
+
+-- ℹ️ DETAILS ---------------------------------------------- stmt_import.md:1:1
+
+In this scope, `Json` was already defined here:
+
+import json.Json [foo, BAR]
+^
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,OpenSquare,LowerIdent,Comma,UpperIdent,CloseSquare,

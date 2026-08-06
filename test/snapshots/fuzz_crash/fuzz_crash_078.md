@@ -11,21 +11,19 @@ import#\
 INCOMPLETE IMPORT - fuzz_crash_078.md:2:1:2:1
 # PROBLEMS
 
-┌───────────────────┐
-│ INCOMPLETE IMPORT ├─ I was parsing an import, and the mod path is ───────┐
-└┬──────────────────┘  incomplete.                                            │
- │                                                                            │
- │                                                                            │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_078.md:2:1 ┘
+-- ❌ INCOMPLETE IMPORT --------------------------------- fuzz_crash_078.md:2:1
 
-    Imports must name a mod, optionally with a qualifier and exposing list.
+I was parsing an import, and the mod path is incomplete.
 
-    For example:
-        import Json/Decode exposing [decode]
 
-    I reached the end of the file before this construct was complete.
+^
 
+Imports must name a mod, optionally with a qualifier and exposing list.
+
+For example:
+    import Json/Decode exposing [decode]
+
+I reached the end of the file before this construct was complete.
 # TOKENS
 ~~~zig
 KwImport,

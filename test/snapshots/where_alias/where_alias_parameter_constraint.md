@@ -14,18 +14,16 @@ a.EncodableTo(fmt) : where [
 WHERE ALIAS CONSTRAINS ANOTHER TYPE - where_alias_parameter_constraint.md:3:2:3:25
 # PROBLEMS
 
-┌─────────────────────────────────────┐
-│ WHERE ALIAS CONSTRAINS ANOTHER TYPE ├─ A where alias constrains only its ───┐
-└┬────────────────────────────────────┘  receiver, but this constraint is     │
- │                                       on a different type variable.        │
- │                                                                            │
- │  fmt.finish : fmt -> Str,                                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
- └─────────────────────────────────── where_alias_parameter_constraint.md:3:2 ┘
+-- ❌ WHERE ALIAS CONSTRAINS ANOTHER TYPE ----- where_alias_parameter_constraint.md:3:2
 
-    Write this constraint against `a`, or declare a separate where alias for
-    the other type variable and apply it alongside this one.
+A where alias constrains only its receiver, but this constraint is on a
+different type variable.
 
+fmt.finish : fmt -> Str,
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Write this constraint against `a`, or declare a separate where alias for the
+other type variable and apply it alongside this one.
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,KwWhere,OpenSquare,

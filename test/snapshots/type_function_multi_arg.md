@@ -19,66 +19,58 @@ UNEXPECTED STATEMENT - type_function_multi_arg.md:3:42:3:43
 MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ EXPECTED CLOSING PARENTHESIS ├─ I was parsing a parenthesized type, and I ──┐
-└┬─────────────────────────────┘  expected `)`.                               │
- │                                                                            │
- │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                │
- │                            ‾                                               │
- └─────────────────────────────────────────── type_function_multi_arg.md:3:27 ┘
+-- ❌ EXPECTED CLOSING PARENTHESIS ------------ type_function_multi_arg.md:3:27
 
-    Close the parenthesized type after the final type expression.
+I was parsing a parenthesized type, and I expected `)`.
 
-    For example:
-        (Str -> U64)
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+                          ^
 
-    I found `(` here.
+Close the parenthesized type after the final type expression.
 
+For example:
+    (Str -> U64)
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                │
- │                                         ‾‾                                 │
- └─────────────────────────────────────────── type_function_multi_arg.md:3:40 ┘
+I found `(` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+-- ❌ UNEXPECTED STATEMENT -------------------- type_function_multi_arg.md:3:40
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `_c` here.
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+                                       ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                │
- │                                           ‾                                │
- └─────────────────────────────────────────── type_function_multi_arg.md:3:42 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `_c` here.
 
-    For example:
-        answer = 42
+-- ❌ UNEXPECTED STATEMENT -------------------- type_function_multi_arg.md:3:42
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+                                         ^
 
-┌────────────────┐
-│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
-└┬───────────────┘  syntax.                                                   │
- │                                                                            │
- │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                │
- │                            ‾‾‾‾‾‾‾‾‾‾‾‾                                    │
- └─────────────────────────────────────────── type_function_multi_arg.md:3:27 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
+
+I found `)` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
+
+-- ❌ MALFORMED TYPE -------------------------- type_function_multi_arg.md:3:27
+
+This type annotation is malformed or contains invalid syntax.
+
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+                          ^^^^^^^^^^^^
 
 # TOKENS
 ~~~zig

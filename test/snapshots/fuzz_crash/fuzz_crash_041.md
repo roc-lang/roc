@@ -19,161 +19,143 @@ UNEXPECTED STATEMENT - fuzz_crash_041.md:1:27:1:28
 UNEXPECTED STATEMENT - fuzz_crash_041.md:1:28:1:29
 # PROBLEMS
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}|(0,)|||0                                              │
- │                     ‾                                                      │
- └──────────────────────────────────────────────────── fuzz_crash_041.md:1:20 ┘
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_041.md:1:20
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+app[]{f:platform""}|(0,)|||0
+                   ^
 
-    I found `|` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}|(0,)|||0                                              │
- │                      ‾                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_041.md:1:21 ┘
+I found `|` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_041.md:1:21
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `(` here.
+app[]{f:platform""}|(0,)|||0
+                    ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}|(0,)|||0                                              │
- │                       ‾                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_041.md:1:22 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `(` here.
 
-    For example:
-        answer = 42
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_041.md:1:22
 
-    I found `0` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+app[]{f:platform""}|(0,)|||0
+                     ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}|(0,)|||0                                              │
- │                        ‾                                                   │
- └──────────────────────────────────────────────────── fuzz_crash_041.md:1:23 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `0` here.
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_041.md:1:23
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}|(0,)|||0                                              │
- │                         ‾                                                  │
- └──────────────────────────────────────────────────── fuzz_crash_041.md:1:24 ┘
+app[]{f:platform""}|(0,)|||0
+                      ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_041.md:1:24
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}|(0,)|||0                                              │
- │                          ‾                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_041.md:1:25 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+app[]{f:platform""}|(0,)|||0
+                       ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `|` here.
+For example:
+    answer = 42
 
+I found `)` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}|(0,)|||0                                              │
- │                           ‾                                                │
- └──────────────────────────────────────────────────── fuzz_crash_041.md:1:26 ┘
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_041.md:1:25
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+app[]{f:platform""}|(0,)|||0
+                        ^
 
-    I found `|` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}|(0,)|||0                                              │
- │                            ‾                                               │
- └──────────────────────────────────────────────────── fuzz_crash_041.md:1:27 ┘
+I found `|` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_041.md:1:26
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `|` here.
+app[]{f:platform""}|(0,)|||0
+                         ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}|(0,)|||0                                              │
- │                             ‾                                              │
- └──────────────────────────────────────────────────── fuzz_crash_041.md:1:28 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `|` here.
 
-    For example:
-        answer = 42
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_041.md:1:27
 
-    I found `0` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+app[]{f:platform""}|(0,)|||0
+                          ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `|` here.
+
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_041.md:1:28
+
+I was parsing a statement, and this token cannot start a statement here.
+
+app[]{f:platform""}|(0,)|||0
+                           ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `0` here.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,OpBar,NoSpaceOpenRound,Int,Comma,CloseRound,OpBar,OpBar,OpBar,Int,

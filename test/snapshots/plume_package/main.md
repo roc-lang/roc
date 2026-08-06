@@ -13,14 +13,12 @@ package [
 MOD NOT FOUND - main.md:2:5:2:10
 # PROBLEMS
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `Color` was not found in this Roc project. ──┐
-└┬─────────────────┘                                                          │
- │                                                                            │
- │  Color,                                                                    │
- │  ‾‾‾‾‾                                                                     │
- └─────────────────────────────────────────────────────────────── main.md:2:5 ┘
+-- ❌ MOD NOT FOUND -------------------------------------------- main.md:2:5
 
+The mod `Color` was not found in this Roc project.
+
+Color,
+^^^^^
 
 # TOKENS
 ~~~zig

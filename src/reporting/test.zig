@@ -28,7 +28,6 @@ test "SYNTAX_PROBLEM report along with all four render types" {
 
     // Markdown
     try reporting.renderReportToMarkdown(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
-
     const expected =
         \\**Syntax Problem**
         \\Using more than one `+` like this requires parentheses, to clarify how things should be grouped.
@@ -41,14 +40,11 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\
         \\
     ;
-
-    try expectMultilineEqual(expected, writer.written());
+    try testing.expectEqualStrings(expected, writer.written());
 
     // HTML
     writer.clearRetainingCapacity();
-
     try reporting.renderReportToHtml(&r, &writer.writer, @import("config.zig").ReportingConfig.initHtml());
-
     const expected_html =
         \\<div class="report error">
         \\<h1 class="report-title">SYNTAX PROBLEM</h1>
@@ -58,14 +54,11 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\</div>
         \\
     ;
-
-    try expectMultilineEqual(expected_html, writer.written());
+    try testing.expectEqualStrings(expected_html, writer.written());
 
     // Language Server Protocol
     writer.clearRetainingCapacity();
-
     try reporting.renderReportToLsp(&r, &writer.writer, @import("config.zig").ReportingConfig.initLsp());
-
     const expected_lsp =
         \\SYNTAX PROBLEM
         \\
@@ -73,52 +66,15 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\example.roc:1:10:1:20: example.roc
         \\
     ;
+    try testing.expectEqualStrings(expected_lsp, writer.written());
 
-    try expectMultilineEqual(expected_lsp, writer.written());
-
-    // Terminal (TTY)
-    writer.clearRetainingCapacity();
-
-    try reporting.renderReportToTerminal(&r, &writer.writer, ColorPalette.ANSI, @import("config.zig").ReportingConfig.initColorTerminal());
-
-    // let's forget about comparing with ansi escape codes present... doesn't seem worth the effort.
-    // we'll have to QA the old fashioned way.
-
-    // Plain-text box (the layout used for snapshots and non-color output).
-    // Assert the alignment invariant: every row that reaches the main box's
-    // right wall has the same display width, so the wall lines up vertically.
-    // The label box in the upper-left pokes out past the main box's left wall,
-    // and its short top edge (`┌──┐`) does not reach the right wall, so it is
-    // excluded.
+    // Plain-text header format
     writer.clearRetainingCapacity();
     try reporting.renderReportToBoxPlain(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
-    const box = writer.written();
-    try testing.expect(std.mem.find(u8, box, "SYNTAX PROBLEM") != null);
-    try testing.expect(std.mem.find(u8, box, "example.roc:1:10") != null);
-    var box_lines = std.mem.splitScalar(u8, box, '\n');
-    var wall_width: ?usize = null;
-    var box_rows: usize = 0;
-    var seen_label_top = false;
-    while (box_lines.next()) |line| {
-        const reaches_edge = std.mem.endsWith(u8, line, "│") or
-            std.mem.endsWith(u8, line, "┐") or
-            std.mem.endsWith(u8, line, "┘");
-        if (!reaches_edge) continue;
-        if (!seen_label_top and std.mem.endsWith(u8, line, "┐")) {
-            // The label box's top edge — short, doesn't reach the right wall.
-            seen_label_top = true;
-            continue;
-        }
-        const w = reporting.source_region.displayWidth(line);
-        if (wall_width) |ww| {
-            try testing.expectEqual(ww, w);
-        } else {
-            wall_width = w;
-        }
-        box_rows += 1;
-    }
-    // title-box bottom, blank, source line, underline, bottom edge
-    try testing.expect(box_rows >= 5);
+    const plain_out = writer.written();
+    try testing.expect(std.mem.find(u8, plain_out, "-- ❌ SYNTAX PROBLEM") != null);
+    try testing.expect(std.mem.find(u8, plain_out, "example.roc:1:10") != null);
+    try testing.expect(std.mem.find(u8, plain_out, "^^") != null);
 }
 
 fn buildSyntaxProblemReport(allocator: Allocator) Allocator.Error!Document {
@@ -138,13 +94,11 @@ fn buildSyntaxProblemReport(allocator: Allocator) Allocator.Error!Document {
 // Test Helpers
 
 /// Should only print out the debug copy-paste ready string if the string comparison fails.
-fn expectMultilineEqual(expected: []const u8, actual: []const u8) Allocator.Error!void {
-    testing.expectEqualStrings(expected, actual) catch {
-        std.debug.print("\n--- DEBUG STRING COMPARISON (copy-paste ready) ---\n", .{});
-        std.debug.print("const expected = \n", .{});
-        printAsMultilineString(actual);
-        std.debug.print(";\n", .{});
-    };
+fn expectMultilineEqual(expected: []const u8, actual: []const u8) !void {
+    if (!std.mem.eql(u8, expected, actual)) {
+        std.debug.print("\n--- DEBUG EXPECTED vs ACTUAL ---\nEXPECTED:\n{s}\nACTUAL:\n{s}\n", .{ expected, actual });
+    }
+    try testing.expectEqualStrings(expected, actual);
 }
 
 fn printAsMultilineString(s: []const u8) void {

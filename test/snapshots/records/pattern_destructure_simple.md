@@ -15,28 +15,24 @@ NAME NOT IN SCOPE - pattern_destructure_simple.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  match person {                                                            │
- │        ‾‾‾‾‾‾                                                              │
- └───────────────────────────────────────── pattern_destructure_simple.md:1:7 ┘
+-- ❌ NAME NOT IN SCOPE --------------------- pattern_destructure_simple.md:1:7
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `person` in this scope.
 
+match person {
+      ^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `age` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  { name, age } => name                                                     │
- │          ‾‾‾                                                               │
- └──────────────────────────────────────── pattern_destructure_simple.md:2:13 ┘
+Is it misspelled, or is there an import missing?
 
-    If you don't need this variable, prefix it with an underscore like `_age`
-    to suppress this warning.
+-- ⚠️ UNUSED VARIABLE ---------------------- pattern_destructure_simple.md:2:13
 
+Variable `age` is defined here and then never used:
+
+{ name, age } => name
+        ^^^
+
+If you don't need this variable, prefix it with an underscore like `_age` to
+suppress this warning.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

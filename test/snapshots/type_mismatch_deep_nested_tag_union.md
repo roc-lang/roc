@@ -17,25 +17,23 @@ collide = |x| x
 TYPE MISMATCH - type_mismatch_deep_nested_tag_union.md:7:15:7:16
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  collide = |x| x                                                           │
- │                ‾                                                           │
- └─────────────────────────────── type_mismatch_deep_nested_tag_union.md:7:15 ┘
+-- ❌ TYPE MISMATCH --------------- type_mismatch_deep_nested_tag_union.md:7:15
 
-    It has the type:
+This expression is used in an unexpected way.
 
-        [A6([A5([A4([A3([A2([A1([Z1, Z10, Z2, Z3, Z4, Z5, Z6, Z7, Z8, Z9]),
-        B1_1, B1_2, B1_3, B1_4, B1_5]), B2_1, B2_2, B2_3, B2_4, B2_5]), B3_1,
-        B3_2, B3_3, B3_4, B3_5]), B4_1, B4_2, B4_3, B4_4, B4_5]), B5_1, B5_2,
-        B5_3, B5_4, B5_5]), B6_1, B6_2, B6_3, B6_4, B6_5]
+collide = |x| x
+              ^
 
-    But the annotation says it should be:
+It has the type:
 
-        Str
+    [A6([A5([A4([A3([A2([A1([Z1, Z10, Z2, Z3, Z4, Z5, Z6, Z7, Z8, Z9]), B1_1,
+    B1_2, B1_3, B1_4, B1_5]), B2_1, B2_2, B2_3, B2_4, B2_5]), B3_1, B3_2, B3_3,
+    B3_4, B3_5]), B4_1, B4_2, B4_3, B4_4, B4_5]), B5_1, B5_2, B5_3, B5_4,
+    B5_5]), B6_1, B6_2, B6_3, B6_4, B6_5]
 
+But the annotation says it should be:
+
+    Str
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,CloseRound,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,OpArrow,UpperIdent,

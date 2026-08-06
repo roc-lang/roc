@@ -12,27 +12,25 @@ x }
 UNEXPECTED ASSOCIATED EXPRESSION - nominal_associated_with_final_expression.md:2:1:2:2
 # PROBLEMS
 
-┌──────────────────────────────────┐
-│ UNEXPECTED ASSOCIATED EXPRESSION ├─ I was parsing associated items for a ───┐
-└┬─────────────────────────────────┘  nominal type, and I found a plain       │
- │                                    final expression.                       │
- │                                                                            │
- │  x }                                                                       │
- │  ‾                                                                         │
- └─────────────────────────── nominal_associated_with_final_expression.md:2:1 ┘
+-- ❌ UNEXPECTED ASSOCIATED EXPRESSION ----- nominal_associated_with_final_expression.md:2:1
 
-    Associated item blocks can contain associated types and values. Remove the
-    trailing expression or turn it into a named associated value.
+I was parsing associated items for a nominal type, and I found a plain final
+expression.
 
-    For example:
-        Id := U64 implements [
-            zero = @Id 0
-        ]
+x }
+^
 
-    I found `x` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Associated item blocks can contain associated types and values. Remove the
+trailing expression or turn it into a named associated value.
 
+For example:
+    Id := U64 implements [
+        zero = @Id 0
+    ]
+
+I found `x` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,LowerIdent,OpAssign,Int,

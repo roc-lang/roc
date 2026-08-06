@@ -11,30 +11,25 @@ app[]{f:platform""}import fS
 ASCII CONTROL CHARACTER - :0:0:0:0
 INCOMPLETE IMPORT - fuzz_crash_046.md:1:20:1:26
 # PROBLEMS
-
 ASCII CONTROL CHARACTER
 
 ASCII control characters are not allowed in Roc source code.
 
 
+-- ❌ INCOMPLETE IMPORT -------------------------------- fuzz_crash_046.md:1:20
 
-┌───────────────────┐
-│ INCOMPLETE IMPORT ├─ I was parsing an import, and the mod path is ───────┐
-└┬──────────────────┘  incomplete.                                            │
- │                                                                            │
- │  app[]{f:platform""}import fS                                             │
- │                     ‾‾‾‾‾‾                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_046.md:1:20 ┘
+I was parsing an import, and the mod path is incomplete.
 
-    Imports must name a mod, optionally with a qualifier and exposing list.
+app[]{f:platform""}import fS
+                   ^^^^^^
 
-    For example:
-        import Json/Decode exposing [decode]
+Imports must name a mod, optionally with a qualifier and exposing list.
 
-    I found `import` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+For example:
+    import Json/Decode exposing [decode]
 
+I found `import` here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,KwImport,LowerIdent,UpperIdent,

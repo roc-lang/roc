@@ -16,20 +16,17 @@ canonicalize_diagnostics=true
 MUTUALLY RECURSIVE LOCAL DEFINITIONS - local_let_mutual_recursion.md:2:46:2:52
 # PROBLEMS
 
-┌──────────────────────────────────────┐
-│ MUTUALLY RECURSIVE LOCAL DEFINITIONS ├─ The local definitions `is_even` ────┐
-└┬─────────────────────────────────────┘  and `is_odd` are mutually           │
- │                                        recursive, which isn't supported    │
- │                                        for local definitions.              │
- │                                                                            │
- │  is_even = |n| if (n == 0) Bool.True else is_odd(n - 1)                    │
- │                                           ‾‾‾‾‾‾                           │
- └──────────────────────────────────────── local_let_mutual_recursion.md:2:46 ┘
+-- ❌ MUTUALLY RECURSIVE LOCAL DEFINITIONS - local_let_mutual_recursion.md:2:46
 
-    Local definitions are evaluated in order and can only refer to themselves
-    or to earlier definitions. Move these mutually recursive definitions to the
-    top level, where mutual recursion is supported.
+The local definitions `is_even` and `is_odd` are mutually recursive, which
+isn't supported for local definitions.
 
+is_even = |n| if (n == 0) Bool.True else is_odd(n - 1)
+                                         ^^^^^^
+
+Local definitions are evaluated in order and can only refer to themselves or to
+earlier definitions. Move these mutually recursive definitions to the top
+level, where mutual recursion is supported.
 # TOKENS
 ~~~zig
 OpBar,Underscore,OpBar,OpenCurly,

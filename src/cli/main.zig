@@ -5456,6 +5456,57 @@ pub const SharedMemoryResult = struct {
     diagnostics: CheckDiagnosticCounts,
 };
 
+fn renderSummaryHeaderLine(
+    writer: anytype,
+    error_count: usize,
+    warning_count: usize,
+    use_color: bool,
+    path: []const u8,
+    config: reporting.ReportingConfig,
+) !void {
+    const cyan = if (use_color) ansi_term.cyan else "";
+    const red = if (use_color) ansi_term.red else "";
+    const yellow = if (use_color) ansi_term.yellow else "";
+    const reset = if (use_color) ansi_term.reset else "";
+
+    const error_suffix = if (error_count == 1) "" else "s";
+    const warning_suffix = if (warning_count == 1) "" else "s";
+
+    var error_buf: [32]u8 = undefined;
+    const err_str = std.fmt.bufPrint(&error_buf, "{} error{s}", .{ error_count, error_suffix }) catch "";
+
+    var warn_buf: [32]u8 = undefined;
+    const warn_str = std.fmt.bufPrint(&warn_buf, "{} warning{s}", .{ warning_count, warning_suffix }) catch "";
+
+    const total_w = @min(config.getMaxLineWidth(), 120) -| 1;
+    const icon_w: usize = 2;
+    const prefix_w = 3 + icon_w + 1 + 6 + err_str.len + 5 + warn_str.len + 1;
+
+    const sanitised_path = reporting.sanitisePathForSnapshots(path);
+    const loc_w = if (sanitised_path.len > 0) 1 + sanitised_path.len else 0;
+
+    const dashes = if (total_w > prefix_w + loc_w) (total_w - prefix_w - loc_w) else 5;
+
+    try writer.writeByte('\n');
+    try writer.writeAll(cyan);
+    try writer.writeAll("-- 📊 Found ");
+    try writer.writeAll(red);
+    try writer.writeAll(err_str);
+    try writer.writeAll(cyan);
+    try writer.writeAll(" and ");
+    try writer.writeAll(yellow);
+    try writer.writeAll(warn_str);
+    try writer.writeAll(cyan);
+    try writer.writeByte(' ');
+    try writer.splatBytesAll("-", dashes);
+    if (sanitised_path.len > 0) {
+        try writer.writeByte(' ');
+        try writer.writeAll(sanitised_path);
+    }
+    try writer.writeAll(reset);
+    try writer.writeAll("\n\n");
+}
+
 fn writeDiagnosticCounts(writer: *std.Io.Writer, error_count: anytype, warning_count: anytype, use_color: bool) std.Io.Writer.Error!void {
     const error_suffix = if (error_count == 1) "" else "s";
     const warning_suffix = if (warning_count == 1) "" else "s";
@@ -5566,10 +5617,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
     if (counts.errors > 0 or counts.warnings > 0) {
         const stderr = ctx.io.stderr();
-        stderr.writeAll("\n") catch {};
-        stderr.writeAll("Found ") catch {};
-        writeDiagnosticCounts(stderr, counts.errors, counts.warnings, report_config.shouldUseColors()) catch {};
-        stderr.print(" for {s}.\n", .{display_path}) catch {};
+        renderSummaryHeaderLine(stderr, counts.errors, counts.warnings, report_config.shouldUseColors(), display_path, report_config) catch {};
     }
 
     ctx.io.flush();
@@ -16025,12 +16073,7 @@ fn finishRocCheck(
     ctx.io.flush();
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.writeAll("Found ") catch {};
-        writeDiagnosticCounts(stderr, check_result.error_count, check_result.warning_count, stderr_report_config.shouldUseColors()) catch {};
-        stderr.writeAll(" in ") catch {};
-        formatElapsedTimeMs(stderr, elapsed) catch {};
-        stderr.print(" for {s}.\n", .{args.path}) catch {};
+        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, stderr_report_config.shouldUseColors(), args.path, stderr_report_config) catch {};
 
         if (args.verbose) {
             printVerboseStats(stderr, check_result);

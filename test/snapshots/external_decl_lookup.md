@@ -22,42 +22,37 @@ NAME NOT IN SCOPE - external_decl_lookup.md:8:14:8:23
 NAME NOT IN SCOPE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json                                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └─────────────────────────────────────────────── external_decl_lookup.md:4:1 ┘
+-- ⚠️ DUPLICATE DEFINITION ------------------------ external_decl_lookup.md:4:1
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  app [main!] { pf: platform "../basic-cli/platform.roc" }             │
-      │  ‾                                                                    │
-      └────────────────────────────────────────── external_decl_lookup.md:1:1 ┘
+The name `Json` is being redeclared here:
 
+import json.Json
+^^^^^^^^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  result = Json.utf8("Hello from external mod!")                            │
- │           ‾‾‾‾‾‾‾‾‾                                                        │
- └────────────────────────────────────────────── external_decl_lookup.md:8:14 ┘
+-- ℹ️ DETAILS ------------------------------------- external_decl_lookup.md:1:1
 
-    Is it misspelled, or is there an import missing?
+In this scope, `Json` was already defined here:
 
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!(result)                                                      │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────── external_decl_lookup.md:9:5 ┘
+-- ❌ NAME NOT IN SCOPE -------------------------- external_decl_lookup.md:8:14
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `utf8` in this scope.
 
+result = Json.utf8("Hello from external mod!")
+         ^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+-- ❌ NAME NOT IN SCOPE --------------------------- external_decl_lookup.md:9:5
+
+Nothing is named `line!` in this scope.
+
+Stdout.line!(result)
+^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

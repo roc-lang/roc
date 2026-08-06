@@ -15,36 +15,31 @@ INVALID ASSIGNMENT TO ITSELF - recursion_infinite_self.md:4:9:4:10
 INVALID RECURSIVE TYPE - recursion_infinite_self.md:1:1:1:14
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value `t` is assigned to itself, ───────┐
-└┬─────────────────────────────┘  which would cause an infinite loop at       │
- │                                runtime.                                    │
- │                                                                            │
- │  t = T.((t, 1))                                                            │
- │          ‾                                                                 │
- └──────────────────────────────────────────── recursion_infinite_self.md:4:9 ┘
+-- ❌ INVALID ASSIGNMENT TO ITSELF ------------- recursion_infinite_self.md:4:9
 
-    Only functions can reference themselves (for recursion). For non-function
-    values, the right-hand side must be fully computable without referring to
-    the value being assigned.
+The value `t` is assigned to itself, which would cause an infinite loop at
+runtime.
 
+t = T.((t, 1))
+        ^
 
-┌────────────────────────┐
-│ INVALID RECURSIVE TYPE ├─ The nominal type T refers to itself in a way ─────┐
-└┬───────────────────────┘  that would make it infinite.                      │
- │                                                                            │
- │  T := (T, U64)                                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
- └──────────────────────────────────────────── recursion_infinite_self.md:1:1 ┘
+Only functions can reference themselves (for recursion). For non-function
+values, the right-hand side must be fully computable without referring to the
+value being assigned.
 
-    Its definition is:
+-- ❌ INVALID RECURSIVE TYPE ------------------- recursion_infinite_self.md:1:1
 
-        (T, U64)
+The nominal type T refers to itself in a way that would make it infinite.
 
-    Hint: Recursion in a nominal type is only allowed inside a tag union
-    payload or record field — for example `ConsList(a) := [Nil, Cons(a,
-    ConsList(a))]`.
+T := (T, U64)
+^^^^^^^^^^^^^
 
+Its definition is:
+
+    (T, U64)
+
+Hint: Recursion in a nominal type is only allowed inside a tag union payload or
+record field — for example `ConsList(a) := [Nil, Cons(a, ConsList(a))]`.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,

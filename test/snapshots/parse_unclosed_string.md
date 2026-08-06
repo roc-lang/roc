@@ -11,14 +11,12 @@ type=expr
 UNCLOSED STRING - parse_unclosed_string.md:1:1:1:7
 # PROBLEMS
 
-┌─────────────────┐
-│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  "hello                                                                    │
- │  ‾‾‾‾‾‾                                                                    │
- └────────────────────────────────────────────── parse_unclosed_string.md:1:1 ┘
+-- ❌ UNCLOSED STRING ---------------------------- parse_unclosed_string.md:1:1
 
+This string is missing a closing quote.
+
+"hello
+^^^^^^
 
 # TOKENS
 ~~~zig

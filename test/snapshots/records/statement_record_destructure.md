@@ -11,16 +11,14 @@ type=snippet
 NAME NOT IN SCOPE - statement_record_destructure.md:1:24:1:30
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  { name, age, email } = person                                             │
- │                         ‾‾‾‾‾‾                                             │
- └────────────────────────────────────── statement_record_destructure.md:1:24 ┘
+-- ❌ NAME NOT IN SCOPE ------------------ statement_record_destructure.md:1:24
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `person` in this scope.
 
+{ name, age, email } = person
+                       ^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseCurly,OpAssign,LowerIdent,

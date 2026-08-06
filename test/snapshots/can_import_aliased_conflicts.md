@@ -18,31 +18,28 @@ DUPLICATE DEFINITION - can_import_aliased_conflicts.md:2:1:2:28
 NAME NOT IN SCOPE - can_import_aliased_conflicts.md:5:9:5:20
 # PROBLEMS
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `MyMod` is being redeclared here. ─────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import http.Client as MyMod                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └─────────────────────────────────────── can_import_aliased_conflicts.md:2:1 ┘
+-- ⚠️ DUPLICATE DEFINITION ---------------- can_import_aliased_conflicts.md:2:1
 
-    In this scope, `MyMod` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json as MyMod                                            │
-      │  ‾                                                                    │
-      └────────────────────────────────── can_import_aliased_conflicts.md:1:1 ┘
+The name `MyMod` is being redeclared here:
 
+import http.Client as MyMod
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  x = MyMod.parse                                                           │
- │      ‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────── can_import_aliased_conflicts.md:5:9 ┘
+-- ℹ️ DETAILS ----------------------------- can_import_aliased_conflicts.md:1:1
 
-    Is it misspelled, or is there an import missing?
+In this scope, `MyMod` was already defined here:
 
+import json.Json as MyMod
+^
+
+-- ❌ NAME NOT IN SCOPE ------------------- can_import_aliased_conflicts.md:5:9
+
+Nothing is named `parse` in this scope.
+
+x = MyMod.parse
+    ^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,

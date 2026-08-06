@@ -11,21 +11,19 @@ platform""requires{}{}exposes[]packages{}provides[
 EXPECTED OPENING BRACE - fuzz_crash_045.md:1:50:1:51
 # PROBLEMS
 
-┌────────────────────────┐
-│ EXPECTED OPENING BRACE ├─ I was parsing a `provides` section, and I ────────┐
-└┬───────────────────────┘  expected an opening `{`.                          │
- │                                                                            │
- │  platform""requires{}{}exposes[]packages{}provides[                        │
- │                                                   ‾                        │
- └──────────────────────────────────────────────────── fuzz_crash_045.md:1:50 ┘
+-- ❌ EXPECTED OPENING BRACE --------------------------- fuzz_crash_045.md:1:50
 
-    Host symbol mappings are written as record-like entries inside braces.
+I was parsing a `provides` section, and I expected an opening `{`.
 
-    For example:
-        provides { "roc_main": main }
+platform""requires{}{}exposes[]packages{}provides[
+                                                 ^
 
-    I found `[` here.
+Host symbol mappings are written as record-like entries inside braces.
 
+For example:
+    provides { "roc_main": main }
+
+I found `[` here.
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,KwRequires,OpenCurly,CloseCurly,OpenCurly,CloseCurly,KwExposes,OpenSquare,CloseSquare,KwPackages,OpenCurly,CloseCurly,KwProvides,OpenSquare,

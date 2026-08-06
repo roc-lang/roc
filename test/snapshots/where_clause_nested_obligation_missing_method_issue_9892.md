@@ -20,21 +20,20 @@ main = run(Wrap.W(42.U8))
 MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:3:28:3:38
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `frobnicate` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  unwrap = |Wrap.W(x)| x.frobnicate()                                       │
- │                         ‾‾‾‾‾‾‾‾‾‾                                         │
- └────────── where_clause_nested_obligation_missing_method_issue_9892.md:3:28 ┘
+-- ❌ MISSING METHOD ----- where_clause_nested_obligation_missing_method_issue_9892.md:3:28
 
-    The value's type, which does not have a method named `frobnicate`, is:
+This `frobnicate` method is being called on a value whose type doesn't have
+that method.
 
-        U8
+unwrap = |Wrap.W(x)| x.frobnicate()
+                       ^^^^^^^^^^
 
-    Hint: For this to work, the type would need to have a method named
-    `frobnicate` associated with it in the type's declaration.
+The value's type, which does not have a method named `frobnicate`, is:
 
+    U8
+
+Hint: For this to work, the type would need to have a method named `frobnicate`
+associated with it in the type's declaration.
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,Dot,OpenCurly,

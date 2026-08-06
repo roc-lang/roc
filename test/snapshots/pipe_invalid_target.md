@@ -11,22 +11,21 @@ type=expr
 EXPECTED PIPE TARGET - pipe_invalid_target.md:1:6:1:7
 # PROBLEMS
 
-┌──────────────────────┐
-│ EXPECTED PIPE TARGET ├─ I was parsing a pipe expression, and I expected a ──┐
-└┬─────────────────────┘  name or parenthesized expression after `|>`.        │
- │                                                                            │
- │  1 |> 2                                                                    │
- │       ‾                                                                    │
- └──────────────────────────────────────────────── pipe_invalid_target.md:1:6 ┘
+-- ❌ EXPECTED PIPE TARGET ------------------------- pipe_invalid_target.md:1:6
 
-    The right side of a pipe must start with a value name, tag name, or
-    parenthesized expression.
+I was parsing a pipe expression, and I expected a name or parenthesized
+expression after `|>`.
 
-    For example:
-        value |> next
+1 |> 2
+     ^
 
-    I found `2` here.
+The right side of a pipe must start with a value name, tag name, or
+parenthesized expression.
 
+For example:
+    value |> next
+
+I found `2` here.
 # TOKENS
 ~~~zig
 Int,OpPizza,Int,

@@ -23,28 +23,24 @@ NAME NOT IN SCOPE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!("Hello, world!")                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └──────────────────────────────────────────── hello_world_with_block.md:11:2 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------ hello_world_with_block.md:11:2
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `line!` in this scope.
 
+Stdout.line!("Hello, world!")
+^^^^^^^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `world` is defined here and then never used. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  world = "World"                                                           │
- │  ‾‾‾‾‾                                                                     │
- └───────────────────────────────────────────── hello_world_with_block.md:9:2 ┘
+Is it misspelled, or is there an import missing?
 
-    If you don't need this variable, prefix it with an underscore like `_world`
-    to suppress this warning.
+-- ⚠️ UNUSED VARIABLE --------------------------- hello_world_with_block.md:9:2
 
+Variable `world` is defined here and then never used:
+
+world = "World"
+^^^^^
+
+If you don't need this variable, prefix it with an underscore like `_world` to
+suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -15,14 +15,12 @@ decodeThings = ...
 UNDECLARED TYPE - where_clauses_4.md:4:10:4:17
 # PROBLEMS
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Decode` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  where [a.Decode]                                                          │
- │          ‾‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────────────────── where_clauses_4.md:4:10 ┘
+-- ❌ UNDECLARED TYPE --------------------------------- where_clauses_4.md:4:10
 
+The type `Decode` is not declared in this scope.
+
+where [a.Decode]
+        ^^^^^^^
 
 # TOKENS
 ~~~zig

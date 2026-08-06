@@ -23,29 +23,23 @@ UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:13:9:14
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:29:9:30
 # PROBLEMS
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  Container : a -> [Container(a)]                                           │
- │              ‾                                                             │
- └────────────────────────────────────── nominal_associated_in_tuples.md:9:13 ┘
+-- ❌ UNDECLARED TYPE VARIABLE ----------- nominal_associated_in_tuples.md:9:13
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+The type variable `a` is not declared in this scope.
 
+Container : a -> [Container(a)]
+            ^
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  Container : a -> [Container(a)]                                           │
- │                              ‾                                             │
- └────────────────────────────────────── nominal_associated_in_tuples.md:9:29 ┘
+Type variables must be introduced in a type annotation before they can be used.
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+-- ❌ UNDECLARED TYPE VARIABLE ----------- nominal_associated_in_tuples.md:9:29
 
+The type variable `a` is not declared in this scope.
+
+Container : a -> [Container(a)]
+                            ^
+
+Type variables must be introduced in a type annotation before they can be used.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

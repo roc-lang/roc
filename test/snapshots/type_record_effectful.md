@@ -20,16 +20,14 @@ main! = |_| {}
 NAME NOT IN SCOPE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!(person.name)                                                 │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
+-- ❌ NAME NOT IN SCOPE -------------------------- type_record_effectful.md:7:5
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `line!` in this scope.
 
+Stdout.line!(person.name)
+^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

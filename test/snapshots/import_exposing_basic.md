@@ -20,42 +20,37 @@ NAME NOT IN SCOPE - import_exposing_basic.md:5:15:5:21
 NAME NOT IN SCOPE - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json exposing [decode, to_str]                                │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
- └────────────────────────────────────────────── import_exposing_basic.md:1:1 ┘
+-- ⚠️ DUPLICATE DEFINITION ----------------------- import_exposing_basic.md:1:1
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json exposing [decode, to_str]                           │
-      │  ‾                                                                    │
-      └───────────────────────────────────────── import_exposing_basic.md:1:1 ┘
+The name `Json` is being redeclared here:
 
+import json.Json exposing [decode, to_str]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `to_str` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  encoded = to_str(data)                                                    │
- │            ‾‾‾‾‾‾                                                          │
- └───────────────────────────────────────────── import_exposing_basic.md:5:15 ┘
+-- ℹ️ DETAILS ------------------------------------ import_exposing_basic.md:1:1
 
-    Is it misspelled, or is there an import missing?
+In this scope, `Json` was already defined here:
 
+import json.Json exposing [decode, to_str]
+^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  decoded = decode(encoded)                                                 │
- │            ‾‾‾‾‾‾                                                          │
- └───────────────────────────────────────────── import_exposing_basic.md:6:15 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------- import_exposing_basic.md:5:15
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `to_str` in this scope.
 
+encoded = to_str(data)
+          ^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+-- ❌ NAME NOT IN SCOPE ------------------------- import_exposing_basic.md:6:15
+
+Nothing is named `decode` in this scope.
+
+decoded = decode(encoded)
+          ^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,

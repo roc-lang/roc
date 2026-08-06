@@ -995,7 +995,7 @@ pub const Diagnostic = union(enum) {
         const owned_ident = try report.addOwnedString(ident_name);
         try report.headline.addReflowingText("The name ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
-        try report.headline.addReflowingText(" is being redeclared here.");
+        try report.headline.addReflowingText(" is being redeclared here:");
 
         // The main box shows the new declaration; point below it at the original.
         const owned_filename = try report.addOwnedString(filename);
@@ -1335,7 +1335,7 @@ pub const Diagnostic = union(enum) {
 
         try report.headline.addReflowingText("Variable ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
-        try report.headline.addReflowingText(" is defined here and then never used.");
+        try report.headline.addReflowingText(" is defined here and then never used:");
 
         try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
         const ident_with_underscore = try std.fmt.allocPrint(gpa, "_{s}", .{owned_ident});

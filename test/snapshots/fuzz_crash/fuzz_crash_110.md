@@ -12,30 +12,26 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_110.md:1:25:1:26
 MISSING METHOD - fuzz_crash_110.md:1:61:1:62
 # PROBLEMS
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `o` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}       │
- │                          ‾                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_110.md:1:25 ┘
+-- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_110.md:1:25
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+The type variable `o` is not declared in this scope.
 
+R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}
+                        ^
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}       │
- │                                                              ‾             │
- └──────────────────────────────────────────────────── fuzz_crash_110.md:1:61 ┘
+Type variables must be introduced in a type annotation before they can be used.
 
-    The value's type, which does not have a method named `from_numeral`, is:
+-- ❌ MISSING METHOD ----------------------------------- fuzz_crash_110.md:1:61
 
-        ({}) -> _ret
+This `from_numeral` method is being called on a value whose type doesn't have
+that method.
 
+R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}
+                                                            ^
+
+The value's type, which does not have a method named `from_numeral`, is:
+
+    ({}) -> _ret
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,CloseSquare,Dot,OpenCurly,LowerIdent,OpAssign,OpenCurly,OpBar,OpBar,OpenCurly,KwMatch,Int,OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,Int,CloseRound,OpFatArrow,Int,CloseCurly,CloseCurly,NoSpaceOpenRound,CloseRound,CloseCurly,CloseCurly,

@@ -13,52 +13,46 @@ UNEXPECTED EXPRESSION SYNTAX - error_malformed_syntax_2.md:1:10:1:11
 DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 # PROBLEMS
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  { age: 42, name = "Alice" }                                               │
- │         ‾‾                                                                 │
- └─────────────────────────────────────────── error_malformed_syntax_2.md:1:8 ┘
+-- ❌ UNEXPECTED TYPE SYNTAX ------------------ error_malformed_syntax_2.md:1:8
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+I was parsing a type annotation, and this token cannot start a type here.
 
-    For example:
-        List(U64)
+{ age: 42, name = "Alice" }
+       ^^
 
-    I found `42` here.
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
+For example:
+    List(U64)
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  { age: 42, name = "Alice" }                                               │
- │           ‾                                                                │
- └────────────────────────────────────────── error_malformed_syntax_2.md:1:10 ┘
+I found `42` here.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ----------- error_malformed_syntax_2.md:1:10
 
-    For example:
-        add(1, 2)
+I was parsing an expression, and this token cannot start an expression here.
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+{ age: 42, name = "Alice" }
+         ^
 
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  { age: 42, name = "Alice" }                                               │
- │    ‾‾‾‾‾‾‾                                                                 │
- └─────────────────────────────────────────── error_malformed_syntax_2.md:1:3 ┘
+For example:
+    add(1, 2)
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
+-- ⚠️ DECLARATION HAS NO VALUE ---------------- error_malformed_syntax_2.md:1:3
+
+This declaration has a type annotation but no implementation.
+
+{ age: 42, name = "Alice" }
+  ^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,CloseCurly,

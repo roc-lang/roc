@@ -16,15 +16,13 @@ result = f(3)?
 TRY OPERATOR OUTSIDE FUNCTION - question_in_top_level_def_error.md:6:10:6:15
 # PROBLEMS
 
-┌───────────────────────────────┐
-│ TRY OPERATOR OUTSIDE FUNCTION ├─ The `?` operator can only be used inside ──┐
-└┬──────────────────────────────┘  function bodies because it can cause an    │
- │                                 early return.                              │
- │                                                                            │
- │  result = f(3)?                                                            │
- │           ‾‾‾‾‾                                                            │
- └─────────────────────────────────── question_in_top_level_def_error.md:6:10 ┘
+-- ❌ TRY OPERATOR OUTSIDE FUNCTION --- question_in_top_level_def_error.md:6:10
 
+The `?` operator can only be used inside function bodies because it can cause
+an early return.
+
+result = f(3)?
+         ^^^^^
 
 # TOKENS
 ~~~zig

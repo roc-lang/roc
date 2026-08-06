@@ -14,31 +14,28 @@ DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
 NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
 # PROBLEMS
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json                                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────────────────────── can_import_json.md:1:1 ┘
+-- ⚠️ DUPLICATE DEFINITION ----------------------------- can_import_json.md:1:1
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json                                                     │
-      │  ‾                                                                    │
-      └─────────────────────────────────────────────── can_import_json.md:1:1 ┘
+The name `Json` is being redeclared here:
 
+import json.Json
+^^^^^^^^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  main = Json.utf8                                                          │
- │         ‾‾‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────────────────────── can_import_json.md:3:8 ┘
+-- ℹ️ DETAILS ------------------------------------------ can_import_json.md:1:1
 
-    Is it misspelled, or is there an import missing?
+In this scope, `Json` was already defined here:
 
+import json.Json
+^
+
+-- ❌ NAME NOT IN SCOPE -------------------------------- can_import_json.md:3:8
+
+Nothing is named `utf8` in this scope.
+
+main = Json.utf8
+       ^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

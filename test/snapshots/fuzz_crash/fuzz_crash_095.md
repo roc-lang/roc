@@ -11,19 +11,17 @@ t=0->(0)()
 MISSING METHOD - fuzz_crash_095.md:1:7:1:8
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  t=0->(0)()                                                                │
- │        ‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_095.md:1:7 ┘
+-- ❌ MISSING METHOD ------------------------------------ fuzz_crash_095.md:1:7
 
-    The value's type, which does not have a method named `from_numeral`, is:
+This `from_numeral` method is being called on a value whose type doesn't have
+that method.
 
-        a -> _ret where [a.from_numeral : Numeral -> Try(a,
-        [InvalidNumeral(Str)])]
+t=0->(0)()
+      ^
 
+The value's type, which does not have a method named `from_numeral`, is:
+
+    a -> _ret where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpArrow,NoSpaceOpenRound,Int,CloseRound,NoSpaceOpenRound,CloseRound,

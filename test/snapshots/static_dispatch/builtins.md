@@ -11,14 +11,12 @@ main! = |_| True.not()
 DOES NOT EXIST - builtins.md:1:13:1:21
 # PROBLEMS
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `True.not` does not exist. ───────────────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  main! = |_| True.not()                                                    │
- │              ‾‾‾‾‾‾‾‾                                                      │
- └────────────────────────────────────────────────────────── builtins.md:1:13 ┘
+-- ❌ DOES NOT EXIST ----------------------------------------- builtins.md:1:13
 
+`True.not` does not exist.
+
+main! = |_| True.not()
+            ^^^^^^^^
 
 # TOKENS
 ~~~zig
