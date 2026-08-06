@@ -50,9 +50,30 @@ const Region = struct {
     end: u32,
 };
 
-const Event = struct {
-    kind: []const u8,
-    message: []const u8,
+const Event = union(enum) {
+    runtime: struct { kind: []const u8, message: []const u8 },
+    effect: struct { name: []const u8, payload: []const u8 },
+
+    pub fn jsonStringify(self: Event, json: anytype) !void {
+        try json.beginObject();
+        switch (self) {
+            .runtime => |event| {
+                try json.objectField("kind");
+                try json.write(event.kind);
+                try json.objectField("message");
+                try json.write(event.message);
+            },
+            .effect => |event| {
+                try json.objectField("kind");
+                try json.write("effect");
+                try json.objectField("name");
+                try json.write(event.name);
+                try json.objectField("payload");
+                try json.write(event.payload);
+            },
+        }
+        try json.endObject();
+    }
 };
 
 const Crash = struct {
@@ -153,9 +174,13 @@ fn copyEvents(arena: Allocator, session: *ReplSession) Allocator.Error![]const E
     const events = try arena.alloc(Event, host_events.len);
     for (host_events, 0..) |event, index| {
         events[index] = switch (event) {
-            .dbg => |message| .{ .kind = "dbg", .message = try arenaDupe(arena, message) },
-            .expect_failed => |message| .{ .kind = "expect_failed", .message = try arenaDupe(arena, message) },
-            .crashed => |message| .{ .kind = "crashed", .message = try arenaDupe(arena, message) },
+            .dbg => |message| .{ .runtime = .{ .kind = "dbg", .message = try arenaDupe(arena, message) } },
+            .expect_failed => |message| .{ .runtime = .{ .kind = "expect_failed", .message = try arenaDupe(arena, message) } },
+            .crashed => |message| .{ .runtime = .{ .kind = "crashed", .message = try arenaDupe(arena, message) } },
+            .effect => |effect| .{ .effect = .{
+                .name = try arenaDupe(arena, effect.name),
+                .payload = try arenaDupe(arena, effect.payload),
+            } },
         };
     }
     return events;
@@ -554,7 +579,11 @@ fn capabilities(request: Request) Allocator.Error![]u8 {
             .presentation_strings = false,
             .filesystem = false,
             .network = false,
-            .platform_effects = false,
+            .platform_effects = "one_way_events",
+            .effect_module = eval.InspectedRun.repl_effect_module_name,
+            .effect_function = "emit!",
+            .effect_payload_encoding = "caller_defined_utf8",
+            .effect_responses = false,
             .host_managed_history = true,
             .host_managed_cancellation = true,
         },
@@ -602,6 +631,7 @@ fn processJson(bytes: []const u8) Allocator.Error![]u8 {
         error.InvalidCursor => errorResponse(request.id, "invalid_cursor", "The completion cursor must be a UTF-8 boundary within params.source."),
         error.MissingModules => errorResponse(request.id, "missing_modules", "set_modules requires params.modules."),
         error.DuplicateVirtualModule => errorResponse(request.id, "duplicate_module", "Virtual module names must be unique."),
+        error.ReservedVirtualModule => errorResponse(request.id, "reserved_module", "Repl is provided by the REPL and cannot be replaced."),
         else => errorResponse(request.id, "internal_error", "The REPL could not complete this request."),
     };
 }

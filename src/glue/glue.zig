@@ -1005,6 +1005,7 @@ fn writeHostEvents(stderr: *std.Io.Writer, runtime_env: *const eval_mod.RuntimeH
             .dbg => |msg| try stderr.print("[dbg] {s}\n", .{msg}),
             .expect_failed => |msg| try stderr.print("Expect failed: {s}\n", .{msg}),
             .crashed => {},
+            .effect => unreachable,
         }
     }
 }

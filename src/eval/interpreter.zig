@@ -320,6 +320,7 @@ pub const Interpreter = struct {
     /// RocOps environment for builtin dispatch.
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
+    hosted_call_handler: ?HostedCallHandler,
     static_strings: backend.StaticStringData.Table,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
@@ -371,6 +372,30 @@ pub const Interpreter = struct {
         DivisionByZero,
         Crash,
         ExpectErr,
+        UnsupportedHostedFunction,
+        InvalidHostedFunctionSignature,
+    };
+
+    /// Explicit hosted-call data produced by LIR and the interpreter's ABI
+    /// packing. Integrations consume this without reconstructing hosted
+    /// identities or guessing dispatch-table order. As at every hosted ABI
+    /// boundary, the handler owns each refcounted argument. It must explicitly
+    /// move, retain, or release that ownership; LIR ARC has already emitted the
+    /// ownership transfer and the interpreter must not make another RC decision.
+    pub const HostedCall = struct {
+        symbol: []const u8,
+        dispatch_index: u32,
+        args: []const u8,
+        arg_layouts: []const layout_mod.Idx,
+        arg_offsets: []const u32,
+        ret: []u8,
+        ret_layout: layout_mod.Idx,
+        layouts: *const layout_mod.Store,
+    };
+
+    pub const HostedCallHandler = struct {
+        context: *anyopaque,
+        dispatch: *const fn (*anyopaque, HostedCall) Error!void,
     };
 
     pub const ComptimeBranchHit = struct {
@@ -536,6 +561,27 @@ pub const Interpreter = struct {
         caller_roc_ops: *RocOps,
         float_nan_mode: builtins.float_bits.NanMode,
     ) Allocator.Error!LirInterpreter {
+        return initWithHostedCallHandler(
+            allocator,
+            store,
+            layout_store,
+            caller_roc_ops,
+            float_nan_mode,
+            null,
+        );
+    }
+
+    /// Construct an interpreter with an explicit hosted-call dependency. When
+    /// present, every hosted call is routed exclusively through this handler;
+    /// the RocOps function table is not consulted as a fallback.
+    pub fn initWithHostedCallHandler(
+        allocator: Allocator,
+        store: *const LirStore,
+        layout_store: *const layout_mod.Store,
+        caller_roc_ops: *RocOps,
+        float_nan_mode: builtins.float_bits.NanMode,
+        hosted_call_handler: ?HostedCallHandler,
+    ) Allocator.Error!LirInterpreter {
         const frame_plans = try buildFramePlans(allocator, store);
         errdefer deinitFramePlans(allocator, frame_plans);
 
@@ -579,6 +625,7 @@ pub const Interpreter = struct {
                 .roc_crashed = &InterpreterRocEnv.rocCrashedFn,
                 .hosted_fns = caller_roc_ops.hosted_fns,
             },
+            .hosted_call_handler = hosted_call_handler,
             .static_strings = static_strings,
             .static_data = &.{},
             .static_erased_callables = &.{},
@@ -821,6 +868,8 @@ pub const Interpreter = struct {
             error.OutOfMemory,
             error.ComptimeExhaustiveness,
             error.ExpectErr,
+            error.UnsupportedHostedFunction,
+            error.InvalidHostedFunctionSignature,
             => {},
         }
     }
@@ -2996,6 +3045,8 @@ pub const Interpreter = struct {
             error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
             error.DivisionByZero => ops.crash("LIR/interpreter erased callable trampoline hit division by zero"),
             error.Crash => ops.crash("LIR/interpreter erased callable trampoline hit Roc crash"),
+            error.UnsupportedHostedFunction => ops.crash("LIR/interpreter erased callable trampoline reached an unsupported hosted function"),
+            error.InvalidHostedFunctionSignature => ops.crash("LIR/interpreter erased callable trampoline reached an invalid hosted function signature"),
             // expect_err statements only occur in top-level expect test
             // roots, never in callable bodies.
             error.ExpectErr => unreachable,
@@ -3636,16 +3687,24 @@ pub const Interpreter = struct {
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
 
-        if (hosted.dispatch_index >= self.roc_ops.hosted_fns.count) {
+        if (self.hosted_call_handler) |handler| {
+            try handler.dispatch(handler.context, .{
+                .symbol = self.store.getString(hosted.symbol),
+                .dispatch_index = hosted.dispatch_index,
+                .args = args_buf,
+                .arg_layouts = arg_layouts,
+                .arg_offsets = arg_offsets,
+                .ret = ret_buf,
+                .ret_layout = ret_layout,
+                .layouts = self.layout_store,
+            });
+        } else if (hosted.dispatch_index >= self.roc_ops.hosted_fns.count) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: hosted call index {d} out of bounds for proc {d}",
                 .{ hosted.dispatch_index, @intFromEnum(proc_id) },
             );
-        }
-
-        const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
-
-        if (comptime host_trampoline.available) {
+        } else if (comptime host_trampoline.available) {
+            const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
             // Call the hosted function with the platform C ABI via the fixed register-image
             // trampoline (no runtime code generation).
             var arena_state = std.heap.ArenaAllocator.init(self.allocator);
@@ -3664,6 +3723,7 @@ pub const Interpreter = struct {
                 .{ @intFromEnum(proc_id), @errorName(err) },
             );
         } else {
+            const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
             // Architectures without a register-image trampoline (e.g. wasm32, where
             // a dynamic-signature call cannot be synthesized) call hosted functions
             // through a uniform `(args_buf, ret_buf)` ABI instead. The arguments are

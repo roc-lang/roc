@@ -6218,6 +6218,7 @@ fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
         error.ExpectErr => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
     ops.crash(message);
 }
@@ -11501,6 +11502,7 @@ fn interpreterTestFailureMessage(
         error.Crash => interpreter.getCrashMessage() orelse "Test crashed",
         error.ExpectErr => interpreter.getExpectErrMessage() orelse
             "The `?` operator evaluated an `Err` inside an `expect`",
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
     return try allocator.dupe(u8, message);
 }
@@ -11548,6 +11550,7 @@ fn copyCliTestTranscriptEventsFromEval(
             .dbg => |message| .{ .stream = .stderr, .kind = .dbg, .payload = message },
             .expect_failed => |message| .{ .stream = .stderr, .kind = .expect_failed, .payload = message },
             .crashed => |message| .{ .stream = .stderr, .kind = .crashed, .payload = message },
+            .effect => unreachable,
         };
         copied[index] = .{
             .stream = parts.stream,
@@ -14409,6 +14412,7 @@ const CliOptimizedLiveTestOutput = struct {
             .dbg => |payload| .{ .stream = .stderr, .kind = .dbg, .payload = payload },
             .expect_failed => |payload| .{ .stream = .stderr, .kind = .expect_failed, .payload = payload },
             .crashed => |payload| .{ .stream = .stderr, .kind = .crashed, .payload = payload },
+            .effect => unreachable,
         };
 
         self.lock();

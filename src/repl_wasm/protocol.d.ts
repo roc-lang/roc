@@ -22,10 +22,10 @@ export interface Diagnostic {
   region: Region | null;
 }
 
-export interface RuntimeEvent {
-  kind: "dbg" | "expect_failed" | "crashed";
-  message: string;
-}
+export type RuntimeEvent =
+  | { kind: "dbg" | "expect_failed" | "crashed"; message: string }
+  /** A one-way request emitted by `Repl.emit!`; the host owns interpretation. */
+  | { kind: "effect"; name: string; payload: string };
 
 export interface SnippetResult {
   source: string;
@@ -127,7 +127,13 @@ export interface CapabilitiesResult {
   revision_scope: "wasm_instance";
   revision_bits: 32;
   completion_scope: "session_definitions";
-  features: Record<string, boolean | string>;
+  features: Record<string, boolean | string> & {
+    platform_effects: "one_way_events";
+    effect_module: "Repl";
+    effect_function: "emit!";
+    effect_payload_encoding: "caller_defined_utf8";
+    effect_responses: false;
+  };
 }
 
 interface RequestBase {

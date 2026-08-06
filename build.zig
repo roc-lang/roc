@@ -4165,7 +4165,7 @@ pub fn build(b: *std.Build) void {
 
     const repl_wasm_install = b.addInstallFile(repl_wasm.getEmittedBin(), "lib/repl/repl.wasm");
     build_repl_wasm_step.dependOn(&repl_wasm_install.step);
-    inline for (.{ "index.html", "app.js", "worker.js" }) |filename| {
+    inline for (.{ "index.html", "app.js", "cells.js", "worker.js" }) |filename| {
         const install_file = b.addInstallFile(b.path("src/repl_wasm/www/" ++ filename), "lib/repl/" ++ filename);
         build_repl_wasm_step.dependOn(&install_file.step);
         build_web_step.dependOn(&install_file.step);
@@ -4189,6 +4189,9 @@ pub fn build(b: *std.Build) void {
     run_repl_wasm_test.addFileArg(repl_wasm.getEmittedBin());
     run_repl_wasm_test.step.dependOn(&repl_wasm.step);
     run_test_repl_wasm_step.dependOn(&run_repl_wasm_test.step);
+    const run_repl_cells_test = b.addSystemCommand(&.{ "node", "--test" });
+    run_repl_cells_test.addFileArg(b.path("test/repl-wasm-test/cells.test.mjs"));
+    run_test_repl_wasm_step.dependOn(&run_repl_cells_test.step);
 
     // Build echo.wasm—echo platform compiled to wasm32-freestanding.
     // Also serves as a regression test that the compile module stays wasm-compatible.

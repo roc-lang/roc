@@ -62,6 +62,82 @@ pub const Program = struct {
     main_proc: LirProcSpecId,
 };
 
+/// Explicit dependency for platform-hosted calls during inspected execution.
+/// The runtime environment is provided by this layer so custom events share
+/// the exact ordering and ownership boundary of dbg/expect/crash events.
+pub const HostedCallDependency = struct {
+    dispatch: *const fn (*RuntimeHostEnv, Interpreter.HostedCall) Interpreter.Error!void,
+};
+
+pub const ExecutionHost = union(enum) {
+    reject,
+    hosted_calls: HostedCallDependency,
+};
+
+pub const repl_effect_module_name = "Repl";
+pub const repl_effect_hosted_symbol = "roc_repl_emit!";
+pub const repl_effect_module_source =
+    \\Repl := [].{
+    \\    roc_repl_emit! : { name : Str, payload : Str } => {}
+    \\    emit! : { name : Str, payload : Str } => {}
+    \\    emit! = |request| Repl.roc_repl_emit!(request)
+    \\}
+;
+
+/// The dedicated REPL's explicit one-way-effect dependency. Callers opt into
+/// it; ordinary inspected evaluation always passes `.reject`.
+pub fn replEffectHost() ExecutionHost {
+    return .{ .hosted_calls = .{ .dispatch = dispatchReplEffect } };
+}
+
+fn dispatchReplEffect(runtime_env: *RuntimeHostEnv, call: Interpreter.HostedCall) Interpreter.Error!void {
+    if (!std.mem.eql(u8, call.symbol, repl_effect_hosted_symbol)) {
+        return error.UnsupportedHostedFunction;
+    }
+    if (call.arg_layouts.len != 1 or call.arg_offsets.len != 1) {
+        return error.InvalidHostedFunctionSignature;
+    }
+
+    const arg_layout_idx = call.layouts.runtimeRepresentationLayoutIdx(call.arg_layouts[0]);
+    const arg_layout = call.layouts.getLayout(arg_layout_idx);
+    if (arg_layout.tag != .struct_) return error.InvalidHostedFunctionSignature;
+    const struct_idx = arg_layout.getStruct().idx;
+    if (call.layouts.getStructData(struct_idx).fields.count != 2) {
+        return error.InvalidHostedFunctionSignature;
+    }
+    if (call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 0)) != .str or
+        call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 1)) != .str or
+        call.layouts.layoutSizeAlign(call.layouts.getLayout(call.ret_layout)).size != 0)
+    {
+        return error.InvalidHostedFunctionSignature;
+    }
+
+    const record_offset: usize = call.arg_offsets[0];
+    const name_offset = std.math.add(
+        usize,
+        record_offset,
+        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+    ) catch return error.InvalidHostedFunctionSignature;
+    const payload_offset = std.math.add(
+        usize,
+        record_offset,
+        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+    ) catch return error.InvalidHostedFunctionSignature;
+    if (name_offset > call.args.len or call.args.len - name_offset < @sizeOf(RocStr) or
+        payload_offset > call.args.len or call.args.len - payload_offset < @sizeOf(RocStr))
+    {
+        return error.InvalidHostedFunctionSignature;
+    }
+    const name_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + name_offset);
+    const payload_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + payload_offset);
+    const name = name_ptr.*;
+    const payload = payload_ptr.*;
+    const roc_ops = runtime_env.get_ops();
+    defer name.decref(roc_ops);
+    defer payload.decref(roc_ops);
+    try runtime_env.recordEffect(name.asSlice(), payload.asSlice());
+}
+
 /// Semantic result of executing a Roc root. The caller owns the byte slice in
 /// either variant and must call `deinit` when it is no longer needed.
 pub const Outcome = union(enum) {
@@ -97,8 +173,10 @@ const InterpreterError = Allocator.Error || error{
     Crash,
     DivisionByZero,
     ExpectErr,
+    InvalidHostedFunctionSignature,
     Internal,
     RuntimeError,
+    UnsupportedHostedFunction,
 };
 
 const DevError = Allocator.Error || error{
@@ -148,11 +226,20 @@ fn BackendError(comptime backend_kind: Backend) type {
     };
 }
 
+fn ExecutionHostArg(comptime backend_kind: Backend) type {
+    return if (backend_kind == .interpreter) ExecutionHost else void;
+}
+
 /// Execute an inspect-wrapped root. Roc crashes are returned as `.crashed`;
 /// the error channel is reserved for compiler, allocator, and engine failures.
-pub fn run(allocator: Allocator, comptime backend_kind: Backend, program: Program) BackendError(backend_kind)!Result {
+pub fn run(
+    allocator: Allocator,
+    comptime backend_kind: Backend,
+    program: Program,
+    execution_host: ExecutionHostArg(backend_kind),
+) BackendError(backend_kind)!Result {
     return switch (backend_kind) {
-        .interpreter => runInterpreter(allocator, program),
+        .interpreter => runInterpreter(allocator, program, execution_host),
         .dev => runDev(allocator, program),
         .wasm => runWasm(allocator, program),
         .llvm => runLlvm(allocator, program),
@@ -223,16 +310,39 @@ fn mainProcArgLayouts(allocator: Allocator, program: Program) Allocator.Error![]
     return arg_layouts;
 }
 
-fn runInterpreter(allocator: Allocator, program: Program) InterpreterError!Result {
+const BoundHostedCallDependency = struct {
+    runtime_env: *RuntimeHostEnv,
+    dependency: ?HostedCallDependency,
+
+    fn dispatch(context: *anyopaque, call: Interpreter.HostedCall) Interpreter.Error!void {
+        const self: *BoundHostedCallDependency = @ptrCast(@alignCast(context));
+        const dependency = self.dependency orelse return error.UnsupportedHostedFunction;
+        return dependency.dispatch(self.runtime_env, call);
+    }
+};
+
+fn runInterpreter(allocator: Allocator, program: Program, execution_host: ExecutionHost) InterpreterError!Result {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interp = try Interpreter.init(
+    var bound_host: BoundHostedCallDependency = .{
+        .runtime_env = &runtime_env,
+        .dependency = switch (execution_host) {
+            .reject => null,
+            .hosted_calls => |dependency| dependency,
+        },
+    };
+
+    var interp = try Interpreter.initWithHostedCallHandler(
         allocator,
         program.store,
         program.layouts,
         runtime_env.get_ops(),
         .preserve,
+        .{
+            .context = &bound_host,
+            .dispatch = BoundHostedCallDependency.dispatch,
+        },
     );
     defer interp.deinit();
 
@@ -248,7 +358,9 @@ fn runInterpreter(allocator: Allocator, program: Program) InterpreterError!Resul
         error.DivisionByZero => return crashResult(allocator, &runtime_env, "Division by zero"),
         error.ComptimeExhaustiveness,
         error.ExpectErr,
+        error.InvalidHostedFunctionSignature,
         error.OutOfMemory,
+        error.UnsupportedHostedFunction,
         => return err,
     };
     const ret_layout = program.store.getProcSpec(program.main_proc).ret_layout;
