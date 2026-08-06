@@ -63,7 +63,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 LowerIdent,OpColon,UpperIdent,
 KwWhere,OpenSquare,
 LowerIdent,
-DotLowerIdent,OpColon,LowerIdent,Comma,
+NewlineDotLowerIdent,OpColon,LowerIdent,Comma,
 CloseSquare,
 EndOfFile,
 ~~~
