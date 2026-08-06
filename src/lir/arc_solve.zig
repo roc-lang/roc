@@ -2467,8 +2467,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             }
         },
         .ret => |ret_stmt| try solver.unique_facts.append(allocator, .{ .consume = ret_stmt.value }),
+        .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
+            try solver.binding_facts.append(allocator, .{ .demand = message });
+            try solver.unique_facts.append(allocator, .{ .consume = message });
+        },
         .jump => {},
-        .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+        .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
     }
 }
 
@@ -4226,6 +4230,9 @@ fn computeUniquenessDetailed(
             // Returning is the value's consuming use: the unit moves to the
             // caller, which feeds the per-proc unique-return solve.
             .ret => |ret_stmt| marks.consume(&consumed_once, &destroyed, ret_stmt.value),
+            .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
+                marks.consume(&consumed_once, &destroyed, message);
+            },
             .debug => |debug_stmt| marks.noteUse(&borrow_used, debug_stmt.message),
             // The failure report is the message's consuming use.
             .expect_err => |expect_err_stmt| marks.consume(&consumed_once, &destroyed, expect_err_stmt.message),
@@ -4235,7 +4242,7 @@ fn computeUniquenessDetailed(
             .switch_stmt => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
             .switch_initialized_payload => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
             .decref_if_initialized => |rc| marks.noteUse(&borrow_used, rc.cond),
-            .decref, .free, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+            .decref, .free, .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
         }
     }
 

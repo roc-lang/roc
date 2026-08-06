@@ -4319,7 +4319,7 @@ fn collectProcLocals(
                 try recordRcHelperLocals(locals, free_stmt.rc);
                 try work.append(wa, free_stmt.next);
             },
-            .crash => {},
+            .crash => |crash| if (crash.msg.localId()) |message| try recordProcLocal(locals, message),
             .loop_continue => {},
         }
     }
@@ -10429,8 +10429,10 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = marker.next, .stop = stop } });
         },
         .crash => |crash| {
-            const msg_bytes = self.store.getString(crash.msg);
-            try self.emitRocStaticStringCall(wasm_roc_ops_crashed_offset, msg_bytes);
+            switch (crash.msg) {
+                .literal => |literal| try self.emitRocStaticStringCall(wasm_roc_ops_crashed_offset, self.store.getString(literal)),
+                .local => |local| try self.emitRocStrCall(local, wasm_roc_ops_crashed_offset),
+            }
 
             self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },

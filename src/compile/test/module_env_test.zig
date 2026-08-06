@@ -169,19 +169,11 @@ test "ModuleEnv.Serialized roundtrip" {
     // Verify that the map was repopulated correctly
     try testing.expectEqual(@as(usize, 2), env.imports.map.count());
 
-    // Test that deduplication still works after deserialization for existing keys.
-    // Note: the deserialized StringLiteral.Store points into the cache buffer and
-    // cannot be grown (SafeList.deserializeInto contract), so we only test lookup
-    // of already-serialized strings here.
-    var test_arena = collections.SingleThreadArena.init(gpa);
-    defer test_arena.deinit();
-    const test_alloc = test_arena.allocator();
-
-    const import4 = try env.imports.getOrPut(test_alloc, &env.common, "json.Json");
-
-    // Should find existing json.Json (deduplication)
-    try testing.expectEqual(@as(u32, 0), @intFromEnum(import4));
-    try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
+    // The deserialized StringLiteral.Store is immutable, so cached import lookup
+    // uses the serialized string index rather than reinterning its bytes.
+    const json_string_idx = env.imports.imports.items.items[0];
+    const import_json_cached = env.imports.map.get(json_string_idx).?;
+    try testing.expectEqual(@as(u32, 0), @intFromEnum(import_json_cached));
 }
 
 test "ModuleEnv.Serialized finalizes method metadata tables before writing" {

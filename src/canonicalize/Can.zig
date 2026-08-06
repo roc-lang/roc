@@ -8659,7 +8659,10 @@ const DefiniteInitAnalyzer = struct {
                 break :blk false;
             },
             .e_for => |for_| try self.analyzeForLike(for_.expr, for_.body, state, breaks),
-            .e_run_low_level => |run| try self.analyzeExprSpan(run.args, state, breaks),
+            .e_run_low_level => |run| blk: {
+                if (!try self.analyzeExprSpan(run.args, state, breaks)) break :blk false;
+                break :blk run.op != .crash;
+            },
         };
     }
 
@@ -9483,32 +9486,20 @@ fn canonicalizeStandaloneCrashStatement(
     crash_stmt: @TypeOf(@as(AST.Statement, undefined).crash),
 ) std.mem.Allocator.Error!CanonicalizedStatement {
     const region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region);
-    const mb_msg_literal = blk: {
-        const msg_expr = self.parse_ir.store.getExpr(crash_stmt.expr);
-        if (msg_expr == .string) {
-            const parts = self.parse_ir.store.exprSlice(msg_expr.string.parts);
-            if (parts.len > 0) {
-                const first_part = self.parse_ir.store.getExpr(parts[0]);
-                if (first_part == .string_part) {
-                    const part_text = self.parse_ir.resolve(first_part.string_part.token);
-                    break :blk try self.env.insertString(part_text);
-                }
-            }
-            break :blk try self.env.insertString("crash");
-        }
-        break :blk null;
-    };
+    const msg = try self.canonicalizeExprOrMalformed(crash_stmt.expr);
+    const crash_expr = try self.addCrashExpr(msg.idx, region);
+    const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
+        .expr = crash_expr,
+    } }, region);
+    return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = msg.free_vars };
+}
 
-    const stmt_idx = if (mb_msg_literal) |msg_literal|
-        try self.env.addStatement(Statement{ .s_crash = .{
-            .msg = msg_literal,
-        } }, region)
-    else
-        try self.env.pushMalformed(Statement.Idx, Diagnostic{ .crash_expects_string = .{
-            .region = region,
-        } });
-
-    return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+fn addCrashExpr(self: *Self, msg: Expr.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const args = try self.env.store.appendExprSpan(&.{msg});
+    return try self.env.addExpr(.{ .e_run_low_level = .{
+        .op = .crash,
+        .args = args,
+    } }, region);
 }
 
 fn canonicalizeStandaloneTypeAnnoStatement(
@@ -9840,6 +9831,7 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                         for (self.env.store.sliceExpr(run_low_level.args)) |arg| {
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
                         }
+                        if (run_low_level.op == .crash) facts.has_exit = true;
                     },
                     .e_lambda,
                     .e_closure,
@@ -11073,32 +11065,14 @@ fn runExprKernel(
                         try stacks.pushParse(frame_allocator, .{ .idx = return_stmt.expr, .target = .scratch });
                     },
                     .crash => |crash_stmt| {
-                        const crash_region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region);
-                        const crash_expr = blk: {
-                            const msg_expr = self.parse_ir.store.getExpr(crash_stmt.expr);
-                            if (msg_expr == .string) {
-                                const parts = self.parse_ir.store.exprSlice(msg_expr.string.parts);
-                                if (parts.len > 0) {
-                                    const first_part = self.parse_ir.store.getExpr(parts[0]);
-                                    if (first_part == .string_part) {
-                                        const part_text = self.parse_ir.resolve(first_part.string_part.token);
-                                        break :blk try self.env.addExpr(Expr{ .e_crash = .{
-                                            .msg = try self.env.insertString(part_text),
-                                        } }, crash_region);
-                                    }
-                                }
-                                break :blk try self.env.addExpr(Expr{ .e_crash = .{
-                                    .msg = try self.env.insertString("crash"),
-                                } }, crash_region);
-                            } else break :blk try self.env.pushMalformed(Expr.Idx, Diagnostic{ .crash_expects_string = .{
-                                .region = work.block_region,
-                            } });
-                        };
-                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, .scratch, CanonicalizedExpr{ .idx = crash_expr, .free_vars = DataSpan.empty() });
-                        try stacks.pushFinishBlock(frame_allocator, .{
+                        try stacks.pushFinishBlockCrashStmt(frame_allocator, .{
                             .block = work,
-                            .has_final_expr = true,
+                            .next = next,
+                            .region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region),
+                            .ast_expr = crash_stmt.expr,
+                            .final_expr = true,
                         });
+                        try stacks.pushParse(frame_allocator, .{ .idx = crash_stmt.expr, .target = .scratch });
                     },
                     .decl, .@"var", .expect, .@"for", .@"while", .@"break", .import, .file_import, .type_decl, .type_anno, .malformed => unreachable,
                 }
@@ -11150,33 +11124,14 @@ fn runExprKernel(
                     try stacks.pushParse(frame_allocator, .{ .idx = expr_stmt.expr, .target = .scratch });
                 },
                 .crash => |c| {
-                    const region = self.parse_ir.tokenizedRegionToRegion(c.region);
-                    const mb_msg_literal = blk: {
-                        const msg_expr = self.parse_ir.store.getExpr(c.expr);
-                        if (msg_expr == .string) {
-                            const parts = self.parse_ir.store.exprSlice(msg_expr.string.parts);
-                            if (parts.len > 0) {
-                                const first_part = self.parse_ir.store.getExpr(parts[0]);
-                                if (first_part == .string_part) {
-                                    const part_text = self.parse_ir.resolve(first_part.string_part.token);
-                                    break :blk try self.env.insertString(part_text);
-                                }
-                            }
-                            break :blk try self.env.insertString("crash");
-                        } else break :blk null;
-                    };
-
-                    const stmt_idx = if (mb_msg_literal) |msg_literal|
-                        try self.env.addStatement(Statement{ .s_crash = .{
-                            .msg = msg_literal,
-                        } }, region)
-                    else
-                        try self.env.pushMalformed(Statement.Idx, Diagnostic{ .crash_expects_string = .{
-                            .region = region,
-                        } });
-
-                    try self.addBlockStatement(blockContextFromState(work), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() });
-                    try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next });
+                    try stacks.pushFinishBlockCrashStmt(frame_allocator, .{
+                        .block = work,
+                        .next = next,
+                        .region = self.parse_ir.tokenizedRegionToRegion(c.region),
+                        .ast_expr = c.expr,
+                        .final_expr = false,
+                    });
+                    try stacks.pushParse(frame_allocator, .{ .idx = c.expr, .target = .scratch });
                 },
                 .dbg => |d| {
                     try stacks.pushFinishBlockDbgStmt(frame_allocator, .{
@@ -11462,6 +11417,26 @@ fn runExprKernel(
                     .expr = expr.idx,
                 } }, state.region);
                 try self.addBlockStatement(blockContextFromState(state.block), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars });
+                try stacks.pushBlockNext(frame_allocator, .{ .block = state.block, .next = state.next });
+            }
+
+            continue :expr_kernel_loop .dispatch;
+        },
+        .finish_block_crash_stmt => {
+            const state = stacks.takeFinishBlockCrashStmt();
+            const result_start = child_slots.items.len - 1;
+            const msg = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const crash_expr = try self.addCrashExpr(msg.idx, state.region);
+            const can_crash = CanonicalizedExpr{ .idx = crash_expr, .free_vars = msg.free_vars };
+            child_slots.shrinkRetainingCapacity(state.block.result_start);
+            if (state.final_expr) {
+                const block_expr = try self.finishBlockState(state.block, can_crash);
+                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, block_expr);
+            } else {
+                const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
+                    .expr = crash_expr,
+                } }, state.region);
+                try self.addBlockStatement(blockContextFromState(state.block), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = msg.free_vars });
                 try stacks.pushBlockNext(frame_allocator, .{ .block = state.block, .next = state.next });
             }
 
@@ -15437,6 +15412,7 @@ const ExprKernelLabel = enum {
     finish_block_expr_stmt,
     finish_block_final_expr,
     finish_block_dbg_stmt,
+    finish_block_crash_stmt,
     finish_block_expect_stmt,
     finish_block_return_stmt,
     finish_block_var_stmt,
@@ -15538,6 +15514,14 @@ const ExprFinishBlockFinalExprWork = struct {
 };
 
 const ExprFinishBlockDbgStmtWork = struct {
+    block: BlockState,
+    next: usize,
+    region: Region,
+    ast_expr: AST.Expr.Idx,
+    final_expr: bool,
+};
+
+const ExprFinishBlockCrashStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
@@ -15905,6 +15889,7 @@ const ExprKernelWork = struct {
     finish_block_expr_stmt: std.ArrayList(ExprFinishBlockExprStmtWork) = .empty,
     finish_block_final_expr: std.ArrayList(ExprFinishBlockFinalExprWork) = .empty,
     finish_block_dbg_stmt: std.ArrayList(ExprFinishBlockDbgStmtWork) = .empty,
+    finish_block_crash_stmt: std.ArrayList(ExprFinishBlockCrashStmtWork) = .empty,
     finish_block_expect_stmt: std.ArrayList(ExprFinishBlockExpectStmtWork) = .empty,
     finish_block_return_stmt: std.ArrayList(ExprFinishBlockReturnStmtWork) = .empty,
     finish_block_var_stmt: std.ArrayList(ExprFinishBlockVarStmtWork) = .empty,
@@ -15960,6 +15945,7 @@ const ExprKernelWork = struct {
             .finish_block_expr_stmt => _ = self.takeFinishBlockExprStmt(),
             .finish_block_final_expr => _ = self.takeFinishBlockFinalExpr(),
             .finish_block_dbg_stmt => _ = self.takeFinishBlockDbgStmt(),
+            .finish_block_crash_stmt => _ = self.takeFinishBlockCrashStmt(),
             .finish_block_expect_stmt => _ = self.takeFinishBlockExpectStmt(),
             .finish_block_return_stmt => _ = self.takeFinishBlockReturnStmt(),
             .finish_block_var_stmt => _ = self.takeFinishBlockVarStmt(),
@@ -16032,6 +16018,7 @@ const ExprKernelWork = struct {
                 .finish_block_expr_stmt,
                 .finish_block_final_expr,
                 .finish_block_dbg_stmt,
+                .finish_block_crash_stmt,
                 .finish_block_expect_stmt,
                 .finish_block_return_stmt,
                 .finish_block_var_stmt,
@@ -16091,6 +16078,7 @@ const ExprKernelWork = struct {
         self.finish_block_expr_stmt.deinit(allocator);
         self.finish_block_final_expr.deinit(allocator);
         self.finish_block_dbg_stmt.deinit(allocator);
+        self.finish_block_crash_stmt.deinit(allocator);
         self.finish_block_expect_stmt.deinit(allocator);
         self.finish_block_return_stmt.deinit(allocator);
         self.finish_block_var_stmt.deinit(allocator);
@@ -16148,6 +16136,7 @@ const ExprKernelWork = struct {
         self.finish_block_expr_stmt.clearRetainingCapacity();
         self.finish_block_final_expr.clearRetainingCapacity();
         self.finish_block_dbg_stmt.clearRetainingCapacity();
+        self.finish_block_crash_stmt.clearRetainingCapacity();
         self.finish_block_expect_stmt.clearRetainingCapacity();
         self.finish_block_return_stmt.clearRetainingCapacity();
         self.finish_block_var_stmt.clearRetainingCapacity();
@@ -16255,6 +16244,12 @@ const ExprKernelWork = struct {
         try self.finish_block_dbg_stmt.append(allocator, item);
         errdefer _ = self.finish_block_dbg_stmt.pop();
         try self.pushLabel(allocator, .finish_block_dbg_stmt, self.current_target);
+    }
+
+    inline fn pushFinishBlockCrashStmt(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishBlockCrashStmtWork) std.mem.Allocator.Error!void {
+        try self.finish_block_crash_stmt.append(allocator, item);
+        errdefer _ = self.finish_block_crash_stmt.pop();
+        try self.pushLabel(allocator, .finish_block_crash_stmt, self.current_target);
     }
 
     inline fn pushFinishBlockExpectStmt(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishBlockExpectStmtWork) std.mem.Allocator.Error!void {
@@ -16547,6 +16542,10 @@ const ExprKernelWork = struct {
 
     inline fn takeFinishBlockDbgStmt(self: *ExprKernelWork) ExprFinishBlockDbgStmtWork {
         return self.finish_block_dbg_stmt.pop() orelse unreachable;
+    }
+
+    inline fn takeFinishBlockCrashStmt(self: *ExprKernelWork) ExprFinishBlockCrashStmtWork {
+        return self.finish_block_crash_stmt.pop() orelse unreachable;
     }
 
     inline fn takeFinishBlockExpectStmt(self: *ExprKernelWork) ExprFinishBlockExpectStmtWork {

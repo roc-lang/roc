@@ -43752,7 +43752,20 @@ const BodyContext = struct {
             },
             .tuple_access => |access| try self.lowerDivergentExprForEffectDataAtType(access.tuple, ty),
             .for_ => |for_| try self.lowerDivergentExprForEffectDataAtType(for_.expr, ty),
-            .run_low_level => |low_level| try self.lowerFirstDivergentExprForEffectDataAtType(low_level.args, ty),
+            .run_low_level => |low_level| blk: {
+                for (low_level.args) |arg| {
+                    if (self.checkedExprDivergesInLoweredRuntime(arg)) {
+                        break :blk try self.lowerDivergentExprForEffectDataAtType(arg, ty);
+                    }
+                }
+                if (low_level.op != .crash) {
+                    Common.invariant("checked low-level expression was marked divergent but no divergent argument was found");
+                }
+                break :blk .{ .low_level = .{
+                    .op = low_level.op,
+                    .args = try self.lowerExprSpan(low_level.args),
+                } };
+            },
             .dispatch_call => |plan| try self.lowerDivergentDispatchForEffectDataAtType(plan, ty),
             .interpolation => |interpolation| try self.lowerDivergentInterpolationForEffectDataAtType(interpolation, ty),
             .method_eq => |plan| try self.lowerDivergentDispatchForEffectDataAtType(plan, ty),

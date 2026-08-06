@@ -2747,7 +2747,7 @@ const Lowerer = struct {
             .jump => |jump| try self.lowerJump(jump),
             .return_ => |ret| try self.lowerReturn(ret),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
+                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
             } }),
             .comptime_branch_taken => |taken| try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
                 .site = try self.lowerComptimeSite(taken.site),
@@ -4524,6 +4524,15 @@ const Lowerer = struct {
 
     fn lowerLowLevelInto(self: *Lowerer, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: Lifted.Span(Lifted.ExprId), next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const args = self.solved.lifted.exprSpan(span);
+        if (op == .crash) {
+            if (args.len != 1) Common.invariant("crash low-level operation received the wrong number of arguments");
+            const lowered = try self.lowerExprsToTemps(args);
+            defer lowered.deinit(self.allocator);
+            const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .local = lowered.ids[0] },
+            } });
+            return try self.prependExprs(lowered, crash_stmt);
+        }
         if (op == .dict_pseudo_seed and self.dict_seed_mode == .comptime_zero) {
             if (args.len != 0) Common.invariant("Dict seed low-level operation received arguments");
             return try self.result.store.addCFStmt(.{ .assign_literal = .{
@@ -5114,7 +5123,7 @@ const Lowerer = struct {
             },
             .return_ => |ret| try self.lowerReturn(ret),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
+                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
             } }),
         };
     }

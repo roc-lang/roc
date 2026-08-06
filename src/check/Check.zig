@@ -14636,9 +14636,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_run_low_level => |run_ll| {
             self.markCurrentHoistObservableEffect();
             // Check each argument expression in the run_low_level node
-            for (self.cir.store.exprSlice(run_ll.args)) |arg_idx| {
+            const args = self.cir.store.exprSlice(run_ll.args);
+            for (args) |arg_idx| {
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(arg_idx, env, child_expected) or does_fx;
+            }
+            if (run_ll.op == .crash) {
+                std.debug.assert(args.len == 1);
+                const msg_var = ModuleEnv.varFrom(args[0]);
+                const str_var = try self.freshStr(env, self.cir.store.getExprRegion(args[0]));
+                _ = try self.unify(msg_var, str_var, env);
+                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
             }
         },
         .e_runtime_error => {
@@ -15282,6 +15290,7 @@ fn isGeneralizableValueBinding(
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     const expr = self.cir.store.getExpr(expr_idx);
     if (expr == .e_crash or expr == .e_ellipsis or expr == .e_expect_err or expr == .e_break) return true;
+    if (expr == .e_run_low_level and expr.e_run_low_level.op == .crash) return true;
     if (expr == .e_block) return self.exprAlwaysCrashes(expr.e_block.final_expr);
     if (expr == .e_if) {
         const if_expr = expr.e_if;

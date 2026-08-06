@@ -51,6 +51,27 @@ test "Import.Store deduplicates module names" {
     try testing.expect(storeContainsModule(&store, &common, "other.Module"));
 }
 
+test "Import.Store deduplicates through interned string indices" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var common = try CommonEnv.init(gpa, "");
+    defer common.deinit(gpa);
+
+    var store = Import.Store.init();
+    defer store.deinit(gpa);
+
+    const string_idx = try common.insertString(gpa, "test.Module");
+    const import_idx = try store.getOrPut(gpa, &common, "test.Module");
+    const ident_idx = try common.insertIdent(gpa, base.Ident.for_text("Module"));
+    const duplicate_idx = try store.getOrPutWithIdent(gpa, &common, "test.Module", ident_idx);
+
+    try testing.expectEqual(import_idx, duplicate_idx);
+    try testing.expectEqual(string_idx, store.imports.items.items[@intFromEnum(import_idx)]);
+    try testing.expectEqual(import_idx, store.map.get(string_idx).?);
+    try testing.expectEqual(ident_idx, store.getIdentIdx(import_idx).?);
+}
+
 test "Import.Store empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;

@@ -783,7 +783,7 @@ pub fn compute(
             },
             .jump => {},
             .ret => |stmt| analysis.useWhole(stmt.value),
-            .crash => {},
+            .crash => |stmt| if (stmt.msg.localId()) |message| analysis.useWhole(message),
         }
     }
 

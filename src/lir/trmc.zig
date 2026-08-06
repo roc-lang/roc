@@ -796,7 +796,8 @@ const Detection = struct {
             .str_match_set => true,
             .ret => |s| c.chainContains(s.value),
             .expect_err => |s| c.chainContains(s.message),
-            .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
+            .crash => |s| if (s.msg.localId()) |message| c.chainContains(message) else false,
+            .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
         };
     }
 

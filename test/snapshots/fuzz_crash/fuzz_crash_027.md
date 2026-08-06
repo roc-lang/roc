@@ -1856,7 +1856,11 @@ main! = |_| { # Yeah Ie
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-crash (msg "Unreachtement"))
+				(s-expr
+					(e-run-low-level (op "crash")
+						(args
+							(e-string
+								(e-literal (string "Unreachtement"))))))
 				(s-let
 					(p-assign (ident "tag_with"))
 					(e-tag (name "Ok")
@@ -1870,7 +1874,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1094) (dispatcher-var 315)
+						(e-interpolation (constraint-fn-var 1107) (dispatcher-var 318)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
