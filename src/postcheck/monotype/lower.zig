@@ -19569,7 +19569,17 @@ const BodyContext = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
-            .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
+            // A callable whose definition checker error recovery replaced with
+            // a runtime error crashes at compile-time evaluation, storing the
+            // crash as its constant result. Lower the use as that crash so
+            // compilation completes and the recorded check error renders.
+            .const_node => |node| switch (view.const_store.get(node)) {
+                .crash => |message| try self.runtimeCrashExprAtCell(
+                    DraftTypeCell.fromGraphNode(request_fn_node),
+                    view.const_store.strBytes(message),
+                ),
+                else => try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
+            },
             .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
             .expect => Common.invariant("callable eval binding root output an expect payload"),
         };
