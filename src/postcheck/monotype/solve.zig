@@ -5742,7 +5742,7 @@ test "opaque interface relation preserves distinct public and generated-private 
     try std.testing.expectEqual(field_name, projected.fields[0].name);
 }
 
-test "opaque interface relation preserves forced-dynamic iterator identity" {
+test "checked type mapping preserves forced-dynamic iterator identity" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -5787,7 +5787,7 @@ test "opaque interface relation preserves forced-dynamic iterator identity" {
         },
     } });
 
-    _ = try graph.applyProducedTypeToRequest(public, private);
+    _ = try graph.applyCheckedTypeMapping(public, private);
 
     try std.testing.expect(!graph.sameClass(public, private));
     try std.testing.expect(graph.sameClass(public_item, private_item));

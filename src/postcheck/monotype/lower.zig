@@ -15028,8 +15028,9 @@ const BodyContext = struct {
         }
     }
 
-    /// Constrain a checked type to a Monotype: instantiate the checked type
-    /// into the graph and unify with the (linked or imported) Monotype node.
+    /// Apply a checker-authored type view to an already-finished exact
+    /// Monotype. The checked instantiation receives its substitution without
+    /// merging a checked-public root into an exact generated root.
     fn constrainTypeToMono(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -15037,7 +15038,10 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        try self.graph.unify(try self.instNode(checked_ty), try self.graph.importMono(mono_ty));
+        _ = try self.graph.applyCheckedTypeMapping(
+            try self.instNode(checked_ty),
+            try self.graph.importMono(mono_ty),
+        );
     }
 
     fn requireClosedCheckedType(

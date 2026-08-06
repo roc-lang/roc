@@ -2720,10 +2720,13 @@ digests. Every type-store translation copies them. A later stage never derives a
 tier, producer kind, or mint depth from lowered type shape.
 
 For a minted iterator, Monotype rewrites the public recursive `rest` type in the
-step result to the minted self type and records concrete adapter components as
-additional nominal arguments. Each adapter layer therefore embeds its concrete
-predecessor by value. A bounded chain is a finite tower of distinct nominal
-identities rather than one public nominal with a recursive self edge.
+step result to the minted self type. Concrete adapter inputs remain temporary
+producer provenance until depth and stable identity are finalized; they never
+become durable nominal arguments. Each generated iterator keeps exactly the
+public semantic item argument, while its content-addressed definition identity
+distinguishes the concrete adapter chain. A bounded chain is therefore a finite
+tower of distinct nominal identities rather than one public nominal with a
+recursive self edge.
 
 The representation producer is `generatedIteratorNode` in
 `src/postcheck/monotype/lower.zig`, together with
