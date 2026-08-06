@@ -13750,9 +13750,10 @@ pub const ProcedureUseTemplate = struct {
     /// Checking proved that this procedure consumes or produces a runtime
     /// representation whose exact Monotype graph must remain its signature.
     graph_participating: bool = false,
-    /// Evaluating this procedure can mint a new exact Monotype result. Such a
-    /// body must finish in its caller's live graph so the produced result cell
-    /// is available before that graph is sealed.
+    /// Evaluating this procedure can return an exact Monotype selected by its
+    /// body, including an exact caller-supplied argument. Such a body must
+    /// finish in its caller's live graph so the produced result cell is
+    /// available before that graph is sealed.
     produces_exact_graph: bool = false,
     /// Whether exact result production depends on the concrete dispatch
     /// evidence supplied to this specialization.
@@ -18040,12 +18041,13 @@ pub const CheckedProcedureTemplate = struct {
     top_level_value_uses: TopLevelUseSummaryRef,
     nested_proc_sites: NestedProcSiteTableRef,
     target: ProcTarget,
-    /// The checked return flow can mint a new exact Monotype representation.
-    /// Monotype consumes this fact directly; it never rediscovers it by
-    /// searching a lowered type graph for generated nodes.
+    /// The checked return flow can select an exact Monotype representation
+    /// created by the body or supplied by the caller. Monotype consumes this
+    /// fact directly; it never rediscovers it by searching a lowered type graph
+    /// for generated nodes.
     produces_exact_graph: bool = false,
     /// The checked return flow invokes a specialization-selected method whose
-    /// concrete evidence decides whether it mints an exact representation.
+    /// concrete evidence decides whether it returns an exact representation.
     exact_graph_from_evidence: bool = false,
     hosted_try_adapter: ?HostedTryAdapterCapability = null,
     /// The scheme's dispatch obligations in canonical order (a range into

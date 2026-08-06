@@ -3907,6 +3907,19 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: record rest preserves an exact iterator field",
+        .source_kind = .module,
+        .source =
+        \\make_record = |values| { ignored: "drop", iterator: values.iter() }
+        \\
+        \\main = {
+        \\    { ignored: _, ..rest } = make_record([1.I64, 2, 3])
+        \\    Iter.fold(rest.iterator, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: generic procedure passes through exact iterator",
         .source_kind = .module,
         .source =

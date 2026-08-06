@@ -5429,7 +5429,10 @@ const Builder = struct {
         defer nested_ctx.deinit();
         const root_node = try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
-            try nested_ctx.graph.unify(root_node, try nested_ctx.lowerExprTypeNode(expr_id));
+            _ = try nested_ctx.graph.applyCheckedTypeMapping(
+                root_node,
+                try nested_ctx.lowerExprTypeNode(expr_id),
+            );
             try nested_ctx.instantiateTemplateDispatchRelations(
                 nested_ctx.view.templates.get(nested_ctx.owner_template.template),
                 scope,
@@ -17420,8 +17423,9 @@ const BodyContext = struct {
         child: checked.CheckedExprId,
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const value_node = try self.lowerExprTypeNode(child);
-        const value = try self.lowerExprAtTypeCell(child, DraftTypeCell.fromGraphNode(value_node));
+        const value_request_node = try self.lowerExprTypeNode(child);
+        const value = try self.lowerExprAtTypeCell(child, DraftTypeCell.fromGraphNode(value_request_node));
+        const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
         return if (try self.graph.typeIsResolved(value_node))
             try self.inspectCall(value, try self.activeTypeFromNode(value_node), str_ty)
         else
@@ -24863,9 +24867,13 @@ const BodyContext = struct {
             checked_args[0],
             DraftTypeCell.fromGraphNode(iterator_node),
         );
+        const produced_iterator_node = try self.exprTypeCell(iterator).toGraphNode(self.graph);
+        if (!self.isGeneratedIteratorEvidenceNode(produced_iterator_node)) {
+            Common.invariant("generated iterator next argument did not produce generated iterator evidence");
+        }
         return .{
             .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
-            .data = try self.lowerGeneratedIteratorNextData(iterator, iterator_node),
+            .data = try self.lowerGeneratedIteratorNextData(iterator, produced_iterator_node),
         };
     }
 
@@ -40868,7 +40876,6 @@ const BodyContext = struct {
         rest_cell: DraftTypeCell,
         rest_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        try self.relateRecordRestNodeToSource(value_node, rest_node);
         const rest_fields = try self.allocator.dupe(InstField, (try self.graph.recordNodes(rest_node)).fields);
         defer self.allocator.free(rest_fields);
         std.mem.sort(InstField, rest_fields, &self.builder.program.names, instRecordFieldLessThan);
@@ -40889,17 +40896,6 @@ const BodyContext = struct {
         return try self.addExprWithTypeCell(rest_cell, .{
             .record = try self.addFieldExprSpan(fields),
         });
-    }
-
-    fn relateRecordRestNodeToSource(
-        self: *BodyContext,
-        source_node: NodeId,
-        rest_node: NodeId,
-    ) Allocator.Error!void {
-        const rest_fields = (try self.graph.recordNodes(rest_node)).fields;
-        for (rest_fields) |field| {
-            try self.graph.unify(field.ty, try self.graph.recordFieldNode(source_node, field.name));
-        }
     }
 
     fn recordRestNodeForPattern(
@@ -40930,7 +40926,7 @@ const BodyContext = struct {
                 .fields = try self.graph.arena().dupe(InstField, remaining.items),
                 .ext = try self.graph.newNode(.empty_record),
             } });
-        try self.graph.unify(
+        _ = try self.graph.applyCheckedTypeMapping(
             try self.lowerTypeNode(self.view.bodies.pattern(rest_pattern).ty),
             rest_node,
         );
@@ -41057,8 +41053,13 @@ const BodyContext = struct {
             body: DraftExprId = undefined,
         };
 
-        const scrutinee_node = try self.lowerExprTypeNode(match.cond);
-        const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node);
+        const scrutinee_request_node = try self.lowerExprTypeNode(match.cond);
+        const scrutinee_request_cell = DraftTypeCell.fromGraphNode(scrutinee_request_node);
+        const scrutinee = if (try self.nodeIsProvenUninhabited(scrutinee_request_node))
+            try self.lowerUninhabitedScrutineeAtTypeCell(match.cond, scrutinee_request_cell)
+        else
+            try self.lowerExprAtTypeCell(match.cond, scrutinee_request_cell);
+        const scrutinee_node = try self.exprTypeCell(scrutinee).toGraphNode(self.graph);
         const branches = try self.allocator.alloc(DraftBranch, branchCount(match.branches));
         defer self.allocator.free(branches);
         var pending = std.ArrayListUnmanaged(PendingBranch).empty;
@@ -41113,10 +41114,6 @@ const BodyContext = struct {
             }
         }
 
-        const scrutinee = if (try self.nodeIsProvenUninhabited(scrutinee_node))
-            try self.lowerUninhabitedScrutineeAtTypeCell(match.cond, scrutinee_cell)
-        else
-            try self.lowerExprAtTypeCell(match.cond, scrutinee_cell);
         var index: usize = 0;
         for (pending.items) |*entry| {
             entry.ctx.reuse_pre_registered_pattern_binders = true;
@@ -42364,10 +42361,14 @@ const BodyContext = struct {
         };
         if (!self.recordDestructsNeedExplicitRest(destructs)) return false;
 
-        const value_node = try self.lowerExprTypeNode(expr);
-        const value_cell = DraftTypeCell.fromGraphNode(value_node);
+        const value_request_node = try self.lowerExprTypeNode(expr);
+        const value = try self.lowerExprAtTypeCell(
+            expr,
+            DraftTypeCell.fromGraphNode(value_request_node),
+        );
+        const value_cell = self.exprTypeCell(value);
+        const value_node = try value_cell.toGraphNode(self.graph);
         try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, value_cell);
-        const value = try self.lowerExprAtTypeCell(expr, value_cell);
         const source_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
             .pat = try self.addPatWithTypeCell(value_cell, .{ .bind = source_local }),

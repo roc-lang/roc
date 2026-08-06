@@ -288,7 +288,8 @@ pub const ProcedureMethodTarget = struct {
     /// `MethodTarget.def_idx` when an associated method is bound by reference.
     source_def_idx: CIR.Def.Idx,
     runtime_target: ProcedureRuntimeTarget = .procedure,
-    /// Evaluating this target can mint a new exact Monotype result.
+    /// Evaluating this target can return an exact Monotype selected by its
+    /// body or caller-supplied arguments.
     produces_exact_graph: bool = false,
     /// Whether exact result production depends on this target's evidence.
     exact_graph_from_evidence: bool = false,
