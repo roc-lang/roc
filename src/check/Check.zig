@@ -22970,8 +22970,12 @@ fn closeUnquantifiedTagRowExts(self: *Self, env: *Env) std.mem.Allocator.Error!v
             const stmt = self.cir.store.getStatement(@enumFromInt(raw_node));
             if (stmt != .s_decl) continue;
             const decl = stmt.s_decl;
-            const decl_expr = self.cir.store.getExpr(decl.expr);
-            if (decl_expr != .e_lambda and decl_expr != .e_closure) continue;
+            // Any generalized local decl is a scheme root, not only function
+            // bindings: tier-2 generalization also gives annotated value
+            // bindings quantified row extensions (spelled out or minted by
+            // polarity opening). Closing those exts desyncs the binder's
+            // serialized row from widened uses, and Monotype replays the
+            // recorded use/binder relations as strict equalities.
             const pattern_var = ModuleEnv.varFrom(decl.pattern);
             if (self.types.resolveVar(pattern_var).desc.rank != .generalized) continue;
             try worklist.append(self.gpa, pattern_var);
