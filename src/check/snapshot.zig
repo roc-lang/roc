@@ -168,6 +168,13 @@ const ByteListRange = struct { start: usize, count: usize };
 const SnapshotFill = struct {
     original_var: types.Var,
     resolved_var: types.Var,
+    /// The polarity of the position this var was requested from: `.pos` at
+    /// the snapshot root, negated through function argument positions,
+    /// preserved everywhere else. The formatted string rendered at
+    /// `finishFrame` starts its polarity walk here, so error messages hide
+    /// implicit output-position openness (`..`) exactly where the full
+    /// type's rendering would.
+    polarity: types.Polarity,
 };
 
 const SnapshotIdentityResult = enum { flex, rigid };
@@ -462,7 +469,7 @@ pub const Store = struct {
             self.seen_vars.clearRetainingCapacity();
         }
 
-        if (!try self.requestVar(store, type_writer, var_)) {
+        if (!try self.requestVar(store, type_writer, var_, .pos)) {
             while (self.frames.items.len > frames_base) {
                 const top = &self.frames.items[self.frames.items.len - 1];
                 // A step either suspends after requesting exactly one child
@@ -495,7 +502,7 @@ pub const Store = struct {
     /// its content immediately (contents with no children) or push the frame
     /// that will record it. Returns true when the result index is already on
     /// the value stack; false when a frame was pushed.
-    fn requestVar(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var) std.mem.Allocator.Error!bool {
+    fn requestVar(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var, polarity: types.Polarity) std.mem.Allocator.Error!bool {
         const resolved = store.resolveVar(var_);
 
         // If we've already reached this variable on the current path, then
@@ -525,7 +532,7 @@ pub const Store = struct {
         // If not, mark it as being visited
         try self.seen_vars.put(self.gpa, resolved.var_, {});
 
-        const fill = SnapshotFill{ .original_var = var_, .resolved_var = resolved.var_ };
+        const fill = SnapshotFill{ .original_var = var_, .resolved_var = resolved.var_, .polarity = polarity };
         switch (resolved.desc.content) {
             .err => {
                 try self.finishFrame(type_writer, fill, SnapshotContent.err);
@@ -616,7 +623,7 @@ pub const Store = struct {
                             frame.backing = decl.backing;
                             frame.stage = .await_backing;
                             try self.frames.append(self.gpa, .{ .nominal = frame });
-                            _ = try self.requestVar(store, type_writer, decl.backing);
+                            _ = try self.requestVar(store, type_writer, decl.backing, polarity);
                             return false;
                         }
                     }
@@ -689,7 +696,7 @@ pub const Store = struct {
         // Here, we run the TypeWriter, writing directly into our backing
         {
             const formatted_strings_start = self.formatted_strings_backing.items.len;
-            type_writer.writeInto(&self.formatted_strings_backing, fill.original_var, .wrap) catch return error.OutOfMemory;
+            type_writer.writeIntoAtPolarity(&self.formatted_strings_backing, fill.original_var, .wrap, fill.polarity) catch return error.OutOfMemory;
             const formatted_strings_end = self.formatted_strings_backing.items.len;
 
             const formatted_range = ByteListRange{
@@ -710,7 +717,7 @@ pub const Store = struct {
                 .head => {
                     if (frame.idx < frame.constraints.len) {
                         frame.stage = .await_fn;
-                        if (!try self.requestVar(store, type_writer, frame.constraints[frame.idx].fn_var)) return false;
+                        if (!try self.requestVar(store, type_writer, frame.constraints[frame.idx].fn_var, frame.fill.polarity)) return false;
                         continue;
                     }
                     const range = try self.static_dispatch_constraints.appendSlice(
@@ -751,7 +758,7 @@ pub const Store = struct {
             switch (frame.stage) {
                 .backing => {
                     frame.stage = .await_backing;
-                    if (!try self.requestVar(store, type_writer, frame.backing)) return false;
+                    if (!try self.requestVar(store, type_writer, frame.backing, frame.fill.polarity)) return false;
                     continue;
                 },
                 .await_backing => {
@@ -765,7 +772,7 @@ pub const Store = struct {
                 .args => {
                     if (frame.idx < frame.args.len) {
                         frame.stage = .await_arg;
-                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx])) return false;
+                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], frame.fill.polarity)) return false;
                         continue;
                     }
                     const args_range = try self.content_indexes.appendSlice(
@@ -795,7 +802,7 @@ pub const Store = struct {
                 .elems => {
                     if (frame.idx < frame.elems.len) {
                         frame.stage = .await_elem;
-                        if (!try self.requestVar(store, type_writer, frame.elems[frame.idx])) return false;
+                        if (!try self.requestVar(store, type_writer, frame.elems[frame.idx], frame.fill.polarity)) return false;
                         continue;
                     }
                     const elems_range = try self.content_indexes.appendSlice(
@@ -827,7 +834,7 @@ pub const Store = struct {
                 .args => {
                     if (frame.idx < frame.args.len) {
                         frame.stage = .await_arg;
-                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx])) return false;
+                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], frame.fill.polarity)) return false;
                         continue;
                     }
                     const args_range = try self.content_indexes.appendSlice(
@@ -859,7 +866,8 @@ pub const Store = struct {
                 .args => {
                     if (frame.idx < frame.args.len) {
                         frame.stage = .await_arg;
-                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx])) return false;
+                        // Argument positions negate the surrounding polarity.
+                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], frame.fill.polarity.flip())) return false;
                         continue;
                     }
                     // The argument run is committed before the return type is
@@ -870,7 +878,7 @@ pub const Store = struct {
                     );
                     self.scratch_content.clearFrom(frame.scratch_top);
                     frame.stage = .await_ret;
-                    if (!try self.requestVar(store, type_writer, frame.ret)) return false;
+                    if (!try self.requestVar(store, type_writer, frame.ret, frame.fill.polarity)) return false;
                     continue;
                 },
                 .await_arg => {
@@ -925,7 +933,7 @@ pub const Store = struct {
                     if (frame.idx < frame.source_fields.count) {
                         frame.stage = .await_field;
                         const field = sourceRecordField(store, frame.source_fields, frame.idx);
-                        if (!try self.requestVar(store, type_writer, field.presence.typeVar())) return false;
+                        if (!try self.requestVar(store, type_writer, field.presence.typeVar(), frame.fill.polarity)) return false;
                         continue;
                     }
                     // The field run is committed before the extension is
@@ -936,7 +944,7 @@ pub const Store = struct {
                     );
                     self.scratch_record_fields.clearFrom(frame.scratch_top);
                     frame.stage = .await_ext;
-                    if (!try self.requestVar(store, type_writer, frame.ext)) return false;
+                    if (!try self.requestVar(store, type_writer, frame.ext, frame.fill.polarity)) return false;
                     continue;
                 },
                 .await_field => {
@@ -967,7 +975,7 @@ pub const Store = struct {
                     if (frame.idx < frame.source_fields.count) {
                         frame.stage = .await_field;
                         const field = sourceRecordField(store, frame.source_fields, frame.idx);
-                        if (!try self.requestVar(store, type_writer, field.presence.typeVar())) return false;
+                        if (!try self.requestVar(store, type_writer, field.presence.typeVar(), frame.fill.polarity)) return false;
                         continue;
                     }
                     const fields_range = try self.record_fields.appendSlice(
@@ -1006,7 +1014,7 @@ pub const Store = struct {
                         self.scratch_tags.clearFrom(frame.tags_scratch_top);
                         frame.tags_range = tags_range;
                         frame.stage = .await_ext;
-                        if (!try self.requestVar(store, type_writer, frame.ext)) return false;
+                        if (!try self.requestVar(store, type_writer, frame.ext, frame.fill.polarity)) return false;
                         continue;
                     }
                     frame.content_scratch_top = self.scratch_content.top();
@@ -1020,7 +1028,7 @@ pub const Store = struct {
                     const tag_args_slice = store.sliceVars(tag.args);
                     if (frame.arg_idx < tag_args_slice.len) {
                         frame.stage = .await_tag_arg;
-                        if (!try self.requestVar(store, type_writer, tag_args_slice[frame.arg_idx])) return false;
+                        if (!try self.requestVar(store, type_writer, tag_args_slice[frame.arg_idx], frame.fill.polarity)) return false;
                         continue;
                     }
                     const tag_args_range = try self.content_indexes.appendSlice(

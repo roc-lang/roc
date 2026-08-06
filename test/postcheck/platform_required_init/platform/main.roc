@@ -1,8 +1,8 @@
 platform ""
     requires {
         [Model : model] for program : {
-            init! : Host => Try(model, [Exit(I64), ..]),
-            render! : model, Host => Try(model, [Exit(I64), ..]),
+            init! : Host => Try(model, [Exit(I64)]),
+            render! : model, Host => Try(model, [Exit(I64)]),
         }
     }
     exposes [Host]

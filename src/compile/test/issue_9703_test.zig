@@ -17,7 +17,7 @@ test "issue 9703: recursive list effect with explicit root annotation lowers to 
         \\render! = |model, _|
         \\    Ok({ pins: f!(model.pins, model.pins, model.pins) })
         \\
-        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! : List(Str) => Try({}, [Exit(I8)])
         \\main! = |_args| {
         \\    model : Model
         \\    model = { pins: [] }

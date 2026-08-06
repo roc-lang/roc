@@ -283,9 +283,9 @@ main! = |_| {
 	(defs
 		(patt (type "Str => {}"))
 		(patt (type "List(a), U64, U64 -> List(a)"))
-		(patt (type "_arg -> [Ok({}), ..]")))
+		(patt (type "_arg -> [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "List(a), U64, U64 -> List(a)"))
-		(expr (type "_arg -> [Ok({}), ..]"))))
+		(expr (type "_arg -> [Ok({})]"))))
 ~~~

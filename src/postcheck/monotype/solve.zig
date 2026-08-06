@@ -1937,6 +1937,70 @@ pub const InstGraph = struct {
         });
     }
 
+    /// Ground every reachable unresolved cell that carries a checked default
+    /// to the content final sealing would materialize anyway. Stored codec
+    /// restores must emit bodies from a resolved view before the graph
+    /// freezes; with implicitly open output rows (polarity) their request
+    /// rows can still carry live defaults at that point, so this commits the
+    /// defaults early. Cells with no default are left untouched and still
+    /// fail the resolved-view invariant loudly.
+    pub fn groundUnresolvedDefaults(self: *InstGraph, root: NodeId) Allocator.Error!void {
+        self.requireRelationProduction();
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |raw_node| {
+            const node = self.find(raw_node);
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            switch (self.nodes.items[@intFromEnum(node)]) {
+                .redirect => unreachable,
+                .unresolved => |variable| {
+                    if (variable.numeric_default_phase) |phase| {
+                        if (checked.literal_defaulting.defaultTargetForPhase(phase)) |target| {
+                            try self.setContent(node, switch (target) {
+                                .dec => .{ .primitive = .dec },
+                                .str => .{ .primitive = .str },
+                            });
+                        }
+                        continue;
+                    }
+                    if (variable.row_default) |row_default| {
+                        try self.setContent(node, switch (row_default) {
+                            .empty_record => .empty_record,
+                            .empty_tag_union => .empty_tag_union,
+                        });
+                    }
+                },
+                .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .func => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |row| {
+                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .record => |row| {
+                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .named => |named| {
+                    try pending.appendSlice(self.allocator, named.args);
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
+                    for (named.declared_order) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding| try pending.append(self.allocator, padding),
+                    };
+                },
+            }
+        }
+    }
+
     /// Whether evidence finalization has explicit producer provenance for every
     /// node in this live type. Numeric and row defaults are direct closure
     /// evidence. A plain checked variable is provisionally sealable as the
@@ -4194,12 +4258,12 @@ pub const InstGraph = struct {
         }
     }
 
-    const FlatTagRow = struct {
+    pub const FlatTagRow = struct {
         tags: []InstTag,
         ext: NodeId,
     };
 
-    const FlatRecordRow = struct {
+    pub const FlatRecordRow = struct {
         fields: []InstField,
         ext: NodeId,
     };
@@ -4207,7 +4271,7 @@ pub const InstGraph = struct {
     /// Chase a tag row's extension chain and rewrite the root to a single
     /// flattened row. The returned extension is unresolved (open), an empty tag
     /// union (closed), or compressed out.
-    fn flattenTagRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatTagRow {
+    pub fn flattenTagRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatTagRow {
         const root = self.find(raw_root);
         const root_content = self.nodes.items[@intFromEnum(root)];
         if (root_content != .tag_union) Common.invariant("instantiation flattened a non-tag-union row");
@@ -4266,7 +4330,7 @@ pub const InstGraph = struct {
         return .{ .tags = flat_tags, .ext = ext };
     }
 
-    fn flattenRecordRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatRecordRow {
+    pub fn flattenRecordRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatRecordRow {
         const root = self.find(raw_root);
         const root_content = self.nodes.items[@intFromEnum(root)];
         if (root_content != .record) Common.invariant("instantiation flattened a non-record row");

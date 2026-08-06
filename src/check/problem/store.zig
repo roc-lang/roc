@@ -249,6 +249,7 @@ pub const Store = struct {
                     .circular_value_definition,
                     .literal_defaulted,
                     .redundant_pattern,
+                    .redundant_open_tag_union,
                     .unmatchable_pattern,
                     .unreachable_code,
                     .comptime_unused_branch,

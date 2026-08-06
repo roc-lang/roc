@@ -74,6 +74,7 @@ pub const Problem = union(enum) {
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
+    redundant_open_tag_union: RedundantOpenTagUnion,
     unmatchable_pattern: UnmatchablePattern,
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
@@ -179,6 +180,14 @@ pub const EffectfulExpect = struct {
 
 /// Warning for an effectful function binding whose name does not end in `!`.
 pub const EffectfulFunctionName = struct {
+    region: base.Region,
+};
+
+/// Warning for an explicit `..` on a tag union in an output position of an
+/// annotation. Tag unions in output positions are implicitly open, so the
+/// `..` is redundant there.
+pub const RedundantOpenTagUnion = struct {
+    /// The region of the `..` itself
     region: base.Region,
 };
 

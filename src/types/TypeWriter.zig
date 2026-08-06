@@ -85,6 +85,14 @@ import_mapping: ?*const import_mapping_mod.ImportMapping,
 /// Optional resolver for rendering a defaulted field's source expression.
 mb_default_source: ?DefaultSourceFn = null,
 default_source_ctx: *const anyopaque = undefined,
+/// The polarity of the position currently being written: `.pos` at the root,
+/// negated through function argument positions. Tag unions in output
+/// positions are implicitly open, so their anonymous flex extensions are not
+/// displayed as `..` there (openness is meaningful — and shown — in input
+/// positions and for shared or named extensions). Maintained by the func
+/// frame: each `FuncFrame` saves the surrounding polarity and re-asserts the
+/// stage-appropriate value before every child it requests.
+polarity: types_mod.Polarity,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
 
@@ -194,6 +202,10 @@ const FuncFrame = struct {
     ret: Var,
     arrow: []const u8,
     wrap_in_parens: bool,
+    /// The polarity surrounding this function. Argument positions negate it;
+    /// the return position restores it. Re-asserted before every child
+    /// request so suspension and resumption cannot leave a stale value.
+    saved_polarity: types_mod.Polarity,
     idx: u32 = 0,
     stage: enum { args, ret, done } = .args,
 };
@@ -288,6 +300,7 @@ pub fn initFromParts(
         .import_mapping = import_mapping,
         .mb_default_source = null,
         .default_source_ctx = undefined,
+        .polarity = .pos,
         .gpa = gpa,
     };
 }
@@ -322,6 +335,7 @@ pub fn setImportMapping(self: *TypeWriter, import_mapping: ?*const import_mappin
 
 /// Reset type writer state
 pub fn reset(self: *TypeWriter) void {
+    self.polarity = .pos;
     self.buf.clearRetainingCapacity();
     self.seen.clearRetainingCapacity();
     self.frames.clearRetainingCapacity();
@@ -414,7 +428,15 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) error{ OutOfMemory, W
 /// This APPENDS to the provided buffer
 /// Internal TypeWriter state will be reset before processing
 pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format) error{ OutOfMemory, WriteFailed }!void {
+    return self.writeIntoAtPolarity(into, var_, format, .pos);
+}
+
+/// `writeInto`, starting the polarity walk at `polarity` instead of `.pos`.
+/// Used when the caller knows the polarity of the position `var_` occupies
+/// (eg error snapshots of types nested inside a larger type).
+pub fn writeIntoAtPolarity(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format, polarity: types_mod.Polarity) error{ OutOfMemory, WriteFailed }!void {
     self.reset();
+    self.polarity = polarity;
 
     var aw = collections_mod.managedWriter(into);
 
@@ -794,6 +816,7 @@ fn startFunc(
         .ret = func.ret,
         .arrow = arrow,
         .wrap_in_parens = wrap_in_parens,
+        .saved_polarity = self.polarity,
     } });
     return true;
 }
@@ -950,15 +973,20 @@ fn stepFunc(self: *TypeWriter, writer: *ByteWrite, frame: *FuncFrame, root_var: 
                     if (frame.idx > 0) try writer.writeAll(", ");
                     const arg = self.varAt(frame.args, frame.idx);
                     frame.idx += 1;
+                    // Argument positions negate the surrounding polarity.
+                    self.polarity = frame.saved_polarity.flip();
                     if (!try self.requestVar(writer, arg, .FunctionArgument, root_var)) return false;
                     continue;
                 }
                 try writer.writeAll(frame.arrow);
+                self.polarity = frame.saved_polarity;
                 frame.stage = .ret;
             },
             .ret => {
                 const ret = frame.ret;
                 frame.stage = .done;
+                // The return position preserves the surrounding polarity.
+                self.polarity = frame.saved_polarity;
                 if (!try self.requestVar(writer, ret, .FunctionReturn, root_var)) return false;
             },
             .done => {
@@ -1149,20 +1177,34 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                 frame.stage = .done;
                 switch (frame.ext) {
                     .flex => |flex| {
-                        if (frame.tags_count > 0) try writer.writeAll(", ");
-                        try writer.writeAll("..");
-
-                        if (flex.payload.name) |ident_idx| {
-                            const name = self.getIdent(ident_idx);
-                            // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
-                            if (name.len > 0 and name[0] != '#') {
-                                try writer.writeAll(name);
+                        // An anonymous, unshared, unconstrained flex ext in an
+                        // output position is just that position's implicit
+                        // openness — hide it. Openness is still shown in input
+                        // positions, for named extensions, and when the ext
+                        // var is shared elsewhere in the type (where it
+                        // carries real information).
+                        const display: enum { hidden, anonymous, source_name, generated_name } = blk: {
+                            if (flex.payload.name) |ident_idx| {
+                                const name = self.getIdent(ident_idx);
+                                // Internal names (e.g. #others from anonymous
+                                // `..`) are suppressed but the `..` itself is
+                                // kept.
+                                if (name.len > 0 and name[0] != '#') break :blk .source_name;
+                                break :blk .anonymous;
                             }
-                        } else if (true) {
-                            // TODO: ^ here, we should consider polarity
                             const occurrences = try self.countVarOccurrences(flex.var_, root_var);
-                            if (occurrences > 1) {
-                                try self.writeFlexVarName(writer, flex.var_, .TagUnionExtension, root_var);
+                            if (occurrences > 1) break :blk .generated_name;
+                            if (self.polarity == .pos and flex.payload.constraints.len() == 0) break :blk .hidden;
+                            break :blk .anonymous;
+                        };
+
+                        if (display != .hidden) {
+                            if (frame.tags_count > 0) try writer.writeAll(", ");
+                            try writer.writeAll("..");
+                            switch (display) {
+                                .hidden, .anonymous => {},
+                                .source_name => try writer.writeAll(self.getIdent(flex.payload.name.?)),
+                                .generated_name => try self.writeFlexVarName(writer, flex.var_, .TagUnionExtension, root_var),
                             }
                         }
 
@@ -1171,16 +1213,22 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                         }
                     },
                     .rigid => |rigid| {
-                        if (frame.tags_count > 0) try writer.writeAll(", ");
-                        try writer.writeAll("..");
                         const name = self.getIdent(rigid.name);
-                        // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
-                        if (name.len == 0 or name[0] != '#') {
-                            try writer.writeAll(name);
-                        }
+                        if (std.mem.eql(u8, name, types_mod.polarity_var_text)) {
+                            // A polarity-deferred extension in an alias
+                            // declaration body: the declaration is written
+                            // closed, so display it closed.
+                        } else {
+                            if (frame.tags_count > 0) try writer.writeAll(", ");
+                            try writer.writeAll("..");
+                            // Suppress internal names (e.g. #others from anonymous `..`)
+                            if (name.len == 0 or name[0] != '#') {
+                                try writer.writeAll(name);
+                            }
 
-                        for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                            try self.appendStaticDispatchConstraint(frame.ext_var, constraint);
+                            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                                try self.appendStaticDispatchConstraint(frame.ext_var, constraint);
+                            }
                         }
                     },
                     .empty_tag_union, .err, .invalid => {},
