@@ -333,8 +333,7 @@ const Pass = struct {
         entry.value_ptr.* += 1;
     }
 
-    fn noteUse(self: *Pass, scan: *Scan, local: LocalId, tracked: bool) ResourceError!void {
-        _ = self;
+    fn noteUse(scan: *Scan, local: LocalId, tracked: bool) ResourceError!void {
         try bumpUse(&scan.total_uses, local);
         if (tracked) try bumpUse(&scan.tracked_uses, local);
     }
@@ -361,17 +360,17 @@ const Pass = struct {
                         .local => |src| {
                             if (self.isListLocal(src) and self.isListLocal(assign.target)) {
                                 try scan.edges.append(allocator, .{ .kind = .alias, .stmt = current, .source = src, .target = assign.target });
-                                try self.noteUse(scan, src, true);
+                                try noteUse(scan, src, true);
                             } else {
-                                try self.noteUse(scan, src, false);
+                                try noteUse(scan, src, false);
                             }
                         },
-                        .discriminant => |op| try self.noteUse(scan, op.source, false),
-                        .field => |op| try self.noteUse(scan, op.source, false),
-                        .tag_payload => |op| try self.noteUse(scan, op.source, false),
-                        .tag_payload_struct => |op| try self.noteUse(scan, op.source, false),
-                        .list_reinterpret => |op| try self.noteUse(scan, op.backing_ref, false),
-                        .nominal => |op| try self.noteUse(scan, op.backing_ref, false),
+                        .discriminant => |op| try noteUse(scan, op.source, false),
+                        .field => |op| try noteUse(scan, op.source, false),
+                        .tag_payload => |op| try noteUse(scan, op.source, false),
+                        .tag_payload_struct => |op| try noteUse(scan, op.source, false),
+                        .list_reinterpret => |op| try noteUse(scan, op.backing_ref, false),
+                        .nominal => |op| try noteUse(scan, op.backing_ref, false),
                     }
                     try stack.append(allocator, assign.next);
                 },
@@ -397,7 +396,7 @@ const Pass = struct {
                         // its element argument is an ordinary consumed value
                         // that the rewrite passes through unchanged, so it is
                         // tracked for the element local too.
-                        try self.noteUse(scan, arg, matched);
+                        try noteUse(scan, arg, matched);
                     }
                     try stack.append(allocator, assign.next);
                 },
@@ -436,16 +435,16 @@ const Pass = struct {
                         // borrow the chain analysis treats as foreign.
                         const tracked = (i == 0 and list_arg0 and (rebinds or read_ok)) or
                             (i > 0 and !self.isListLocal(arg));
-                        try self.noteUse(scan, arg, tracked);
+                        try noteUse(scan, arg, tracked);
                     }
                     try stack.append(allocator, assign.next);
                 },
                 .set_local => |assign| {
                     if (assign.mode == .initialize_join_param and self.isListLocal(assign.value) and self.isListLocal(assign.target)) {
                         try scan.edges.append(allocator, .{ .kind = .param_write, .stmt = current, .source = assign.value, .target = assign.target });
-                        try self.noteUse(scan, assign.value, true);
+                        try noteUse(scan, assign.value, true);
                     } else {
-                        try self.noteUse(scan, assign.value, false);
+                        try noteUse(scan, assign.value, false);
                         try scan.dirty_targets.put(assign.target, {});
                     }
                     try stack.append(allocator, assign.next);
@@ -453,7 +452,7 @@ const Pass = struct {
                 .ret => |ret_stmt| {
                     // Returning ends the chain; the slack local dies with the
                     // frame.
-                    try self.noteUse(scan, ret_stmt.value, true);
+                    try noteUse(scan, ret_stmt.value, true);
                 },
                 .join => |join| {
                     try scan.joins.append(allocator, .{ .stmt = current, .has_back_edge = false });
@@ -466,24 +465,24 @@ const Pass = struct {
                     try stack.append(allocator, join.remainder);
                 },
                 .switch_stmt => |s| {
-                    try self.noteUse(scan, s.cond, false);
+                    try noteUse(scan, s.cond, false);
                     const branches = self.store.getCFSwitchBranches(s.branches);
                     for (0..GuardedList.borrowLen(branches)) |i| try stack.append(allocator, GuardedList.at(branches, i).body);
                     try stack.append(allocator, s.default_branch);
                     if (s.continuation) |continuation| try stack.append(allocator, continuation);
                 },
                 .switch_initialized_payload => |s| {
-                    try self.noteUse(scan, s.cond, false);
+                    try noteUse(scan, s.cond, false);
                     try stack.append(allocator, s.initialized_branch);
                     try stack.append(allocator, s.uninitialized_branch);
                 },
                 .str_match => |s| {
-                    try self.noteUse(scan, s.source, false);
+                    try noteUse(scan, s.source, false);
                     try stack.append(allocator, s.on_match);
                     try stack.append(allocator, s.on_miss);
                 },
                 .str_match_set => |s| {
-                    try self.noteUse(scan, s.source, false);
+                    try noteUse(scan, s.source, false);
                     const arms = self.store.getStrMatchArms(s.arms);
                     for (0..GuardedList.borrowLen(arms)) |i| try stack.append(allocator, GuardedList.at(arms, i).on_match);
                     try stack.append(allocator, s.on_miss);
@@ -500,8 +499,8 @@ const Pass = struct {
                 .assign_call_erased => |s| {
                     try bumpUse(&scan.assigned_targets, s.target);
                     const args = self.store.getLocalSpan(s.args);
-                    for (0..GuardedList.borrowLen(args)) |i| try self.noteUse(scan, GuardedList.at(args, i), false);
-                    try self.noteUse(scan, s.closure, false);
+                    for (0..GuardedList.borrowLen(args)) |i| try noteUse(scan, GuardedList.at(args, i), false);
+                    try noteUse(scan, s.closure, false);
                     try stack.append(allocator, s.next);
                 },
                 .assign_packed_erased_fn => |s| {
@@ -511,57 +510,57 @@ const Pass = struct {
                 .assign_list => |s| {
                     try bumpUse(&scan.assigned_targets, s.target);
                     const elems = self.store.getLocalSpan(s.elems);
-                    for (0..GuardedList.borrowLen(elems)) |i| try self.noteUse(scan, GuardedList.at(elems, i), false);
+                    for (0..GuardedList.borrowLen(elems)) |i| try noteUse(scan, GuardedList.at(elems, i), false);
                     try stack.append(allocator, s.next);
                 },
                 .assign_struct => |s| {
                     try bumpUse(&scan.assigned_targets, s.target);
                     const fields = self.store.getLocalSpan(s.fields);
-                    for (0..GuardedList.borrowLen(fields)) |i| try self.noteUse(scan, GuardedList.at(fields, i), false);
+                    for (0..GuardedList.borrowLen(fields)) |i| try noteUse(scan, GuardedList.at(fields, i), false);
                     try stack.append(allocator, s.next);
                 },
                 .assign_tag => |s| {
                     try bumpUse(&scan.assigned_targets, s.target);
-                    if (s.payload) |payload| try self.noteUse(scan, payload, false);
+                    if (s.payload) |payload| try noteUse(scan, payload, false);
                     try stack.append(allocator, s.next);
                 },
                 .store_struct => |s| {
-                    try self.noteUse(scan, s.dest, false);
+                    try noteUse(scan, s.dest, false);
                     const fields = self.store.getLocalSpan(s.fields);
-                    for (0..GuardedList.borrowLen(fields)) |i| try self.noteUse(scan, GuardedList.at(fields, i), false);
+                    for (0..GuardedList.borrowLen(fields)) |i| try noteUse(scan, GuardedList.at(fields, i), false);
                     try stack.append(allocator, s.next);
                 },
                 .store_tag => |s| {
-                    try self.noteUse(scan, s.dest, false);
-                    if (s.payload) |payload| try self.noteUse(scan, payload, false);
+                    try noteUse(scan, s.dest, false);
+                    if (s.payload) |payload| try noteUse(scan, payload, false);
                     try stack.append(allocator, s.next);
                 },
                 .debug => |s| {
-                    try self.noteUse(scan, s.message, false);
+                    try noteUse(scan, s.message, false);
                     try stack.append(allocator, s.next);
                 },
                 .expect => |s| {
-                    try self.noteUse(scan, s.condition, false);
+                    try noteUse(scan, s.condition, false);
                     try stack.append(allocator, s.next);
                 },
                 .incref => |s| {
-                    try self.noteUse(scan, s.value, false);
+                    try noteUse(scan, s.value, false);
                     try stack.append(allocator, s.next);
                 },
                 .decref => |s| {
-                    try self.noteUse(scan, s.value, false);
+                    try noteUse(scan, s.value, false);
                     try stack.append(allocator, s.next);
                 },
                 .decref_if_initialized => |s| {
-                    try self.noteUse(scan, s.value, false);
-                    try self.noteUse(scan, s.cond, false);
+                    try noteUse(scan, s.value, false);
+                    try noteUse(scan, s.cond, false);
                     try stack.append(allocator, s.next);
                 },
                 .free => |s| {
-                    try self.noteUse(scan, s.value, false);
+                    try noteUse(scan, s.value, false);
                     try stack.append(allocator, s.next);
                 },
-                .expect_err => |s| try self.noteUse(scan, s.message, false),
+                .expect_err => |s| try noteUse(scan, s.message, false),
                 .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
@@ -1009,7 +1008,7 @@ const Pass = struct {
                         try rewritten.put(edge.stmt, {});
                         const slack_out = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
                         const owned_out = shared_owned.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
-                        try self.rewriteSetSite(edge, owned_in, owned_out, slack_in, slack_out, max_join_id, new_locals);
+                        try self.rewriteSetSite(edge, owned_in, owned_out, slack_in, slack_out, max_join_id);
                         try slack_of.put(edge.target, slack_out);
                         try owned_of.put(edge.target, owned_out);
                         resolving = true;
@@ -1125,9 +1124,7 @@ const Pass = struct {
         slack_in: LocalId,
         slack_out: LocalId,
         max_join_id: *u32,
-        new_locals: *std.ArrayList(LocalId),
     ) ResourceError!void {
-        _ = new_locals;
         const call = self.store.getCFStmt(edge.stmt).assign_low_level;
 
         const join_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
@@ -1579,7 +1576,7 @@ test "promote threads slack through an append-only loop" {
         .body = alias_a,
         .remainder = entry_set,
     } });
-    const proc = try store.addProcSpec(.{
+    _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .args = LIR.LocalSpan.empty(),
         .body = loop,
@@ -1739,7 +1736,6 @@ test "promote threads slack through an append-only loop" {
         }
     }
     try testing.expect(found_switch);
-    _ = proc;
 }
 
 test "promote leaves a tainted chain alone" {
