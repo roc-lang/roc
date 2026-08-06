@@ -95,10 +95,17 @@ pub const Dismantles = struct {
 
     pub fn ownedOnlyParamBenefits(self: *const Dismantles, proc: LIR.LirProcSpecId) arc_sig.ParamMask {
         const index = @intFromEnum(proc);
-        if (index >= self.owned_only_param_benefits.len) return 0;
+        if (index >= self.owned_only_param_benefits.len) {
+            dismantleInvariant("ARC owned-only benefit lookup exceeded the analyzed source-procedure table");
+        }
         return self.owned_only_param_benefits[index];
     }
 };
+
+fn dismantleInvariant(comptime message: []const u8) noreturn {
+    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    unreachable;
+}
 
 const State = enum(u8) {
     unknown,
