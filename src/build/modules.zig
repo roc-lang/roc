@@ -900,6 +900,7 @@ pub const RocModules = struct {
             .echo_platform,
             .docs,
             .bump,
+            .glue,
             .host_alloc,
         };
 
