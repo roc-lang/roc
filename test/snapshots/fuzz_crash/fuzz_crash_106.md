@@ -37,7 +37,7 @@ Carriage return characters (\r) are not allowed in Roc source code.
 
 # TOKENS
 ~~~zig
-LowerIdent,OpAssign,Int,DotInt,
+LowerIdent,OpAssign,Int,NewlineDotInt,
 EndOfFile,
 ~~~
 # PARSE

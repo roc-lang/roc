@@ -443,7 +443,7 @@ pub const Tag = enum {
     method_call,
     /// Tuple element access: tuple.0, tuple.1, etc.
     /// * lhs - node index of tuple expression
-    /// * main_token - the element index token (NoSpaceDotInt or DotInt)
+    /// * main_token - the element index token (NoSpaceDotInt, DotInt, or NewlineDotInt)
     tuple_access,
     /// DESCRIPTION
     /// Example: EXAMPLE

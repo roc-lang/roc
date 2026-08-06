@@ -3620,11 +3620,11 @@ fn runExprStatementKernel(
                 var previous_pos = if (self.pos > 0) self.pos - 1 else self.pos;
                 while (previous_pos > 0) {
                     const previous_part = self.tok_buf.tokens.items(.tag)[previous_pos];
-                    if (previous_part != .NoSpaceDotLowerIdent and previous_part != .NoSpaceDotUpperIdent and previous_part != .DotLowerIdent and previous_part != .DotUpperIdent) break;
+                    if (previous_part != .NoSpaceDotLowerIdent and previous_part != .NoSpaceDotUpperIdent and previous_part != .DotLowerIdent and previous_part != .NewlineDotLowerIdent and previous_part != .DotUpperIdent) break;
                     previous_pos -= 1;
                 }
                 const previous_tag = self.tok_buf.tokens.items(.tag)[previous_pos];
-                const recovery_expr = if (previous_tag == .LowerIdent or previous_tag == .NamedUnderscore or previous_tag == .NoSpaceDotLowerIdent or previous_tag == .DotLowerIdent) blk: {
+                const recovery_expr = if (previous_tag == .LowerIdent or previous_tag == .NamedUnderscore or previous_tag == .NoSpaceDotLowerIdent or previous_tag == .DotLowerIdent or previous_tag == .NewlineDotLowerIdent) blk: {
                     const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
                     break :blk try self.store.addExpr(.{ .ident = .{
                         .token = previous_pos,
@@ -3651,6 +3651,13 @@ fn runExprStatementKernel(
         .suffix => {
             const tok = self.peek();
             const tok_int = @intFromEnum(tok);
+
+            if (open_syntax.peekExpr() == .expr_pipe_rhs and
+                (tok == .NewlineDotInt or tok == .NewlineDotLowerIdent))
+            {
+                last_expr = expr_finish_state.expr;
+                continue :expr_kernel .complete;
+            }
 
             if (tok == .Dot and self.peekN(1) == .OpenCurly) {
                 const record_start = self.pos + 1;
@@ -3707,7 +3714,7 @@ fn runExprStatementKernel(
             }
 
             if (tok_int < @intFromEnum(Token.Tag.OpenRound)) {
-                if (tok == .NoSpaceDotInt or tok == .DotInt) {
+                if (tok == .NoSpaceDotInt or tok == .DotInt or tok == .NewlineDotInt) {
                     const elem_token = self.pos;
                     self.advance();
                     expr_finish_state.expr = try self.store.addExpr(.{ .tuple_access = .{
@@ -3717,7 +3724,7 @@ fn runExprStatementKernel(
                     } });
                     continue :expr_kernel .suffix;
                 }
-                if (tok == .NoSpaceDotLowerIdent or tok == .DotLowerIdent) {
+                if (tok == .NoSpaceDotLowerIdent or tok == .DotLowerIdent or tok == .NewlineDotLowerIdent) {
                     const s = self.pos;
                     self.advance();
                     const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
@@ -4853,7 +4860,7 @@ fn runExprStatementKernel(
             const not_followed_by_colon = two_away_tok != .OpColon;
             const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
             const next_starts_where_clause = next_tok == .LowerIdent and
-                (two_away_tok == .NoSpaceDotLowerIdent or two_away_tok == .DotLowerIdent or
+                (two_away_tok == .NoSpaceDotLowerIdent or two_away_tok == .DotLowerIdent or two_away_tok == .NewlineDotLowerIdent or
                     two_away_tok == .NoSpaceDotUpperIdent or two_away_tok == .DotUpperIdent) and
                 three_away_tok == .OpColon;
             const can_parse_arrow = type_after_primary_state.looking_for_args != .looking_for_args and curr_is_arrow;
@@ -5448,7 +5455,7 @@ fn runExprStatementKernel(
                 self.advance();
 
                 const name_tok = self.pos;
-                if (self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent) {
+                if (self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .NewlineDotLowerIdent) {
                     self.advance();
                 } else if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
                     // A where alias reference. Its name is read as an
