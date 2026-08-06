@@ -2566,7 +2566,7 @@ checking, when Monotype creates concrete iterator call results.
 
 Checking is the final authority for Roc type correctness. A checked expression
 type, checked procedure interface, dispatch plan, and producer identity are
-immutable facts consumed by Monotype; they are never propositions that
+immutable checked outputs consumed by Monotype; they are never propositions that
 post-check lowering validates again. No post-check stage can report a type
 mismatch. An inconsistency in checked producer data or Monotype construction is
 a compiler invariant violation.
@@ -2608,9 +2608,21 @@ function interface. This remains true when the expected result is an imported
 finished generated nominal: the current producer constructs its own exact
 identity from its explicit inputs, then applies that output to the request.
 
+Representation-sensitive low-level operations define one explicit
+`ProducedTypeFlow` alongside the shared low-level vocabulary. The flow says
+which completed operand supplies a box or list result, which list operand is
+projected, and which operands meet at a concrete storage boundary. Monotype
+lowers those operands once before constructing the result cell: `box_unbox`
+and `list_get_unsafe` project the actual operand, list-preserving operations
+return the actual list cell, and insertion, concatenation, and replacement
+select an exact element representation at their declared storage boundary.
+The checked exact-result-flow pass consumes the same metadata. It must not
+maintain a second handwritten classification or stamp the low-level result
+with the checker-public type and ask Lambda Solved to repair it.
+
 Representation-determining input cells are producer provenance in the active
 Monotype graph, not nominal type arguments. A generated `Iter(item)` has exactly
-the public semantic `item` argument in its durable named type. Adapter sources,
+the public checked `item` argument in its durable named type. Adapter sources,
 state, step functions, lengths, and other implementation inputs remain in an
 ordered graph-local component span only until representation choice and stable
 identity have been finalized. Sealing must not make those inputs reachable as
@@ -2638,8 +2650,9 @@ repair the representation.
 
 This producer-first order applies to ordinary direct calls as well as static
 dispatch. Preparing checked relations is not completion: a record, tuple, tag,
-list, call, or projection argument can still replace its checked destination
-with a distinct exact output cell while it lowers. Callee specialization starts
+list, call, field read, tuple-item read, or tag-payload read can still replace
+its checked destination with a distinct exact output cell while it lowers.
+Callee specialization starts
 only after those argument expressions have completed, and reuses the already
 lowered operands in the emitted call. An `exact_graph` procedure signature also
 drives its body through graph-cell lowering even when the outer checked return
@@ -2652,22 +2665,25 @@ representation created by its body or return a caller-supplied exact argument,
 including through ordinary record, tuple, tag, list, box, local-binding,
 branch, and return structure. The `exact_graph_from_evidence` column means that
 this can become true only when the specialization's checked dispatch evidence
-selects such a procedure. These facts follow the returned value's checked data
+selects such a procedure. These columns follow the returned value's checked data
 flow and procedure-call edges. They do not inspect checked type structure and
 do not ask whether any type contains a generated nominal. Checked body output
 collects direct result flow and dense procedure dependencies in one pass, then
-propagates the two facts with a reverse-call work queue. It must not repeatedly
+propagates the two columns with a reverse-call work queue. It must not repeatedly
 rescan procedure bodies until a fixed point is reached.
 
-The direct-flow pass retains exact projections for record fields, tuple items,
+The direct-flow pass retains exact record fields, tuple items,
 tag payloads, nominal backings, list items, and pattern binders. Selecting one
 ordinary sibling from a compound value does not make the procedure an exact
 producer merely because a different sibling can carry an exact representation.
 Match alternatives remap their projected binder cells onto the checked branch
 representative, and every binder nested inside a lambda argument pattern is a
-parameter source. The pass initializes its dense expression state once for the
-module; it does not clear a module-sized column per template. Multiple calls
-from one template to the same callee publish one propagation edge.
+parameter source. Every binder nested inside a `for` pattern is likewise an
+explicit exact input source, because the iterator step supplies its item cell;
+an early return from the loop body therefore preserves that item's exact type.
+The pass initializes its dense expression state once for the module; it does
+not clear a module-sized column per template. Multiple calls from one template
+to the same callee add one propagation edge.
 
 A procedure with exact result flow finishes its body in the requesting
 Monotype graph before that graph is sealed. This is required because the body,
@@ -2677,6 +2693,13 @@ procedure without exact result flow remains an independent specialization whose
 body can be deferred, deduplicated, and lowered once outside the caller. A
 procedure is never made caller-owned merely because one of its parameter or
 local types could contain a generated nominal.
+
+Every explicit `return` and the ordinary fall-through value contribute to one
+stable exact result-selection cell owned by the active function
+specialization. Return expressions name that cell directly; they do not seal
+the checker-public return and leave the final body to choose a different type.
+Synthetic argument-destructuring `let` expressions sequence work around the
+already-lowered body and retain that body's exact result cell.
 
 When an exact-producing call is itself specialization input, Monotype completes
 that one call before selecting the consumer specialization and uses the
@@ -2726,7 +2749,7 @@ type validation.
 
 An exact destination request is not itself such a meeting point. If the request
 already carries one generated-private identity and the current producer returns
-a different identity, directed substitution relates only their public semantic
+a different identity, directed substitution relates only their public checked
 arguments and keeps the producer root. It neither merges the private roots nor
 chooses a common representation. Equal complete identities may be deduplicated;
 different identities can meet only at the explicit join described above.
@@ -2793,7 +2816,7 @@ For a minted iterator, Monotype rewrites the public recursive `rest` type in the
 step result to the minted self type. Concrete adapter inputs remain temporary
 producer provenance until depth and stable identity are finalized; they never
 become durable nominal arguments. Each generated iterator keeps exactly the
-public semantic item argument, while its content-addressed definition identity
+public checked item argument, while its content-addressed definition identity
 distinguishes the concrete adapter chain. A bounded chain is therefore a finite
 tower of distinct nominal identities rather than one public nominal with a
 recursive self edge.
@@ -2903,6 +2926,16 @@ emitted code. Match patterns first project their exact binder cells from the
 exact scrutinee, so branch-local lookups produce from those cells directly.
 Source order cannot change the joined identity, and lowering never relates the
 selected result back to a public interface.
+
+The stable selection cell is refined by a representation join that walks only
+the two structures meeting at that declared boundary. It reuses either input
+when all joined children already come from that input and allocates new
+compound structure only when the result combines children from both. At the
+exact node where a checker-public generated nominal meets a private generated
+nominal, the public node is only a request and the private node remains the
+child authority. Two distinct private identities invoke the explicit generated
+representation join. A graph-local pair memo allocates an indirection only on
+a real recursive re-entry; acyclic joins do not manufacture memo nodes.
 
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:

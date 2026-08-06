@@ -242,6 +242,12 @@ const NodePair = struct {
     right: NodeId,
 };
 
+const ProducedJoinMemo = union(enum) {
+    visiting,
+    cycle: NodeId,
+    done: NodeId,
+};
+
 const RelationStamp = struct {
     left: NodeId,
     left_version: u32,
@@ -347,6 +353,8 @@ pub const InstGraph = struct {
     processed_produced_relations: std.AutoHashMap(ProducedRelationStamp, void),
     produced_type_pending: std.ArrayList(NodePair),
     applying_produced_type: bool,
+    produced_join_memo: std.AutoHashMap(NodePair, ProducedJoinMemo),
+    joining_produced_types: bool,
     /// Immutable Type-shaped snapshots by permanent node id. Old snapshots
     /// retain their original provenance while `find` resolves that node to its
     /// current class root; unions therefore never move or reindex snapshots.
@@ -382,13 +390,14 @@ pub const InstGraph = struct {
     /// The digest is graph-local: durable identities are sealed separately
     /// after every input type is final.
     generated_iterator_intern: std.HashMap(names.TypeDigest, std.ArrayList(NodeId), GeneratedIteratorInternContext, 80),
-    /// Permanent item-node index used when a later union changes the canonical
+    /// Permanent item-node index used when a later union changes the current
     /// roots that contributed to an older graph-local digest. Walking the
     /// dense union class reaches only candidates that can actually match.
     generated_iterators_by_item: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
     /// Exact checked source function node from which a distinct produced
     /// function request was constructed. This is explicit substitution input;
-    /// consumers never recover it from the produced function's type shape.
+    /// consumers read this field instead of deriving it from the produced
+    /// function's type shape.
     request_checked_sources: std.ArrayList(?NodeId),
     /// Minted iterator roots whose relation graph proved that retaining the
     /// minted tier would create a recursive component identity. The raw node
@@ -423,6 +432,8 @@ pub const InstGraph = struct {
             .processed_produced_relations = std.AutoHashMap(ProducedRelationStamp, void).init(allocator),
             .produced_type_pending = .empty,
             .applying_produced_type = false,
+            .produced_join_memo = std.AutoHashMap(NodePair, ProducedJoinMemo).init(allocator),
+            .joining_produced_types = false,
             .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .current_snapshots = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .current_snapshots_dirty = false,
@@ -486,6 +497,7 @@ pub const InstGraph = struct {
         self.row_exts.deinit(allocator);
         self.imported_monos.deinit();
         self.linked_type_nodes.deinit();
+        self.produced_join_memo.deinit();
         self.produced_type_pending.deinit(allocator);
         self.processed_produced_relations.deinit();
         self.processed_relations.deinit();
@@ -544,7 +556,7 @@ pub const InstGraph = struct {
             }
         }
 
-        // A union can change a key's canonical node ids after insertion. Each
+        // A union can change a key's current node ids after insertion. Each
         // generated iterator is also indexed under its permanent item node, so
         // inspect only the now-equal item class instead of scanning the graph.
         var item_members = self.classMemberIterator(public_named.args[0]);
@@ -1850,11 +1862,15 @@ pub const InstGraph = struct {
 
         if (isGeneratedPrivateRootContent(public_content) and isGeneratedPrivateRootContent(private_content)) {
             if (self.sameExactGeneratedPrivateIdentity(public_content.named, private_content.named)) {
-                try self.unify(public_node, private_node);
+                // Equal content-addressed private identities are already the
+                // same runtime type. Keep the current producer's complete
+                // node as authority without recursively relating a stale
+                // request backing that may still contain public cells.
+                try self.union_(private_node, public_node);
             } else {
                 // A destination request can itself carry an earlier exact
                 // identity. The current producer remains authoritative: bind
-                // only the public semantic arguments and keep the two private
+                // only the public checked arguments and keep the two private
                 // roots distinct. Choosing a common runtime representation is
                 // reserved for an explicit control-flow or recursion join.
                 if (public_content.named.args.len != private_content.named.args.len) {
@@ -2642,10 +2658,446 @@ pub const InstGraph = struct {
     }
 
     /// Select the deterministic common runtime representation for two exact
-    /// produced values that meet at one control-flow continuation.
-    pub fn joinProducedTypeRepresentations(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
+    /// produced values that meet at one control-flow or storage boundary.
+    /// Matching structure is rebuilt from the joined child cells. In
+    /// particular, a checked-public generated nominal is a request and the
+    /// exact nominal remains the child authority; the two nominal roots are
+    /// never merged.
+    pub fn joinProducedTypeRepresentations(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!NodeId {
         self.countDiagnostic("produced_type_joins");
-        try self.unifyRootsTransitively(a, b);
+        if (self.joining_produced_types) {
+            Common.invariant("produced representation join reentered its graph-owned memo");
+        }
+        self.joining_produced_types = true;
+        defer self.joining_produced_types = false;
+        self.produced_join_memo.clearRetainingCapacity();
+        defer self.produced_join_memo.clearRetainingCapacity();
+        return try self.joinProducedTypeNodes(a, b, &self.produced_join_memo);
+    }
+
+    /// Write the current common representation into one stable control-flow
+    /// selection cell. Branch expressions retain this cell while its explicit
+    /// child structure is refined by later branches.
+    pub fn writeProducedTypeSelection(
+        self: *InstGraph,
+        selection: NodeId,
+        produced: NodeId,
+    ) Allocator.Error!void {
+        const selection_root = self.find(selection);
+        const produced_root = self.find(produced);
+        if (selection_root == produced_root) return;
+        try self.setContent(selection_root, self.nodes.items[@intFromEnum(produced_root)]);
+    }
+
+    fn orderedNodePair(left: NodeId, right: NodeId) NodePair {
+        return if (@intFromEnum(left) <= @intFromEnum(right))
+            .{ .left = left, .right = right }
+        else
+            .{ .left = right, .right = left };
+    }
+
+    fn joinProducedTypeNodes(
+        self: *InstGraph,
+        raw_left: NodeId,
+        raw_right: NodeId,
+        joined: *std.AutoHashMap(NodePair, ProducedJoinMemo),
+    ) Allocator.Error!NodeId {
+        const left = self.find(raw_left);
+        const right = self.find(raw_right);
+        if (left == right) return left;
+        const pair = orderedNodePair(left, right);
+        if (joined.getPtr(pair)) |entry| return switch (entry.*) {
+            .done => |existing| self.find(existing),
+            .cycle => |placeholder| placeholder,
+            .visiting => blk: {
+                // Allocate an indirection only for a real recursive re-entry;
+                // ordinary joins do not create a node merely for memoization.
+                const placeholder = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+                entry.* = .{ .cycle = placeholder };
+                break :blk placeholder;
+            },
+        };
+
+        try joined.put(pair, .visiting);
+        const built = try self.joinProducedTypeNodeContents(left, right, joined);
+        const entry = joined.getPtr(pair) orelse
+            Common.invariant("produced representation join lost its memo entry");
+        return switch (entry.*) {
+            .visiting => blk: {
+                entry.* = .{ .done = built };
+                break :blk self.find(built);
+            },
+            .cycle => |placeholder| blk: {
+                try self.writeProducedTypeSelection(placeholder, built);
+                entry.* = .{ .done = placeholder };
+                break :blk self.find(placeholder);
+            },
+            .done => Common.invariant("produced representation join completed one pair twice"),
+        };
+    }
+
+    fn joinProducedTypeNodeContents(
+        self: *InstGraph,
+        left: NodeId,
+        right: NodeId,
+        joined: *std.AutoHashMap(NodePair, ProducedJoinMemo),
+    ) Allocator.Error!NodeId {
+        const left_content = self.content(left);
+        const right_content = self.content(right);
+        const left_generated = isGeneratedPrivateRootContent(left_content);
+        const right_generated = isGeneratedPrivateRootContent(right_content);
+        if (left_generated or right_generated) {
+            if (left_generated and right_generated) {
+                if (self.sameExactGeneratedPrivateIdentity(left_content.named, right_content.named)) {
+                    const pair = orderedNodePair(left, right);
+                    try self.union_(pair.left, pair.right);
+                } else {
+                    try self.unify(left, right);
+                }
+                return self.find(left);
+            }
+            const exact = if (left_generated) left else right;
+            const public = if (left_generated) right else left;
+            _ = try self.applyCheckedTypeMapping(public, exact);
+            return self.find(exact);
+        }
+
+        if (left_content == .named and left_content.named.kind == .alias) {
+            const backing = left_content.named.backing orelse
+                Common.invariant("produced representation join found an alias without backing");
+            return try self.joinProducedTypeNodes(backing.node, right, joined);
+        }
+        if (right_content == .named and right_content.named.kind == .alias) {
+            const backing = right_content.named.backing orelse
+                Common.invariant("produced representation join found an alias without backing");
+            return try self.joinProducedTypeNodes(left, backing.node, joined);
+        }
+
+        if (left_content == .unresolved) {
+            try self.unify(left, right);
+            return self.find(right);
+        }
+        if (right_content == .unresolved) {
+            try self.unify(left, right);
+            return self.find(left);
+        }
+        if (right_content == .named and left_content != .named) {
+            return try self.joinProducedTypeNodeContents(right, left, joined);
+        }
+
+        return switch (left_content) {
+            .redirect, .unresolved => unreachable,
+            .primitive => |primitive| blk: {
+                if (right_content != .primitive or right_content.primitive != primitive) {
+                    Common.invariant("produced representation join received different primitive types");
+                }
+                break :blk left;
+            },
+            .list => |left_element| blk: {
+                if (right_content != .list) Common.invariant("produced representation join received different type structure");
+                const element = try self.joinProducedTypeNodes(
+                    left_element,
+                    right_content.list,
+                    joined,
+                );
+                if (self.sameClass(element, left_element)) break :blk left;
+                if (self.sameClass(element, right_content.list)) break :blk right;
+                break :blk try self.newNode(.{ .list = element });
+            },
+            .box => |left_element| blk: {
+                if (right_content != .box) Common.invariant("produced representation join received different type structure");
+                const element = try self.joinProducedTypeNodes(
+                    left_element,
+                    right_content.box,
+                    joined,
+                );
+                if (self.sameClass(element, left_element)) break :blk left;
+                if (self.sameClass(element, right_content.box)) break :blk right;
+                break :blk try self.newNode(.{ .box = element });
+            },
+            .tuple => |left_items| blk: {
+                if (right_content != .tuple or right_content.tuple.len != left_items.len) {
+                    Common.invariant("produced representation join received tuples of different arity");
+                }
+                const items = try self.allocator.alloc(NodeId, left_items.len);
+                defer self.allocator.free(items);
+                var all_left = true;
+                var all_right = true;
+                for (left_items, right_content.tuple, items) |left_item, right_item, *item| {
+                    item.* = try self.joinProducedTypeNodes(left_item, right_item, joined);
+                    all_left = all_left and self.sameClass(item.*, left_item);
+                    all_right = all_right and self.sameClass(item.*, right_item);
+                }
+                if (all_left) break :blk left;
+                if (all_right) break :blk right;
+                break :blk try self.newNode(.{ .tuple = try self.arena().dupe(NodeId, items) });
+            },
+            .func => |left_fn| blk: {
+                if (right_content != .func or right_content.func.args.len != left_fn.args.len) {
+                    Common.invariant("produced representation join received functions of different arity");
+                }
+                const args = try self.allocator.alloc(NodeId, left_fn.args.len);
+                defer self.allocator.free(args);
+                var all_left = true;
+                var all_right = true;
+                for (left_fn.args, right_content.func.args, args) |left_arg, right_arg, *arg| {
+                    arg.* = try self.joinProducedTypeNodes(left_arg, right_arg, joined);
+                    all_left = all_left and self.sameClass(arg.*, left_arg);
+                    all_right = all_right and self.sameClass(arg.*, right_arg);
+                }
+                const ret = try self.joinProducedTypeNodes(left_fn.ret, right_content.func.ret, joined);
+                all_left = all_left and self.sameClass(ret, left_fn.ret);
+                all_right = all_right and self.sameClass(ret, right_content.func.ret);
+                if (all_left) break :blk left;
+                if (all_right) break :blk right;
+                break :blk try self.newNode(.{ .func = .{
+                    .args = try self.arena().dupe(NodeId, args),
+                    .ret = ret,
+                } });
+            },
+            .tag_union => blk: {
+                if (right_content != .tag_union and right_content != .empty_tag_union) {
+                    Common.invariant("produced representation join received different type structure");
+                }
+                break :blk try self.joinProducedTagRows(left, right, joined);
+            },
+            .empty_tag_union => switch (right_content) {
+                .empty_tag_union => left,
+                .tag_union => try self.joinProducedTagRows(left, right, joined),
+                .redirect,
+                .unresolved,
+                .primitive,
+                .list,
+                .box,
+                .tuple,
+                .func,
+                .record,
+                .empty_record,
+                .named,
+                .erased,
+                .zst,
+                => Common.invariant("produced representation join received different type structure"),
+            },
+            .record => blk: {
+                if (right_content != .record and right_content != .empty_record) {
+                    Common.invariant("produced representation join received different type structure");
+                }
+                break :blk try self.joinProducedRecordRows(left, right, joined);
+            },
+            .empty_record => switch (right_content) {
+                .empty_record => left,
+                .record => try self.joinProducedRecordRows(left, right, joined),
+                .redirect,
+                .unresolved,
+                .primitive,
+                .list,
+                .box,
+                .tuple,
+                .func,
+                .tag_union,
+                .empty_tag_union,
+                .named,
+                .erased,
+                .zst,
+                => Common.invariant("produced representation join received different type structure"),
+            },
+            .named => |left_named| blk: {
+                if (right_content != .named) {
+                    const backing = left_named.backing orelse
+                        Common.invariant("produced representation join received a nominal without backing");
+                    const joined_backing = try self.joinProducedTypeNodes(backing.node, right, joined);
+                    var result = left_named;
+                    result.backing = .{ .node = joined_backing, .use = backing.use, .authority = backing.authority };
+                    break :blk try self.newNode(.{ .named = result });
+                }
+                const right_named = right_content.named;
+                if (!std.meta.eql(left_named.def, right_named.def) or left_named.args.len != right_named.args.len) {
+                    Common.invariant("produced representation join received different nominal types");
+                }
+                const args = try self.allocator.alloc(NodeId, left_named.args.len);
+                defer self.allocator.free(args);
+                var all_left = true;
+                var all_right = true;
+                for (left_named.args, right_named.args, args) |left_arg, right_arg, *arg| {
+                    arg.* = try self.joinProducedTypeNodes(left_arg, right_arg, joined);
+                    all_left = all_left and self.sameClass(arg.*, left_arg);
+                    all_right = all_right and self.sameClass(arg.*, right_arg);
+                }
+                var result = left_named;
+                if (left_named.backing) |left_backing| {
+                    const right_backing = right_named.backing orelse
+                        Common.invariant("produced representation join found backing on only one nominal");
+                    if (left_backing.authority != right_backing.authority or left_backing.use != right_backing.use) {
+                        Common.invariant("produced representation join found different nominal backing contracts");
+                    }
+                    const backing = try self.joinProducedTypeNodes(left_backing.node, right_backing.node, joined);
+                    all_left = all_left and self.sameClass(backing, left_backing.node);
+                    all_right = all_right and self.sameClass(backing, right_backing.node);
+                    result.backing = .{
+                        .node = backing,
+                        .use = left_backing.use,
+                        .authority = left_backing.authority,
+                    };
+                } else if (right_named.backing != null) {
+                    Common.invariant("produced representation join found backing on only one nominal");
+                }
+                if (all_left) break :blk left;
+                if (all_right) break :blk right;
+                result.args = try self.arena().dupe(NodeId, args);
+                break :blk try self.newNode(.{ .named = result });
+            },
+            .erased => |left_digest| blk: {
+                if (right_content != .erased or !std.mem.eql(u8, &left_digest.bytes, &right_content.erased.bytes)) {
+                    Common.invariant("produced representation join received different erased types");
+                }
+                break :blk left;
+            },
+            .zst => if (right_content == .zst)
+                left
+            else
+                Common.invariant("produced representation join received different type structure"),
+        };
+    }
+
+    fn instTagLessThan(graph: *InstGraph, left: InstTag, right: InstTag) bool {
+        return std.mem.order(u8, graph.tagLabelText(left.name), graph.tagLabelText(right.name)) == .lt;
+    }
+
+    fn instFieldLessThan(graph: *InstGraph, left: InstField, right: InstField) bool {
+        return std.mem.order(u8, graph.fieldLabelText(left.name), graph.fieldLabelText(right.name)) == .lt;
+    }
+
+    fn joinProducedTagRows(
+        self: *InstGraph,
+        left: NodeId,
+        right: NodeId,
+        joined: *std.AutoHashMap(NodePair, ProducedJoinMemo),
+    ) Allocator.Error!NodeId {
+        const left_row: FlatTagRow = if (self.content(left) == .empty_tag_union)
+            .{ .tags = &.{}, .ext = left }
+        else
+            try self.flattenTagRow(left);
+        const right_row: FlatTagRow = if (self.content(right) == .empty_tag_union)
+            .{ .tags = &.{}, .ext = right }
+        else
+            try self.flattenTagRow(right);
+        var tags = std.ArrayList(InstTag).empty;
+        defer tags.deinit(self.allocator);
+        var owned_payloads = std.ArrayList([]NodeId).empty;
+        defer {
+            for (owned_payloads.items) |payloads| self.allocator.free(payloads);
+            owned_payloads.deinit(self.allocator);
+        }
+        var all_left = true;
+        var all_right = true;
+        for (left_row.tags) |left_tag| {
+            var matched: ?InstTag = null;
+            for (right_row.tags) |right_tag| {
+                if (!Ident.textEql(self.tagLabelText(left_tag.name), self.tagLabelText(right_tag.name))) continue;
+                matched = right_tag;
+                break;
+            }
+            if (matched) |right_tag| {
+                if (left_tag.payloads.len != right_tag.payloads.len) {
+                    Common.invariant("produced representation join received one tag at two payload arities");
+                }
+                const payloads = try self.allocator.alloc(NodeId, left_tag.payloads.len);
+                try owned_payloads.append(self.allocator, payloads);
+                for (left_tag.payloads, right_tag.payloads, payloads) |left_payload, right_payload, *payload| {
+                    payload.* = try self.joinProducedTypeNodes(left_payload, right_payload, joined);
+                    all_left = all_left and self.sameClass(payload.*, left_payload);
+                    all_right = all_right and self.sameClass(payload.*, right_payload);
+                }
+                try tags.append(self.allocator, .{
+                    .name = left_tag.name,
+                    .checked_name = left_tag.checked_name,
+                    .payloads = payloads,
+                });
+            } else {
+                all_right = false;
+                try tags.append(self.allocator, left_tag);
+            }
+        }
+        for (right_row.tags) |right_tag| {
+            for (left_row.tags) |left_tag| {
+                if (Ident.textEql(self.tagLabelText(left_tag.name), self.tagLabelText(right_tag.name))) break;
+            } else {
+                all_left = false;
+                try tags.append(self.allocator, right_tag);
+            }
+        }
+        std.mem.sort(InstTag, tags.items, self, instTagLessThan);
+        const ext = try self.joinProducedTypeNodes(left_row.ext, right_row.ext, joined);
+        all_left = all_left and self.sameClass(ext, left_row.ext);
+        all_right = all_right and self.sameClass(ext, right_row.ext);
+        if (all_left) return left;
+        if (all_right) return right;
+        if (tags.items.len == 0) return ext;
+        const stored_tags = try self.arena().alloc(InstTag, tags.items.len);
+        for (tags.items, stored_tags) |tag, *stored| {
+            stored.* = tag;
+            stored.payloads = try self.arena().dupe(NodeId, tag.payloads);
+        }
+        return try self.newNode(.{ .tag_union = .{
+            .tags = stored_tags,
+            .ext = ext,
+        } });
+    }
+
+    fn joinProducedRecordRows(
+        self: *InstGraph,
+        left: NodeId,
+        right: NodeId,
+        joined: *std.AutoHashMap(NodePair, ProducedJoinMemo),
+    ) Allocator.Error!NodeId {
+        const left_row: FlatRecordRow = if (self.content(left) == .empty_record)
+            .{ .fields = &.{}, .ext = left }
+        else
+            try self.flattenRecordRow(left);
+        const right_row: FlatRecordRow = if (self.content(right) == .empty_record)
+            .{ .fields = &.{}, .ext = right }
+        else
+            try self.flattenRecordRow(right);
+        var fields = std.ArrayList(InstField).empty;
+        defer fields.deinit(self.allocator);
+        var all_left = true;
+        var all_right = true;
+        for (left_row.fields) |left_field| {
+            var matched: ?InstField = null;
+            for (right_row.fields) |right_field| {
+                if (!Ident.textEql(self.fieldLabelText(left_field.name), self.fieldLabelText(right_field.name))) continue;
+                matched = right_field;
+                break;
+            }
+            if (matched) |right_field| {
+                const field_ty = try self.joinProducedTypeNodes(left_field.ty, right_field.ty, joined);
+                all_left = all_left and self.sameClass(field_ty, left_field.ty);
+                all_right = all_right and self.sameClass(field_ty, right_field.ty);
+                try fields.append(self.allocator, .{ .name = left_field.name, .ty = field_ty });
+            } else {
+                all_right = false;
+                try fields.append(self.allocator, left_field);
+            }
+        }
+        for (right_row.fields) |right_field| {
+            for (left_row.fields) |left_field| {
+                if (Ident.textEql(self.fieldLabelText(left_field.name), self.fieldLabelText(right_field.name))) break;
+            } else {
+                all_left = false;
+                try fields.append(self.allocator, right_field);
+            }
+        }
+        std.mem.sort(InstField, fields.items, self, instFieldLessThan);
+        const ext = try self.joinProducedTypeNodes(left_row.ext, right_row.ext, joined);
+        all_left = all_left and self.sameClass(ext, left_row.ext);
+        all_right = all_right and self.sameClass(ext, right_row.ext);
+        if (all_left) return left;
+        if (all_right) return right;
+        if (fields.items.len == 0) return ext;
+        return try self.newNode(.{ .record = .{
+            .fields = try self.arena().dupe(InstField, fields.items),
+            .ext = ext,
+        } });
     }
 
     fn unifyRootsTransitively(
@@ -6406,7 +6858,7 @@ test "generated iterator interning happens before backing work and survives late
         graph.findGeneratedIterator(public_at_construction, .map, &.{component_at_construction}, null).?,
     );
 
-    // Canonical roots change after the intern key was recorded. The permanent
+    // Current roots change after the intern key was recorded. The permanent
     // item-class index still finds the same exact generated identity without a
     // graph-wide search or repeated backing construction.
     try graph.unify(item_at_construction, item_at_lookup);
@@ -6454,7 +6906,7 @@ test "generated iterator identity includes nested graph-local producer evidence"
     const item = try graph.newNode(.{ .primitive = .u64 });
     const source = try graph.newNode(.{ .list = item });
 
-    const Factory = struct {
+    const GeneratedNodeBuilder = struct {
         fn add(
             active_graph: *InstGraph,
             source_contract: InstIteratorPublicSource,
@@ -6488,12 +6940,12 @@ test "generated iterator identity includes nested graph-local producer evidence"
 
     const equivalent_item = try graph.newNode(.{ .primitive = .u64 });
     const equivalent_source = try graph.newNode(.{ .list = equivalent_item });
-    const inner_a = try Factory.add(graph, public_source, item, &.{source}, 0xA1);
-    const inner_b = try Factory.add(graph, public_source, item, &.{source}, 0xB2);
-    const inner_equivalent = try Factory.add(graph, public_source, equivalent_item, &.{equivalent_source}, 0xA1);
-    const outer_a = try Factory.add(graph, public_source, item, &.{inner_a}, 0xC3);
-    const outer_b = try Factory.add(graph, public_source, item, &.{inner_b}, 0xC3);
-    const outer_equivalent = try Factory.add(graph, public_source, equivalent_item, &.{inner_equivalent}, 0xC3);
+    const inner_a = try GeneratedNodeBuilder.add(graph, public_source, item, &.{source}, 0xA1);
+    const inner_b = try GeneratedNodeBuilder.add(graph, public_source, item, &.{source}, 0xB2);
+    const inner_equivalent = try GeneratedNodeBuilder.add(graph, public_source, equivalent_item, &.{equivalent_source}, 0xA1);
+    const outer_a = try GeneratedNodeBuilder.add(graph, public_source, item, &.{inner_a}, 0xC3);
+    const outer_b = try GeneratedNodeBuilder.add(graph, public_source, item, &.{inner_b}, 0xC3);
+    const outer_equivalent = try GeneratedNodeBuilder.add(graph, public_source, equivalent_item, &.{inner_equivalent}, 0xC3);
     for ([_]NodeId{ inner_a, inner_b, inner_equivalent, outer_a, outer_b, outer_equivalent }) |node| {
         try graph.registerGeneratedIterator(node);
     }
@@ -6851,6 +7303,114 @@ test "opaque interface relation preserves nested generated-private backing" {
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, retained_private.backing.?.authority);
     try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public_arg).named.backing.?.authority);
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_arg).named.backing.?.authority);
+}
+
+test "produced representation join keeps exact children at their compound positions" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xC1} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(20) };
+    const public_def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    var private_def = public_def;
+    private_def.generated = .{ .bytes = [_]u8{0xC2} ** 32 };
+    private_def.iterator_representation = .minted;
+    private_def.iterator_kind = .list;
+    private_def.iterator_depth = 1;
+    const item = try graph.newNode(.{ .primitive = .u64 });
+
+    const Pair = struct {
+        public: NodeId,
+        private: NodeId,
+
+        fn add(
+            active_graph: *InstGraph,
+            public_type_def: Type.TypeDef,
+            private_type_def: Type.TypeDef,
+            type_ref: Type.NamedType,
+            item_node: NodeId,
+        ) Allocator.Error!@This() {
+            return .{
+                .public = try active_graph.newNode(.{ .named = .{
+                    .named_type = type_ref,
+                    .def = public_type_def,
+                    .kind = .@"opaque",
+                    .builtin_owner = .iter,
+                    .args = try active_graph.arena().dupe(NodeId, &.{item_node}),
+                    .backing = .{
+                        .node = try active_graph.newNode(.empty_record),
+                        .use = .runtime_layout_only,
+                    },
+                } }),
+                .private = try active_graph.newNode(.{ .named = .{
+                    .named_type = type_ref,
+                    .def = private_type_def,
+                    .kind = .@"opaque",
+                    .builtin_owner = .iter,
+                    .args = try active_graph.arena().dupe(NodeId, &.{item_node}),
+                    .backing = .{
+                        .node = try active_graph.newNode(.empty_record),
+                        .use = .runtime_layout_only,
+                        .authority = .generated_private,
+                    },
+                } }),
+            };
+        }
+    };
+
+    const a = try Pair.add(graph, public_def, private_def, named_type, item);
+    const b = try Pair.add(graph, public_def, private_def, named_type, item);
+    const a_name = try name_store.internRecordFieldLabel("a");
+    const b_name = try name_store.internRecordFieldLabel("b");
+    const left = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{
+            .{ .name = a_name, .ty = a.private },
+            .{ .name = b_name, .ty = b.public },
+        }),
+        .ext = try graph.newNode(.empty_record),
+    } });
+    const right = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{
+            .{ .name = a_name, .ty = a.public },
+            .{ .name = b_name, .ty = b.private },
+        }),
+        .ext = try graph.newNode(.empty_record),
+    } });
+
+    const joined = try graph.joinProducedTypeRepresentations(left, right);
+    const joined_fields = (try graph.recordConstructionNodes(joined)).fields;
+
+    try std.testing.expect(!graph.sameClass(joined, left));
+    try std.testing.expect(!graph.sameClass(joined, right));
+    try std.testing.expectEqual(@as(usize, 2), joined_fields.len);
+    try std.testing.expectEqual(a_name, joined_fields[0].name);
+    try std.testing.expectEqual(b_name, joined_fields[1].name);
+    try std.testing.expect(graph.sameClass(joined_fields[0].ty, a.private));
+    try std.testing.expect(graph.sameClass(joined_fields[1].ty, b.private));
+    try std.testing.expect(!graph.sameClass(a.public, a.private));
+    try std.testing.expect(!graph.sameClass(b.public, b.private));
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(a.public).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(a.private).named.backing.?.authority);
+
+    const left_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.setContent(left_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{ a.private, left_cycle }) });
+    const right_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.setContent(right_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{ a.public, right_cycle }) });
+
+    const joined_cycle = try graph.joinProducedTypeRepresentations(left_cycle, right_cycle);
+    const joined_items = try graph.tupleItemNodes(joined_cycle);
+    try std.testing.expectEqual(@as(usize, 2), joined_items.len);
+    try std.testing.expect(graph.sameClass(joined_items[0], a.private));
+    try std.testing.expect(graph.sameClass(joined_items[1], joined_cycle));
 }
 
 test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {

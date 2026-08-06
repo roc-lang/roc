@@ -4,6 +4,34 @@
 //! reject specific ops that should have been lowered away earlier, but there is
 //! no separate semantic/backend enum pair.
 
+/// Exact runtime-type flow for the representation-sensitive low-level
+/// operations that can carry a compiler-generated type through a value. This
+/// is post-check data flow, not a typing rule: checking has already established
+/// that the operands and result are valid.
+pub const ProducedTypeFlow = union(enum) {
+    none,
+    box_from_item: struct { item_arg: u8, arity: u8 },
+    box_item: struct { box_arg: u8, arity: u8 },
+    list_item: struct { list_arg: u8, arity: u8 },
+    same_as_arg: struct { arg: u8, arity: u8 },
+    list_insert: struct { list_arg: u8, item_arg: u8, arity: u8 },
+    list_join: struct { left_arg: u8, right_arg: u8, arity: u8 },
+    list_replace: struct { list_arg: u8, item_arg: u8, arity: u8 },
+
+    pub fn argumentCount(self: ProducedTypeFlow) ?usize {
+        return switch (self) {
+            .none => null,
+            .box_from_item => |flow| flow.arity,
+            .box_item => |flow| flow.arity,
+            .list_item => |flow| flow.arity,
+            .same_as_arg => |flow| flow.arity,
+            .list_insert => |flow| flow.arity,
+            .list_join => |flow| flow.arity,
+            .list_replace => |flow| flow.arity,
+        };
+    }
+};
+
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
 pub const LowLevel = enum(u16) {
     // String operations
@@ -577,6 +605,39 @@ pub const LowLevel = enum(u16) {
 
     // Crash/panic
     crash,
+
+    /// Describe only the exact produced-type relationships that Monotype must
+    /// preserve from the operands it actually lowered. Operations absent from
+    /// this table keep the checked result cell because their representation is
+    /// not derived from one of these runtime operands.
+    pub fn producedTypeFlow(self: LowLevel) ProducedTypeFlow {
+        const count = @typeInfo(LowLevel).@"enum".fields.len;
+        const flows: [count]ProducedTypeFlow = comptime blk: {
+            var result = [_]ProducedTypeFlow{.none} ** count;
+            result[@intFromEnum(LowLevel.box_box)] = .{ .box_from_item = .{ .item_arg = 0, .arity = 1 } };
+            result[@intFromEnum(LowLevel.box_unbox)] = .{ .box_item = .{ .box_arg = 0, .arity = 1 } };
+
+            result[@intFromEnum(LowLevel.list_get_unsafe)] = .{ .list_item = .{ .list_arg = 0, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_append_unsafe)] = .{ .list_insert = .{ .list_arg = 0, .item_arg = 1, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_prepend)] = .{ .list_insert = .{ .list_arg = 0, .item_arg = 1, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_set)] = .{ .list_insert = .{ .list_arg = 0, .item_arg = 2, .arity = 3 } };
+            result[@intFromEnum(LowLevel.list_map_write_unsafe)] = .{ .list_insert = .{ .list_arg = 0, .item_arg = 2, .arity = 3 } };
+            result[@intFromEnum(LowLevel.list_concat)] = .{ .list_join = .{ .left_arg = 0, .right_arg = 1, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_append_sublist)] = .{ .list_join = .{ .left_arg = 0, .right_arg = 1, .arity = 4 } };
+            result[@intFromEnum(LowLevel.list_replace_unsafe)] = .{ .list_replace = .{ .list_arg = 0, .item_arg = 2, .arity = 3 } };
+
+            result[@intFromEnum(LowLevel.list_reserve)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_drop_at)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_sublist)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_release_excess_capacity)] = .{ .same_as_arg = .{ .arg = 0, .arity = 1 } };
+            result[@intFromEnum(LowLevel.list_map_prepare_reuse)] = .{ .same_as_arg = .{ .arg = 0, .arity = 1 } };
+            result[@intFromEnum(LowLevel.list_swap)] = .{ .same_as_arg = .{ .arg = 0, .arity = 3 } };
+            result[@intFromEnum(LowLevel.list_append_range_within)] = .{ .same_as_arg = .{ .arg = 0, .arity = 3 } };
+            result[@intFromEnum(LowLevel.list_copy_range_within)] = .{ .same_as_arg = .{ .arg = 0, .arity = 4 } };
+            break :blk result;
+        };
+        return flows[@intFromEnum(self)];
+    }
 
     /// Index into `builtins.simd.Op`. The SIMD entries are intentionally one
     /// contiguous, order-pinned block so the interpreter and compile-time

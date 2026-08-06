@@ -14481,7 +14481,9 @@ const ExactGraphProducerAnalysis = struct {
     refs: *const ResolvedValueRefTable,
     procedure_bindings: *const TopLevelProcedureBindingTable,
     expr_states: []ExprState,
+    return_states: []ExprState,
     binder_value_heads: []?u32,
+    binder_exact_sources: []bool,
     binder_values: std.ArrayList(BinderValue),
     projection_steps: std.ArrayList(ProjectionStep),
     dependency_heads: []?u32,
@@ -14502,9 +14504,15 @@ const ExactGraphProducerAnalysis = struct {
         const expr_states = try allocator.alloc(ExprState, bodies.exprCount());
         errdefer allocator.free(expr_states);
         @memset(expr_states, .unknown);
+        const return_states = try allocator.alloc(ExprState, bodies.exprCount());
+        errdefer allocator.free(return_states);
+        @memset(return_states, .unknown);
         const binder_value_heads = try allocator.alloc(?u32, bodies.patternBinderCount());
         errdefer allocator.free(binder_value_heads);
         @memset(binder_value_heads, null);
+        const binder_exact_sources = try allocator.alloc(bool, bodies.patternBinderCount());
+        errdefer allocator.free(binder_exact_sources);
+        @memset(binder_exact_sources, false);
         const dependency_heads = try allocator.alloc(?u32, templates.templates.len);
         errdefer allocator.free(dependency_heads);
         @memset(dependency_heads, null);
@@ -14520,7 +14528,9 @@ const ExactGraphProducerAnalysis = struct {
             .refs = refs,
             .procedure_bindings = procedure_bindings,
             .expr_states = expr_states,
+            .return_states = return_states,
             .binder_value_heads = binder_value_heads,
+            .binder_exact_sources = binder_exact_sources,
             .binder_values = .empty,
             .projection_steps = .empty,
             .dependency_heads = dependency_heads,
@@ -14540,7 +14550,9 @@ const ExactGraphProducerAnalysis = struct {
         self.allocator.free(self.dependency_heads);
         self.projection_steps.deinit(self.allocator);
         self.binder_values.deinit(self.allocator);
+        self.allocator.free(self.binder_exact_sources);
         self.allocator.free(self.binder_value_heads);
+        self.allocator.free(self.return_states);
         self.allocator.free(self.expr_states);
         self.* = undefined;
     }
@@ -14557,13 +14569,13 @@ const ExactGraphProducerAnalysis = struct {
                     try self.indexPatternValue(reassign.pattern, reassign.expr, &projection);
                     for (reassign.reassigned_binders) |binder| try self.addBinderValue(binder, reassign.expr, &.{});
                 },
+                .for_ => |for_| try self.markPatternExactSource(for_.pattern),
                 .pending,
                 .var_uninitialized,
                 .crash,
                 .dbg,
                 .expr,
                 .expect,
-                .for_,
                 .while_,
                 .infinite_loop,
                 .breakable_loop,
@@ -14585,17 +14597,110 @@ const ExactGraphProducerAnalysis = struct {
         // representative used by lookups in the shared branch body.
         for (0..self.bodies.exprCount()) |raw_expr| {
             const expr = self.bodies.expr(@enumFromInt(@as(u32, @intCast(raw_expr))));
-            if (expr.data != .match_) continue;
-            const match = expr.data.match_;
-            for (match.branches) |branch| {
-                for (branch.patternsSlice(self.bodies)) |branch_pattern| {
-                    projection.clearRetainingCapacity();
-                    try self.indexPatternValue(branch_pattern.pattern, match.cond, &projection);
-                    for (branch_pattern.binderRemapsSlice(self.bodies)) |remap| {
-                        try self.copyBinderValues(remap.candidate_binder, remap.representative_binder);
+            switch (expr.data) {
+                .match_ => |match| for (match.branches) |branch| {
+                    for (branch.patternsSlice(self.bodies)) |branch_pattern| {
+                        projection.clearRetainingCapacity();
+                        try self.indexPatternValue(branch_pattern.pattern, match.cond, &projection);
+                        for (branch_pattern.binderRemapsSlice(self.bodies)) |remap| {
+                            try self.copyBinderValues(remap.candidate_binder, remap.representative_binder);
+                        }
                     }
-                }
+                },
+                .for_ => |for_| try self.markPatternExactSource(for_.pattern),
+                .pending,
+                .numeral,
+                .str_from_quote,
+                .str_segment,
+                .str,
+                .bytes_literal,
+                .lookup_local,
+                .lookup_external,
+                .lookup_required,
+                .list,
+                .empty_list,
+                .tuple,
+                .if_,
+                .call,
+                .record,
+                .empty_record,
+                .block,
+                .tag,
+                .nominal,
+                .zero_argument_tag,
+                .closure,
+                .lambda,
+                .binop,
+                .unary_minus,
+                .unary_not,
+                .field_access,
+                .dispatch_call,
+                .interpolation,
+                .structural_eq,
+                .structural_hash,
+                .method_eq,
+                .type_dispatch_call,
+                .tuple_access,
+                .runtime_error,
+                .crash,
+                .dbg,
+                .expect_err,
+                .expect,
+                .ellipsis,
+                .anno_only,
+                .break_,
+                .return_,
+                .hosted_lambda,
+                .run_low_level,
+                => {},
             }
+        }
+    }
+
+    /// A `for` pattern receives an item cell from an exact iterator step. The
+    /// checked item type cannot say which generated representation a concrete
+    /// specialization supplies, so every binder in the pattern is an explicit
+    /// exact input source, just like a lambda parameter.
+    fn markPatternExactSource(
+        self: *ExactGraphProducerAnalysis,
+        pattern_id: CheckedPatternId,
+    ) Allocator.Error!void {
+        const pattern = self.bodies.pattern(pattern_id);
+        switch (pattern.data) {
+            .assign => |binder| {
+                const raw = @intFromEnum(binder);
+                if (raw >= self.binder_exact_sources.len) {
+                    return checkedArtifactInvariant("exact producer analysis referenced a missing for-pattern binder", .{});
+                }
+                self.binder_exact_sources[raw] = true;
+            },
+            .as => |as_| {
+                const raw = @intFromEnum(as_.binder);
+                if (raw >= self.binder_exact_sources.len) {
+                    return checkedArtifactInvariant("exact producer analysis referenced a missing for-pattern binder", .{});
+                }
+                self.binder_exact_sources[raw] = true;
+                try self.markPatternExactSource(as_.pattern);
+            },
+            .applied_tag => |tag| for (tag.args) |arg| try self.markPatternExactSource(arg),
+            .nominal => |nominal| try self.markPatternExactSource(nominal.backing_pattern),
+            .record_destructure => |fields| for (fields) |field| switch (field.kind) {
+                .required, .sub_pattern, .rest => |child| try self.markPatternExactSource(child),
+            },
+            .list => |list| {
+                for (list.patterns) |child| try self.markPatternExactSource(child);
+                if (list.rest) |rest| if (rest.pattern) |child| try self.markPatternExactSource(child);
+            },
+            .tuple => |items| for (items) |child| try self.markPatternExactSource(child),
+            .str_interpolation => |interpolation| for (interpolation.steps) |step| {
+                if (step.capture) |child| try self.markPatternExactSource(child);
+            },
+            .pending,
+            .numeral_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
         }
     }
 
@@ -14974,6 +15079,7 @@ const ExactGraphProducerAnalysis = struct {
     fn binderProduces(self: *ExactGraphProducerAnalysis, binder: PatternBinderId) Allocator.Error!bool {
         const raw = @intFromEnum(binder);
         if (raw >= self.binder_value_heads.len) return checkedArtifactInvariant("exact producer analysis referenced a missing binder value", .{});
+        if (self.binder_exact_sources[raw]) return true;
         var current = self.binder_value_heads[raw];
         while (current) |edge| {
             const value = self.binder_values.items[edge];
@@ -15128,67 +15234,21 @@ const ExactGraphProducerAnalysis = struct {
     fn statementReturnsProduced(self: *ExactGraphProducerAnalysis, statement_id: CheckedStatementId) Allocator.Error!bool {
         return switch (self.bodies.statement(statement_id).data) {
             .return_ => |return_| try self.exprProduces(return_.expr),
-            .expr => |expr| switch (self.bodies.expr(expr).data) {
-                .return_ => |return_| try self.exprProduces(return_.expr),
-                .pending,
-                .numeral,
-                .str_from_quote,
-                .str_segment,
-                .str,
-                .bytes_literal,
-                .lookup_local,
-                .lookup_external,
-                .lookup_required,
-                .list,
-                .empty_list,
-                .tuple,
-                .match_,
-                .if_,
-                .call,
-                .record,
-                .empty_record,
-                .block,
-                .tag,
-                .nominal,
-                .zero_argument_tag,
-                .closure,
-                .lambda,
-                .binop,
-                .unary_minus,
-                .unary_not,
-                .field_access,
-                .dispatch_call,
-                .interpolation,
-                .structural_eq,
-                .structural_hash,
-                .method_eq,
-                .type_dispatch_call,
-                .tuple_access,
-                .runtime_error,
-                .crash,
-                .dbg,
-                .expect_err,
-                .expect,
-                .ellipsis,
-                .anno_only,
-                .break_,
-                .for_,
-                .hosted_lambda,
-                .run_low_level,
-                => false,
-            },
+            .decl => |decl| try self.exprReturnsProduced(decl.expr),
+            .var_ => |var_| try self.exprReturnsProduced(var_.expr),
+            .reassign => |reassign| try self.exprReturnsProduced(reassign.expr),
+            .dbg, .expr, .expect => |expr| try self.exprReturnsProduced(expr),
+            .for_ => |for_| try self.exprReturnsProduced(for_.expr) or
+                try self.exprReturnsProduced(for_.body),
+            .while_ => |while_| try self.exprReturnsProduced(while_.cond) or
+                try self.exprReturnsProduced(while_.body),
+            .infinite_loop => |loop| try self.exprReturnsProduced(loop.cond) or
+                try self.exprReturnsProduced(loop.body),
+            .breakable_loop => |loop| try self.exprReturnsProduced(loop.cond) or
+                try self.exprReturnsProduced(loop.body),
             .pending,
-            .decl,
-            .var_,
             .var_uninitialized,
-            .reassign,
             .crash,
-            .dbg,
-            .expect,
-            .for_,
-            .while_,
-            .infinite_loop,
-            .breakable_loop,
             .break_,
             .import_,
             .alias_decl,
@@ -15198,6 +15258,148 @@ const ExactGraphProducerAnalysis = struct {
             .type_var_alias,
             .runtime_error,
             => false,
+        };
+    }
+
+    fn exprsReturnProduced(
+        self: *ExactGraphProducerAnalysis,
+        exprs: []const CheckedExprId,
+    ) Allocator.Error!bool {
+        for (exprs) |expr| if (try self.exprReturnsProduced(expr)) return true;
+        return false;
+    }
+
+    /// Find explicit returns whose value carries an exact graph. This is a
+    /// control-flow walk, separate from `exprProduces`: an exact value merely
+    /// evaluated inside a loop body does not make the enclosing procedure's
+    /// result exact.
+    fn exprReturnsProduced(
+        self: *ExactGraphProducerAnalysis,
+        expr_id: CheckedExprId,
+    ) Allocator.Error!bool {
+        const raw = @intFromEnum(expr_id);
+        if (raw >= self.return_states.len) {
+            return checkedArtifactInvariant("exact return analysis referenced a missing expression", .{});
+        }
+        switch (self.return_states[raw]) {
+            .yes => return true,
+            .no, .visiting => return false,
+            .unknown => self.return_states[raw] = .visiting,
+        }
+        const returns_produced = switch (self.bodies.expr(expr_id).data) {
+            .return_ => |return_| try self.exprProduces(return_.expr),
+            .str => |segments| try self.exprsReturnProduced(segments),
+            .list, .tuple => |items| try self.exprsReturnProduced(items),
+            .match_ => |match_| blk: {
+                if (try self.exprReturnsProduced(match_.cond)) break :blk true;
+                for (match_.branches) |branch| {
+                    if (branch.guard) |guard| {
+                        if (try self.exprReturnsProduced(guard)) break :blk true;
+                    }
+                    if (try self.exprReturnsProduced(branch.value)) break :blk true;
+                }
+                break :blk false;
+            },
+            .if_ => |if_| blk: {
+                for (if_.branches) |branch| {
+                    if (try self.exprReturnsProduced(branch.cond) or
+                        try self.exprReturnsProduced(branch.body)) break :blk true;
+                }
+                break :blk try self.exprReturnsProduced(if_.final_else);
+            },
+            .call => |call| try self.exprReturnsProduced(call.func) or
+                try self.exprsReturnProduced(call.args),
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (try self.exprReturnsProduced(field.value)) break :blk true;
+                }
+                if (record.ext) |ext| break :blk try self.exprReturnsProduced(ext);
+                break :blk false;
+            },
+            .block => |block| blk: {
+                for (block.statements) |statement| {
+                    if (try self.statementReturnsProduced(statement)) break :blk true;
+                }
+                break :blk try self.exprReturnsProduced(block.final_expr);
+            },
+            .tag => |tag| try self.exprsReturnProduced(tag.args),
+            .nominal => |nominal| try self.exprReturnsProduced(nominal.backing_expr),
+            // A closure's lambda has its own return target. Creating the
+            // closure does not execute that body in the enclosing procedure.
+            .closure, .lambda => false,
+            .binop => |binop| try self.exprReturnsProduced(binop.lhs) or
+                try self.exprReturnsProduced(binop.rhs),
+            .unary_minus, .unary_not => |child| try self.exprReturnsProduced(child),
+            .field_access => |field| try self.exprReturnsProduced(field.receiver),
+            .interpolation => |interpolation| blk: {
+                if (try self.exprReturnsProduced(interpolation.first)) break :blk true;
+                for (interpolation.parts) |part| {
+                    if (try self.exprReturnsProduced(part.value) or
+                        try self.exprReturnsProduced(part.following_segment)) break :blk true;
+                }
+                break :blk false;
+            },
+            .structural_eq => |eq| try self.exprReturnsProduced(eq.lhs) or
+                try self.exprReturnsProduced(eq.rhs),
+            .structural_hash => |hash| try self.exprReturnsProduced(hash.value) or
+                try self.exprReturnsProduced(hash.hasher),
+            .tuple_access => |tuple| try self.exprReturnsProduced(tuple.tuple),
+            .dbg, .expect => |child| try self.exprReturnsProduced(child),
+            .expect_err => |expect_err| try self.exprReturnsProduced(expect_err.expr),
+            .for_ => |for_| try self.exprReturnsProduced(for_.expr) or
+                try self.exprReturnsProduced(for_.body),
+            .run_low_level => |run| try self.exprsReturnProduced(run.args),
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .dispatch_call,
+            .method_eq,
+            .type_dispatch_call,
+            .runtime_error,
+            .crash,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .hosted_lambda,
+            => false,
+        };
+        self.return_states[raw] = if (returns_produced) .yes else .no;
+        return returns_produced;
+    }
+
+    fn lowLevelProduces(
+        self: *ExactGraphProducerAnalysis,
+        op: CIR.Expr.LowLevel,
+        args: []const CheckedExprId,
+    ) Allocator.Error!bool {
+        const flow = op.producedTypeFlow();
+        const expected_arity = flow.argumentCount() orelse return false;
+        if (args.len != expected_arity) {
+            return checkedArtifactInvariant(
+                "representation-sensitive low-level operation had an invalid checked arity",
+                .{},
+            );
+        }
+        return switch (flow) {
+            .none => false,
+            .box_from_item => |box| try self.exprProduces(args[box.item_arg]),
+            .box_item => |box| try self.exprProduces(args[box.box_arg]),
+            .list_item => |list| try self.exprProduces(args[list.list_arg]),
+            .same_as_arg => |same| try self.exprProduces(args[same.arg]),
+            .list_insert => |insert| try self.exprProduces(args[insert.list_arg]) or
+                try self.exprProduces(args[insert.item_arg]),
+            .list_join => |join| try self.exprProduces(args[join.left_arg]) or
+                try self.exprProduces(args[join.right_arg]),
+            .list_replace => |replace| try self.exprProduces(args[replace.list_arg]) or
+                try self.exprProduces(args[replace.item_arg]),
         };
     }
 
@@ -15281,6 +15483,12 @@ const ExactGraphProducerAnalysis = struct {
             .dbg, .expect => |child| try self.exprProduces(child),
             .expect_err => |expect_err| try self.exprProduces(expect_err.expr),
             .return_ => |return_| try self.exprProduces(return_.expr),
+            // The loop expression itself produces no item value. Only a
+            // non-local return nested in its operands can determine the
+            // enclosing function's exact result.
+            .for_ => |for_| try self.exprReturnsProduced(for_.expr) or
+                try self.exprReturnsProduced(for_.body),
+            .run_low_level => |run| try self.lowLevelProduces(run.op, run.args),
             .pending,
             .numeral,
             .str_from_quote,
@@ -15303,9 +15511,7 @@ const ExactGraphProducerAnalysis = struct {
             .ellipsis,
             .anno_only,
             .break_,
-            .for_,
             .hosted_lambda,
-            .run_low_level,
             => false,
         };
         self.expr_states[raw] = if (produces) .yes else .no;

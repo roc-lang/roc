@@ -1052,7 +1052,7 @@ fn functionRequestNode(
     }
     if (!changed) {
         // The checked source itself is also the request node when no argument
-        // or result cell changed. Record that fact so lowering the callable
+        // or result cell changed. Record that relation so lowering the callable
         // still uses checked-interface mapping at this boundary.
         try graph.registerRequestCheckedSource(source_fn, source_fn);
         return source_fn;
@@ -12234,9 +12234,22 @@ const CollectedListPattern = struct {
     rest: ?checked.CheckedListRestPattern,
 };
 
+const ControlFlowDestinationRelation = enum {
+    checked_mapping,
+    exact_producer,
+};
+
+const ControlFlowResultSelection = struct {
+    declared: DraftTypeCell,
+    selected: DraftTypeCell,
+    destination_relation: ControlFlowDestinationRelation,
+    has_selection: bool = false,
+    has_value: bool = false,
+};
+
 const ActiveReturnTarget = struct {
     lambda: checked.CheckedExprId,
-    cell: DraftTypeCell,
+    selection: *ControlFlowResultSelection,
 };
 
 const ActiveConstBindingId = enum(u32) { _ };
@@ -12382,9 +12395,9 @@ const BodyContext = struct {
     /// If any argument finalizes as uninhabited, the body is unreachable.
     /// This callee-owned proof is separate from call-chain frame identity.
     function_entry_demand_guards: []const NodeId = &.{},
-    /// Exact return cell owned by the active checked lambda specialization.
-    /// Source `return` expressions must consume this cell rather than create a
-    /// new instantiation of the lambda's checked return type.
+    /// Stable exact result selection owned by the active checked lambda
+    /// specialization. Source `return` expressions and ordinary fallthrough
+    /// both contribute to this one selection.
     current_return_target: ?ActiveReturnTarget = null,
     /// Match lowering can pre-register binder locals with graph type cells so
     /// branch bodies contribute constraints before the scrutinee is sealed.
@@ -13482,7 +13495,7 @@ const BodyContext = struct {
         };
     }
 
-    /// Rebuild a nominal constructor layer around an exact produced backing,
+    /// Construct a nominal constructor layer around an exact produced backing,
     /// or return the exact structural backing directly. Transparent aliases do
     /// not create runtime constructor layers.
     fn producedConstructorNode(
@@ -16429,7 +16442,12 @@ const BodyContext = struct {
         if (arg_nodes.len != checked_args.len) Common.invariant("lambda arity differs from concrete function type");
         const saved_return_target = self.current_return_target;
         defer self.current_return_target = saved_return_target;
-        self.current_return_target = .{ .lambda = lambda_id, .cell = ret_cell };
+        var return_selection = try self.initControlFlowResultSelection(
+            self.view.bodies.expr(checked_body).ty,
+            ret_cell,
+            ret_destination_relation,
+        );
+        self.current_return_target = .{ .lambda = lambda_id, .selection = &return_selection };
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
         const saved_region = self.builder.program.current_region;
@@ -16524,7 +16542,6 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(try self.lowerTypeNode(self.view.bodies.expr(checked_body).ty))
         else
             ret_cell;
-        self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell };
         try self.constrainCheckedInterfaceToCell(
             self.view.bodies.expr(checked_body).ty,
             body_ret_cell,
@@ -16564,21 +16581,19 @@ const BodyContext = struct {
         while (remaining > 0) {
             remaining -= 1;
             const arg_let = arg_lets.items[remaining];
-            body = try self.addExprWithTypeCell(body_ret_cell, .{ .let_ = .{
+            // Argument destructuring only sequences a binding before the
+            // already-lowered body. Its result is the body's exact produced
+            // type, which may refine a checked-public return to a generated
+            // private representation.
+            body = try self.addExprWithTypeCell(self.exprTypeCell(body), .{ .let_ = .{
                 .bind = arg_let.pat,
                 .value = arg_let.value,
                 .rest = body,
             } });
         }
 
-        const body_ret_node = try self.exprTypeCell(body).toGraphNode(self.graph);
-        if (!self.graph.sameClass(declared_ret_node, body_ret_node)) {
-            switch (ret_destination_relation) {
-                .checked_mapping => _ = try self.graph.applyCheckedTypeMapping(declared_ret_node, body_ret_node),
-                .exact_producer => _ = try self.graph.applyProducedTypeToRequest(declared_ret_node, body_ret_node),
-            }
-        }
-        const produced_ret_cell = DraftTypeCell.fromGraphNode(body_ret_node);
+        try self.includeControlFlowResult(&return_selection, body);
+        const produced_ret_cell = try self.finishControlFlowResultSelection(return_selection);
         self.draft.exprs.items[@intFromEnum(body)].ty = produced_ret_cell;
 
         return .{
@@ -16981,9 +16996,11 @@ const BodyContext = struct {
         if (ret.lambda != target.lambda) {
             Common.invariant("checked return target disagreed with the active lambda specialization");
         }
+        const value = try self.lowerExprAtTypeCell(ret.expr, target.selection.declared);
+        try self.includeControlFlowResult(target.selection, value);
         return .{
-            .value = try self.lowerExprAtTypeCell(ret.expr, target.cell),
-            .target = target.cell,
+            .value = value,
+            .target = target.selection.selected,
         };
     }
 
@@ -30007,6 +30024,135 @@ const BodyContext = struct {
         };
     }
 
+    /// Select the exact element representation at a concrete storage meeting
+    /// point. The join visits matching compound structure once, treating a
+    /// public generated node as a request and two exact generated nodes as the
+    /// explicit representation choice required by shared storage.
+    fn storedElementRepresentation(
+        self: *BodyContext,
+        left: NodeId,
+        right: NodeId,
+    ) Allocator.Error!NodeId {
+        if (self.graph.sameClass(left, right)) return self.graph.rootNode(left);
+        return try self.graph.joinProducedTypeRepresentations(left, right);
+    }
+
+    fn listNodeWithElement(
+        self: *BodyContext,
+        list_node: NodeId,
+        element_node: NodeId,
+    ) Allocator.Error!NodeId {
+        if (self.graph.sameClass(try self.graph.listElementNode(list_node), element_node)) {
+            return list_node;
+        }
+        return try self.graph.newNode(.{ .list = element_node });
+    }
+
+    fn lowLevelReplaceResultNode(
+        self: *BodyContext,
+        expected_node: NodeId,
+        list_node: NodeId,
+        element_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const expected_fields = (try self.graph.recordConstructionNodes(expected_node)).fields;
+        const produced_fields = try self.graph.arena().alloc(InstField, expected_fields.len);
+        var found_list = false;
+        var found_prev = false;
+        for (expected_fields, produced_fields) |field, *produced| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            if (Ident.textEql(label, "list")) {
+                produced.* = .{ .name = field.name, .ty = list_node };
+                found_list = true;
+            } else if (Ident.textEql(label, "prev")) {
+                produced.* = .{ .name = field.name, .ty = element_node };
+                found_prev = true;
+            } else {
+                Common.invariant("list_replace_unsafe result had an unexpected record field");
+            }
+        }
+        if (!found_list or !found_prev or expected_fields.len != 2) {
+            Common.invariant("list_replace_unsafe result did not have list and prev fields");
+        }
+        return try self.graph.newNode(.{ .record = .{
+            .fields = produced_fields,
+            .ext = try self.graph.newNode(.empty_record),
+        } });
+    }
+
+    /// Lower a representation-sensitive primitive from the operands' completed
+    /// exact cells. The returned expression keeps the produced cell; the
+    /// checker-authored result is only the destination request it is applied
+    /// to.
+    fn lowerProducedLowLevelExprAtNode(
+        self: *BodyContext,
+        op: can.CIR.Expr.LowLevel,
+        checked_args: []const checked.CheckedExprId,
+        expected_node: NodeId,
+    ) Allocator.Error!?DraftExprId {
+        const flow = op.producedTypeFlow();
+        const expected_arity = flow.argumentCount() orelse return null;
+        if (checked_args.len != expected_arity) {
+            Common.invariant("representation-sensitive low-level operation had an invalid checked arity");
+        }
+
+        const arg_nodes = try self.allocator.alloc(NodeId, checked_args.len);
+        defer self.allocator.free(arg_nodes);
+        const reserved = try self.reserveExprSpan(checked_args.len);
+        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
+        for (checked_args, 0..) |checked_arg, index| {
+            const lowered = try self.lowerExprAtTypeCell(
+                checked_arg,
+                DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(checked_arg)),
+            );
+            arg_nodes[index] = try self.exprTypeCell(lowered).toGraphNode(self.graph);
+            self.draft.setReservedExprSpanItem(reserved, index, lowered);
+        }
+
+        const produced_node = switch (flow) {
+            .none => unreachable,
+            .box_from_item => |box| try self.graph.newNode(.{ .box = arg_nodes[box.item_arg] }),
+            .box_item => |box| try self.graph.boxElementNode(arg_nodes[box.box_arg]),
+            .list_item => |list| try self.graph.listElementNode(arg_nodes[list.list_arg]),
+            .same_as_arg => |same| arg_nodes[same.arg],
+            .list_insert => |insert| blk: {
+                const list_node = arg_nodes[insert.list_arg];
+                const stored_element = try self.graph.listElementNode(list_node);
+                const produced_element = try self.storedElementRepresentation(
+                    stored_element,
+                    arg_nodes[insert.item_arg],
+                );
+                break :blk try self.listNodeWithElement(list_node, produced_element);
+            },
+            .list_join => |join| blk: {
+                const left_list = arg_nodes[join.left_arg];
+                const right_list = arg_nodes[join.right_arg];
+                const produced_element = try self.storedElementRepresentation(
+                    try self.graph.listElementNode(left_list),
+                    try self.graph.listElementNode(right_list),
+                );
+                break :blk try self.listNodeWithElement(left_list, produced_element);
+            },
+            .list_replace => |replace| blk: {
+                const input_list = arg_nodes[replace.list_arg];
+                const produced_element = try self.storedElementRepresentation(
+                    try self.graph.listElementNode(input_list),
+                    arg_nodes[replace.item_arg],
+                );
+                const produced_list = try self.listNodeWithElement(input_list, produced_element);
+                break :blk try self.lowLevelReplaceResultNode(
+                    expected_node,
+                    produced_list,
+                    produced_element,
+                );
+            },
+        };
+        _ = try self.graph.applyProducedTypeToRequest(expected_node, produced_node);
+        return try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(produced_node),
+            .{ .low_level = .{ .op = op, .args = reserved.span } },
+        );
+    }
+
     fn lowerExprAtTypeCellInner(
         self: *BodyContext,
         checked_expr: checked.CheckedExprId,
@@ -30020,6 +30166,14 @@ const BodyContext = struct {
                     break :blk restored;
                 }
                 const expr = self.view.bodies.expr(checked_expr);
+                if (expr.data == .run_low_level) {
+                    const low_level = expr.data.run_low_level;
+                    if (try self.lowerProducedLowLevelExprAtNode(
+                        low_level.op,
+                        low_level.args,
+                        expected_node,
+                    )) |lowered| break :blk lowered;
+                }
                 switch (expr.data) {
                     .lookup_local => |lookup| break :blk try self.lowerLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
                     .lookup_external => |resolved| break :blk try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node),
@@ -30821,8 +30975,7 @@ const BodyContext = struct {
             for (lowered[1..]) |item| {
                 const item_node = try self.exprTypeCell(item).toGraphNode(self.graph);
                 if (!self.graph.sameClass(produced_element, item_node)) {
-                    try self.graph.unify(produced_element, item_node);
-                    produced_element = self.graph.rootNode(produced_element);
+                    produced_element = try self.graph.joinProducedTypeRepresentations(produced_element, item_node);
                 }
             }
         }
@@ -41722,32 +41875,21 @@ const BodyContext = struct {
         return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
     }
 
-    const ControlFlowResultSelection = struct {
-        declared: DraftTypeCell,
-        selected: DraftTypeCell,
-        destination_relation: ControlFlowDestinationRelation,
-        has_selection: bool = false,
-        has_value: bool = false,
-    };
-
-    const ControlFlowDestinationRelation = enum {
-        checked_mapping,
-        exact_producer,
-    };
-
     /// A value-producing control-flow expression owns one result selection.
     /// Each branch is lowered exactly once and returns its exact graph cell;
     /// those cells join before sealing, so already-emitted branch IR observes
     /// the deterministic joined root without being lowered or rewritten again.
     fn initControlFlowResultSelection(
-        _: *BodyContext,
+        self: *BodyContext,
         _: checked.CheckedTypeId,
         declared: DraftTypeCell,
         destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!ControlFlowResultSelection {
         return .{
             .declared = declared,
-            .selected = declared,
+            .selected = DraftTypeCell.fromGraphNode(try self.graph.newNode(.{
+                .unresolved = InstVariable.placeholder(),
+            })),
             .destination_relation = destination_relation,
         };
     }
@@ -41772,14 +41914,15 @@ const BodyContext = struct {
         if (self.exprImpossibilityProof(value) != null) return;
         const value_cell = self.exprTypeCell(value);
         const value_node = try value_cell.toGraphNode(self.graph);
+        const selected_node = try selection.selected.toGraphNode(self.graph);
         if (!selection.has_selection) {
             try self.applyControlFlowDestination(selection.*, value_node);
-            selection.selected = value_cell;
+            try self.graph.writeProducedTypeSelection(selected_node, value_node);
             selection.has_selection = true;
         } else {
-            const selected_node = try selection.selected.toGraphNode(self.graph);
             if (!self.graph.sameClass(selected_node, value_node)) {
-                try self.graph.joinProducedTypeRepresentations(selected_node, value_node);
+                const joined = try self.graph.joinProducedTypeRepresentations(selected_node, value_node);
+                try self.graph.writeProducedTypeSelection(selected_node, joined);
             }
         }
         selection.has_value = true;

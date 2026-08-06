@@ -1211,16 +1211,18 @@ test "Monotype lambda argument patterns retain graph provenance" {
     try expectNotContains(lambda_args, "lowerPatternAtType(pattern_id");
 }
 
-test "Monotype returns consume the active specialization return cell" {
+test "Monotype returns share the active specialization result selection" {
     const lower_source = @embedFile("monotype/lower.zig");
     const lower_return = sourceSliceBetween(
         lower_source,
         "fn lowerReturn(",
         "fn lowerComptimeRootExprAtCell(",
     );
-    try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell }");
+    try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .selection = &return_selection }");
     try expectContains(lower_return, "ret.lambda != target.lambda");
-    try expectContains(lower_return, "self.lowerExprAtTypeCell(ret.expr, target.cell)");
+    try expectContains(lower_return, "self.lowerExprAtTypeCell(ret.expr, target.selection.declared)");
+    try expectContains(lower_return, "self.includeControlFlowResult(target.selection, value)");
+    try expectContains(lower_return, ".target = target.selection.selected");
     try expectNotContains(lower_source, "returnTargetTypeCell");
 
     const lambda_node = sourceSliceBetween(
