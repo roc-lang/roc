@@ -325,6 +325,9 @@ pub const LocalProcedureMethodTarget = struct {
     context_anchor: CheckedStatementId,
     /// Exact generalized-local evidence scope owned by this target.
     dispatch_scope: ?DispatchScopeId = null,
+    /// Whether this local procedure consumes or produces an exact Monotype
+    /// graph that must become its specialization interface.
+    graph_participating: bool = false,
 };
 
 /// Public `MethodTargetKind` declaration.
@@ -449,7 +452,13 @@ pub const MethodRegistry = struct {
                         } };
                     },
                 }
-            } else if (localProcedureTargetForMethodBinding(module, checked_bodies, entry.key.owner, entry.value)) |local|
+            } else if (localProcedureTargetForMethodBinding(
+                module,
+                checked_bodies,
+                entry.key.owner,
+                entry.value,
+                method_requires_exact_graph,
+            )) |local|
                 .{ .local_proc = local }
             else if (referencedProcedureTargetForMethodBinding(
                 module,
@@ -557,6 +566,7 @@ fn localProcedureTargetForMethodBinding(
     checked_bodies: anytype,
     owner_statement: CIR.Statement.Idx,
     binding: ModuleEnv.MethodBinding,
+    graph_participating: bool,
 ) ?LocalProcedureMethodTarget {
     const raw_node = @intFromEnum(binding.type_node_idx);
     if (raw_node >= module.nodeCount()) {
@@ -602,6 +612,7 @@ fn localProcedureTargetForMethodBinding(
         .binder = binder,
         .expr = expr,
         .context_anchor = context_anchor,
+        .graph_participating = graph_participating,
     };
 }
 
@@ -663,6 +674,7 @@ fn referencedProcedureTargetForMethodBinding(
                         .binder = binder,
                         .expr = expr,
                         .context_anchor = checked_bodies.statementIdForSource(decl.statement) orelse return null,
+                        .graph_participating = method_requires_exact_graph,
                     } },
                     .callable_var = module.exprType(decl.expr),
                 };

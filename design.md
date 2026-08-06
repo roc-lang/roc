@@ -2361,11 +2361,12 @@ representation; other graph-sensitive procedures carry no protocol. No
 consumer may inspect a procedure body, builtin name, owner type, or result shape
 to reconstruct this category.
 
-CheckedModule preserves this category on every direct `ProcedureUseTemplate`
-and every exported or imported procedure binding. Monotype gives every
-graph-participating procedure an `exact_graph` specialization signature, not
-only procedures with an iterator construction protocol. The call's exact
-argument and result graph is therefore the procedure body's graph. For example,
+CheckedModule preserves this category on every direct `ProcedureUseTemplate`,
+every exported or imported procedure binding, and every selected local
+procedure method target. Monotype gives every graph-participating top-level or
+local procedure an `exact_graph` specialization signature, not only procedures
+with an iterator construction protocol. The call's exact argument and result
+graph is therefore the procedure body's graph. For example,
 when `Iter.fold` consumes a generated iterator, its recursive `rest` binder is
 the exact generated iterator from the call; it is never reinstantiated as the
 checked-public `Iter` declaration. A checked iterator procedure identity without
@@ -2374,9 +2375,10 @@ graph participation is an invariant violation.
 The compiler-owned interpolation protocol is graph-participating too. Its
 generated iterator operand has no source expression whose checked type could
 carry the exact implementation, so method-registry construction explicitly
-marks every selected `from_interpolation` procedure target as
-graph-participating. Downstream code consumes that category; it does not infer
-it from the method name or rediscover it from the callable shape.
+marks every selected `from_interpolation` procedure target, including a
+capturing block-local target, as graph-participating. Downstream code consumes
+that category; it does not infer it from the method name or rediscover it from
+the callable shape.
 
 Compiler-generated body-local functions are exact producers too. Iterator step
 closures, field-iteration steps, parser runtimes, encoder runtimes, and encoder

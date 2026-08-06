@@ -17733,6 +17733,7 @@ const BodyContext = struct {
                         self.view.types.rootKey(expr.ty),
                         request_fn_node,
                         try self.evidenceForUseSite(record.expr),
+                        .independent_roots,
                     );
                     const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                     return try self.addExprWithTypeCell(
@@ -18234,6 +18235,13 @@ const BodyContext = struct {
             .graph_participating => .exact_graph,
             .procedure, .low_level, .intrinsic => .independent_roots,
         };
+    }
+
+    fn localProcedureSignatureRelation(
+        _: *BodyContext,
+        target: static_dispatch.LocalProcedureMethodTarget,
+    ) Ast.SignatureRelation {
+        return if (target.graph_participating) .exact_graph else .independent_roots;
     }
 
     fn callsiteIntrinsicForMethodTarget(
@@ -25663,6 +25671,7 @@ const BodyContext = struct {
                 source_fn_key,
                 request_fn_node,
                 evidence,
+                .independent_roots,
             ) },
             .top_level_proc,
             .imported_proc,
@@ -25716,6 +25725,7 @@ const BodyContext = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
+        signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnTarget {
         const context = self.validateLocalProcContext(
             context_id,
@@ -25789,7 +25799,7 @@ const BodyContext = struct {
             capture_entry_guards,
             requested_evidence,
             local.dispatch_scope,
-            .independent_roots,
+            signature_relation,
         );
     }
 
@@ -26386,6 +26396,7 @@ const BodyContext = struct {
                     self.view.types.rootKey(checked_ty),
                     request_fn_node,
                     try self.evidenceForUseSite(record.expr),
+                    .independent_roots,
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                 break :blk try self.addExprWithTypeCell(
@@ -26499,6 +26510,7 @@ const BodyContext = struct {
                     self.view.types.rootKey(checked_ty),
                     expected_node,
                     try self.evidenceForUseSite(record.expr),
+                    .independent_roots,
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, expected_node);
                 return try self.addExprWithTypeCell(
@@ -33643,6 +33655,7 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
+                    self.localProcedureSignatureRelation(local),
                 ) };
             },
             .structural => Common.invariant("structural method registry result has no callable procedure body"),
@@ -33729,6 +33742,7 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
+                    self.localProcedureSignatureRelation(local),
                 ) };
             },
             .structural => Common.invariant("direct checked call targeted a structural derivation"),

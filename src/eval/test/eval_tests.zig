@@ -1115,6 +1115,27 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
     },
     .{
+        .name = "inspect: capturing local from_interpolation receives exact generated iterator",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    suffix = "!"
+        \\    Local := [Local(Str)].{
+        \\        from_interpolation : Str, Iter((Str, Str)) -> Local
+        \\        from_interpolation = |first, rest| {
+        \\            joined = rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))
+        \\            Local.Local(joined.concat(suffix))
+        \\        }
+        \\    }
+        \\    name = "world"
+        \\    value : Local
+        \\    value = "hello ${name}"
+        \\    value
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Local(\"hello world!\")" },
+    },
+    .{
         .name = "inspect: generalized interpolation supports custom and builtin specializations",
         .source_kind = .module,
         .source =
