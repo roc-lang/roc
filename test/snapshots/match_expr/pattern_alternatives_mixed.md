@@ -18,14 +18,13 @@ match ... {
 UNCONDITIONAL CONDITION - pattern_alternatives_mixed.md:1:7:1:10
 # PROBLEMS
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
-└┬────────────────────────┘  this match will always inspect the same value.   │
- │                                                                            │
- │  match ... {                                                               │
- │        ‾‾‾                                                                 │
- └───────────────────────────────────────── pattern_alternatives_mixed.md:1:7 ┘
+-- ⚠️ UNCONDITIONAL CONDITION --------------- pattern_alternatives_mixed.md:1:7
 
+This match value is known at compile time, so this match will always inspect
+the same value.
+
+match ... {
+      ^^^
 
 # TOKENS
 ~~~zig

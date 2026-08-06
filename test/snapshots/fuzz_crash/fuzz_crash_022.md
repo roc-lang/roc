@@ -33,254 +33,219 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 # PROBLEMS
 
-┌──────────────────────────┐
-│ EXPECTED DEPENDENCY NAME ├─ I was parsing an app dependency record, and I ──┐
-└┬─────────────────────────┘  expected a lowercase field name.                │
- │                                                                            │
- │  app [main!] { |f: platform "c" }                                          │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_022.md:1:1 ┘
+-- ❌ EXPECTED DEPENDENCY NAME -------------------------- fuzz_crash_022.md:1:1
 
-    Each package or platform entry starts with a lowercase field name, followed
-    by `:` and a string path or `platform` path.
+I was parsing an app dependency record, and I expected a lowercase field name.
 
-    For example:
-        pf: platform "../platform/main.roc"
+app [main!] { |f: platform "c" }
+^^^
 
-    I found `app` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+Each package or platform entry starts with a lowercase field name, followed by
+`:` and a string path or `platform` path.
 
+For example:
+    pf: platform "../platform/main.roc"
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  app [main!] { |f: platform "c" }                                          │
- │                    ‾‾‾‾‾‾‾‾                                                │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:1:19 ┘
+I found `app` here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+-- ❌ UNEXPECTED TYPE SYNTAX --------------------------- fuzz_crash_022.md:1:19
 
-    For example:
-        List(U64)
+I was parsing a type annotation, and this token cannot start a type here.
 
-    I found `platform` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+app [main!] { |f: platform "c" }
+                  ^^^^^^^^
 
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app [main!] { |f: platform "c" }                                          │
- │                             ‾                                              │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:1:28 ┘
+For example:
+    List(U64)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `platform` here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-    For example:
-        answer = 42
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_022.md:1:28
 
-    I found `"` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+app [main!] { |f: platform "c" }
+                           ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app [main!] { |f: platform "c" }                                          │
- │                              ‾                                             │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:1:29 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `"` here.
 
-    I found `c` here.
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_022.md:1:29
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app [main!] { |f: platform "c" }                                          │
- │                               ‾                                            │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:1:30 ┘
+app [main!] { |f: platform "c" }
+                            ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `"` here.
+I found `c` here.
 
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_022.md:1:30
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app [main!] { |f: platform "c" }                                          │
- │                                 ‾                                          │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:1:32 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+app [main!] { |f: platform "c" }
+                             ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `"` here.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  getUser = |id| if (id > 1!) "big" else "l"                                │
- │                            ‾                                               │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:6:27 ┘
+-- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_022.md:1:32
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        add(1, 2)
+app [main!] { |f: platform "c" }
+                               ^
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  getUser = |id| if (id > 1!) "big" else "l"                                │
- │                                    ‾‾‾‾                                    │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:6:35 ┘
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+-- ❌ UNEXPECTED EXPRESSION SYNTAX --------------------- fuzz_crash_022.md:6:27
 
-    For example:
-        add(1, 2)
+I was parsing an expression, and this token cannot start an expression here.
 
-    I found `else` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+getUser = |id| if (id > 1!) "big" else "l"
+                          ^
 
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  -ain! = |_| getUser(900)                                                  │
- │        ‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_022.md:8:7 ┘
+For example:
+    add(1, 2)
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I found `)` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        add(1, 2)
+-- ❌ UNEXPECTED EXPRESSION SYNTAX --------------------- fuzz_crash_022.md:6:35
 
-    I found `=` here.
+I was parsing an expression, and this token cannot start an expression here.
+
+getUser = |id| if (id > 1!) "big" else "l"
+                                  ^^^^
+
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
+
+For example:
+    add(1, 2)
+
+I found `else` here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
+
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ---------------------- fuzz_crash_022.md:8:7
+
+I was parsing an expression, and this token cannot start an expression here.
+
+-ain! = |_| getUser(900)
+      ^
+
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
+
+For example:
+    add(1, 2)
+
+I found `=` here.
+
+-- ❌ EXPECTED TUPLE SEPARATOR -------------------------- fuzz_crash_022.md:9:1
+
+I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.
 
 
-┌──────────────────────────┐
-│ EXPECTED TUPLE SEPARATOR ├─ I was parsing a parenthesized expression or ────┐
-└┬─────────────────────────┘  tuple, and I expected `,` or `)`.               │
- │                                                                            │
- │                                                                            │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
+^
 
-    Separate tuple elements with commas and close the tuple or parenthesized
-    expression with `)`.
+Separate tuple elements with commas and close the tuple or parenthesized
+expression with `)`.
 
-    For example:
-        (x, y)
+For example:
+    (x, y)
 
-    I reached the end of the file before this construct was complete.
+I reached the end of the file before this construct was complete.
+
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ---------------------- fuzz_crash_022.md:9:1
+
+I was parsing an expression, and this token cannot start an expression here.
 
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │                                                                            │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_022.md:9:1 ┘
+^
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    For example:
-        add(1, 2)
+For example:
+    add(1, 2)
 
-    I reached the end of the file before this construct was complete.
+I reached the end of the file before this construct was complete.
 
+-- ❌ MALFORMED TYPE ----------------------------------- fuzz_crash_022.md:1:19
 
-┌────────────────┐
-│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
-└┬───────────────┘  syntax.                                                   │
- │                                                                            │
- │  app [main!] { |f: platform "c" }                                          │
- │                    ‾‾‾‾‾‾‾‾                                                │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:1:19 ┘
+This type annotation is malformed or contains invalid syntax.
 
-
+app [main!] { |f: platform "c" }
+                  ^^^^^^^^
 
 INVALID IF CONDITION
 
 The condition in this `if` expression could not be processed.
 The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
 
+-- ⚠️ UNUSED VARIABLE ---------------------------------- fuzz_crash_022.md:6:12
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `id` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  getUser = |id| if (id > 1!) "big" else "l"                                │
- │             ‾‾                                                             │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:6:12 ┘
+Variable `id` is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_id` to
-    suppress this warning.
+getUser = |id| if (id > 1!) "big" else "l"
+           ^^
 
+If you don't need this variable, prefix it with an underscore like `_id` to
+suppress this warning.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  app [main!] { |f: platform "c" }                                          │
- │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
- └──────────────────────────────────────────────────── fuzz_crash_022.md:1:16 ┘
+-- ⚠️ DECLARATION HAS NO VALUE ------------------------- fuzz_crash_022.md:1:16
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+This declaration has a type annotation but no implementation.
 
+app [main!] { |f: platform "c" }
+               ^^^^^^^^^^^
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  ser : UserId -> Str                                                       │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_022.md:5:1 ┘
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+-- ⚠️ DECLARATION HAS NO VALUE -------------------------- fuzz_crash_022.md:5:1
 
+This declaration has a type annotation but no implementation.
+
+ser : UserId -> Str
+^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,OpBar,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

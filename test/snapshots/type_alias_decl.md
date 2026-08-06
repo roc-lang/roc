@@ -55,53 +55,45 @@ UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
 
-┌───────────────────────┐
-│ BUILTIN TYPE SHADOWED ├─ The type `Try` shadows a builtin type. ────────────┐
-└┬──────────────────────┘                                                     │
- │                                                                            │
- │  Try(ok, err) : [Ok(ok), Err(err)]                                         │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └──────────────────────────────────────────────────── type_alias_decl.md:7:1 ┘
+-- ⚠️ BUILTIN TYPE SHADOWED ---------------------------- type_alias_decl.md:7:1
 
-    This may make the builtin type inaccessible in this scope.
+The type `Try` shadows a builtin type.
 
-    The new declaration is here:
+Try(ok, err) : [Ok(ok), Err(err)]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+This may make the builtin type inaccessible in this scope.
 
-┌──────────────────────────────────────────┐
-│ OPEN EXT NOT ALLOWED IN TYPE DECLARATION ├─ You cannot use a `..` inside ───┐
-└┬─────────────────────────────────────────┘  a type declaration.             │
- │                                                                            │
- │  Letters : [A, B, ..]                                                      │
- │                   ‾‾                                                       │
- └────────────────────────────────────────────────── type_alias_decl.md:22:18 ┘
+The new declaration is here:
 
-    Hint: You need a named variable, like `..others`, to use this here.
+-- ❌ OPEN EXT NOT ALLOWED IN TYPE DECLARATION ------- type_alias_decl.md:22:18
 
+You cannot use a `..` inside a type declaration.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `person` is defined here and then never used. ──┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  person = { name: "Alice", age: 30 }                                       │
- │  ‾‾‾‾‾‾                                                                    │
- └─────────────────────────────────────────────────── type_alias_decl.md:36:5 ┘
+Letters : [A, B, ..]
+                 ^^
 
-    If you don't need this variable, prefix it with an underscore like
-    `_person` to suppress this warning.
+Hint: You need a named variable, like `..others`, to use this here.
 
+-- ⚠️ UNUSED VARIABLE --------------------------------- type_alias_decl.md:36:5
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `color` is defined here and then never used. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  color = Red                                                               │
- │  ‾‾‾‾‾                                                                     │
- └─────────────────────────────────────────────────── type_alias_decl.md:39:5 ┘
+Variable `person` is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_color`
-    to suppress this warning.
+person = { name: "Alice", age: 30 }
+^^^^^^
 
+If you don't need this variable, prefix it with an underscore like `_person` to
+suppress this warning.
+
+-- ⚠️ UNUSED VARIABLE --------------------------------- type_alias_decl.md:39:5
+
+Variable `color` is defined here and then never used:
+
+color = Red
+^^^^^
+
+If you don't need this variable, prefix it with an underscore like `_color` to
+suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

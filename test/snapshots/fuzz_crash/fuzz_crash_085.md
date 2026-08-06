@@ -16,77 +16,61 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_085.md:1:27:1:28
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_085.md:1:32:1:34
 # PROBLEMS
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}                                      │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_085.md:1:3 ┘
+-- ❌ UNDERSCORE IN TYPE ALIAS -------------------------- fuzz_crash_085.md:1:3
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+Underscores are not allowed in type alias declarations.
 
+C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
+  ^
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}                                      │
- │               ‾                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_085.md:1:14 ┘
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+-- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_085.md:1:14
 
+The type variable `a` is not declared in this scope.
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `b` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}                                      │
- │                 ‾                                                          │
- └──────────────────────────────────────────────────── fuzz_crash_085.md:1:16 ┘
+C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
+             ^
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+Type variables must be introduced in a type annotation before they can be used.
 
+-- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_085.md:1:16
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `r` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}                                      │
- │                        ‾                                                   │
- └──────────────────────────────────────────────────── fuzz_crash_085.md:1:23 ┘
+The type variable `b` is not declared in this scope.
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
+               ^
 
+Type variables must be introduced in a type annotation before they can be used.
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `e` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}                                      │
- │                            ‾                                               │
- └──────────────────────────────────────────────────── fuzz_crash_085.md:1:27 ┘
+-- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_085.md:1:23
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+The type variable `r` is not declared in this scope.
 
+C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
+                      ^
 
-┌─────────────────────────┐
-│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
-└┬────────────────────────┘  it is empty.                                     │
- │                                                                            │
- │  C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}                                      │
- │                                 ‾‾                                         │
- └──────────────────────────────────────────────────── fuzz_crash_085.md:1:32 ┘
+Type variables must be introduced in a type annotation before they can be used.
 
-    If you want to represent nothing, try using an empty record: `{}`.
+-- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_085.md:1:27
 
+The type variable `e` is not declared in this scope.
+
+C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
+                          ^
+
+Type variables must be introduced in a type annotation before they can be used.
+
+-- ❌ EMPTY TUPLE NOT ALLOWED -------------------------- fuzz_crash_085.md:1:32
+
+I am part way through parsing this tuple, but it is empty.
+
+C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
+                               ^^
+
+If you want to represent nothing, try using an empty record: `{}`.
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,Underscore,Comma,LowerIdent,CloseRound,OpColon,NoSpaceOpenRound,CloseRound,UpperIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,LowerIdent,CloseCurly,UpperIdent,OpColon,LowerIdent,LowerIdent,OpAssign,OpenCurly,NoSpaceOpenRound,CloseRound,OpenCurly,CloseCurly,CloseCurly,

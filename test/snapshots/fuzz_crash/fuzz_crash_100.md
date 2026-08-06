@@ -13,22 +13,19 @@ T := [].{
 INVALID RECURSIVE TYPE - fuzz_crash_100.md:2:2:2:9
 # PROBLEMS
 
-┌────────────────────────┐
-│ INVALID RECURSIVE TYPE ├─ The nominal type T.A refers to itself in a way ───┐
-└┬───────────────────────┘  that would make it infinite.                      │
- │                                                                            │
- │  A ::T.A                                                                   │
- │  ‾‾‾‾‾‾‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_100.md:2:2 ┘
+-- ❌ INVALID RECURSIVE TYPE ---------------------------- fuzz_crash_100.md:2:2
 
-    Its definition is:
+The nominal type T.A refers to itself in a way that would make it infinite.
 
-        T.A
+A ::T.A
+^^^^^^^
 
-    Hint: Recursion in a nominal type is only allowed inside a tag union
-    payload or record field—for example `ConsList(a) := [Nil, Cons(a,
-    ConsList(a))]`.
+Its definition is:
 
+    T.A
+
+Hint: Recursion in a nominal type is only allowed inside a tag union payload or
+record field — for example `ConsList(a) := [Nil, Cons(a, ConsList(a))]`.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

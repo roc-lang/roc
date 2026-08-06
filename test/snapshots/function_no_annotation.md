@@ -24,16 +24,14 @@ main! = process!(42)
 NAME NOT IN SCOPE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  print_number! = |n| Stdout.line!(n)                                       │
- │                      ‾‾‾‾‾‾‾‾‾‾‾‾                                          │
- └──────────────────────────────────────────── function_no_annotation.md:9:21 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------ function_no_annotation.md:9:21
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `line!` in this scope.
 
+print_number! = |n| Stdout.line!(n)
+                    ^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

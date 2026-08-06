@@ -18,75 +18,67 @@ UNEXPECTED STATEMENT - malformed_nominal.md:1:7:1:8
 UNEXPECTED STATEMENT - malformed_nominal.md:1:8:1:9
 # PROBLEMS
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  @2 := {}                                                                  │
- │  ‾‾                                                                        │
- └────────────────────────────────────────────────── malformed_nominal.md:1:1 ┘
+-- ❌ UNEXPECTED STATEMENT --------------------------- malformed_nominal.md:1:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+@2 := {}
+^^
 
-    I found `@2` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  @2 := {}                                                                  │
- │     ‾‾                                                                     │
- └────────────────────────────────────────────────── malformed_nominal.md:1:4 ┘
+I found `@2` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+-- ❌ UNEXPECTED STATEMENT --------------------------- malformed_nominal.md:1:4
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `:=` here.
+@2 := {}
+   ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  @2 := {}                                                                  │
- │        ‾                                                                   │
- └────────────────────────────────────────────────── malformed_nominal.md:1:7 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `:=` here.
 
-    For example:
-        answer = 42
+-- ❌ UNEXPECTED STATEMENT --------------------------- malformed_nominal.md:1:7
 
-    I found `{` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+@2 := {}
+      ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  @2 := {}                                                                  │
- │         ‾                                                                  │
- └────────────────────────────────────────────────── malformed_nominal.md:1:8 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `{` here.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+-- ❌ UNEXPECTED STATEMENT --------------------------- malformed_nominal.md:1:8
 
+I was parsing a statement, and this token cannot start a statement here.
+
+@2 := {}
+       ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 # TOKENS
 ~~~zig
 OpaqueName,OpColonEqual,OpenCurly,CloseCurly,

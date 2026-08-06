@@ -11,18 +11,16 @@ type=expr
 TYPE MISMATCH - list_type_err.md:1:8:1:15
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  [1, 2, "hello"]                                                           │
- │         ‾‾‾‾‾‾‾                                                            │
- └────────────────────────────────────────────────────── list_type_err.md:1:8 ┘
+-- ❌ TYPE MISMATCH -------------------------------------- list_type_err.md:1:8
 
-    The type was determined to be:
+This string literal is being used where a non-string type is needed.
 
-        Dec
+[1, 2, "hello"]
+       ^^^^^^^
 
+The type was determined to be:
+
+    Dec
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,

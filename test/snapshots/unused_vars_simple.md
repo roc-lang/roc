@@ -32,29 +32,25 @@ UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
 UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `x` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  unused_regular = |x| 42                                                   │
- │                    ‾                                                       │
- └──────────────────────────────────────────────── unused_vars_simple.md:4:19 ┘
+-- ⚠️ UNUSED VARIABLE ------------------------------ unused_vars_simple.md:4:19
 
-    If you don't need this variable, prefix it with an underscore like `_x` to
-    suppress this warning.
+Variable `x` is defined here and then never used:
 
+unused_regular = |x| 42
+                  ^
 
-┌──────────────────────────┐
-│ UNDERSCORE VARIABLE USED ├─ Variable `_value` is prefixed with an ──────────┐
-└┬─────────────────────────┘  underscore but is actually used.                │
- │                                                                            │
- │  used_underscore = |_value| _value                                         │
- │                             ‾‾‾‾‾‾                                         │
- └──────────────────────────────────────────────── unused_vars_simple.md:7:28 ┘
+If you don't need this variable, prefix it with an underscore like `_x` to
+suppress this warning.
 
-    Variables prefixed with `_` are intended to be unused. Remove the
-    underscore prefix: `value`.
+-- ⚠️ UNDERSCORE VARIABLE USED --------------------- unused_vars_simple.md:7:28
 
+Variable `_value` is prefixed with an underscore but is actually used.
+
+used_underscore = |_value| _value
+                           ^^^^^^
+
+Variables prefixed with `_` are intended to be unused. Remove the underscore
+prefix: `value`.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

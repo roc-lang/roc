@@ -15,22 +15,20 @@ Wrap :: { a : U8, b : U8 }.{
 INVALID NOMINAL RECORD - issue_10195_nominal_record_update_rewrapped.md:4:22:4:47
 # PROBLEMS
 
-┌────────────────────────┐
-│ INVALID NOMINAL RECORD ├─ I'm having trouble with this nominal type that ───┐
-└┬───────────────────────┘  wraps a record.                                   │
- │                                                                            │
- │  inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }                             │
- │                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                             │
- └─────────────────────── issue_10195_nominal_record_update_rewrapped.md:4:22 ┘
+-- ❌ INVALID NOMINAL RECORD ----- issue_10195_nominal_record_update_rewrapped.md:4:22
 
-    The record I found is:
+I'm having trouble with this nominal type that wraps a record.
 
-        Wrap
+inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    But the nominal type expects:
+The record I found is:
 
-        { a: U8, b: U8 }
+    Wrap
 
+But the nominal type expects:
+
+    { a: U8, b: U8 }
 # TOKENS
 ~~~zig
 UpperIdent,OpDoubleColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Dot,OpenCurly,

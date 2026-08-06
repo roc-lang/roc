@@ -11,18 +11,16 @@ type=expr
 TYPE MISMATCH - can_list_heterogeneous.md:1:5:1:12
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  [1, "hello", 3.14]                                                        │
- │      ‾‾‾‾‾‾‾                                                               │
- └───────────────────────────────────────────── can_list_heterogeneous.md:1:5 ┘
+-- ❌ TYPE MISMATCH ----------------------------- can_list_heterogeneous.md:1:5
 
-    The type was determined to be:
+This string literal is being used where a non-string type is needed.
 
-        Dec
+[1, "hello", 3.14]
+    ^^^^^^^
 
+The type was determined to be:
+
+    Dec
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,Comma,Float,CloseSquare,

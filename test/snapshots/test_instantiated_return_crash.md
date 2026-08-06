@@ -19,22 +19,20 @@ type=expr
 TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  needs_string = |f| f(["hello"])                                           │
- │                       ‾‾‾‾‾‾‾‾‾                                            │
- └──────────────────────────────────── test_instantiated_return_crash.md:6:26 ┘
+-- ❌ TYPE MISMATCH -------------------- test_instantiated_return_crash.md:6:26
 
-    This argument has the type:
+The first argument being passed to this function has the wrong type.
 
-        List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]
+needs_string = |f| f(["hello"])
+                     ^^^^^^^^^
 
-    But `f` needs the first argument to be:
+This argument has the type:
 
-        Str
+    List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]
 
+But `f` needs the first argument to be:
+
+    Str
 # TOKENS
 ~~~zig
 OpenCurly,

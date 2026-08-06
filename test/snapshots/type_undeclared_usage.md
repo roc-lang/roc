@@ -21,46 +21,38 @@ UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 MOD NOT IMPORTED - type_undeclared_usage.md:8:15:8:34
 # PROBLEMS
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `UnknownType` is not declared in this scope. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  MyType : UnknownType                                                      │
- │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └───────────────────────────────────────────── type_undeclared_usage.md:1:10 ┘
+-- ❌ UNDECLARED TYPE --------------------------- type_undeclared_usage.md:1:10
+
+The type `UnknownType` is not declared in this scope.
+
+MyType : UnknownType
+         ^^^^^^^^^^^
 
 
+-- ❌ UNDECLARED TYPE --------------------------- type_undeclared_usage.md:3:16
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `UndeclaredResult` is not declared in this ─────┐
-└┬────────────────┘  scope.                                                   │
- │                                                                            │
- │  processValue : UndeclaredResult -> Str                                    │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
- └───────────────────────────────────────────── type_undeclared_usage.md:3:16 ┘
+The type `UndeclaredResult` is not declared in this scope.
+
+processValue : UndeclaredResult -> Str
+               ^^^^^^^^^^^^^^^^
 
 
+-- ⚠️ UNUSED VARIABLE --------------------------- type_undeclared_usage.md:4:17
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `value` is defined here and then never used. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processValue = |value| {                                                  │
- │                  ‾‾‾‾‾                                                     │
- └───────────────────────────────────────────── type_undeclared_usage.md:4:17 ┘
+Variable `value` is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_value`
-    to suppress this warning.
+processValue = |value| {
+                ^^^^^
 
+If you don't need this variable, prefix it with an underscore like `_value` to
+suppress this warning.
 
-┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `SomeMod` ──────────┐
-└┬────────────────────┘  imported into this Roc file.                         │
- │                                                                            │
- │  AnotherType : SomeMod.MissingType                                         │
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └───────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
+-- ❌ MOD NOT IMPORTED ----------------------- type_undeclared_usage.md:8:15
 
+There is no mod with the name `SomeMod` imported into this Roc file.
+
+AnotherType : SomeMod.MissingType
+              ^^^^^^^^^^^^^^^^^^^
 
 # TOKENS
 ~~~zig

@@ -26,114 +26,100 @@ UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
 
-┌─────────────────────┐
-│ EXPECTED TYPE FIELD ├─ I was parsing a record type, and I expected a ───────┐
-└┬────────────────────┘  field name.                                          │
- │                                                                            │
- │  Try : [Success, Failure]                                                  │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────── type_shadowing_across_scopes.md:9:5 ┘
+-- ❌ EXPECTED TYPE FIELD ----------------- type_shadowing_across_scopes.md:9:5
 
-    Record type fields start with lowercase names, `_`, or named underscores,
-    followed by `:` and the field type.
+I was parsing a record type, and I expected a field name.
 
-    For example:
-        { name : Str, age : U64 }
+Try : [Success, Failure]
+^^^
 
-    I found `Try` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Record type fields start with lowercase names, `_`, or named underscores,
+followed by `:` and the field type.
 
+For example:
+    { name : Str, age : U64 }
 
-┌────────────────────────────────┐
-│ EXPECTED RECORD TYPE SEPARATOR ├─ I was parsing a record type, and I ───────┐
-└┬───────────────────────────────┘  expected `,` or `}`.                      │
- │                                                                            │
- │  Try : [Success, Failure]                                                  │
- │                  ‾‾‾‾‾‾‾                                                   │
- └────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
+I found `Try` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Separate record type fields with commas and close the record type with `}`.
+-- ❌ EXPECTED RECORD TYPE SEPARATOR ----- type_shadowing_across_scopes.md:9:21
 
-    For example:
-        { name : Str, age : U64 }
+I was parsing a record type, and I expected `,` or `}`.
 
-    I found `Failure` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Try : [Success, Failure]
+                ^^^^^^^
 
+Separate record type fields with commas and close the record type with `}`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Try : [Success, Failure]                                                  │
- │                         ‾                                                  │
- └────────────────────────────────────── type_shadowing_across_scopes.md:9:28 ┘
+For example:
+    { name : Str, age : U64 }
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `Failure` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+-- ❌ UNEXPECTED STATEMENT --------------- type_shadowing_across_scopes.md:9:28
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+Try : [Success, Failure]
+                       ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └────────────────────────────────────── type_shadowing_across_scopes.md:10:1 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+-- ❌ UNEXPECTED STATEMENT --------------- type_shadowing_across_scopes.md:10:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌───────────────────────┐
-│ BUILTIN TYPE SHADOWED ├─ The type `Try` shadows a builtin type. ────────────┐
-└┬──────────────────────┘                                                     │
- │                                                                            │
- │  Try(a, b) : [Ok(a), Err(b)]                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └─────────────────────────────────────── type_shadowing_across_scopes.md:1:1 ┘
+}
+^
 
-    This may make the builtin type inaccessible in this scope.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    The new declaration is here:
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `data` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processData = |data|                                                      │
- │                 ‾‾‾‾                                                       │
- └────────────────────────────────────── type_shadowing_across_scopes.md:4:16 ┘
+-- ⚠️ BUILTIN TYPE SHADOWED --------------- type_shadowing_across_scopes.md:1:1
 
-    If you don't need this variable, prefix it with an underscore like `_data`
-    to suppress this warning.
+The type `Try` shadows a builtin type.
 
+Try(a, b) : [Ok(a), Err(b)]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-┌────────────────┐
-│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
-└┬───────────────┘  syntax.                                                   │
- │                                                                            │
- │  Try : [Success, Failure]                                                  │
- │                  ‾‾‾‾‾‾‾                                                   │
- └────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
+This may make the builtin type inaccessible in this scope.
 
+The new declaration is here:
+
+-- ⚠️ UNUSED VARIABLE -------------------- type_shadowing_across_scopes.md:4:16
+
+Variable `data` is defined here and then never used:
+
+processData = |data|
+               ^^^^
+
+If you don't need this variable, prefix it with an underscore like `_data` to
+suppress this warning.
+
+-- ❌ MALFORMED TYPE --------------------- type_shadowing_across_scopes.md:9:21
+
+This type annotation is malformed or contains invalid syntax.
+
+Try : [Success, Failure]
+                ^^^^^^^
 
 # TOKENS
 ~~~zig

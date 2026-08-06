@@ -18,18 +18,16 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))                      │
- │                                           ‾‾‾                              │
- └────────────────────────────────── generalize_alias_assoc_fn_record.md:8:42 ┘
+-- ❌ TYPE MISMATCH ------------------ generalize_alias_assoc_fn_record.md:8:42
 
-    The type was determined to be:
+This string literal is being used where a non-string type is needed.
 
-        Dec
+main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
+                                         ^^^
 
+The type was determined to be:
+
+    Dec
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,

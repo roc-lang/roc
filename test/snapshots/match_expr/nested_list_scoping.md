@@ -16,38 +16,20 @@ MISSING METHOD - nested_list_scoping.md:4:17:4:22
 POLYMORPHIC VALUE - nested_list_scoping.md:1:1:5:2
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ The value before this `*` operator has a type that ───────┐
-└┬───────────────┘  doesn't have a `times` method.                            │
- │                                                                            │
- │  [x, [y]] => x * y                                                         │
- │              ‾‾‾‾‾                                                         │
- └─────────────────────────────────────────────── nested_list_scoping.md:4:17 ┘
+-- ❌ MISSING METHOD ------------------------------ nested_list_scoping.md:4:17
 
-    The value's type, which does not have a method named `times`, is:
+The value before this `*` operator has a type that doesn't have a `times`
+method.
 
-        List(a) where [a.minus : a, a -> a, a.plus : a, a -> a]
+[x, [y]] => x * y
+            ^^^^^
 
-    Hint: The `*` operator calls a method named `times` on the value preceding
-    it, passing the value after the operator as the one argument.
+The value's type, which does not have a method named `times`, is:
 
+    List(_a)
 
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  match nestedList {                                                        │
- │      [[x], [y]] => x + y                                                   │
- │      [[x, y]] => x - y                                                     │
- │      [x, [y]] => x * y                                                     │
- │  }                                                                         │
- │                                                                            │
- └──────────────────────────────────────────────── nested_list_scoping.md:1:1 ┘
-
-    Its type is:
-    a where [a.minus : a, a -> a, a.plus : a, a -> a]
-    Add an annotation or use this value in a way that fixes its concrete type.
-
+Hint: The `*` operator calls a method named `times` on the value preceding it,
+passing the value after the operator as the one argument.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

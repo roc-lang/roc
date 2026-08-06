@@ -15,16 +15,14 @@ main! = |_| Stdout.line!("Hello, world!")
 NAME NOT IN SCOPE - hello_world.md:5:13:5:25
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  main! = |_| Stdout.line!("Hello, world!")                                 │
- │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
- └─────────────────────────────────────────────────────── hello_world.md:5:13 ┘
+-- ❌ NAME NOT IN SCOPE ----------------------------------- hello_world.md:5:13
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `line!` in this scope.
 
+main! = |_| Stdout.line!("Hello, world!")
+            ^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

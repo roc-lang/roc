@@ -15,83 +15,73 @@ UNEXPECTED STATEMENT - fuzz_crash_003.md:1:4:1:6
 UNEXPECTED STATEMENT - fuzz_crash_003.md:1:6:1:6
 # PROBLEMS
 
-┌─────────────────┐
-│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  = "te                                                                     │
- │    ‾‾‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
+-- ❌ UNCLOSED STRING ----------------------------------- fuzz_crash_003.md:1:3
+
+This string is missing a closing quote.
+
+= "te
+  ^^^
 
 
+-- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_003.md:1:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  = "te                                                                     │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_003.md:1:1 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+= "te
+^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `=` here.
+For example:
+    answer = 42
 
+I found `=` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  = "te                                                                     │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
+-- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_003.md:1:3
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+= "te
+  ^
 
-    I found `"` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  = "te                                                                     │
- │     ‾‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_003.md:1:4 ┘
+I found `"` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+-- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_003.md:1:4
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `te` here.
+= "te
+   ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  = "te                                                                     │
- │       ‾                                                                    │
- └───────────────────────────────────────────────────── fuzz_crash_003.md:1:6 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `te` here.
 
-    For example:
-        answer = 42
+-- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_003.md:1:6
 
-    I reached the end of the file before this construct was complete.
+I was parsing a statement, and this token cannot start a statement here.
 
+= "te
+     ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I reached the end of the file before this construct was complete.
 # TOKENS
 ~~~zig
 OpAssign,StringStart,StringPart,StringEnd,

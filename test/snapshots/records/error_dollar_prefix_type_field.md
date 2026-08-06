@@ -11,17 +11,15 @@ Person : { $name : Str }
 INVALID RECORD FIELD NAME - error_dollar_prefix_type_field.md:1:12:1:17
 # PROBLEMS
 
-┌───────────────────────────┐
-│ INVALID RECORD FIELD NAME ├─ Record field names cannot start with a ────────┐
-└┬──────────────────────────┘  dollar sign.                                   │
- │                                                                            │
- │  Person : { $name : Str }                                                  │
- │             ‾‾‾‾‾                                                          │
- └──────────────────────────────────── error_dollar_prefix_type_field.md:1:12 ┘
+-- ❌ INVALID RECORD FIELD NAME -------- error_dollar_prefix_type_field.md:1:12
 
-    Names that start with `$` are reassignable variables declared with the
-    `var` keyword, so they cannot be used as record field names.
+Record field names cannot start with a dollar sign.
 
+Person : { $name : Str }
+           ^^^^^
+
+Names that start with `$` are reassignable variables declared with the `var`
+keyword, so they cannot be used as record field names.
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,CloseCurly,

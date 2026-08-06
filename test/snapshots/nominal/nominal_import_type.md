@@ -15,24 +15,20 @@ MOD NOT FOUND - nominal_import_type.md:3:12:3:16
 MOD NOT FOUND - nominal_import_type.md:4:12:4:16
 # PROBLEMS
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
-└┬─────────────────┘  does not exist.                                         │
- │                                                                            │
- │  red : Color.RGB                                                           │
- │             ‾‾‾‾                                                           │
- └─────────────────────────────────────────────── nominal_import_type.md:3:12 ┘
+-- ❌ MOD NOT FOUND ---------------------------- nominal_import_type.md:3:12
+
+This `RGB` type is declared to be in `Color`, which does not exist.
+
+red : Color.RGB
+           ^^^^
 
 
+-- ❌ MOD NOT FOUND ---------------------------- nominal_import_type.md:4:12
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
-└┬─────────────────┘  does not exist.                                         │
- │                                                                            │
- │  red = Color.RGB.Red                                                       │
- │             ‾‾‾‾                                                           │
- └─────────────────────────────────────────────── nominal_import_type.md:4:12 ┘
+This `RGB` type is declared to be in `Color`, which does not exist.
 
+red = Color.RGB.Red
+           ^^^^
 
 # TOKENS
 ~~~zig

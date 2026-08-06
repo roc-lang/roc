@@ -13,17 +13,15 @@ match person {
 INVALID RECORD FIELD NAME - error_dollar_prefix_pattern_field.md:2:7:2:12
 # PROBLEMS
 
-┌───────────────────────────┐
-│ INVALID RECORD FIELD NAME ├─ Record field names cannot start with a ────────┐
-└┬──────────────────────────┘  dollar sign.                                   │
- │                                                                            │
- │  { $name } => $name                                                        │
- │    ‾‾‾‾‾                                                                   │
- └────────────────────────────────── error_dollar_prefix_pattern_field.md:2:7 ┘
+-- ❌ INVALID RECORD FIELD NAME ------ error_dollar_prefix_pattern_field.md:2:7
 
-    Names that start with `$` are reassignable variables declared with the
-    `var` keyword, so they cannot be used as record field names.
+Record field names cannot start with a dollar sign.
 
+{ $name } => $name
+  ^^^^^
+
+Names that start with `$` are reassignable variables declared with the `var`
+keyword, so they cannot be used as record field names.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

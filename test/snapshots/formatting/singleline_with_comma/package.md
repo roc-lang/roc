@@ -17,53 +17,47 @@ DECLARATION HAS NO VALUE - package.md:3:1:3:16
 DECLARATION HAS NO VALUE - package.md:4:1:4:16
 # PROBLEMS
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `a!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  package [a!, b!,] { a: "a", b: "b", }                                     │
- │           ‾‾                                                               │
- └─────────────────────────────────────────────────────────── package.md:1:10 ┘
+-- ❌ EXPOSED BUT NOT DEFINED --------------------------------- package.md:1:10
 
-    You can fix this by either defining `a!` in this mod, or by removing it
-    from the list of exposed values.
+The mod header says that `a!` is exposed, but it is not defined anywhere in
+this mod.
 
+package [a!, b!,] { a: "a", b: "b", }
+         ^^
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `b!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  package [a!, b!,] { a: "a", b: "b", }                                     │
- │               ‾‾                                                           │
- └─────────────────────────────────────────────────────────── package.md:1:14 ┘
+You can fix this by either defining `a!` in this mod, or by removing it from
+the list of exposed values.
 
-    You can fix this by either defining `b!` in this mod, or by removing it
-    from the list of exposed values.
+-- ❌ EXPOSED BUT NOT DEFINED --------------------------------- package.md:1:14
 
+The mod header says that `b!` is exposed, but it is not defined anywhere in
+this mod.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  a! : Str => Str                                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └──────────────────────────────────────────────────────────── package.md:3:1 ┘
+package [a!, b!,] { a: "a", b: "b", }
+             ^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+You can fix this by either defining `b!` in this mod, or by removing it from
+the list of exposed values.
 
+-- ⚠️ DECLARATION HAS NO VALUE --------------------------------- package.md:3:1
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  b! : Str => Str                                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └──────────────────────────────────────────────────────────── package.md:4:1 ┘
+This declaration has a type annotation but no implementation.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+a! : Str => Str
+^^^^^^^^^^^^^^^
 
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ⚠️ DECLARATION HAS NO VALUE --------------------------------- package.md:4:1
+
+This declaration has a type annotation but no implementation.
+
+b! : Str => Str
+^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,LowerIdent,Comma,LowerIdent,Comma,CloseSquare,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,CloseCurly,

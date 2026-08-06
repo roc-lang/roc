@@ -13,33 +13,30 @@ EXPECTED INTERPOLATION END - fuzz_crash_017.md:2:7:2:8
 UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
 
-┌────────────────────────────┐
-│ EXPECTED INTERPOLATION END ├─ I was parsing a string interpolation, and I ──┐
-└┬───────────────────────────┘  expected `}` before returning to the string.  │
- │                                                                            │
- │  foo = "hello ${namF                                                       │
- │        ‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_017.md:2:7 ┘
+-- ❌ EXPECTED INTERPOLATION END ------------------------ fuzz_crash_017.md:2:7
 
-    String interpolations start with `${` and must close with `}` after the
-    embedded expression.
+I was parsing a string interpolation, and I expected `}` before returning to
+the string.
 
-    For example:
-        "Hello, ${name}!"
+foo = "hello ${namF
+      ^
 
-    I found `"` here.
+String interpolations start with `${` and must close with `}` after the
+embedded expression.
 
+For example:
+    "Hello, ${name}!"
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  foo = "hello ${namF                                                       │
- │        ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_017.md:2:7 ┘
+I found `"` here.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+-- ❌ UNRECOGNIZED SYNTAX ------------------------------- fuzz_crash_017.md:2:7
 
+I don't recognize this syntax.
+
+foo = "hello ${namF
+      ^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,StringStart,StringPart,StringEnd,

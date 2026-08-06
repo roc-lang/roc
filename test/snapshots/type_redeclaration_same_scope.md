@@ -13,22 +13,21 @@ Maybe(a) : [Ok(a), Err]
 TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
 # PROBLEMS
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `Maybe` is being redeclared. ───────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Maybe(a) : [Ok(a), Err]                                                   │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
- └────────────────────────────────────── type_redeclaration_same_scope.md:3:1 ┘
+-- ❌ TYPE REDECLARED -------------------- type_redeclaration_same_scope.md:3:1
 
-    The redeclaration is here:
+The type `Maybe` is being redeclared.
 
-    But Maybe was already declared here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  Maybe(a) : [Some(a), None]                                           │
-      │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
-      └───────────────────────────────── type_redeclaration_same_scope.md:1:1 ┘
+Maybe(a) : [Ok(a), Err]
+^^^^^^^^^^^^^^^^^^^^^^^
 
+-- ℹ️ DETAILS ---------------------------- type_redeclaration_same_scope.md:1:1
+
+The redeclaration is here:
+
+But Maybe was already declared here:
+
+Maybe(a) : [Some(a), None]
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,CloseSquare,

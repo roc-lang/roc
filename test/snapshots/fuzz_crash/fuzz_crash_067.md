@@ -13,18 +13,15 @@ f = || {
 TYPE MISMATCH - fuzz_crash_067.md:2:11:2:12
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  crash 1                                                                   │
- │        ‾                                                                   │
- └──────────────────────────────────────────────────── fuzz_crash_067.md:2:11 ┘
+-- ❌ CRASH EXPECTS STRING ------------------------------ fuzz_crash_067.md:1:8
 
-    Other code expects this to have the type:
+The `crash` keyword expects a string literal as its argument.
 
-        Str
+f = || {
+    crash 1
+}
 
+For example: `crash "Something went wrong"`
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,

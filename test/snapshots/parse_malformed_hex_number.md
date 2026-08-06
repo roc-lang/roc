@@ -11,22 +11,20 @@ type=expr
 UNEXPECTED EXPRESSION SYNTAX - parse_malformed_hex_number.md:1:1:1:3
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  0x                                                                        │
- │  ‾‾                                                                        │
- └───────────────────────────────────────── parse_malformed_hex_number.md:1:1 ┘
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ---------- parse_malformed_hex_number.md:1:1
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing an expression, and this token cannot start an expression here.
 
-    For example:
-        add(1, 2)
+0x
+^^
 
-    I found `0x` here.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
+For example:
+    add(1, 2)
+
+I found `0x` here.
 # TOKENS
 ~~~zig
 MalformedNumberNoDigits,

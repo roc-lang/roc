@@ -14,17 +14,15 @@ describe = |value| value.to_str()
 WHERE ALIAS USED AS A TYPE - where_alias_in_type_position.md:3:12:3:22
 # PROBLEMS
 
-┌────────────────────────────┐
-│ WHERE ALIAS USED AS A TYPE ├─ Stringable is a where alias, not a type. ─────┐
-└┬───────────────────────────┘                                                │
- │                                                                            │
- │  describe : Stringable -> Str                                              │
- │             ‾‾‾‾‾‾‾‾‾‾                                                     │
- └────────────────────────────────────── where_alias_in_type_position.md:3:12 ┘
+-- ❌ WHERE ALIAS USED AS A TYPE --------- where_alias_in_type_position.md:3:12
 
-    A where alias names a set of method constraints, so it constrains a type
-    variable in a `where` clause rather than standing in for a type of its own.
+Stringable is a where alias, not a type.
 
+describe : Stringable -> Str
+           ^^^^^^^^^^
+
+A where alias names a set of method constraints, so it constrains a type
+variable in a `where` clause rather than standing in for a type of its own.
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotUpperIdent,OpColon,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,

@@ -11,23 +11,21 @@ type=expr
 UNEXPECTED EXPRESSION SYNTAX - method_call_inspect_defined.md:1:14:1:15
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  { x = "hello"; x.inspect() }                                              │
- │               ‾                                                            │
- └─────────────────────────────────────── method_call_inspect_defined.md:1:14 ┘
+-- ❌ UNEXPECTED EXPRESSION SYNTAX -------- method_call_inspect_defined.md:1:14
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing an expression, and this token cannot start an expression here.
 
-    For example:
-        add(1, 2)
+{ x = "hello"; x.inspect() }
+             ^
 
-    I found `;` here.
-    This token is malformed, so it cannot be used as ordinary Roc syntax.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
+For example:
+    add(1, 2)
+
+I found `;` here.
+This token is malformed, so it cannot be used as ordinary Roc syntax.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,MalformedUnknownToken,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,CloseCurly,

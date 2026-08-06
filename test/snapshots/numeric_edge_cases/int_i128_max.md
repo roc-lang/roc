@@ -11,18 +11,16 @@ type=expr
 INVALID NUMBER - int_i128_max.md:1:1:1:40
 # PROBLEMS
 
-┌────────────────┐
-│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  170141183460469231731687303715884105727                                   │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
- └─────────────────────────────────────────────────────── int_i128_max.md:1:1 ┘
+-- ❌ INVALID NUMBER -------------------------------------- int_i128_max.md:1:1
 
-    The inferred type is:
+This number literal does not fit in the inferred type.
 
-        Dec
+170141183460469231731687303715884105727
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+The inferred type is:
+
+    Dec
 # TOKENS
 ~~~zig
 Int,

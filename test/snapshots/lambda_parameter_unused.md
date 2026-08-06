@@ -36,29 +36,25 @@ UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `unused` is defined here and then never used. ──┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  add = |unused| 42                                                         │
- │         ‾‾‾‾‾‾                                                             │
- └──────────────────────────────────────────── lambda_parameter_unused.md:5:8 ┘
+-- ⚠️ UNUSED VARIABLE -------------------------- lambda_parameter_unused.md:5:8
 
-    If you don't need this variable, prefix it with an underscore like
-    `_unused` to suppress this warning.
+Variable `unused` is defined here and then never used:
 
+add = |unused| 42
+       ^^^^^^
 
-┌──────────────────────────┐
-│ UNDERSCORE VARIABLE USED ├─ Variable `_factor` is prefixed with an ─────────┐
-└┬─────────────────────────┘  underscore but is actually used.                │
- │                                                                            │
- │  multiply = |_factor| _factor * 2                                          │
- │                       ‾‾‾‾‾‾‾                                              │
- └─────────────────────────────────────────── lambda_parameter_unused.md:9:22 ┘
+If you don't need this variable, prefix it with an underscore like `_unused` to
+suppress this warning.
 
-    Variables prefixed with `_` are intended to be unused. Remove the
-    underscore prefix: `factor`.
+-- ⚠️ UNDERSCORE VARIABLE USED ---------------- lambda_parameter_unused.md:9:22
 
+Variable `_factor` is prefixed with an underscore but is actually used.
+
+multiply = |_factor| _factor * 2
+                     ^^^^^^^
+
+Variables prefixed with `_` are intended to be unused. Remove the underscore
+prefix: `factor`.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

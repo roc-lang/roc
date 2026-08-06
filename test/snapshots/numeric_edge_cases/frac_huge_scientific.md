@@ -11,18 +11,16 @@ type=expr
 INVALID NUMBER - frac_huge_scientific.md:1:1:1:8
 # PROBLEMS
 
-┌────────────────┐
-│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  1.0e100                                                                   │
- │  ‾‾‾‾‾‾‾                                                                   │
- └─────────────────────────────────────────────── frac_huge_scientific.md:1:1 ┘
+-- ❌ INVALID NUMBER ------------------------------ frac_huge_scientific.md:1:1
 
-    The inferred type is:
+This number literal does not fit in the inferred type.
 
-        Dec
+1.0e100
+^^^^^^^
 
+The inferred type is:
+
+    Dec
 # TOKENS
 ~~~zig
 Float,

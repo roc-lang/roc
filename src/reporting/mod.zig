@@ -31,6 +31,7 @@ pub const renderDocumentToMarkdown = @import("renderer.zig").renderDocumentToMar
 pub const renderDocumentToHtml = @import("renderer.zig").renderDocumentToHtml;
 pub const renderDocumentToLsp = @import("renderer.zig").renderDocumentToLsp;
 pub const writeShouted = @import("renderer.zig").writeShouted;
+pub const sanitisePathForSnapshots = @import("renderer.zig").sanitisePathForSnapshots;
 
 // Configuration utilities
 pub const validateUtf8 = @import("config.zig").validateUtf8;

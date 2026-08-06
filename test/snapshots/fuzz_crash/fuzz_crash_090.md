@@ -16,90 +16,80 @@ EXPECTED CLOSING BRACE - fuzz_crash_090.md:3:1:3:1
 UNRECOGNIZED SYNTAX - fuzz_crash_090.md:1:1:1:1
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  .{f}{})                                                                   │
- │        ‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_090.md:2:7 ┘
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ---------------------- fuzz_crash_090.md:2:7
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing an expression, and this token cannot start an expression here.
 
-    For example:
-        add(1, 2)
+.{f}{})
+      ^
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
+For example:
+    add(1, 2)
 
-┌────────────────────────┐
-│ EXPECTED CLOSING BRACE ├─ I was parsing a block expression, and I ──────────┐
-└┬───────────────────────┘  expected `}` before the file ended.               │
- │                                                                            │
- │                                                                            │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_090.md:3:1 ┘
+I found `)` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Close the block after its final statement or expression.
+-- ❌ EXPECTED CLOSING BRACE ---------------------------- fuzz_crash_090.md:3:1
 
-    For example:
-        {
-            answer = 42
-            answer
-        }
-
-    I reached the end of the file before this construct was complete.
+I was parsing a block expression, and I expected `}` before the file ended.
 
 
-┌──────────────────────────┐
-│ EXPECTED TUPLE SEPARATOR ├─ I was parsing a parenthesized expression or ────┐
-└┬─────────────────────────┘  tuple, and I expected `,` or `)`.               │
- │                                                                            │
- │                                                                            │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_090.md:3:1 ┘
+^
 
-    Separate tuple elements with commas and close the tuple or parenthesized
-    expression with `)`.
+Close the block after its final statement or expression.
 
-    For example:
-        (x, y)
+For example:
+    {
+        answer = 42
+        answer
+    }
 
-    I reached the end of the file before this construct was complete.
+I reached the end of the file before this construct was complete.
 
+-- ❌ EXPECTED TUPLE SEPARATOR -------------------------- fuzz_crash_090.md:3:1
 
-┌────────────────────────┐
-│ EXPECTED CLOSING BRACE ├─ I was parsing a block expression, and I ──────────┐
-└┬───────────────────────┘  expected `}` before the file ended.               │
- │                                                                            │
- │                                                                            │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_090.md:3:1 ┘
-
-    Close the block after its final statement or expression.
-
-    For example:
-        {
-            answer = 42
-            answer
-        }
-
-    I reached the end of the file before this construct was complete.
+I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.
 
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  e={({\\                                                                   │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_090.md:1:1 ┘
+^
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+Separate tuple elements with commas and close the tuple or parenthesized
+expression with `)`.
 
+For example:
+    (x, y)
+
+I reached the end of the file before this construct was complete.
+
+-- ❌ EXPECTED CLOSING BRACE ---------------------------- fuzz_crash_090.md:3:1
+
+I was parsing a block expression, and I expected `}` before the file ended.
+
+
+^
+
+Close the block after its final statement or expression.
+
+For example:
+    {
+        answer = 42
+        answer
+    }
+
+I reached the end of the file before this construct was complete.
+
+-- ❌ UNRECOGNIZED SYNTAX ------------------------------- fuzz_crash_090.md:1:1
+
+I don't recognize this syntax.
+
+e={({\\
+^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,NoSpaceOpenRound,OpenCurly,MultilineStringStart,StringPart,

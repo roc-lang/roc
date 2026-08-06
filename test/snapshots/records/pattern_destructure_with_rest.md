@@ -16,38 +16,32 @@ DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  match person {                                                            │
- │        ‾‾‾‾‾‾                                                              │
- └────────────────────────────────────── pattern_destructure_with_rest.md:1:7 ┘
+-- ❌ NAME NOT IN SCOPE ------------------ pattern_destructure_with_rest.md:1:7
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `person` in this scope.
 
+match person {
+      ^^^^^^
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Str.len` does not exist. ────────────────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  …rs } => Str.len(first_name) > Str.len(others.last_name)                  │
- │           ‾‾‾‾‾‾‾                                                          │
- └───────────────────────────────────── pattern_destructure_with_rest.md:2:33 ┘
+Is it misspelled, or is there an import missing?
 
-    `Str` is in scope, but it has no associated `len`.
+-- ❌ DOES NOT EXIST -------------------- pattern_destructure_with_rest.md:2:33
 
+`Str.len` does not exist.
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Str.len` does not exist. ────────────────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  …name) > Str.len(others.last_name)                                        │
- │           ‾‾‾‾‾‾‾                                                          │
- └───────────────────────────────────── pattern_destructure_with_rest.md:2:55 ┘
+{ first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
+                            ^^^^^^^
 
-    `Str` is in scope, but it has no associated `len`.
+`Str` is in scope, but it has no associated `len`.
 
+-- ❌ DOES NOT EXIST -------------------- pattern_destructure_with_rest.md:2:55
+
+`Str.len` does not exist.
+
+{ first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
+                                                  ^^^^^^^
+
+`Str` is in scope, but it has no associated `len`.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

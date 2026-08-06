@@ -17,31 +17,27 @@ TYPE MISMATCH - tuple_type.md:5:8:5:9
 TYPE MISMATCH - tuple_type.md:5:11:5:12
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  f((1, 2))                                                                 │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────────── tuple_type.md:5:8 ┘
+-- ❌ TYPE MISMATCH ----------------------------------------- tuple_type.md:5:8
 
-    Other code expects this to have the type:
+This number is being used where a non-number type is needed.
 
-        Str
+f((1, 2))
+   ^
 
+Other code expects this to have the type:
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  f((1, 2))                                                                 │
- │        ‾                                                                   │
- └──────────────────────────────────────────────────────── tuple_type.md:5:11 ┘
+    Str
 
-    Other code expects this to have the type:
+-- ❌ TYPE MISMATCH ---------------------------------------- tuple_type.md:5:11
 
-        Str
+This number is being used where a non-number type is needed.
 
+f((1, 2))
+      ^
+
+Other code expects this to have the type:
+
+    Str
 # TOKENS
 ~~~zig
 OpenCurly,

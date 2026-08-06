@@ -11,6 +11,10 @@ pub const green = "\x1B[32m";
 pub const red = "\x1B[31m";
 /// ANSI escape sequence to set foreground color to yellow.
 pub const yellow = "\x1B[33m";
+/// ANSI escape sequence to set foreground color to cyan.
+pub const cyan = "\x1B[36m";
+/// ANSI escape sequence to set foreground color to bright black (gray).
+pub const bright_black = "\x1B[90m";
 /// ANSI escape sequence to reset all text attributes.
 pub const reset = "\x1B[0m";
 

@@ -16,14 +16,12 @@ main! = |_| processNested([])
 UNDECLARED TYPE - type_app_nested.md:3:31:3:34
 # PROBLEMS
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Err` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processNested : List(Try(Str, Err)) -> List(Str)                          │
- │                                ‾‾‾                                         │
- └─────────────────────────────────────────────────── type_app_nested.md:3:31 ┘
+-- ❌ UNDECLARED TYPE --------------------------------- type_app_nested.md:3:31
 
+The type `Err` is not declared in this scope.
+
+processNested : List(Try(Str, Err)) -> List(Str)
+                              ^^^
 
 # TOKENS
 ~~~zig

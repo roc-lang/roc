@@ -283,882 +283,747 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:40
 MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 # PROBLEMS
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  ...                                                                       │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:154:2 ┘
+-- ❌ EXPECTED RECORD ACCESSOR ------------------------ fuzz_crash_023.md:154:2
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        person.name
-        pair.0
+...
+^^^
 
-    I found `...` here.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌───────────────────────┐
-│ EXPECTED RECORD FIELD ├─ I was parsing a record expression, and I ──────────┐
-└┬──────────────────────┘  expected a lowercase field name.                   │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                     ‾                                      │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:37 ┘
+I found `...` here.
 
-    Record fields start with lowercase names. After the name, either write `:
-    value` or omit the value to use field punning.
+-- ❌ EXPECTED RECORD FIELD -------------------------- fuzz_crash_023.md:178:37
 
-    For example:
-        { name: "Ada", age }
+I was parsing a record expression, and I expected a lowercase field name.
 
-    I found `;` here.
-    This token is malformed, so it cannot be used as ordinary Roc syntax.
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+                                   ^
 
+Record fields start with lowercase names. After the name, either write `:
+value` or omit the value to use field punning.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                             ‾                              │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:45 ┘
+For example:
+    { name: "Ada", age }
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I found `;` here.
+This token is malformed, so it cannot be used as ordinary Roc syntax.
 
-    For example:
-        add(1, 2)
+-- ❌ UNEXPECTED EXPRESSION SYNTAX ------------------- fuzz_crash_023.md:178:45
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I was parsing an expression, and this token cannot start an expression here.
 
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+                                           ^
 
-┌─────────────────────────┐
-│ EXPECTED FUNCTION ARROW ├─ I was parsing a function type, and I expected ───┐
-└┬────────────────────────┘  `->` or `=>` before the return type.             │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                                    ‾‾                      │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:52 ┘
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    Function types list argument types first, then an arrow, then the return
-    type.
+For example:
+    add(1, 2)
 
-    For example:
-        Str, U64 -> Bool
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-    I found `Ok` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+-- ❌ EXPECTED FUNCTION ARROW ------------------------ fuzz_crash_023.md:178:52
 
+I was parsing a function type, and I expected `->` or `=>` before the return
+type.
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `BadName` was not found in this Roc ─────────┐
-└┬─────────────────┘  project.                                                │
- │                                                                            │
- │  import BadName as GoodName                                                │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:16:1 ┘
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+                                                  ^^
 
+Function types list argument types first, then an arrow, then the return type.
 
+For example:
+    Str, U64 -> Bool
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `BadNameMultiline` was not found in this ────┐
-└┬─────────────────┘  Roc project.                                            │
- │                                                                            │
- │  import                                                                    │
- │      BadNameMultiline                                                      │
- │          as                                                                │
- │          GoodNameMultiline                                                 │
- │                                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:17:1 ┘
+I found `Ok` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+-- ❌ MOD NOT FOUND --------------------------------- fuzz_crash_023.md:16:1
 
+The mod `BadName` was not found in this Roc project.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │         ‾‾‾                                                                │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:36:8 ┘
+import BadName as GoodName
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+-- ❌ MOD NOT FOUND --------------------------------- fuzz_crash_023.md:17:1
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │              ‾‾‾                                                           │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:36:13 ┘
+The mod `BadNameMultiline` was not found in this Roc project.
 
+import
+    BadNameMultiline
+        as
+        GoodNameMultiline
 
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Bar, # Comment after pattern tuple item                                   │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:39:2 ┘
+-- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_023.md:36:8
 
+The type `Bar` is not declared in this scope.
 
+Foo : (Bar, Baz)
+       ^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Baz, # Another after pattern tuple item                                   │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:40:2 ┘
 
+-- ❌ UNDECLARED TYPE --------------------------------- fuzz_crash_023.md:36:13
 
+The type `Baz` is not declared in this scope.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Some(a) : { foo : Ok(a), bar : Something }                                │
- │                    ‾‾                                                      │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:43:19 ┘
+Foo : (Bar, Baz)
+            ^^^
 
 
+-- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_023.md:39:2
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Some(a) : { foo : Ok(a), bar : Something }                                │
- │                                 ‾‾‾‾‾‾‾‾‾                                  │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:43:32 ┘
+The type `Bar` is not declared in this scope.
 
+Bar, # Comment after pattern tuple item
+^^^
 
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  foo : Ok(a), # After field                                                │
- │        ‾‾                                                                  │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:45:8 ┘
+-- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_023.md:40:2
 
+The type `Baz` is not declared in this scope.
 
+Baz, # Another after pattern tuple item
+^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  bar : Something, # After last field                                       │
- │        ‾‾‾‾‾‾‾‾‾                                                           │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:46:8 ┘
 
+-- ❌ UNDECLARED TYPE --------------------------------- fuzz_crash_023.md:43:19
 
+The type `Ok` is not declared in this scope.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Ok(a), # Comment after pattern record field                               │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:52:4 ┘
+Some(a) : { foo : Ok(a), bar : Something }
+                  ^^
 
 
+-- ❌ UNDECLARED TYPE --------------------------------- fuzz_crash_023.md:43:32
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  bar : Something, # Another after pattern record field                     │
- │        ‾‾‾‾‾‾‾‾‾                                                           │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:53:8 ┘
+The type `Something` is not declared in this scope.
 
+Some(a) : { foo : Ok(a), bar : Something }
+                               ^^^^^^^^^
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  some_func() # After debug expr                                            │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:72:4 ┘
+-- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_023.md:45:8
 
-    Is it misspelled, or is there an import missing?
+The type `Ok` is not declared in this scope.
 
+foo : Ok(a), # After field
+      ^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `lower` is defined here and then never used. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  lower # After pattern comment                                             │
- │  ‾‾‾‾‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:97:3 ┘
 
-    If you don't need this variable, prefix it with an underscore like `_lower`
-    to suppress this warning.
+-- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_023.md:46:8
 
+The type `Something` is not declared in this scope.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  # This is a mod comment!                                                  │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_023.md:1:1 ┘
+bar : Something, # After last field
+      ^^^^^^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
 
+-- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_023.md:52:4
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  [1, 2 | 5, 3, .. as rest] => 123                                          │
- │      ‾‾‾‾‾                                                                 │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:108:7 ┘
+The type `Ok` is not declared in this scope.
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+Ok(a), # Comment after pattern record field
+^^
 
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  # This is a mod comment!                                                  │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_023.md:1:1 ┘
+-- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_023.md:53:8
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+The type `Something` is not declared in this scope.
 
+bar : Something, # Another after pattern record field
+      ^^^^^^^^^
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  2 | 5,                                                                    │
- │  ‾‾‾‾‾                                                                     │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:111:4 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_023.md:72:4
 
+Nothing is named `some_func` in this scope.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  # This is a mod comment!                                                  │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_023.md:1:1 ┘
+some_func() # After debug expr
+^^^^^^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+Is it misspelled, or is there an import missing?
 
+-- ⚠️ UNUSED VARIABLE ---------------------------------- fuzz_crash_023.md:97:3
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  (1, 2 | 5, 3) => 123                                                      │
- │      ‾‾‾‾‾                                                                 │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:120:7 ┘
+Variable `lower` is defined here and then never used:
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+lower # After pattern comment
+^^^^^
 
+If you don't need this variable, prefix it with an underscore like `_lower` to
+suppress this warning.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `add` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
- │                                    ‾‾‾                                     │
- └────────────────────────────────────────────────── fuzz_crash_023.md:121:37 ┘
+-- ⚠️ UNUSED VARIABLE ----------------------------------- fuzz_crash_023.md:1:1
 
-    Is it misspelled, or is there an import missing?
+Variable `rest` is defined here and then never used:
 
+# This is a mod comment!
+^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
- │                    ‾‾‾‾‾‾                                                  │
- └────────────────────────────────────────────────── fuzz_crash_023.md:121:21 ┘
+If you don't need this variable, prefix it with an underscore like `_rest` to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+-- ❌ NOT IMPLEMENTED --------------------------------- fuzz_crash_023.md:108:7
 
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  .. # After spread operator                                                │
- │      rest, # After last field                                              │
- │                                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:127:4 ┘
+[1, 2 | 5, 3, .. as rest] => 123
+    ^^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
+-- ⚠️ UNUSED VARIABLE ----------------------------------- fuzz_crash_023.md:1:1
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  { foo: 1, bar: 2 | 7 } => 12                                              │
- │                 ‾‾‾‾‾                                                      │
- └────────────────────────────────────────────────── fuzz_crash_023.md:130:18 ┘
+Variable `rest` is defined here and then never used:
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+# This is a mod comment!
+^
 
+If you don't need this variable, prefix it with an underscore like `_rest` to
+suppress this warning.
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  bar: 2 | 7, # After last record field                                     │
- │       ‾‾‾‾‾                                                                │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:133:9 ┘
+-- ❌ NOT IMPLEMENTED --------------------------------- fuzz_crash_023.md:111:4
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
+2 | 5,
+^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  b,                                                                        │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:82:2 ┘
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
-    If you don't need this variable, prefix it with an underscore like `_b` to
-    suppress this warning.
+-- ⚠️ UNUSED VARIABLE ----------------------------------- fuzz_crash_023.md:1:1
 
+Variable `rest` is defined here and then never used:
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  blah == 1 # Comment after expect statement                                │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:141:2 ┘
+# This is a mod comment!
+^
 
-    Is it misspelled, or is there an import missing?
+If you don't need this variable, prefix it with an underscore like `_rest` to
+suppress this warning.
 
+-- ❌ NOT IMPLEMENTED --------------------------------- fuzz_crash_023.md:120:7
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `String` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  main! : List(String) -> Try({}, _)                                        │
- │               ‾‾‾‾‾‾                                                       │
- └────────────────────────────────────────────────── fuzz_crash_023.md:143:14 ┘
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
+(1, 2 | 5, 3) => 123
+    ^^^^^
 
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  expect blah == 1                                                          │
- │         ‾‾‾‾                                                               │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:147:9 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------------ fuzz_crash_023.md:121:37
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `add` in this scope.
 
+{ foo: 1, bar: 2, ..rest } => 12->add(34)
+                                  ^^^
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  ...                                                                       │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:154:2 ┘
+Is it misspelled, or is there an import missing?
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+-- ⚠️ UNUSED VARIABLE -------------------------------- fuzz_crash_023.md:121:21
 
+Variable `rest` is defined here and then never used:
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  some_func(                                                                │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:158:2 ┘
+{ foo: 1, bar: 2, ..rest } => 12->add(34)
+                  ^^^^^^
 
-    Is it misspelled, or is there an import missing?
+If you don't need this variable, prefix it with an underscore like `_rest` to
+suppress this warning.
 
+-- ⚠️ UNUSED VARIABLE --------------------------------- fuzz_crash_023.md:127:4
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!("Adding ${n} to ${number}")                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:175:3 ┘
+Variable `rest` is defined here and then never used:
 
-    Is it misspelled, or is there an import missing?
+.. # After spread operator
+    rest, # After last field
 
+If you don't need this variable, prefix it with an underscore like `_rest` to
+suppress this warning.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:11 ┘
+-- ❌ NOT IMPLEMENTED -------------------------------- fuzz_crash_023.md:130:18
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
+{ foo: 1, bar: 2 | 7 } => 12
+               ^^^^^
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                             ‾                              │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:45 ┘
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+-- ❌ NOT IMPLEMENTED --------------------------------- fuzz_crash_023.md:133:9
 
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
-┌────────────────┐
-│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
-└┬───────────────┘  syntax.                                                   │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                                    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾     │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:52 ┘
+bar: 2 | 7, # After last record field
+     ^^^^^
 
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
+-- ⚠️ UNUSED VARIABLE ---------------------------------- fuzz_crash_023.md:82:2
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `nested` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
- │                                          ‾‾‾‾‾‾                            │
- └────────────────────────────────────────────────── fuzz_crash_023.md:179:42 ┘
+Variable `b` is defined here and then never used:
 
-    Is it misspelled, or is there an import missing?
+b,
+^
 
+If you don't need this variable, prefix it with an underscore like `_b` to
+suppress this warning.
 
-┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value `tuple` is assigned to itself, ───┐
-└┬─────────────────────────────┘  which would cause an infinite loop at       │
- │                                runtime.                                    │
- │                                                                            │
- │  tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
- │                                                  ‾‾‾‾‾                     │
- └────────────────────────────────────────────────── fuzz_crash_023.md:179:50 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_023.md:141:2
 
-    Only functions can reference themselves (for recursion). For non-function
-    values, the right-hand side must be fully computable without referring to
-    the value being assigned.
+Nothing is named `blah` in this scope.
 
+blah == 1 # Comment after expect statement
+^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `tag1` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  tag1,                                                                     │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:183:3 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+-- ❌ UNDECLARED TYPE -------------------------------- fuzz_crash_023.md:143:14
 
+The type `String` is not declared in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `nested` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  (nested, tuple),                                                          │
- │   ‾‾‾‾‾‾                                                                   │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:185:4 ┘
+main! : List(String) -> Try({}, _)
+             ^^^^^^
 
-    Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_023.md:147:9
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  …t = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5 │
- │           ‾‾‾                                                              │
- └────────────────────────────────────────────────── fuzz_crash_023.md:188:22 ┘
+Nothing is named `blah` in this scope.
 
-    Is it misspelled, or is there an import missing?
+expect blah == 1
+       ^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `some_fn` in this scope. ─────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
- │           ‾‾‾‾‾‾‾                                                          │
- └────────────────────────────────────────────────── fuzz_crash_023.md:189:26 ┘
+-- ❌ UNRECOGNIZED SYNTAX ----------------------------- fuzz_crash_023.md:154:2
 
-    Is it misspelled, or is there an import missing?
+I don't recognize this syntax.
 
+...
+^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `arg1` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  …some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.…│
- │           ‾‾‾‾                                                             │
- └────────────────────────────────────────────────── fuzz_crash_023.md:189:34 ┘
+This might be a syntax error, an unsupported language feature, or a typo.
 
-    Is it misspelled, or is there an import missing?
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_023.md:158:2
 
+Nothing is named `some_func` in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!(interpolated)?                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:190:2 ┘
+some_func(
+^^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_023.md:175:3
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!(                                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:191:2 ┘
+Nothing is named `line!` in this scope.
 
-    Is it misspelled, or is there an import missing?
+Stdout.line!("Adding ${n} to ${number}")
+^^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Num.toStr` does not exist. ──────────────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  Num.toStr(number) # Comment after string interpolation expr               │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:193:4 ┘
+-- ❌ UNRECOGNIZED SYNTAX ---------------------------- fuzz_crash_023.md:178:11
 
+I don't recognize this syntax.
 
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `tag_with_payload` is defined here and then ────┐
-└┬────────────────┘  never used.                                              │
- │                                                                            │
- │  tag_with_payload = Ok(number)                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:164:2 ┘
+This might be a syntax error, an unsupported language feature, or a typo.
 
-    If you don't need this variable, prefix it with an underscore like
-    `_tag_with_payload` to suppress this warning.
+-- ❌ UNRECOGNIZED SYNTAX ---------------------------- fuzz_crash_023.md:178:45
 
+I don't recognize this syntax.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `record` is defined here and then never used. ──┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │  ‾‾‾‾‾‾                                                                    │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:178:2 ┘
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+                                           ^
 
-    If you don't need this variable, prefix it with an underscore like
-    `_record` to suppress this warning.
+This might be a syntax error, an unsupported language feature, or a typo.
 
+-- ❌ MALFORMED TYPE --------------------------------- fuzz_crash_023.md:178:52
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `qux` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                               ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾     │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:47 ┘
+This type annotation is malformed or contains invalid syntax.
 
-    If you don't need this variable, prefix it with an underscore like `_qux`
-    to suppress this warning.
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+                                                  ^^^^^^^^^^^^^^^^^^^
 
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `multiline_tuple` is defined here and then ─────┐
-└┬────────────────┘  never used.                                              │
- │                                                                            │
- │  multiline_tuple = (                                                       │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:180:2 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------------ fuzz_crash_023.md:179:42
 
-    If you don't need this variable, prefix it with an underscore like
-    `_multiline_tuple` to suppress this warning.
+Nothing is named `nested` in this scope.
 
+tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+                                        ^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `bin_op_result` is defined here and then ───────┐
-└┬────────────────┘  never used.                                              │
- │                                                                            │
- │  bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or… │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:188:2 ┘
+Is it misspelled, or is there an import missing?
 
-    If you don't need this variable, prefix it with an underscore like
-    `_bin_op_result` to suppress this warning.
+-- ❌ INVALID ASSIGNMENT TO ITSELF ------------------- fuzz_crash_023.md:179:50
 
+The value `tuple` is assigned to itself, which would cause an infinite loop at
+runtime.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `static_dispatch_style` is defined here and ────┐
-└┬────────────────┘  then never used.                                         │
- │                                                                            │
- │  static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_st… │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:189:2 ┘
+tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+                                                ^^^^^
 
-    If you don't need this variable, prefix it with an underscore like
-    `_static_dispatch_style` to suppress this warning.
+Only functions can reference themselves (for recursion). For non-function
+values, the right-hand side must be fully computable without referring to the
+value being assigned.
 
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_023.md:183:3
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  tuple : Value((a, b, c))                                                  │
- │          ‾‾‾‾‾                                                             │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:201:9 ┘
+Nothing is named `tag1` in this scope.
 
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This `if` condition must evaluate to a `Bool` – either ────┐
-└┬──────────────┘  `True` or `False`.                                         │
- │                                                                            │
- │  if num {                                                                  │
- │     ‾‾‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:70:5 ┘
-
-    It is:
-
-        U64
-
-    But I need this to be a `Bool` value.
+tag1,
+^^^^
 
-
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  "foo" => # After arrow comment                                            │
- │  ‾‾‾‾‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:99:3 ┘
+Is it misspelled, or is there an import missing?
 
-    The value's type, which does not have a method named `from_quote`, is:
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_023.md:185:4
 
-        [Blue, Green, Red, ..]
+Nothing is named `nested` in this scope.
 
+(nested, tuple),
+ ^^^^^^
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  "foo" | "bar" => 200                                                      │
- │  ‾‾‾‾‾                                                                     │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:101:3 ┘
+Is it misspelled, or is there an import missing?
 
-    The value's type, which does not have a method named `from_quote`, is:
+-- ❌ NAME NOT IN SCOPE ------------------------------ fuzz_crash_023.md:188:22
 
-        [Blue, Green, Red, ..]
-
+Nothing is named `foo` in this scope.
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The sixth branch of this `match` does not match the ───────┐
-└┬──────────────┘  previous ones.                                             │
- │                                                                            │
- │  match a {                                                                 │
- │      Blue | Green | Red => {                                               │
- │          x = 12                                                            │
- │          x                                                                 │
- │      }                                                                     │
- │      Blue # After pattern in alt                                           │
- │      | # Before pattern in alt                                             │
- │          Green                                                             │
- │      | Red # After alt pattern                                             │
- │          => {                                                              │
- │              x = 12                                                        │
- │              x                                                             │
- │          }                                                                 │
- │      lower # After pattern comment                                         │
- │          => 1                                                              │
- │      "foo" => # After arrow comment                                        │
- │          100                                                               │
- │      "foo" | "bar" => 200                                                  │
- │      [1, 2, 3, .. as rest] # After pattern comment                         │
- │          => # After arrow comment                                          │
- │              123 # After branch comment                                    │
- │                                                                            │
- │      # Just a random comment                                               │
- │                                                                            │
- │      [1, 2 | 5, 3, .. as rest] => 123                                      │
- │      [                                                                     │
- │          1,                                                                │
- │          2 | 5,                                                            │
- │          3,                                                                │
- │          .. # After DoubleDot                                              │
- │              as # Before alias                                             │
- │                  rest, # After last pattern in list                        │
- │      ] => 123                                                              │
- │      3.14 => 314                                                           │
- │      3.14 | 6.28 => 314                                                    │
- │      (1, 2, 3) => 123                                                      │
- │      (1, 2 | 5, 3) => 123                                                  │
- │      { foo: 1, bar: 2, ..rest } => 12->add(34)                             │
- │      { # After pattern record open                                         │
- │          foo # After pattern record field name                             │
- │              : # Before pattern record field value                         │
- │                  1, # After pattern record field                           │
- │          bar: 2,                                                           │
- │          .. # After spread operator                                        │
- │              rest, # After last field                                      │
- │      } => 12                                                               │
- │      { foo: 1, bar: 2 | 7 } => 12                                          │
- │      {                                                                     │
- │          foo: 1,                                                           │
- │          bar: 2 | 7, # After last record field                             │
- │      } => 12                                                               │
- │      Ok(123) => 123                                                        │
- │      Ok(Some(dude)) => dude                                                │
- │      TwoArgs("hello", Some("world")) => 1000                               │
- │  }                                                                         │
- │                                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_023.md:84:3 ┘
+bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+                    ^^^
 
-    This sixth branch is trying to match:
+Is it misspelled, or is there an import missing?
 
-        List(d)
-          where [
-            d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-            d.is_eq : d, d -> Bool,
-          ]
+-- ❌ NAME NOT IN SCOPE ------------------------------ fuzz_crash_023.md:189:26
 
-    But the expression between the `match` parenthesis has the type:
+Nothing is named `some_fn` in this scope.
 
-        [Blue, Green, Red, ..]
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+                        ^^^^^^^
 
-    These can never match! Either the pattern or expression has a problem.
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------ fuzz_crash_023.md:189:34
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                               ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾     │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:47 ┘
+Nothing is named `arg1` in this scope.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+                                ^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌──────────────┐
-│ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
-└┬─────────────┘  1 instead.                                                  │
- │                                                                            │
- │  match_time(                                                               │
- │      ..., # Single args with comment                                       │
- │  )                                                                         │
- │                                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:155:2 ┘
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_023.md:190:2
 
-    The `match_time` function has the type:
+Nothing is named `line!` in this scope.
 
-        [Blue, Green, Red, ..], _arg -> d
-          where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]
+Stdout.line!(interpolated)?
+^^^^^^^^^^^^
 
-    Are there any missing commas?
+Is it misspelled, or is there an import missing?
 
+-- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_023.md:191:2
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  add_one(                                                                  │
- │      dbg # After dbg in list                                               │
- │          number, # after dbg expr as arg                                   │
- │  ), # Comment one                                                          │
- │                                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:167:4 ┘
+Nothing is named `line!` in this scope.
 
-    This argument has the type:
+Stdout.line!(
+^^^^^^^^^^^^
 
-        {}
+Is it misspelled, or is there an import missing?
 
-    But `add_one` needs the first argument to be:
+-- ❌ DOES NOT EXIST ---------------------------------- fuzz_crash_023.md:193:4
 
-        U64
+`Num.toStr` does not exist.
 
+Num.toStr(number) # Comment after string interpolation expr
+^^^^^^^^^
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }     │
- │                                               ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾     │
- └────────────────────────────────────────────────── fuzz_crash_023.md:178:47 ┘
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+-- ⚠️ UNUSED VARIABLE --------------------------------- fuzz_crash_023.md:164:2
 
+Variable `tag_with_payload` is defined here and then never used:
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  tuple : Value((a, b, c))                                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:201:1 ┘
+tag_with_payload = Ok(number)
+^^^^^^^^^^^^^^^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+If you don't need this variable, prefix it with an underscore like
+`_tag_with_payload` to suppress this warning.
 
+-- ⚠️ UNUSED VARIABLE --------------------------------- fuzz_crash_023.md:178:2
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named ────────────────┐
-└┬───────────────┘  `static_dispatch_method` on an unresolved type            │
- │                  variable, but unresolved type variables have no methods.  │
- │                                                                            │
- │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
- └────────────────────────────────────────────────── fuzz_crash_023.md:189:26 ┘
+Variable `record` is defined here and then never used:
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+^^^^^^
 
+If you don't need this variable, prefix it with an underscore like `_record` to
+suppress this warning.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named ────────────────┐
-└┬───────────────┘  `next_static_dispatch_method` on an unresolved type       │
- │                  variable, but unresolved type variables have no methods.  │
- │                                                                            │
- │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                         │
- └────────────────────────────────────────────────── fuzz_crash_023.md:189:26 ┘
+-- ⚠️ UNUSED VARIABLE -------------------------------- fuzz_crash_023.md:178:47
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+Variable `qux` is defined here and then never used:
 
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like `_qux` to
+suppress this warning.
+
+-- ⚠️ UNUSED VARIABLE --------------------------------- fuzz_crash_023.md:180:2
+
+Variable `multiline_tuple` is defined here and then never used:
+
+multiline_tuple = (
+^^^^^^^^^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like
+`_multiline_tuple` to suppress this warning.
+
+-- ⚠️ UNUSED VARIABLE --------------------------------- fuzz_crash_023.md:188:2
+
+Variable `bin_op_result` is defined here and then never used:
+
+bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+^^^^^^^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like
+`_bin_op_result` to suppress this warning.
+
+-- ⚠️ UNUSED VARIABLE --------------------------------- fuzz_crash_023.md:189:2
+
+Variable `static_dispatch_style` is defined here and then never used:
+
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+^^^^^^^^^^^^^^^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like
+`_static_dispatch_style` to suppress this warning.
+
+-- ❌ UNDECLARED TYPE --------------------------------- fuzz_crash_023.md:201:9
+
+The type `Value` is not declared in this scope.
+
+tuple : Value((a, b, c))
+        ^^^^^
+
+
+-- ❌ TYPE MISMATCH ------------------------------------ fuzz_crash_023.md:70:5
+
+This `if` condition must evaluate to a `Bool` – either `True` or `False`.
+
+if num {
+   ^^^
+
+It is:
+
+    U64
+
+But I need this to be a `Bool` value.
+
+-- ❌ MISSING METHOD ----------------------------------- fuzz_crash_023.md:99:3
+
+This `from_quote` method is being called on a value whose type doesn't have
+that method.
+
+"foo" => # After arrow comment
+^^^^^
+
+The value's type, which does not have a method named `from_quote`, is:
+
+    [Blue, Green, Red, ..]
+
+-- ❌ MISSING METHOD ---------------------------------- fuzz_crash_023.md:101:3
+
+This `from_quote` method is being called on a value whose type doesn't have
+that method.
+
+"foo" | "bar" => 200
+^^^^^
+
+The value's type, which does not have a method named `from_quote`, is:
+
+    [Blue, Green, Red, ..]
+
+-- ❌ TYPE MISMATCH ------------------------------------ fuzz_crash_023.md:84:3
+
+The sixth branch of this `match` does not match the previous ones.
+
+match a {
+    Blue | Green | Red => {
+        x = 12
+        x
+    }
+    Blue # After pattern in alt
+    | # Before pattern in alt
+        Green
+    | Red # After alt pattern
+        => {
+            x = 12
+            x
+        }
+    lower # After pattern comment
+        => 1
+    "foo" => # After arrow comment
+        100
+    "foo" | "bar" => 200
+    [1, 2, 3, .. as rest] # After pattern comment
+        => # After arrow comment
+            123 # After branch comment
+
+    # Just a random comment
+
+    [1, 2 | 5, 3, .. as rest] => 123
+    [
+        1,
+        2 | 5,
+        3,
+        .. # After DoubleDot
+            as # Before alias
+                rest, # After last pattern in list
+    ] => 123
+    3.14 => 314
+    3.14 | 6.28 => 314
+    (1, 2, 3) => 123
+    (1, 2 | 5, 3) => 123
+    { foo: 1, bar: 2, ..rest } => 12->add(34)
+    { # After pattern record open
+        foo # After pattern record field name
+            : # Before pattern record field value
+                1, # After pattern record field
+        bar: 2,
+        .. # After spread operator
+            rest, # After last field
+    } => 12
+    { foo: 1, bar: 2 | 7 } => 12
+    {
+        foo: 1,
+        bar: 2 | 7, # After last record field
+    } => 12
+    Ok(123) => 123
+    Ok(Some(dude)) => dude
+    TwoArgs("hello", Some("world")) => 1000
+}
+
+This sixth branch is trying to match:
+
+    List(d)
+      where [
+        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        d.is_eq : d, d -> Bool,
+      ]
+
+But the expression between the `match` parenthesis has the type:
+
+    [Blue, Green, Red, ..]
+
+These can never match! Either the pattern or expression has a problem.
+
+-- ⚠️ DECLARATION HAS NO VALUE ----------------------- fuzz_crash_023.md:178:47
+
+This declaration has a type annotation but no implementation.
+
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ❌ TOO FEW ARGS ------------------------------------ fuzz_crash_023.md:155:2
+
+The `match_time` function expects 2 arguments, but it got 1 instead.
+
+match_time(
+    ..., # Single args with comment
+)
+
+The `match_time` function has the type:
+
+    [Blue, Green, Red, ..], _arg -> Error
+
+Are there any missing commas?
+
+-- ❌ TYPE MISMATCH ----------------------------------- fuzz_crash_023.md:167:4
+
+The first argument being passed to this function has the wrong type.
+
+add_one(
+    dbg # After dbg in list
+        number, # after dbg expr as arg
+), # Comment one
+
+This argument has the type:
+
+    {}
+
+But `add_one` needs the first argument to be:
+
+    U64
+
+-- ⚠️ DECLARATION HAS NO VALUE ----------------------- fuzz_crash_023.md:178:47
+
+This declaration has a type annotation but no implementation.
+
+record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ⚠️ DECLARATION HAS NO VALUE ------------------------ fuzz_crash_023.md:201:1
+
+This declaration has a type annotation but no implementation.
+
+tuple : Value((a, b, c))
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+-- ❌ MISSING METHOD --------------------------------- fuzz_crash_023.md:189:26
+
+This is trying to dispatch a method named `static_dispatch_method` on an
+unresolved type variable, but unresolved type variables have no methods.
+
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+                        ^^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
+
+-- ❌ MISSING METHOD --------------------------------- fuzz_crash_023.md:189:26
+
+This is trying to dispatch a method named `next_static_dispatch_method` on an
+unresolved type variable, but unresolved type variables have no methods.
+
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

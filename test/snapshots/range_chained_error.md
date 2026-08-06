@@ -11,14 +11,13 @@ r = 1..<5..<10
 CHAINED RANGE - range_chained_error.md:1:5:1:15
 # PROBLEMS
 
-┌───────────────┐
-│ CHAINED RANGE ├─ Range operators can't be chained. Write a single range ────┐
-└┬──────────────┘  instead, like `a..<b` or `a..=b`.                          │
- │                                                                            │
- │  r = 1..<5..<10                                                            │
- │      ‾‾‾‾‾‾‾‾‾‾                                                            │
- └──────────────────────────────────────────────── range_chained_error.md:1:5 ┘
+-- ❌ CHAINED RANGE -------------------------------- range_chained_error.md:1:5
 
+Range operators can't be chained. Write a single range instead, like `a..<b` or
+`a..=b`.
+
+r = 1..<5..<10
+    ^^^^^^^^^^
 
 # TOKENS
 ~~~zig

@@ -26,16 +26,14 @@ main! = |_| {
 EFFECTFUL FUNCTION NAME - effectful_annotation_recursive_no_name_warning.md:11:1:11:7
 # PROBLEMS
 
-┌─────────────────────────┐
-│ EFFECTFUL FUNCTION NAME ├─ This function performs an effect, so its name ───┐
-└┬────────────────────────┘  must end in `!`.                                 │
- │                                                                            │
- │  caller = |n| recurse(n)                                                   │
- │  ‾‾‾‾‾‾                                                                    │
- └──────────────────── effectful_annotation_recursive_no_name_warning.md:11:1 ┘
+-- ⚠️ EFFECTFUL FUNCTION NAME ----- effectful_annotation_recursive_no_name_warning.md:11:1
 
-    Add a trailing `!` to this function name.
+This function performs an effect, so its name must end in `!`.
 
+caller = |n| recurse(n)
+^^^^^^
+
+Add a trailing `!` to this function name.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpFatArrow,UpperIdent,
