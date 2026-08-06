@@ -49,7 +49,6 @@ test "tokenTagToSemanticType maps numeric literals" {
         .Int,
         .Float,
         .DotInt,
-        .NewlineDotInt,
         .NoSpaceDotInt,
     };
 
@@ -95,7 +94,6 @@ test "tokenTagToSemanticType maps operators" {
 test "tokenTagToSemanticType maps property access" {
     const property_tags = [_]Token.Tag{
         .DotLowerIdent,
-        .NewlineDotLowerIdent,
         .NoSpaceDotLowerIdent,
     };
 

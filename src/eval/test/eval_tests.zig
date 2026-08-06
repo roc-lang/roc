@@ -64,7 +64,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
-        .name = "line-broken postfix applies to completed pipe",
+        .name = "whitespace-separated postfix applies to completed pipe",
         .source_kind = .module,
         .source =
         \\Holder := { n : I64 }.{
@@ -75,8 +75,7 @@ const core_tests = [_]TestCase{
         \\bar : I64 -> Holder
         \\bar = |n| Holder.{ n: n }
         \\
-        \\main = 2 |> bar()
-        \\    .blah()(3)
+        \\main = 2 |> bar() .blah()(3)
         ,
         .expected = .{ .inspect_str = "5" },
     },

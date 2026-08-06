@@ -17,9 +17,9 @@ NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceOpQuestion,
-NewlineDotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,
-NewlineDotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,
-NewlineDotLowerIdent,NoSpaceOpQuestion,
+DotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,
+DotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,
+DotLowerIdent,NoSpaceOpQuestion,
 EndOfFile,
 ~~~
 # PARSE
