@@ -21,8 +21,7 @@ TYPE MISMATCH - fuzz_crash_092.md:1:4:1:8
 
     It is:
 
-        [X(b), ..] where [b.from_numeral : Numeral -> Try(b,
-        [InvalidNumeral(Str)])]
+        [X(b)] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
 
     But I need a record with a `a` field.
 

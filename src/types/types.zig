@@ -1268,3 +1268,40 @@ pub const TwoStaticDispatchConstraints = struct {
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
 };
+
+/// Polarity of a type, or roughly, what side of an arrow it appears on.
+pub const Polarity = enum {
+    /// A type that appears in negative/input position
+    neg,
+    /// A type that appears in positive/output position
+    pos,
+
+    pub const lhs = Polarity.neg;
+    pub const rhs = Polarity.pos;
+
+    /// The polarity one level deeper through a function argument position:
+    /// argument positions negate the surrounding polarity, while return
+    /// positions preserve it.
+    pub fn flip(self: Polarity) Polarity {
+        return switch (self) {
+            .neg => .pos,
+            .pos => .neg,
+        };
+    }
+};
+
+/// The ident text of the compiler-internal rigid var used as the extension of
+/// extensionless tag unions written in alias declaration bodies (eg
+/// `ParseErrs : [InvalidUtf8, InvalidU8]`).
+///
+/// Whether such a union is open or closed depends on the *polarity* of the
+/// position the alias is used in, which is unknown at declaration time. The
+/// declaration therefore defers the decision by storing this marker rigid as
+/// the union's ext, and `Instantiator` resolves each marker when the alias is
+/// instantiated at a use site: open (fresh flex) in output positions, closed
+/// (`[]`) in input positions. See `Instantiator.PolarityVarBehavior`.
+///
+/// The `#` prefix guarantees no user-written type var can collide with it, and
+/// idents are re-interned by text when types are copied across module envs, so
+/// text identity (and per-env precomputed `Ident.Idx` identity) is stable.
+pub const polarity_var_text = "#polarity";

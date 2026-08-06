@@ -5,7 +5,7 @@ platform ""
                 config : {},
                 run! : Host => Try(State(model), [Exit(I64)]),
             },
-            render! : State(model), Host => Try(State(model), [Exit(I64), ..]),
+            render! : State(model), Host => Try(State(model), [Exit(I64)]),
         }
     }
     exposes [App, Host]

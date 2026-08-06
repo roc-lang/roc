@@ -5,7 +5,7 @@ app [main!] { pf: platform "../fx-open/platform/main.roc" }
 
 import pf.Stdout
 
-emit! : Str => Try({}, [EmitFailed, ..])
+emit! : Str => Try({}, [EmitFailed])
 emit! = |s| {
     Stdout.line!(s)
     Ok({})

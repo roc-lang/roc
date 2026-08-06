@@ -137,7 +137,8 @@ pub const Constants = struct {
     /// 55: Record constructors retain exact checker-selected omitted defaults.
     /// 56: Record field presence uses an explicit sentinel representation.
     /// 57: Field-default roots can own their literal-conversion evaluation.
-    pub const CACHE_VERSION = 57;
+    /// 58: Tag unions in annotation output positions are implicitly open (polarity).
+    pub const CACHE_VERSION = 58;
 };
 
 /// Configuration for the Roc cache system.

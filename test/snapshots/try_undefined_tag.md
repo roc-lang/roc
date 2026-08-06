@@ -34,7 +34,7 @@ TYPE MISMATCH - try_undefined_tag.md:1:1:1:2
 
     This expression has type:
 
-        [A, ..]
+        [A]
 
     Tip: Maybe wrap a value using `Ok(value)` or `Err(value)`.
 

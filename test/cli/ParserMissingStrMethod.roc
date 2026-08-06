@@ -4,7 +4,7 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError, ..])
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
 	parse_record_start = |_, state| Ok(Uncounted(state))
 
 	parse_record_field : Format,
@@ -17,17 +17,17 @@ Format := [Default].{
 			Continue(State),
 			Done(State),
 		],
-		[FormatError, ..],
+		[FormatError],
 	)
 	parse_record_field = |_, _, state| Ok(Done(state))
 
-	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError, ..])
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
 	parse_record_after_field = |_, state| Ok(Continue(state))
 
-	skip_record_field : Format, State -> Try(State, [FormatError, ..])
+	skip_record_field : Format, State -> Try(State, [FormatError])
 	skip_record_field = |_, state| Ok(state)
 
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [FormatError, ..])
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [FormatError])
 	parse_tag_union = |_, _, _| Err(FormatError)
 }
 

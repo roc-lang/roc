@@ -30,7 +30,7 @@ MISSING METHOD - nominal_local.md:9:5:9:15
 
     The value's type, which does not have a method named `encode_str`, is:
 
-        [Utf8Format, ..]
+        [Utf8Format]
 
 # TOKENS
 ~~~zig

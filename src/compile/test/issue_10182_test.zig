@@ -53,7 +53,7 @@ test "issue 10182: local import cycle reports an error without scheduling partia
         .sub_path = ".roc_test_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes []
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
