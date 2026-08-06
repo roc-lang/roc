@@ -8555,7 +8555,7 @@ pub const Interpreter = struct {
 };
 
 test "interpreter float NaN mode preserves runtime payloads and normalizes compile-time results" {
-    const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+    const RuntimeHostEnv = @import("runtime_host.zig");
     const allocator = std.testing.allocator;
 
     var store = LirStore.init(allocator);
@@ -8615,7 +8615,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
 }
 
 test "interpreter evaluates explicit static data by compact id" {
-    const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+    const RuntimeHostEnv = @import("runtime_host.zig");
     const allocator = std.testing.allocator;
 
     var store = LirStore.init(allocator);

@@ -1,4 +1,4 @@
-//! Production-faithful RocOps recorder for eval test harnesses.
+//! RocOps host used by compiler-owned inspected evaluation.
 //!
 //! This env records exactly what a real host can observe through `host_abi`:
 //! callback kind, raw UTF-8 payload bytes, event order, and crash termination.

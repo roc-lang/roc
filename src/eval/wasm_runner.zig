@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const builtins = @import("builtins");
 const bytebox = @import("bytebox");
 const collections = @import("collections");
+const HostEvent = @import("runtime_host.zig").HostEvent;
 const BuiltinSignatures = @import("backend").wasm.BuiltinSignatures;
 const i128h = builtins.compiler_rt_128;
 const is_freestanding = builtin.target.os.tag == .freestanding;
@@ -164,7 +165,13 @@ pub const RunWasmOutcome = union(enum) {
 /// WebAssembly evaluation outcome plus host-observed allocation count.
 pub const RunWasmOutcomeResult = struct {
     outcome: RunWasmOutcome,
+    events: []HostEvent,
     allocation_count: u32,
+
+    pub fn deinitEvents(self: RunWasmOutcomeResult, allocator: std.mem.Allocator) void {
+        for (self.events) |*event| event.deinit(allocator);
+        allocator.free(self.events);
+    }
 };
 
 const WasmRunState = struct {
@@ -174,6 +181,7 @@ const WasmRunState = struct {
     crashed: bool = false,
     crash_message: ?[]u8 = null,
     crash_message_oom: bool = false,
+    events: std.ArrayListUnmanaged(HostEvent) = .empty,
 
     fn init(allocator: std.mem.Allocator, heap_base: u32) WasmRunState {
         return .{ .allocator = allocator, .heap_ptr = heap_base };
@@ -181,10 +189,21 @@ const WasmRunState = struct {
 
     fn deinit(self: *WasmRunState) void {
         if (self.crash_message) |message| self.allocator.free(message);
+        for (self.events.items) |*event| event.deinit(self.allocator);
+        self.events.deinit(self.allocator);
+    }
+
+    fn recordEvent(self: *WasmRunState, comptime tag: std.meta.Tag(HostEvent), message: []const u8) void {
+        const owned = self.allocator.dupe(u8, message) catch @panic("out of memory recording wasm host event");
+        self.events.append(self.allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch {
+            self.allocator.free(owned);
+            @panic("out of memory recording wasm host event");
+        };
     }
 
     fn recordCrash(self: *WasmRunState, message: []const u8) void {
         self.crashed = true;
+        self.recordEvent(.crashed, message);
         if (self.crash_message) |old| {
             self.allocator.free(old);
             self.crash_message = null;
@@ -204,7 +223,23 @@ const WasmRunState = struct {
         if (self.crash_message_oom) return error.OutOfMemory;
         return error.WasmExecFailed;
     }
+
+    fn takeEvents(self: *WasmRunState) std.mem.Allocator.Error![]HostEvent {
+        const events = try self.events.toOwnedSlice(self.allocator);
+        self.events = .empty;
+        return events;
+    }
 };
+
+fn crashedWasmResult(run_state: *WasmRunState) WasmOutcomeError!RunWasmOutcomeResult {
+    const message = try run_state.takeCrashMessage();
+    errdefer run_state.allocator.free(message);
+    return .{
+        .outcome = .{ .crashed = message },
+        .events = try run_state.takeEvents(),
+        .allocation_count = run_state.allocation_count,
+    };
+}
 
 /// Executes a wasm module and returns the Str.inspect result as a string.
 pub fn runWasmStr(
@@ -225,6 +260,7 @@ pub fn runWasmStrWithStats(
     has_imports: bool,
 ) WasmEvalError!RunWasmStrResult {
     const result = try runWasmOutcomeWithStats(allocator, wasm_bytes, heap_base, has_imports);
+    defer result.deinitEvents(allocator);
     return switch (result.outcome) {
         .returned => |output| .{
             .output = output,
@@ -302,7 +338,7 @@ pub fn runWasmOutcomeWithStats(
         env_imports.addHostFunction("roc_alloc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostRocAlloc, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dealloc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDealloc, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_realloc", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostRocRealloc, &run_state) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_dbg", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDbg, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dbg", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDbg, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_expect_failed", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocExpectFailed, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_crashed", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocCrashed, &run_state) catch return error.WasmExecFailed;
 
@@ -458,10 +494,7 @@ pub fn runWasmOutcomeWithStats(
     var returns: [1]bytebox.Val = undefined;
     module_instance.invoke(handle, &params, &returns, .{}) catch |err| {
         if (run_state.crashed) {
-            return .{
-                .outcome = .{ .crashed = try run_state.takeCrashMessage() },
-                .allocation_count = run_state.allocation_count,
-            };
+            return crashedWasmResult(&run_state);
         }
         if (std.debug.runtime_safety) {
             debugPrint("wasm invoke failed: {s}\n", .{@errorName(err)});
@@ -488,10 +521,7 @@ pub fn runWasmOutcomeWithStats(
         }
         return error.WasmExecFailed;
     };
-    if (run_state.crashed) return .{
-        .outcome = .{ .crashed = try run_state.takeCrashMessage() },
-        .allocation_count = run_state.allocation_count,
-    };
+    if (run_state.crashed) return crashedWasmResult(&run_state);
 
     const str_ptr: u32 = @bitCast(returns[0].I32);
     const mem_slice = module_instance.memoryAll();
@@ -524,8 +554,11 @@ pub fn runWasmOutcomeWithStats(
         break :sd mem_slice[data_ptr..][0..data_len];
     };
 
+    const output = try allocator.dupe(u8, str_data);
+    errdefer allocator.free(output);
     return .{
-        .outcome = .{ .returned = try allocator.dupe(u8, str_data) },
+        .outcome = .{ .returned = output },
+        .events = try run_state.takeEvents(),
         .allocation_count = run_state.allocation_count,
     };
 }
@@ -1622,11 +1655,13 @@ fn hostRocRealloc(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
     results[0] = .{ .I32 = @bitCast(data_ptr) };
 }
 
-fn hostRocDbg(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+fn hostRocDbg(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
     const buffer = module.store.getMemory(0).buffer();
     const msg_ptr: u32 = @bitCast(params[1].I32);
     const msg_len: u32 = @bitCast(params[2].I32);
     if (msg_ptr + msg_len > buffer.len) return;
+    state.recordEvent(.dbg, buffer[msg_ptr..][0..msg_len]);
 }
 
 fn hostRocExpectFailed(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1635,7 +1670,7 @@ fn hostRocExpectFailed(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params
     const msg_ptr: u32 = @bitCast(params[1].I32);
     const msg_len: u32 = @bitCast(params[2].I32);
     if (msg_ptr + msg_len > buffer.len) return;
-    state.recordCrash(buffer[msg_ptr..][0..msg_len]);
+    state.recordEvent(.expect_failed, buffer[msg_ptr..][0..msg_len]);
 }
 
 fn hostRocCrashed(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
