@@ -18,10 +18,10 @@
 //! (pow/sqrt/trig/log) and Dec floor/ceiling, `str_from_utf8` invalid-UTF-8
 //! error details, imported function calls, hosted function bodies, roots
 //! with runtime arguments, and recursion beyond the depth cap. Everything
-//! else in the Lambda Mono IR — every expression, statement, and pattern
+//! else in the Lambda Mono IR—every expression, statement, and pattern
 //! form, callable and erased dispatch, capture records, try sequencing,
 //! loops, the numeric op and conversion matrix, string and list op
-//! families — executes and is compared.
+//! families—executes and is compared.
 
 const std = @import("std");
 const base = @import("base");
@@ -1660,6 +1660,14 @@ pub const Evaluator = struct {
             .ptr_store,
             .ptr_load,
             .ptr_cast,
+            .list_append_range_within,
+            .list_copy_range_within,
+            .list_append_range_within_unsafe,
+            .list_append_sublist,
+            .list_append_le_bytes,
+            .list_slack_unique,
+            .list_owned_unique,
+            .list_set_in_place_unsafe,
             => |op_tag| self.evalConversionOrUnsupported(op_tag, args, arg_types, result_ty),
         };
     }

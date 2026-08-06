@@ -134,6 +134,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/platform_box_update_lir_test.zig"));
     std.testing.refAllDecls(@import("test/provided_callable_boundary_test.zig"));
     std.testing.refAllDecls(@import("test/match_lowering_test.zig"));
+    std.testing.refAllDecls(@import("test/range_prove_test.zig"));
     std.testing.refAllDecls(@import("test/match_corpus_test.zig"));
     std.testing.refAllDecls(@import("test/url_package_test.zig"));
 }

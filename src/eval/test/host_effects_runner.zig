@@ -1117,7 +1117,7 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
     else
         30_000;
 
-    // worker_argv_template is null — this runner doesn't (yet) support
+    // worker_argv_template is null—this runner doesn't (yet) support
     // Windows Child-based parallelism; on Windows it falls through to
     // runSequential as before.
     Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, null);

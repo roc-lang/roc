@@ -4,7 +4,7 @@
 # detect whether a slot was previously used. For fresh mmap'd pages these
 # bytes are zero; for reused slots they carry valid values from the prior
 # allocation. Valgrind flags the read as "uninitialized" because it does
-# not model musl's internal bookkeeping. This is safe by design —
+# not model musl's internal bookkeeping. This is safe by design—
 # enframe handles both the zero and nonzero cases correctly.
 
 # Suppress all uninitialised-value errors inside musl's enframe.

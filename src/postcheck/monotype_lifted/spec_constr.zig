@@ -211,7 +211,7 @@
 //! (`branchAt`, `captureOperandAt`), which retain no borrow. The GuardedList
 //! generation guard turns a violation into a Debug panic. The generation is
 //! per-list, so a borrow of one store stays valid across an append to a
-//! different store — only same-store appends invalidate it, so copying a span
+//! different store—only same-store appends invalidate it, so copying a span
 //! whose store this walk never grows is unnecessary.
 
 const std = @import("std");
@@ -330,8 +330,8 @@ fn shapeProofIsProven(proof: ShapeProof) bool {
 /// pointer-edge chain is far shorter than this cap (known values are bounded to
 /// a few thousand nodes by their derivations), so reaching it means the value
 /// is cyclic: the static matchers decline conservatively, and the
-/// materializing and reading walks — which only ever run on values proven
-/// acyclic — treat it as a compiler bug via `Common.invariant`, which is a
+/// materializing and reading walks—which only ever run on values proven
+/// acyclic—treat it as a compiler bug via `Common.invariant`, which is a
 /// checked panic only in safety-checked builds. See design.md "Core
 /// Principles" on bounded post-check walks.
 const value_wrapper_strip_cap: usize = 4096;
@@ -356,8 +356,8 @@ const StaticDataCandidateValue = struct {
 /// `unknown` means the pattern probes information the pass does not track
 /// statically: an opaque `.expr` component, or a pattern form (list,
 /// string, numeric literal) with no `Value` representation. An `unknown`
-/// branch verdict must abort a match fold — the residual match stays in the
-/// output and decides at runtime — whereas `no_match` proves the branch can
+/// branch verdict must abort a match fold—the residual match stays in the
+/// output and decides at runtime—whereas `no_match` proves the branch can
 /// be skipped.
 const MatchVerdict = enum { match, no_match, unknown, unknown_budget_exhausted };
 
@@ -1187,7 +1187,7 @@ const Pass = struct {
     /// Debug-only: a value-substituting rewrite must never introduce a new
     /// free local, so a fn whose body was rewritten in place may not gain a
     /// capture its source did not declare. A gained capture is a reference
-    /// the rewrite left resolving to a vanished binding — capture
+    /// the rewrite left resolving to a vanished binding—capture
     /// recomputation silently promotes it to a phantom argument, which
     /// misreads whatever register the caller happens to leave there.
     fn verifyRewrittenCaptureGain(self: *Pass, capture_snapshot: []const []const Ast.LocalId) void {
@@ -1211,9 +1211,9 @@ const Pass = struct {
         }
     }
 
-    /// Debug-only: every `.local` reference in a rewritten body — mirroring
+    /// Debug-only: every `.local` reference in a rewritten body—mirroring
     /// the reference forms the capture walk consumes, so an
-    /// `uninitialized_payload` condition is exempt exactly as it is there —
+    /// `uninitialized_payload` condition is exempt exactly as it is there—
     /// must resolve to an in-body binding, a function argument, or a
     /// recomputed capture. A
     /// value-substituting rewrite that leaves a reference resolving to a
@@ -2252,13 +2252,13 @@ const Pass = struct {
     }
 
     /// Whether a function body holds a `for` loop over an iterator named by an
-    /// enclosing `if`/`match` binding — the branch-chosen (tier-two) shape. The
+    /// enclosing `if`/`match` binding—the branch-chosen (tier-two) shape. The
     /// loop's first carried value is an identity-style construction over a single
     /// local, and that local is bound in scope to a branch expression whose arms
     /// are the differently-shaped iterators the loop must specialize over.
     const IteratorLoopParts = struct {
         /// The local fed to the iterator constructor in the iterator slot's
-        /// initial value — the branch-bound source the loop consumes.
+        /// initial value—the branch-bound source the loop consumes.
         source_local: Ast.LocalId,
         /// The whole iterator-slot initial expression (a construction over
         /// `source_local`), reused to build the base iteration.
@@ -2272,7 +2272,7 @@ const Pass = struct {
         /// The type each per-element application produces: the accumulator type
         /// for a fold, or a zero-sized unit for a side-effecting drive.
         value_ty: Type.TypeId,
-        /// The `One(...)` payload's item pattern — bound to each pulled element.
+        /// The `One(...)` payload's item pattern—bound to each pulled element.
         item_pat: Ast.PatId,
         /// The `One(...)` arm body, ending in a `continue` whose accumulator
         /// value (when carried) is the per-element result.
@@ -2552,7 +2552,7 @@ const Pass = struct {
         const ip = item_pat orelse return null;
         const carry_ty = if (carry_count == 1) GuardedList.at(params, 1).ty else undefined;
         // A fold produces the accumulator type; a side-effecting drive produces
-        // the loop's own (unit) result type. Reuse an existing type id — the
+        // the loop's own (unit) result type. Reuse an existing type id—the
         // Monotype type store is frozen during this pass.
         const value_ty = if (carry_count == 1)
             carry_ty
@@ -3476,7 +3476,7 @@ const Pass = struct {
             },
             // An early return exits the enclosing function; it is preserved
             // verbatim in the peeled tail, where it fires only after the base
-            // iteration completes without returning — the same order the
+            // iteration completes without returning—the same order the
             // unfused loop would return in.
             .return_ => |ret| .{ .return_ = .{
                 .value = (try self.cloneExprFresh(ret.value, renames)) orelse return null,
@@ -4134,9 +4134,9 @@ const Pass = struct {
     }
 
     /// Total work budget for deriving one shape. Values reachable here are
-    /// not always small finite trees — a loop-carried value can reference
+    /// not always small finite trees—a loop-carried value can reference
     /// itself through the fixpoint of a recursive construction, and deep
-    /// chains share substructure — so the walk spends one shared budget per
+    /// chains share substructure—so the walk spends one shared budget per
     /// node visit and degrades to `.any` (no known shape) when it runs out.
     /// `.any` is this function's existing "don't specialize on this" answer,
     /// so exhaustion is a missed specialization, never a wrong shape. See
@@ -4233,7 +4233,7 @@ const Pass = struct {
 /// scope's writes can be unwound at its boundary.
 ///
 /// The exact-local map is keyed by `LocalId`. The other two maps are keyed by
-/// `BinderIdentity` — the checked pattern binder together with the digest of the
+/// `BinderIdentity`—the checked pattern binder together with the digest of the
 /// local's monomorphic type, so two locals that share a binder but were
 /// monomorphized at different types stay distinct bindings. `binder_aliases`
 /// resolves every binder-equivalent local while cloning, for opaque and
@@ -4440,8 +4440,8 @@ const Subst = struct {
 
     /// Restore the change log to `start`, but re-apply the value each carried
     /// binder holds now so it survives this scope's teardown. A loop-carried
-    /// binder's value escapes the `let` that binds it — the loop back edge
-    /// reads it through its binder after the binding's lexical remainder ends —
+    /// binder's value escapes the `let` that binds it—the loop back edge
+    /// reads it through its binder after the binding's lexical remainder ends—
     /// so its update floats out to the enclosing scope, where an outer restore
     /// (an arm boundary or the loop clone itself) still unwinds it.
     fn restoreFloatingLoopCarries(self: *Subst, start: usize) Allocator.Error!void {
@@ -4551,9 +4551,9 @@ const Cloner = struct {
     wrapper_strip_depth: usize,
     /// Depth of the wrapper-strip recursion in `materialize`, counting each
     /// `nominal.backing`/`static_data_candidate.runtime`/callable-capture edge
-    /// followed. `materialize` runs on values proven acyclic by construction —
+    /// followed. `materialize` runs on values proven acyclic by construction—
     /// a cyclic value is rebound through a plain source clone before it can
-    /// reach here — so reaching `value_wrapper_strip_cap` is a compiler bug.
+    /// reach here—so reaching `value_wrapper_strip_cap` is a compiler bug.
     materialize_strip_depth: usize,
     inline_calls: InlineCallMode,
     iterator_inline_depth: usize,
@@ -4578,8 +4578,20 @@ const Cloner = struct {
     current_region: Region,
     current_inline_scope: Ast.InlineScopeId,
 
-    const case_of_case_work_budget: u32 = 256;
-    const inline_body_work_budget: u32 = 4096;
+    // Sized so realistic hot procedures never exhaust it: a saturated budget
+    // leaves the remaining match-of-match results materialized as real tag
+    // unions mid-procedure, whose per-iteration refcount pairs and payload
+    // copies then poison every loop below the cutoff (measured 10-25%
+    // slowdowns on deflate decode shapes at 256). The budget still bounds
+    // pathological distribution cascades; it is generated-code fuel, not a
+    // legality condition.
+    const case_of_case_work_budget: u32 = 65536;
+    // Sized like the case-of-case budget above: cumulative inlining in a
+    // realistic hot procedure (a decode loop inlining its refill and append
+    // helpers throughout) runs well past a few thousand size units, and a
+    // saturated budget strands the remaining helpers as out-of-line calls in
+    // the hottest paths. The bound still stops pathological cascades.
+    const inline_body_work_budget: u32 = 65536;
 
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
@@ -5424,7 +5436,7 @@ const Cloner = struct {
     }
 
     /// Whether any capture operand of a direct call would clone to something
-    /// other than the callee's own capture local — i.e. the call sits in a
+    /// other than the callee's own capture local—i.e. the call sits in a
     /// context where the captured bindings have been substituted.
     fn callCapturesAreForeign(self: *Cloner, captures_span: Ast.Span(Ast.CaptureOperand)) bool {
         const operands = self.pass.program.captureOperandSpan(captures_span);
@@ -5519,8 +5531,8 @@ const Cloner = struct {
     /// reaches the callable again), and a deep statically-built chain shares
     /// substructure between levels, so a per-level depth budget still permits
     /// combinatorially many paths through the shared nodes. The budget is
-    /// therefore spent per NODE VISIT — one shared counter across the whole
-    /// walk — which bounds total work absolutely for cycles and shared
+    /// therefore spent per NODE VISIT—one shared counter across the whole
+    /// walk—which bounds total work absolutely for cycles and shared
     /// structure alike. See design.md "Core Principles" on bounded post-check
     /// walks.
     ///
@@ -5528,8 +5540,8 @@ const Cloner = struct {
     /// because this predicate is allowed to answer "no" spuriously: declining
     /// a substitution keeps the construction materialized, which is a missed
     /// optimization and never a miscompile. A cyclic value exhausts the
-    /// budget and gets "no" — the correct answer, since a self-referential
-    /// value cannot be substituted anyway — and a value large enough to
+    /// budget and gets "no"—the correct answer, since a self-referential
+    /// value cannot be substituted anyway—and a value large enough to
     /// exhaust it honestly is one whose substitution would bloat the clone
     /// regardless. Value identity is also too murky for a reliable visited
     /// set: values are by-value unions holding slices, with only the nominal
@@ -5788,6 +5800,19 @@ const Cloner = struct {
                 if (self.letCaseJoinFor(jump.target)) |join| {
                     return try self.captureLetCaseJump(expr.ty, join, jump);
                 }
+                if (self.selectedExitJumpSites(jump.target)) |sites| {
+                    // A loop-exit transfer site minted by an active selection is
+                    // being duplicated (an enclosing arm rewrite is re-cloning
+                    // the region). The target is already in this clone's id
+                    // space, and the selection must see every surviving copy of
+                    // its exit, so keep the target and register the duplicate.
+                    const duplicated = try self.addExpr(.{ .ty = expr.ty, .data = .{ .jump = .{
+                        .target = jump.target,
+                        .args = try self.cloneExprSpan(jump.args),
+                    } } });
+                    try sites.append(self.pass.allocator, duplicated);
+                    return duplicated;
+                }
                 break :blk .{ .jump = .{
                     .target = self.clonedJoinTarget(jump.target),
                     .args = try self.cloneExprSpan(jump.args),
@@ -5897,7 +5922,13 @@ const Cloner = struct {
             const join_point = self.join_stack.items[index];
             if (join_point.source == source) return join_point.target;
         }
-        Common.invariant("SpecConstr jump referenced a join point outside its lexical scope");
+        // Not being remapped: the join's definition encloses the region being
+        // cloned rather than sitting inside it. Rewrites re-clone regions of
+        // already-emitted output in place (arm transfers, loop exit
+        // selection), and a jump out of such a region must keep aiming at the
+        // enclosing definition. Join ids are minted from one pass-wide
+        // counter, so the id cannot collide with a different join.
+        return source;
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype, bindings: *BindingChain) Common.LowerError!Value {
@@ -6122,6 +6153,23 @@ const Cloner = struct {
         return self.loop_exit_stack.items[self.loop_exit_stack.items.len - 1];
     }
 
+    /// The live site list of the active selection that owns this jump target,
+    /// if any. Exit-transfer jumps are minted in the clone's own id space, so a
+    /// jump to a selection's target can only be one of that selection's sites
+    /// being cloned again.
+    fn selectedExitJumpSites(self: *Cloner, target: Ast.JoinPointId) ?*std.ArrayList(Ast.ExprId) {
+        var index = self.loop_exit_stack.items.len;
+        while (index > 0) {
+            index -= 1;
+            const selection = self.loop_exit_stack.items[index] orelse continue;
+            switch (selection.transfer) {
+                .break_value => {},
+                .jump => |jump_transfer| if (jump_transfer.target == target) return jump_transfer.sites,
+            }
+        }
+        return null;
+    }
+
     fn cloneSelectedLoopExit(
         self: *Cloner,
         break_ty: Type.TypeId,
@@ -6182,7 +6230,11 @@ const Cloner = struct {
         defer self.subst.restore(change_start);
         for (params, args) |param, arg| try self.subst.put(self.pass.program, param.local, .{ .expr = arg });
         const body = try self.cloneExpr(continuation);
-        self.pass.program.setExprData(site, self.pass.program.getExpr(body).data);
+        // The site is a diverging loop exit: lexically-following loop code is
+        // only dead while it stays one. Inlining the continuation bare would
+        // fall through into that code and discard the result, so the site
+        // becomes a break carrying the continuation's value out of the loop.
+        self.pass.program.setExprData(site, .{ .break_ = body });
     }
 
     /// Dissolve a binding while retaining every opaque leaf in the strict
@@ -6243,8 +6295,8 @@ const Cloner = struct {
     ///
     /// - Each arm's result value must be a known structure (constructor,
     ///   record, tuple, callable). An opaque arm result gains nothing from
-    ///   the rewrite and would only push the continuation behind a join —
-    ///   defeating downstream tail-call and loop-shape recognition — so the
+    ///   the rewrite and would only push the continuation behind a join—
+    ///   defeating downstream tail-call and loop-shape recognition—so the
     ///   rewrite declines and the let lowers as an ordinary binding, exactly
     ///   as arm sinking declined for the same reason.
     /// - When the continuation immediately matches on the bound value, each
@@ -6400,7 +6452,7 @@ const Cloner = struct {
         return result;
     }
 
-    const let_case_shape_arm_budget: usize = 256;
+    const let_case_shape_arm_budget: usize = 4096;
 
     /// The budget-exhausted shape: one join point whose single parameter is
     /// the branch-built value, with every already-cloned arm body threaded to
@@ -6666,26 +6718,84 @@ const Cloner = struct {
         return true;
     }
 
-    /// Clone one arm of the rewritten case. The arm keeps its own statements
-    /// and effects; its result value must be a known structure, which the
-    /// cloned dispatch consumes. Returns null when the arm's value is opaque,
+    /// Rewrite one arm of the case. The arm keeps its own statements and
+    /// effects; its result value must be a known structure, which the cloned
+    /// dispatch consumes. Returns null when the arm's value is opaque,
     /// declining the whole rewrite.
+    ///
+    /// `branch_body` is already-cloned output of the value clone, with fresh
+    /// ids referenced nowhere else, so a block arm's statements are reused
+    /// as they stand and only the tail expression is re-derived for its
+    /// symbolic value. Re-cloning whole arm bodies here re-ran every nested
+    /// rewrite inside them a second time, which compounded across nesting
+    /// levels and drained the pass-wide growth budgets on copies that were
+    /// then discarded.
     fn cloneLetOfCaseArmBody(self: *Cloner, probe: Ast.LocalId, dispatch: Ast.ExprId, branch_body: Ast.ExprId) Common.LowerError!?Ast.ExprId {
         const dispatch_ty = self.pass.program.getExpr(dispatch).ty;
         const branch_expr = self.pass.program.getExpr(branch_body);
         switch (branch_expr.data) {
             .block => |block| {
-                const change_start = self.subst.watermark();
+                // A branch-built or looping tail always derives an opaque
+                // value and is never divergent: decline without re-deriving,
+                // so the nested rewrites inside it do not rerun just to be
+                // thrown away.
+                switch (self.pass.program.getExpr(block.final_expr).data) {
+                    .match_, .if_, .loop_ => return null,
+                    .local,
+                    .unit,
+                    .@"unreachable",
+                    .int_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .dec_lit,
+                    .str_lit,
+                    .bytes_lit,
+                    .static_data_candidate,
+                    .list,
+                    .tuple,
+                    .record,
+                    .record_update,
+                    .tag,
+                    .nominal,
+                    .block,
+                    .let_,
+                    .lambda,
+                    .def_ref,
+                    .fn_def,
+                    .fn_ref,
+                    .call_value,
+                    .call_proc,
+                    .low_level,
+                    .field_access,
+                    .tuple_access,
+                    .structural_eq,
+                    .structural_hash,
+                    .uninitialized,
+                    .uninitialized_payload,
+                    .if_initialized_payload,
+                    .try_sequence,
+                    .try_record_sequence,
+                    .break_,
+                    .continue_,
+                    .join_point,
+                    .jump,
+                    .return_,
+                    .crash,
+                    .comptime_branch_taken,
+                    .comptime_exhaustiveness_failed,
+                    .dbg,
+                    .expect_err,
+                    .expect,
+                    => {},
+                }
 
-                const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
-                defer self.pass.allocator.free(source);
+                const change_start = self.subst.watermark();
 
                 var statements = std.ArrayList(Ast.StmtId).empty;
                 defer statements.deinit(self.pass.allocator);
-                for (source) |stmt| {
-                    const cloned = try self.cloneStmt(stmt);
-                    try self.appendBindingStmts(cloned.bindings, &statements);
-                    if (cloned.stmt) |cloned_stmt| try statements.append(self.pass.allocator, cloned_stmt);
+                const source = self.pass.program.stmtSpan(block.statements);
+                for (0..GuardedList.borrowLen(source)) |index| {
+                    try statements.append(self.pass.allocator, GuardedList.at(source, index));
                 }
 
                 const final = try self.cloneExprValue(block.final_expr);
@@ -6712,6 +6822,7 @@ const Cloner = struct {
                     .final_expr = rest,
                 } } });
             },
+            .match_, .if_, .loop_ => return null,
             .local,
             .unit,
             .@"unreachable",
@@ -6740,14 +6851,11 @@ const Cloner = struct {
             .tuple_access,
             .structural_eq,
             .structural_hash,
-            .match_,
-            .if_,
             .uninitialized,
             .uninitialized_payload,
             .if_initialized_payload,
             .try_sequence,
             .try_record_sequence,
-            .loop_,
             .break_,
             .continue_,
             .join_point,
@@ -6919,7 +7027,7 @@ const Cloner = struct {
     /// join's continuation body once against the rebuilt values, and patch
     /// every jump site with its leaf arguments. A join with exactly one jump
     /// site stores no continuation copy either way, so its body is cloned
-    /// directly at the site — against the site's full symbolic values — and
+    /// directly at the site—against the site's full symbolic values—and
     /// no join point is emitted (null).
     fn finalizeLetCaseJoin(self: *Cloner, join: *LetCaseJoin, rest_ty: Type.TypeId) Common.LowerError!?LetCaseJoinPieces {
         const arena = self.arena.allocator();
@@ -7345,9 +7453,9 @@ const Cloner = struct {
         }
     }
 
-    /// A block whose statements all dissolve — each binding retains its strict
+    /// A block whose statements all dissolve—each binding retains its strict
     /// work in the block's source-ordered binding chain, and each discarded
-    /// expression is speculatable — is transparent to value flow: its result keeps the final
+    /// expression is speculatable—is transparent to value flow: its result keeps the final
     /// expression's structure. A statement that must stay a statement (an
     /// effect, a runtime destructure, control flow) pins the block, which
     /// then materializes as written. Returns null on a pinned block with all
@@ -7650,8 +7758,8 @@ const Cloner = struct {
     /// created the leaf params. Where the value structurally matches the shape,
     /// the split leaves are emitted directly (or read from an opaque expr via
     /// field access). Where a sub-path of the value cannot supply the shape's
-    /// leaves — a back edge flipping an entry-known tag to a sibling tag, or a
-    /// value that is not the shape's constructor — that sub-path demotes to
+    /// leaves—a back edge flipping an entry-known tag to a sibling tag, or a
+    /// value that is not the shape's constructor—that sub-path demotes to
     /// `.any` and its whole value materializes as one runtime scalar over its
     /// finite value set, while its sibling leaves stay split. The returned
     /// shape carries the demotions; `demoted` is set when any leaf demoted.
@@ -8341,8 +8449,8 @@ const Cloner = struct {
     /// every use site, so a value built by a recursively-constructed chain (an
     /// iterator wrapped around itself through many map layers) is a compact
     /// graph reached by combinatorially many distinct paths, and this walk
-    /// probes each visited node with `valueCanSubstitute` — itself a full
-    /// sub-walk — so its cost is the node count times that probe and grows far
+    /// probes each visited node with `valueCanSubstitute`—itself a full
+    /// sub-walk—so its cost is the node count times that probe and grows far
     /// past any per-level depth. The walk spends one shared budget per node
     /// visit and, when it runs out, keeps the remaining sub-value materialized
     /// as-is instead of continuing to rewrite it. See design.md "Core
@@ -8577,12 +8685,10 @@ const Cloner = struct {
                 defer self.pass.allocator.free(rewritten);
 
                 for (inner_branches, 0..) |inner_branch, index| {
-                    var branch_bindings: BindingChain = .{};
                     const change_start = self.subst.watermark();
                     try self.shadowPatLocals(inner_branch.pat);
                     try self.shadowStmtSpanLocals(inner_branch.bindings);
-                    const inner_value = try self.cloneExprValueInto(inner_branch.body, &branch_bindings);
-                    const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse {
+                    const body = (try self.distributeMatchOverArmBody(ty, inner_branch.body, outer_branches_span)) orelse {
                         self.subst.restore(change_start);
                         return null;
                     };
@@ -8590,7 +8696,7 @@ const Cloner = struct {
                         .pat = inner_branch.pat,
                         .bindings = inner_branch.bindings,
                         .guard = inner_branch.guard,
-                        .body = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
+                        .body = body,
                     };
                     self.subst.restore(change_start);
                 }
@@ -8609,19 +8715,14 @@ const Cloner = struct {
                 defer self.pass.allocator.free(rewritten);
 
                 for (inner_branches, 0..) |inner_branch, index| {
-                    var branch_bindings: BindingChain = .{};
-                    const inner_value = try self.cloneExprValueInto(inner_branch.body, &branch_bindings);
-                    const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
+                    const body = (try self.distributeMatchOverArmBody(ty, inner_branch.body, outer_branches_span)) orelse return null;
                     rewritten[index] = .{
                         .cond = inner_branch.cond,
-                        .body = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
+                        .body = body,
                     };
                 }
 
-                var else_bindings: BindingChain = .{};
-                const else_value = try self.cloneExprValueInto(inner_if.final_else, &else_bindings);
-                const outer_else = (try self.distributeMatchOverValue(ty, else_value, outer_branches_span, &else_bindings)) orelse return null;
-                const final_else = try self.wrapBindings(else_bindings, try self.materialize(outer_else));
+                const final_else = (try self.distributeMatchOverArmBody(ty, inner_if.final_else, outer_branches_span)) orelse return null;
 
                 return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .if_ = .{
                     .branches = try self.pass.program.addIfBranchSpan(rewritten),
@@ -8675,6 +8776,147 @@ const Cloner = struct {
             .expect_err,
             .expect,
             => unreachable,
+        }
+    }
+
+    /// Distribute the outer match over one inner arm. The arm is
+    /// already-cloned output with fresh ids referenced nowhere else, so a
+    /// block arm keeps its statements as they stand and only the tail
+    /// expression is re-derived for its symbolic value; a tail that is
+    /// itself branch-built recurses structurally without any re-clone.
+    /// Re-cloning whole arm bodies here compounded across nested
+    /// case-of-case levels.
+    fn distributeMatchOverArmBody(
+        self: *Cloner,
+        ty: Type.TypeId,
+        arm_body: Ast.ExprId,
+        outer_branches_span: Ast.Span(Ast.Branch),
+    ) Common.LowerError!?Ast.ExprId {
+        const arm_expr = self.pass.program.getExpr(arm_body);
+        switch (arm_expr.data) {
+            .block => |block| {
+                const tail = block.final_expr;
+                var branch_bindings: BindingChain = .{};
+                const inner_value: Value = switch (self.pass.program.getExpr(tail).data) {
+                    // Branch-built and looping tails recurse (or decline)
+                    // through the distribution itself, without re-deriving
+                    // the expression.
+                    .match_, .if_, .loop_ => .{ .expr = tail },
+                    .local,
+                    .unit,
+                    .@"unreachable",
+                    .int_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .dec_lit,
+                    .str_lit,
+                    .bytes_lit,
+                    .static_data_candidate,
+                    .list,
+                    .tuple,
+                    .record,
+                    .record_update,
+                    .tag,
+                    .nominal,
+                    .block,
+                    .let_,
+                    .lambda,
+                    .def_ref,
+                    .fn_def,
+                    .fn_ref,
+                    .call_value,
+                    .call_proc,
+                    .low_level,
+                    .field_access,
+                    .tuple_access,
+                    .structural_eq,
+                    .structural_hash,
+                    .uninitialized,
+                    .uninitialized_payload,
+                    .if_initialized_payload,
+                    .try_sequence,
+                    .try_record_sequence,
+                    .break_,
+                    .continue_,
+                    .join_point,
+                    .jump,
+                    .return_,
+                    .crash,
+                    .comptime_branch_taken,
+                    .comptime_exhaustiveness_failed,
+                    .dbg,
+                    .expect_err,
+                    .expect,
+                    => try self.cloneExprValueInto(tail, &branch_bindings),
+                };
+                const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
+
+                var statements = std.ArrayList(Ast.StmtId).empty;
+                defer statements.deinit(self.pass.allocator);
+                const source = self.pass.program.stmtSpan(block.statements);
+                for (0..GuardedList.borrowLen(source)) |index| {
+                    try statements.append(self.pass.allocator, GuardedList.at(source, index));
+                }
+                return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
+                    .statements = try self.pass.program.addStmtSpan(statements.items),
+                    .final_expr = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
+                } } });
+            },
+            .match_, .if_, .loop_ => {
+                var branch_bindings: BindingChain = .{};
+                const outer_value = (try self.distributeMatchOverValue(ty, .{ .expr = arm_body }, outer_branches_span, &branch_bindings)) orelse return null;
+                return try self.wrapBindings(branch_bindings, try self.materialize(outer_value));
+            },
+            .local,
+            .unit,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .static_data_candidate,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .tag,
+            .nominal,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .low_level,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .return_,
+            .crash,
+            .comptime_branch_taken,
+            .comptime_exhaustiveness_failed,
+            .dbg,
+            .expect_err,
+            .expect,
+            => {
+                var branch_bindings: BindingChain = .{};
+                const inner_value = try self.cloneExprValueInto(arm_body, &branch_bindings);
+                const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
+                return try self.wrapBindings(branch_bindings, try self.materialize(outer_value));
+            },
         }
     }
 
@@ -9442,8 +9684,8 @@ const Cloner = struct {
 
     /// Clone one statement. A binding statement whose value's opaque leaves
     /// can all be named dissolves instead: the returned binding chain is
-    /// placed by the caller at this statement's position — the same
-    /// computations in the same order — and the bound name keeps its
+    /// placed by the caller at this statement's position—the same
+    /// computations in the same order—and the bound name keeps its
     /// structured value for the rest of the block. `stmt` is null when the
     /// source binding dissolved completely.
     fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!ClonedStmt {
@@ -11621,7 +11863,7 @@ fn shapeType(shape: Shape) Type.TypeId {
 
 /// Debug enforcement of the nominal construction invariant: a structural
 /// constructor expression (tag, record, tuple) must never be typed at a
-/// nominal type — Monotype lowering wraps every such construction in
+/// nominal type—Monotype lowering wraps every such construction in
 /// explicit `.nominal` nodes, and the static matcher relies on pattern and
 /// value representations aligning exactly.
 fn assertStructuralConstructionType(program: *const Ast.Program, ty: Type.TypeId) void {
@@ -12262,8 +12504,9 @@ test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
 
     // Every wrapper is individually tiny, but each calls the preceding
     // wrapper twice. Per-body admission alone therefore expands this graph
-    // exponentially even though it contains no recursion.
-    for (0..14) |depth| {
+    // exponentially even though it contains no recursion; the depth keeps
+    // the fully-inlined size far past the budget.
+    for (0..18) |depth| {
         const first = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = callee },
             .args = Ast.Span(Ast.ExprId).empty(),
@@ -12711,7 +12954,7 @@ test "static value matchers bound wrapper strips over a cyclic value" {
         },
     };
 
-    // The substitution check answers "cannot substitute" on exhaustion — the
+    // The substitution check answers "cannot substitute" on exhaustion—the
     // conservative direction, and correct, since a self-referential value
     // cannot be substituted.
     try std.testing.expectEqual(ProofStatus.unknown_budget_exhausted, cloner.valueCanSubstitute(cyclic));

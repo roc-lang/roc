@@ -7,8 +7,8 @@ app [main!] { pf: platform "./platform/main.roc" }
 # the loop iterated a slice of `program.fns` captured before the loop, while
 # materializing specialized callables during call-pattern collection appended to
 # `program.fns`, reallocating the backing array and leaving the loop's slice
-# dangling (panic "index out of bounds: index 2863311530" — 0xAAAAAAAA undefined
-# memory — or a SIGSEGV). The build must not panic or segfault.
+# dangling (panic "index out of bounds: index 2863311530"—0xAAAAAAAA undefined
+# memory—or a SIGSEGV). The build must not panic or segfault.
 
 import pf.AnyValue exposing [AnyValue]
 import pf.Stdout

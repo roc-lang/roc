@@ -3,9 +3,9 @@
 ## Problem
 
 The frontend already scales across cores. The compile coordinator is an
-actor model — "the single owner of all mutable state in the compilation
+actor model—"the single owner of all mutable state in the compilation
 pipeline" with "Workers are pure: they receive tasks, return results"
-(`src/compile/coordinator.zig:1-32`) — and it parses, canonicalizes, and
+(`src/compile/coordinator.zig:1-32`)—and it parses, canonicalizes, and
 type-checks modules concurrently on `std.Thread.getCpuCount()` workers
 (`coordinator.zig:2503`). Once that parallel frontend finishes, the
 dev backend lowers the whole program to machine code on a single thread:
@@ -19,8 +19,8 @@ dev-build wall-clock after the frontend has drained.
 Nothing about generating one proc's code depends on generating another
 proc's code concurrently: the inputs are read-only and the cross-proc
 references are already expressed as relocation records. The per-proc
-output the backend produces — final code bytes plus relocations plus its
-readonly-data contributions — is exactly the artifact a worker could
+output the backend produces—final code bytes plus relocations plus its
+readonly-data contributions—is exactly the artifact a worker could
 produce independently and hand to a single writer. This project makes
 codegen produce those per-proc artifacts on worker threads and consume
 them through one serialized, deterministic writer. **It introduces no new
@@ -76,7 +76,7 @@ explicit relocation and readonly data records" into shared memory; the
 `machine_code_shim` maps it, patches the records, and calls the
 entrypoint. Its `RelocationRecord` "names the target symbol explicitly"
 (`RunImage.zig:90`) and each proc appears as a named `CodeSymbol`
-(`:119-123`). So both consumers — object writer and run image — already
+(`:119-123`). So both consumers—object writer and run image—already
 resolve inter-proc references by name at layout time.
 
 The one place a proc→proc reference is **not** a relocation is direct
@@ -98,8 +98,8 @@ in function-index order by `flushPendingBodies`
 (`WasmCodeGen.zig:1536-1564`), which sorts the bodies by function index
 (`:1545`) and appends each through `CodeBuilder`'s `insertIntoModule`
 (`src/backend/wasm/CodeBuilder.zig:129`, invoked at `:1564`). The only difference from the dev backend
-is the relocation identifier — a symbol-table index rather than a symbol
-name string — not the artifact shape.
+is the relocation identifier—a symbol-table index rather than a symbol
+name string—not the artifact shape.
 
 ## The enabling invariants
 
@@ -108,7 +108,7 @@ depends on them and states them as invariants:
 
 1. **The LIR store and layout store are read-only during codegen.** The
    driver holds `store: *const LirStore` and `layout_store: *const
-   LayoutStore` (`LirCodeGen.zig:513-517, 921-922`) — the immutability is
+   LayoutStore` (`LirCodeGen.zig:513-517, 921-922`)—the immutability is
    already in the types. `LirProgram.Result` (`src/lir/program.zig:146`)
    is fully built before codegen begins and is only read thereafter. N
    worker driver instances can share these `*const` borrows with no
@@ -121,7 +121,7 @@ depends on them and states them as invariants:
    `ObjectFileCompiler.zig:269`; the `linked_function`/`linked_data`
    name fields). A proc that emits its call targets and address-of-proc
    references as `linked_function` relocations instead of in-buffer
-   `PendingCall` patches is complete on its own — it needs no other
+   `PendingCall` patches is complete on its own—it needs no other
    proc's final address at generation time.
 
 3. **The per-proc output is a value, not a position in shared state.** A
@@ -160,7 +160,7 @@ with one addition that is the crux of determinism: **procs are appended in
 ascending spec-id order, not completion order.** The frontend coordinator
 collects results in arrival order and relies on keying each result into a
 fixed per-module slot by `module_id` for determinism
-(`coordinator.zig:2617-2620, 3373-3386`) — but codegen concatenates bytes,
+(`coordinator.zig:2617-2620, 3373-3386`)—but codegen concatenates bytes,
 so arrival order would leak into the output layout. The writer therefore
 buffers out-of-order completions keyed by spec id and emits each proc only
 when it is the next in sequence. On emission it assigns the proc its base
@@ -170,7 +170,7 @@ exists), appends its rodata with the same alignment logic
 (`appendStaticDataExport`, `ObjectFileCompiler.zig:493`), records its
 symbol, and resolves inter-proc `linked_function` references against the
 accumulated symbol table. The output byte layout is then a pure function
-of spec-id order and each proc's bytes — identical run-to-run and
+of spec-id order and each proc's bytes—identical run-to-run and
 identical to single-threaded mode.
 
 **Backpressure.** The result channel bounds in-flight artifacts. Codegen
@@ -186,13 +186,13 @@ single-buffer driver today is resolved to either per-worker-private or
 owned-by-the-writer:
 
 - *Code buffer, relocation list, `proc_registry`, `pending_calls`/
-  `pending_proc_addrs`* — become per-worker-private and offset-0-local.
+  `pending_proc_addrs`*—become per-worker-private and offset-0-local.
   Cross-proc calls become `linked_function` relocations; the writer owns
   the global symbol table and does resolution. `patchPendingCalls`'
   absolute-offset patching is removed for the object/JIT paths in favor of
   named relocations.
 - *RC helpers* (`compiled_rc_helpers: AutoHashMap(u64, usize)`,
-  `LirCodeGen.zig:554`; `rc_helper_worklist`, `:563`) — the one genuinely
+  `LirCodeGen.zig:554`; `rc_helper_worklist`, `:563`)—the one genuinely
   cross-proc-shared structure: a drop/copy helper for a layout is compiled
   once and referenced by every proc that needs it, keyed by helper
   identity. Resolution: hoist RC-helper generation into a pre-pass that
@@ -202,14 +202,14 @@ owned-by-the-writer:
   alongside the proc pool. (Alternatively each worker emits its own
   helpers and the writer dedups by identity before layout; the pre-pass is
   preferred because it keeps output size and layout stable.)
-- *Rodata / static strings* — already built up-front by
+- *Rodata / static strings*—already built up-front by
   `StaticStringData.build` from the whole store; the writer owns the one
   rodata section and each worker only references entries by name, so no
   change to interning is needed. Worker-generated static-data symbol
   names (`static_data_symbol_names`, `:527`) are returned in the result
   and merged by the writer.
 - *DWARF line entries and unwind info* (`line_entries`, `:547`;
-  `unwind_functions`, `:557`) — emitted per proc relative to offset 0 and
+  `unwind_functions`, `:557`)—emitted per proc relative to offset 0 and
   rebased by the writer at emission, in the same spec-id order, so debug
   sections are deterministic too.
 
@@ -219,7 +219,7 @@ compiler, `threading.is_freestanding` is true
 compiler is itself compiled out to `void` there
 (`src/backend/dev/mod.zig:52`). The pool must run inline on the owner
 thread in that configuration, draining its own queue and invoking the same
-per-proc generation function — the pattern the coordinator already uses
+per-proc generation function—the pattern the coordinator already uses
 (`coordinator.zig:2606-2613`). `--jobs=1` selects the same inline path on
 native targets and is the byte-identity oracle (below).
 
@@ -228,7 +228,7 @@ same per-proc-artifact-plus-named-relocation inputs, so it is fed from the
 same collected results; only its serializer differs. The hot-reload code
 reference protocol (`enable_hot_reload`, `LirCodeGen.zig:654`) and the
 `src/machine_code_shim`/`src/ipc` boundary see byte-identical images
-because emission order is deterministic — a reload produces the same image
+because emission order is deterministic—a reload produces the same image
 for the same program.
 
 ## Implementation slices
@@ -262,8 +262,8 @@ Each slice lands and is testable on its own.
    Acceptance is therefore behavioral equivalence (all differential suites
    green), relocation-set equivalence, and helper-identity-set equality
    versus slice 1's output. Raw byte-identity stays the *within-slice*
-   oracle — output identical across `--jobs` counts and across repeated
-   runs at a fixed slice — but it is not an *across-slice* oracle between
+   oracle—output identical across `--jobs` counts and across repeated
+   runs at a fixed slice—but it is not an *across-slice* oracle between
    slices 1 and 2.
 3. **Introduce the codegen worker pool.** Reuse `channel.zig` and the
    `WorkerAllocators` arena discipline; N workers, one writer with the
@@ -317,8 +317,8 @@ Every criterion below must hold; the project is not done until all do:
   same `--jobs` produce identical object bytes and identical run-image
   bytes; there is no ordering dependence on which worker finished first.
 - **All differential suites green.** The four-backend eval oracle
-  (`src/eval/test/parallel_runner.zig`, `NUM_BACKENDS = 4` at `:172-173`
-  — interpreter, dev, wasm, and optionally llvm, all compared by
+  (`src/eval/test/parallel_runner.zig`, `NUM_BACKENDS = 4` at `:172-173`—
+  interpreter, dev, wasm, and optionally llvm, all compared by
   `Str.inspect`) and the CLI build-and-run integration tests
   (`src/cli/test/fx_platform_test.zig`, which shells out to `roc build
   --opt=dev` and executes the produced binary) pass unchanged, at the
@@ -350,7 +350,7 @@ through a name table the writer owns, so worker scheduling cannot affect
 the bytes. Data races are impossible by construction because the only
 shared state during generation is `*const` (the LIR and layout stores) and
 every mutable accumulator is either worker-private or owned by the single
-writer — the same property that makes the frontend actor model race-free.
+writer—the same property that makes the frontend actor model race-free.
 The byte-identity oracle turns any accidental order- or thread-dependence
 into a hard test failure rather than a latent nondeterminism.
 
@@ -369,7 +369,7 @@ channel bound to confirm backpressure caps growth.
 - **Byte-identity pin.** A test that builds a representative multi-proc
   program to an object file at `--jobs=1` and `--jobs=8` and asserts the
   two object byte streams are equal; extend to the run-image bytes. This
-  is a new guard — there is no golden-object comparison in the suite
+  is a new guard—there is no golden-object comparison in the suite
   today.
 - **Reorder-buffer unit test.** Feed the writer artifacts in a shuffled
   arrival order and assert the emitted layout matches spec-id order.
@@ -386,18 +386,18 @@ channel bound to confirm backpressure caps growth.
 
 The dev backend is in scope first: it is the per-proc-artifact backend and
 the dev-build hot path. The **LLVM backend is out of scope** for this
-project — it builds one in-memory module with a single module builder and
+project—it builds one in-memory module with a single module builder and
 its bottleneck is different; parallelizing it is a separate effort. The
 **wasm backend is a follow-up** with the same shape, since it already
 produces per-function bodies (`WasmCodeGen.zig:233, 1564`). The
-**interpreter is unaffected** — it walks LIR directly and generates no
+**interpreter is unaffected**—it walks LIR directly and generates no
 code artifacts.
 
 ## Related projects
 
-- [runtime-representation-single-sourcing.md](runtime-representation-single-sourcing.md)
-  — hardens the per-backend value-representation constants this codegen
+- [runtime-representation-single-sourcing.md](runtime-representation-single-sourcing.md)—
+  hardens the per-backend value-representation constants this codegen
   emits; independent, but both touch the dev backend's emission path.
-- [host-boundary-single-sourcing.md](host-boundary-single-sourcing.md) —
+- [host-boundary-single-sourcing.md](host-boundary-single-sourcing.md)—
   the symbol-name and shim-boundary contracts the object writer and run
   image resolve relocations against.

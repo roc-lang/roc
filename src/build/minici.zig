@@ -1387,7 +1387,7 @@ fn setCpuAffinity(count: usize) !void {
 
 /// On a Raspberry Pi with little RAM, pin this process to a CPU subset so the
 /// `zig build` and test-worker children it spawns don't run one multi-GiB
-/// compile per core and exhaust RAM — which OOM-kills build jobs and, once swap
+/// compile per core and exhaust RAM—which OOM-kills build jobs and, once swap
 /// starts thrashing, can hang the machine hard enough to reboot it.
 ///
 /// Zig sizes compile parallelism (and the CLI test runner sizes its worker pool)

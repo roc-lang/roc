@@ -81,11 +81,11 @@ SimdOracle := [].{
 		to_inspect = |vector| simd128_inspect("U8x16", List.map(U8x16.to_list(vector), U8.to_str))
 
 		## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-		## `[i * 8, (i + 1) * 8)`. Free at runtime — no instructions.
+		## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
 		to_u128_bits : U8x16 -> U128
 		to_u128_bits = |vector| vector.bits
 
-		## Build a [U8x16] from 128 raw bits. Free at runtime — no
+		## Build a [U8x16] from 128 raw bits. Free at runtime—no
 		## instructions.
 		from_u128_bits : U128 -> U8x16
 		from_u128_bits = |bits| U8x16.{ bits }
@@ -375,7 +375,7 @@ SimdOracle := [].{
 		interleave_hi = |a, b| U8x16.from_u128_bits(simd128_interleave_hi(a.to_u128_bits(), b.to_u128_bits(), 8))
 
 		## The even-indexed lanes of a followed by the even-indexed lanes
-		## of b — the deinterleaving inverse of the interleave operations,
+		## of b—the deinterleaving inverse of the interleave operations,
 		## used to split interleaved channel data apart.
 		##
 		## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -427,7 +427,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `pshufb` plus a one-instruction fixup on x86-64
 		## (`pshufb` alone wraps indices 16-127), `tbl` on AArch64 NEON,
-		## and `i8x16.swizzle` on wasm — the out-of-range-to-zero
+		## and `i8x16.swizzle` on wasm—the out-of-range-to-zero
 		## semantics here matches `tbl` and `swizzle` exactly.
 		## ```roc
 		## expect U8x16.splat(42).table_lookup(U8x16.splat(20)).get_lane(0) == 0
@@ -745,11 +745,11 @@ SimdOracle := [].{
 		to_inspect = |vector| simd128_inspect("I8x16", List.map(I8x16.to_list(vector), I8.to_str))
 
 		## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-		## `[i * 8, (i + 1) * 8)`. Free at runtime — no instructions.
+		## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
 		to_u128_bits : I8x16 -> U128
 		to_u128_bits = |vector| vector.bits
 
-		## Build an [I8x16] from 128 raw bits. Free at runtime — no
+		## Build an [I8x16] from 128 raw bits. Free at runtime—no
 		## instructions.
 		from_u128_bits : U128 -> I8x16
 		from_u128_bits = |bits| I8x16.{ bits }
@@ -1056,7 +1056,7 @@ SimdOracle := [].{
 		interleave_hi = |a, b| I8x16.from_u128_bits(simd128_interleave_hi(a.to_u128_bits(), b.to_u128_bits(), 8))
 
 		## The even-indexed lanes of a followed by the even-indexed lanes
-		## of b — the deinterleaving inverse of the interleave operations,
+		## of b—the deinterleaving inverse of the interleave operations,
 		## used to split interleaved channel data apart.
 		##
 		## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -1312,11 +1312,11 @@ SimdOracle := [].{
 		to_inspect = |vector| simd128_inspect("U16x8", List.map(U16x8.to_list(vector), U16.to_str))
 
 		## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-		## `[i * 16, (i + 1) * 16)`. Free at runtime — no instructions.
+		## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
 		to_u128_bits : U16x8 -> U128
 		to_u128_bits = |vector| vector.bits
 
-		## Build a [U16x8] from 128 raw bits. Free at runtime — no
+		## Build a [U16x8] from 128 raw bits. Free at runtime—no
 		## instructions.
 		from_u128_bits : U128 -> U16x8
 		from_u128_bits = |bits| U16x8.{ bits }
@@ -1622,7 +1622,7 @@ SimdOracle := [].{
 		interleave_hi = |a, b| U16x8.from_u128_bits(simd128_interleave_hi(a.to_u128_bits(), b.to_u128_bits(), 16))
 
 		## The even-indexed lanes of a followed by the even-indexed lanes
-		## of b — the deinterleaving inverse of the interleave operations,
+		## of b—the deinterleaving inverse of the interleave operations,
 		## used to split interleaved channel data apart.
 		##
 		## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -1917,11 +1917,11 @@ SimdOracle := [].{
 		to_inspect = |vector| simd128_inspect("I16x8", List.map(I16x8.to_list(vector), I16.to_str))
 
 		## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-		## `[i * 16, (i + 1) * 16)`. Free at runtime — no instructions.
+		## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
 		to_u128_bits : I16x8 -> U128
 		to_u128_bits = |vector| vector.bits
 
-		## Build an [I16x8] from 128 raw bits. Free at runtime — no
+		## Build an [I16x8] from 128 raw bits. Free at runtime—no
 		## instructions.
 		from_u128_bits : U128 -> I16x8
 		from_u128_bits = |bits| I16x8.{ bits }
@@ -2063,7 +2063,7 @@ SimdOracle := [].{
 		## 32-bit lanes of an [I32x4]: result lane i is
 		## `a(2i) * b(2i) + a(2i+1) * b(2i+1)`. The only input that wraps
 		## the 32-bit result is all four lanes `-32768`, matching the
-		## hardware. This is the DCT/IDCT/FIR workhorse — multiply-accumulate
+		## hardware. This is the DCT/IDCT/FIR workhorse—multiply-accumulate
 		## over signed 16-bit taps.
 		##
 		## Lowers to `pmaddwd` on x86-64, a `smull` + `smull2` +
@@ -2450,7 +2450,7 @@ SimdOracle := [].{
 		interleave_hi = |a, b| I16x8.from_u128_bits(simd128_interleave_hi(a.to_u128_bits(), b.to_u128_bits(), 16))
 
 		## The even-indexed lanes of a followed by the even-indexed lanes
-		## of b — the deinterleaving inverse of the interleave operations,
+		## of b—the deinterleaving inverse of the interleave operations,
 		## used to split interleaved channel data apart.
 		##
 		## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -2591,11 +2591,11 @@ SimdOracle := [].{
 		to_inspect = |vector| simd128_inspect("U32x4", List.map(U32x4.to_list(vector), U32.to_str))
 
 		## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-		## `[i * 32, (i + 1) * 32)`. Free at runtime — no instructions.
+		## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
 		to_u128_bits : U32x4 -> U128
 		to_u128_bits = |vector| vector.bits
 
-		## Build a [U32x4] from 128 raw bits. Free at runtime — no
+		## Build a [U32x4] from 128 raw bits. Free at runtime—no
 		## instructions.
 		from_u128_bits : U128 -> U32x4
 		from_u128_bits = |bits| U32x4.{ bits }
@@ -2895,7 +2895,7 @@ SimdOracle := [].{
 		interleave_hi = |a, b| U32x4.from_u128_bits(simd128_interleave_hi(a.to_u128_bits(), b.to_u128_bits(), 32))
 
 		## The even-indexed lanes of a followed by the even-indexed lanes
-		## of b — the deinterleaving inverse of the interleave operations,
+		## of b—the deinterleaving inverse of the interleave operations,
 		## used to split interleaved channel data apart.
 		##
 		## Lowers to `shufps`-class shuffles on x86-64, `uzp1` on AArch64
@@ -3125,11 +3125,11 @@ SimdOracle := [].{
 		to_inspect = |vector| simd128_inspect("I32x4", List.map(I32x4.to_list(vector), I32.to_str))
 
 		## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-		## `[i * 32, (i + 1) * 32)`. Free at runtime — no instructions.
+		## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
 		to_u128_bits : I32x4 -> U128
 		to_u128_bits = |vector| vector.bits
 
-		## Build an [I32x4] from 128 raw bits. Free at runtime — no
+		## Build an [I32x4] from 128 raw bits. Free at runtime—no
 		## instructions.
 		from_u128_bits : U128 -> I32x4
 		from_u128_bits = |bits| I32x4.{ bits }
@@ -3557,7 +3557,7 @@ SimdOracle := [].{
 		interleave_hi = |a, b| I32x4.from_u128_bits(simd128_interleave_hi(a.to_u128_bits(), b.to_u128_bits(), 32))
 
 		## The even-indexed lanes of a followed by the even-indexed lanes
-		## of b — the deinterleaving inverse of the interleave operations,
+		## of b—the deinterleaving inverse of the interleave operations,
 		## used to split interleaved channel data apart.
 		##
 		## Lowers to `shufps`-class shuffles on x86-64, `uzp1` on AArch64
@@ -3697,11 +3697,11 @@ SimdOracle := [].{
 		to_inspect = |vector| simd128_inspect("U64x2", List.map(U64x2.to_list(vector), U64.to_str))
 
 		## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-		## `[i * 64, (i + 1) * 64)`. Free at runtime — no instructions.
+		## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.
 		to_u128_bits : U64x2 -> U128
 		to_u128_bits = |vector| vector.bits
 
-		## Build a [U64x2] from 128 raw bits. Free at runtime — no
+		## Build a [U64x2] from 128 raw bits. Free at runtime—no
 		## instructions.
 		from_u128_bits : U128 -> U64x2
 		from_u128_bits = |bits| U64x2.{ bits }
@@ -4120,11 +4120,11 @@ SimdOracle := [].{
 		to_inspect = |vector| simd128_inspect("I64x2", List.map(I64x2.to_list(vector), I64.to_str))
 
 		## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-		## `[i * 64, (i + 1) * 64)`. Free at runtime — no instructions.
+		## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.
 		to_u128_bits : I64x2 -> U128
 		to_u128_bits = |vector| vector.bits
 
-		## Build an [I64x2] from 128 raw bits. Free at runtime — no
+		## Build an [I64x2] from 128 raw bits. Free at runtime—no
 		## instructions.
 		from_u128_bits : U128 -> I64x2
 		from_u128_bits = |bits| I64x2.{ bits }

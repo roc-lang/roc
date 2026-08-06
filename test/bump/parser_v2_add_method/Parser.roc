@@ -1,4 +1,4 @@
-## parser_v1 plus one added associated method (`map`) — a MINOR change.
+## parser_v1 plus one added associated method (`map`)—a MINOR change.
 
 Parser(input, val) := { run : input -> [Ok(val, input), Err(Str)] }.{
 

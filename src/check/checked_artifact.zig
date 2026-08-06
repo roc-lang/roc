@@ -309,7 +309,7 @@ fn hashModuleIdentity(identity: ModuleIdentity) [32]u8 {
 /// A module's identity hash IS its deep content identity: a pure function of
 /// the transitive closure's module names and source bytes (see
 /// `base.module_identity`). No coordinator-assigned display strings, package
-/// names, or paths participate — cache keys and serialized identities are
+/// names, or paths participate—cache keys and serialized identities are
 /// bit-identical no matter which pipeline built the artifact or what
 /// directory the build ran in.
 fn computeStableModuleIdentityHash(module_env: *const ModuleEnv) [32]u8 {
@@ -3042,7 +3042,7 @@ pub const StoredCheckedTypePayload = union(enum) {
 ///
 /// ALIASING INVARIANT: the returned slices point INTO the store's pools. On a
 /// frozen/deserialized store the pools are immutable (buffer-backed), so this is
-/// unconditionally safe — the common case (all post-load consumers: lowering, glue).
+/// unconditionally safe—the common case (all post-load consumers: lowering, glue).
 /// During CONSTRUCTION the pools are growable `ArrayList`s, so a build-time caller
 /// must not retain a returned slice across a subsequent pool-growing call
 /// (`appendTypeIds`/`commitPayload`/…), which may reallocate and dangle it; snapshot
@@ -3497,7 +3497,7 @@ pub const CheckedNominalDeclaration = struct {
     nominal: canonical.NominalTypeKey,
     /// CIR statement index of the declaration in its (content-identified)
     /// declaring module. A decl LOCATOR for reading declared field order from
-    /// the module's CIR — never part of identity. Stable across artifacts
+    /// the module's CIR—never part of identity. Stable across artifacts
     /// because equal content identities imply byte-identical module source.
     source_statement: u32,
     declaration_root: CheckedTypeId,
@@ -3593,7 +3593,7 @@ pub const CheckedTypeStore = struct {
     /// nominal use's backing template is being projected. Nested template
     /// references (including mutual recursion between declarations) must
     /// share this private id space so in-progress cycles close on their
-    /// pending ids; when null, a nominal use forks a fresh private space —
+    /// pending ids; when null, a nominal use forks a fresh private space—
     /// sharing template ids ACROSS uses would let Monotype's instantiation
     /// graphs bind one use's formals to another use's monos.
     template_use_active: ?*std.AutoHashMap(Var, CheckedTypeId) = null,
@@ -3686,7 +3686,7 @@ pub const CheckedTypeStore = struct {
     /// Append `ids` to `type_id_pool`, returning their range.
     fn appendTypeIds(self: *CheckedTypeStore, allocator: Allocator, ids: []const CheckedTypeId) Allocator.Error!CheckedTypeRange {
         // Pools only grow during construction. A frozen (deserialized) store's pools
-        // alias buffer memory and must never be appended to — this catches such a bug,
+        // alias buffer memory and must never be appended to—this catches such a bug,
         // and is the boundary where build-time aliasing slices could be invalidated
         // (see the `argsSlice`/`payload`/`formalArgs` aliasing-invariant docs).
         std.debug.assert(!self.serialized);
@@ -8747,7 +8747,7 @@ pub const CheckedPatternData = union(enum) {
 
 /// Public `CheckedNumeralData` declaration: a numeric literal's exact digit
 /// facts, carried through the checked artifact unchanged. The checked stage
-/// stores NO concrete bit pattern for a literal — monotype lowering produces
+/// stores NO concrete bit pattern for a literal—monotype lowering produces
 /// bits exactly once, for the instantiated primitive, from these facts.
 pub const CheckedNumeralData = struct {
     /// The parser-recorded exact digits (offsets into the module env's
@@ -9142,7 +9142,7 @@ pub const StoredCheckedExpr = struct {
     source_region: base.Region,
     data: StoredCheckedExprData,
     /// Whether evaluating this expression diverges (never returns normally). Stored
-    /// inline so it travels and relocates with its expression — there is no parallel
+    /// inline so it travels and relocates with its expression—there is no parallel
     /// array to keep in lockstep.
     diverges: bool = false,
     /// The same producer-computed fact for lowering modes that omit inline
@@ -9170,7 +9170,7 @@ pub const StoredCheckedStatement = struct {
     source_region: base.Region,
     data: StoredCheckedStatementData,
     /// Whether this statement diverges. Stored inline so it travels with its
-    /// statement — no parallel array to keep in lockstep.
+    /// statement—no parallel array to keep in lockstep.
     diverges: bool = false,
     /// Whether this statement diverges when inline expects are omitted.
     diverges_without_inline_expects: bool = false,
@@ -10354,7 +10354,7 @@ pub const CheckedBodyStore = struct {
         try store.pattern_binders.appendSlice(allocator, pattern_binders.items);
         // Stamp the divergence bit onto each stored expr/statement. `commitExprs`/
         // `commitStatements` produce one stored element per build element in order, so
-        // the zip aligns by construction — this is the lockstep guarantee, replacing a
+        // the zip aligns by construction—this is the lockstep guarantee, replacing a
         // parallel array that could fall out of sync.
         for (store.stored_exprs.items, expr_diverges) |*stored, diverges| stored.diverges = diverges;
         for (store.stored_statements.items, statement_diverges) |*stored, diverges| stored.diverges = diverges;
@@ -10806,7 +10806,7 @@ pub const CheckedBodyStore = struct {
 
     // `source_node_map` and `numeral_conversion_exprs` are BUILD-ONLY side tables: they
     // are not serialized and are empty on a frozen (deserialized) store. These accessors
-    // are only meaningful during build, so they assert `!serialized` — a frozen access is
+    // are only meaningful during build, so they assert `!serialized`—a frozen access is
     // a bug, and this makes it a loud panic instead of a silent wrong `null`.
     pub fn exprIdForSource(self: *const CheckedBodyStore, source_expr: CIR.Expr.Idx) ?CheckedExprId {
         std.debug.assert(!self.serialized);
@@ -15491,10 +15491,10 @@ const EvidencePass = struct {
         }
 
         // Root edges are their templates' only callers (nothing instantiates
-        // a compile-time root). Resolve each pattern'd root's evidence now —
+        // a compile-time root). Resolve each pattern'd root's evidence now—
         // the chain is empty, so every obligation lands on a chain-free
         // resolution (concrete target, mono-default owner, structural,
-        // vacuous) — published as site evidence keyed by the root's body
+        // vacuous)—published as site evidence keyed by the root's body
         // expression for the drain and const-eval entries to consume.
         for (self.compile_time_roots.roots) |root| {
             const source_pattern = root.source_pattern orelse continue;
@@ -15917,8 +15917,8 @@ const EvidencePass = struct {
 
         // A generalized VALUE decl's scheme param may LOOK concrete here:
         // compile-time finalization defaults the pristine var (e.g. to Dec)
-        // after uses were instantiated. The uses are the truth — they carry
-        // the type each inline lowering actually runs at — so resolve through
+        // after uses were instantiated. The uses are the truth—they carry
+        // the type each inline lowering actually runs at—so resolve through
         // a representative use record before trusting the var's content.
         if (self.local_value_scheme_by_var.get(@intFromEnum(resolved.var_))) |pattern_raw| {
             if (self.value_use_record_by_pattern.get(pattern_raw)) |record_idx| {
@@ -15997,8 +15997,8 @@ const EvidencePass = struct {
         if (!commit_unpinned) return null;
 
         // Not an evidence param of any enclosing callable, so no edge pins it
-        // and monotype materializes it by `numericDefaultPhaseForConstraints`
-        // — the same rule that stamps `numeric_default_phase` on published
+        // and monotype materializes it by `numericDefaultPhaseForConstraints`—
+        // the same rule that stamps `numeric_default_phase` on published
         // type variables (Dec for numerals and defaultable arithmetic
         // operators, Str for quotes and interpolations). Every obligation on
         // the var resolves against that default owner now, while retaining the
@@ -18751,7 +18751,7 @@ pub const StoredPlatformRequiredConstUse = struct {
 /// POD mirror of `PlatformRequiredValueUse`: closures live as ranges into the
 /// owning `PlatformRequiredBindingTable`'s `ClosurePool`. Stored by value in each
 /// `PlatformRequiredBinding` row. A real tagged union (not a discriminant + two fixed
-/// fields), so only the active variant's bytes exist — there is no inactive field to
+/// fields), so only the active variant's bytes exist—there is no inactive field to
 /// leave `undefined`, and the serializer's union-padding zeroing keeps the blob
 /// byte-deterministic.
 pub const StoredPlatformRequiredValueUse = union(PlatformRequiredValueUseKind) {
@@ -19176,7 +19176,7 @@ pub const PlatformRequirementSolution = struct {
 /// The relation is recorded here, where it is proven: when an app checks
 /// against a platform's requirement surface, each successful unification's
 /// output travels as these rows. Finalization builds the platform/app
-/// relation by reading them — it never re-resolves app exports by name and
+/// relation by reading them—it never re-resolves app exports by name and
 /// never re-derives identity substitutions structurally. Empty for every
 /// module that is not an app root checked against a platform.
 pub const PlatformRequirementSolutionTable = struct {
@@ -20698,7 +20698,7 @@ fn appendUniqueCheckedTypeSubstitution(
             // different formats, so a partially rebuilt instantiation can
             // reference the original root in one position and the clone's
             // root in another. Two ids for identical content are one actual,
-            // not a conflict — keep the first. Only genuinely different
+            // not a conflict—keep the first. Only genuinely different
             // contents (compared in the substituted-key space, which is
             // format-uniform) violate the invariant.
             const existing_key = try substitutedCheckedTypeKey(allocator, names, store, existing_actual, &.{}, &.{});
@@ -27099,7 +27099,7 @@ pub const CheckedModuleArtifact = struct {
         /// Materialize a frozen artifact from its relocated `backing` buffer (whose
         /// start IS this `Serialized` header). The artifact is SELF-DESCRIBING: it
         /// stores `backing` in `serialized_backing`, so a single `deinit` frees the
-        /// buffer (and the injected env) correctly for every caller — no per-call-site
+        /// buffer (and the injected env) correctly for every caller—no per-call-site
         /// teardown contract. `module_env` is supplied by the caller (transform E): the
         /// env blob is relocated/owned separately and injected here, never serialized.
         /// `gpa` is retained only by the sub-stores that keep an allocator for their
@@ -27205,7 +27205,7 @@ pub const CheckedModuleArtifact = struct {
     pub const SERIALIZED_VERSION_HASH: [32]u8 =
         artifact_serialize.layoutVersionHash(Serialized, serialized_layout_version);
 
-    // A-11: validate the entire serialized sub-store tree at compile time — every
+    // A-11: validate the entire serialized sub-store tree at compile time—every
     // field must be a relocatable marker or relocation-invariant POD (a raw pointer
     // embedded outside a marker would silently dangle after relocation).
     comptime {
@@ -27236,7 +27236,7 @@ pub const CheckedModuleArtifact = struct {
     pub fn splitVersionTrailer(blob: []const u8) error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch }![]const u8 {
         if (blob.len < VERSION_TRAILER_LEN) return error.CorruptBuiltinArtifact;
         const serialized_len = blob.len - VERSION_TRAILER_LEN;
-        // The serialized prefix must be at least a whole `Serialized` header — the loader
+        // The serialized prefix must be at least a whole `Serialized` header—the loader
         // `@ptrCast`s it to `*const Serialized`. This mirrors the disk-cache loader's
         // `< @sizeOf(Serialized)` floor so a truncated builtin blob is a clean error, not
         // an out-of-bounds read.
@@ -27639,7 +27639,7 @@ pub const CheckedModuleArtifact = struct {
     /// the site-evidence index is sound. Monotype lowering consumes these
     /// records without re-deriving targets, so a violation is a compiler bug
     /// reported here at the boundary (in debug builds, where `verifyComplete`
-    /// runs) — not a lowering panic. Returns the first failure found, or
+    /// runs)—not a lowering panic. Returns the first failure found, or
     /// null when the artifact is total.
     pub fn validateDispatchEvidence(self: *const CheckedModuleArtifact) ?DispatchEvidenceFailure {
         const table = &self.static_dispatch_plans;
@@ -29740,7 +29740,7 @@ const CheckedTypeStoreImportProjector = struct {
                 // key lookup); without this projection that lookup fails for a
                 // for-clause-substituted nominal app type whose declaration backing
                 // root is distinct from the projected nominal usage backing (issue
-                // 9731). The returned id is unused — the registration is the point.
+                // 9731). The returned id is unused—the registration is the point.
                 _ = try self.project(self.imported.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty);
                 break :blk .{ .imported_box_payload_capability = .{
                     .artifact = self.imported.key,
@@ -31018,7 +31018,7 @@ fn expectProvidedExportKind(
 
     // The module under test dispatches on builtin owners (`value + 1` needs
     // I64.plus); publication asserts totality, so the builtin projection must
-    // carry its real method registry — built like the real publish path
+    // carry its real method registry—built like the real publish path
     // (bodies, templates, then the registry over them).
     var builtin_pub_source_nodes = try CheckedSourceNodes.init(allocator, builtin_module);
     defer builtin_pub_source_nodes.deinit(allocator);
@@ -32768,7 +32768,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     const ser: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(buffer.ptr));
     // The deserialized artifact is SELF-DESCRIBING: it owns `buffer` via
     // `serialized_backing`, so a single `deinit` frees it. This also exercises the
-    // frozen-deinit path under the testing allocator (no double-free / no leak — the
+    // frozen-deinit path under the testing allocator (no double-free / no leak—the
     // contract that a stray `.deinit()` on a frozen artifact is always correct).
     // `deinitRetainingModuleEnv` because `module_env` here is an injected placeholder.
     var loaded = ser.deserialize(buffer, gpa, undefined);

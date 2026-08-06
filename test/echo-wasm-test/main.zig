@@ -148,7 +148,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     const packages = [_]bytebox.ModuleImportPackage{env_imports};
     try module_instance.instantiate(.{
         .imports = &packages,
-        // 256 KiB — same as playground-integration. Larger values overflow
+        // 256 KiB—same as playground-integration. Larger values overflow
         // bytebox's internal max_labels calc.
         .stack_size = 1024 * 256,
     });

@@ -129,7 +129,7 @@ const InterpreterRocEnv = struct {
         if (self.expect_err_message) |msg| self.allocator.free(msg);
     }
 
-    /// Reset the static buffer — call once at the start of a full evaluation.
+    /// Reset the static buffer—call once at the start of a full evaluation.
     fn resetForEval(self: *InterpreterRocEnv) void {
         self.crashed = false;
         if (self.crash_message) |msg| self.allocator.free(msg);
@@ -275,7 +275,7 @@ pub const Interpreter = struct {
     const LirInterpreter = @This();
     /// Debug-build-only call-depth guard. Release builds of the compiler must
     /// never constrain what compile-time evaluation (or interpreted execution)
-    /// can do, including how deeply it recurses — an arbitrary depth budget
+    /// can do, including how deeply it recurses—an arbitrary depth budget
     /// would make well-formed programs compile in Debug and fail in release,
     /// or vice versa. In release builds recursion is bounded only by actual
     /// native stack memory. Exhausting it is reported by whoever owns the
@@ -3973,7 +3973,7 @@ pub const Interpreter = struct {
         }, .str);
     }
 
-    // Function calls — all go through the stack-safe engine via enterFunction/evalProcStackSafe.
+    // Function calls—all go through the stack-safe engine via enterFunction/evalProcStackSafe.
 
     // Reference counting
 
@@ -5442,6 +5442,18 @@ pub const Interpreter = struct {
                 val.write(u64, @intCast(rl.len()));
                 break :blk val;
             },
+            .list_slack_unique => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, builtins.list.listSlackUnique(rl, &self.roc_ops));
+                break :blk val;
+            },
+            .list_owned_unique => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, builtins.list.listOwnedUnique(rl, &self.roc_ops));
+                break :blk val;
+            },
             .list_get_unsafe => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const idx = args[1].read(u64);
@@ -5497,6 +5509,150 @@ pub const Interpreter = struct {
                     if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     updateModeForArg0(ll.unique_args),
                     updateModeForArg1(ll.unique_args),
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .list_append_range_within => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const count = args[2].read(u64);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + @as(usize, @intCast(count))), ll.ret_layout);
+                }
+                if (count == 0) {
+                    break :blk self.rocListToValue(list_val, ll.ret_layout);
+                }
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
+                const result = builtins.list.listAppendRangeWithin(
+                    list_val,
+                    args[1].read(u64),
+                    count,
+                    info.alignment,
+                    info.width,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    updateModeForArg0(ll.unique_args),
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .list_copy_range_within => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const count = args[3].read(u64);
+                if (info.width == 0 or count == 0) {
+                    break :blk self.rocListToValue(list_val, ll.ret_layout);
+                }
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
+                const result = builtins.list.listCopyRangeWithin(
+                    list_val,
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    count,
+                    info.alignment,
+                    info.width,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .list_append_range_within_unsafe => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const count = args[2].read(u64);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + @as(usize, @intCast(count))), ll.ret_layout);
+                }
+                if (count == 0) {
+                    break :blk self.rocListToValue(list_val, ll.ret_layout);
+                }
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
+                const result = builtins.list.listAppendRangeWithinUnsafe(
+                    list_val,
+                    args[1].read(u64),
+                    count,
+                    info.width,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .list_append_le_bytes => blk: {
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const result = builtins.list.listAppendLeBytes(
+                    list_val,
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    1,
+                    updateModeForArg0(ll.unique_args),
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .list_append_sublist => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const src_val = self.valueToRocListForLayout(args[1], arg_layout);
+                const count = args[3].read(u64);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + @as(usize, @intCast(count))), ll.ret_layout);
+                }
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
+                const result = builtins.list.listAppendSublist(
+                    list_val,
+                    src_val,
+                    args[2].read(u64),
+                    count,
+                    info.alignment,
+                    info.width,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
@@ -5761,7 +5917,7 @@ pub const Interpreter = struct {
 
                 break :blk val;
             },
-            .list_set => blk: {
+            .list_set, .list_set_in_place_unsafe => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
                 if (info.width == 0) {
@@ -5779,7 +5935,7 @@ pub const Interpreter = struct {
                 // listReplace moves the old element into a scratch slot. list_set does not
                 // return that ownership unit, so release it after the replacement.
                 const old_elem = try self.allocAlignedBytes(info.width, layout_mod.RocAlignment.fromByteUnits(@intCast(info.alignment)));
-                const result = if (updateModeForArg0(ll.unique_args) == .InPlace)
+                const result = if (ll.op == .list_set_in_place_unsafe or updateModeForArg0(ll.unique_args) == .InPlace)
                     builtins.list.listReplaceInPlace(
                         self.valueToRocListForLayout(args[0], arg_layout),
                         args[1].read(u64),
@@ -8321,7 +8477,7 @@ pub const Interpreter = struct {
 
     /// ptr_alloca: reserve a zeroed frame slot for the ptr layout's element and
     /// yield its address. The slot lives in the eval arena, which outlives the
-    /// frame — fine, since TRMC emits at most one alloca per proc invocation.
+    /// frame—fine, since TRMC emits at most one alloca per proc invocation.
     fn evalPtrAlloca(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);
         if (builtin.mode == .Debug and ret_layout_val.tag != .ptr) {
@@ -8338,7 +8494,7 @@ pub const Interpreter = struct {
         return result;
     }
 
-    /// box_alloc_zeroed: a box_box whose payload is all zeroes — heap cell with
+    /// box_alloc_zeroed: a box_box whose payload is all zeroes—heap cell with
     /// rc=1 and a zero-filled payload (so any box fields inside read as null).
     fn evalBoxAllocZeroed(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);

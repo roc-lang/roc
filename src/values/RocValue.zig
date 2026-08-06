@@ -162,7 +162,7 @@ fn signedVectorLane(raw: u64, lane_bits: u8) i64 {
     };
 }
 
-/// Lightweight context for formatting values — carries only layout metadata.
+/// Lightweight context for formatting values—carries only layout metadata.
 pub const FormatContext = struct {
     layout_store: *const layout.Store,
     ident_store: ?*const Ident.Store = null,

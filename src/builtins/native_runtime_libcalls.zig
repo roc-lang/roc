@@ -4,8 +4,8 @@
 //! The eval LLVM backend merges the (target-independent) builtins bitcode into
 //! the user module and re-codegens the whole thing for the host's native
 //! target. That final instruction selection lowers operations with no native
-//! instruction — 128-bit multiply/divide/remainder and 128-bit<->float
-//! conversions — to compiler-rt libcalls (`__divti3`, `__fixsfti`, ...). Those
+//! instruction—128-bit multiply/divide/remainder and 128-bit<->float
+//! conversions—to compiler-rt libcalls (`__divti3`, `__fixsfti`, ...). Those
 //! symbols are not in the builtins bitcode (they are introduced *after* it,
 //! during native codegen), so the produced shared object references them as
 //! *undefined* symbols.

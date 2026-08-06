@@ -1,7 +1,7 @@
 //! End-to-end coverage for the TRMC + TCE pass (src/lir/trmc.zig).
 //!
 //! These programs build recursive structures through non-tail recursive
-//! constructors — the shape that stack-overflowed before TRMC. The deep
+//! constructors—the shape that stack-overflowed before TRMC. The deep
 //! cases (n well past the interpreter's 1024-frame call cap) are the
 //! correctness gates: they only pass because the pass rewrites the
 //! recursion into a loop. Outputs must stay byte-identical across all

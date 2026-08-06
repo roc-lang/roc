@@ -636,15 +636,18 @@ pub fn listReserve(
     const original_len = list.len();
 
     const cap = @as(u64, @intCast(list.getCapacity()));
-    const desired_cap = @as(u64, @intCast(original_len)) +| spare;
 
-    if (list.isExclusive(update_mode, roc_ops) and cap >= desired_cap) {
+    // A list's length never exceeds its capacity, so the slack subtraction
+    // cannot wrap and the hot no-growth check needs no saturating add.
+    std.debug.assert(original_len <= cap);
+    if (list.isExclusive(update_mode, roc_ops) and spare <= cap - @as(u64, @intCast(original_len))) {
         // For seamless slices, getCapacity() is the visible window length. This
         // branch can therefore only fire for a slice when no growth was
         // requested, so returning the unchanged slice touches no allocation.
-        std.debug.assert(!list.isSeamlessSlice() or desired_cap <= @as(u64, @intCast(original_len)));
+        std.debug.assert(!list.isSeamlessSlice() or spare == 0);
         return list;
     } else {
+        const desired_cap = @as(u64, @intCast(original_len)) +| spare;
         // Make sure on 32-bit targets we don't accidentally wrap when we cast our U64 desired capacity to U32.
         const reserve_size: u64 = @min(desired_cap, @as(u64, @intCast(std.math.maxInt(usize))));
 
@@ -663,6 +666,404 @@ pub fn listReserve(
         output.length = original_len;
         return output;
     }
+}
+
+/// Ensure capacity for `spare` more elements ahead of an append. Unlike
+/// `listReserve`—the explicit user reserve, which trusts the request and
+/// sizes the allocation exactly—growth here takes at least the geometric
+/// step, so a loop of appends stays amortized-linear instead of reallocating
+/// on every call once the list runs tight.
+fn listReserveForAppend(
+    list: RocList,
+    alignment: u32,
+    spare: u64,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) RocList {
+    const original_len = list.len();
+    const cap = @as(u64, @intCast(list.getCapacity()));
+
+    std.debug.assert(original_len <= cap);
+    if (list.isExclusive(update_mode, roc_ops) and spare <= cap - @as(u64, @intCast(original_len))) {
+        std.debug.assert(!list.isSeamlessSlice() or spare == 0);
+        return list;
+    }
+
+    const needed = @as(u64, @intCast(original_len)) +| spare;
+    const clamped: usize = @intCast(@min(needed, @as(u64, @intCast(std.math.maxInt(usize)))));
+    const desired = @max(clamped, utils.geometricGrowth(@as(usize, @intCast(cap)), element_width));
+
+    var output = list.reallocate(
+        alignment,
+        desired,
+        element_width,
+        elements_refcounted,
+        inc_context,
+        inc,
+        dec_context,
+        dec,
+        update_mode,
+        roc_ops,
+    );
+    output.length = original_len;
+    return output;
+}
+
+/// Append `count` elements copied from the list itself beginning at `start`.
+/// The copy reads through its own freshly appended elements, so a range past
+/// the original end repeats the elements from `start` onward. The caller has
+/// already verified `start < list.len()` and `count > 0`.
+pub fn listAppendRangeWithin(
+    list: RocList,
+    start_u64: u64,
+    count_u64: u64,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const start: usize = @intCast(start_u64);
+    const count: usize = @intCast(@min(count_u64, @as(u64, @intCast(std.math.maxInt(usize)))));
+
+    // Reserve scratch beyond the appended range so every copy below may run
+    // in bursts of whole-word stores that overshoot the range, by up to 39
+    // bytes. The scratch stays within capacity and outside the length.
+    const slop_elements: u64 = (40 + element_width - 1) / element_width;
+    var output = listReserveForAppend(
+        list,
+        alignment,
+        count_u64 +| slop_elements,
+        element_width,
+        elements_refcounted,
+        inc_context,
+        inc,
+        dec_context,
+        dec,
+        update_mode,
+        roc_ops,
+    );
+    appendRangeWithinCore(&output, start, count, element_width, elements_refcounted, inc_context, inc);
+    return output;
+}
+
+/// Append `count` elements copied from the list itself beginning at `start`,
+/// with every check already discharged by the caller: the list uniquely owns
+/// a non-slice allocation whose capacity covers the appended range plus the
+/// word-copy scratch. The loop-append promotion pass emits this on its hot
+/// path after proving exactly those facts through its slack counter.
+pub fn listAppendRangeWithinUnsafe(
+    list: RocList,
+    start_u64: u64,
+    count_u64: u64,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const start: usize = @intCast(start_u64);
+    const count: usize = @intCast(count_u64);
+
+    std.debug.assert(!list.isSeamlessSlice());
+    std.debug.assert(list.isUnique(roc_ops));
+    std.debug.assert(list.getCapacity() * element_width >=
+        (list.len() + count) * element_width + 40);
+
+    var output = list;
+    appendRangeWithinCore(&output, start, count, element_width, elements_refcounted, inc_context, inc);
+    return output;
+}
+
+/// Copy `count` elements within the list from `src_index` onward to
+/// `dest_index` onward, overwriting the destination range. The caller has
+/// already verified both whole ranges lie inside the list. The ranges may
+/// overlap; every source element is read as it was before any destination
+/// element was overwritten, like a memmove.
+pub fn listCopyRangeWithin(
+    list: RocList,
+    dest_index_u64: u64,
+    src_index_u64: u64,
+    count_u64: u64,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const dest_index: usize = @intCast(dest_index_u64);
+    const src_index: usize = @intCast(src_index_u64);
+    const count: usize = @intCast(count_u64);
+    if (count == 0 or element_width == 0 or dest_index == src_index) return list;
+
+    const output = list.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
+    const base = output.bytes.?;
+
+    if (elements_refcounted) {
+        // Retain every copied element before releasing any overwritten one,
+        // so an element present in both ranges never reaches a zero count
+        // mid-copy. The overwritten elements must be released before the
+        // move clobbers their bytes.
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            inc(inc_context, base + (src_index + i) * element_width);
+        }
+        i = 0;
+        while (i < count) : (i += 1) {
+            dec(dec_context, base + (dest_index + i) * element_width);
+        }
+    }
+
+    const total = count * element_width;
+    const src = base[src_index * element_width ..][0..total];
+    const dest = base[dest_index * element_width ..][0..total];
+    @memmove(dest, src);
+    return output;
+}
+
+/// The copy-and-lengthen half of a range-within append. The capacity for the
+/// range plus the overshoot scratch is already reserved.
+inline fn appendRangeWithinCore(
+    output: *RocList,
+    start: usize,
+    count: usize,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+) void {
+    const original_len = output.len();
+    const base = output.bytes.?;
+
+    var src = base + start * element_width;
+    var dst = base + original_len * element_width;
+    const distance = (original_len - start) * element_width;
+    const total = count * element_width;
+    const end = dst + total;
+    if (distance >= 8) {
+        // A word read at offset i touches src[i..i+8), which stays at or
+        // behind the write cursor, so every byte read is already
+        // materialized. An unconditional five-word burst covers most ranges
+        // without a branch; longer ranges continue in five-word strides.
+        inline for (0..5) |_| {
+            dst[0..8].* = src[0..8].*;
+            src += 8;
+            dst += 8;
+        }
+        if (@intFromPtr(dst) < @intFromPtr(end)) {
+            // Only ranges longer than the burst reach here, so this branch
+            // costs short copies nothing. Distances of sixteen or more
+            // stream through vector registers; shorter distances stay on
+            // word stores, whose reads overlap the just-written words
+            // exactly and forward without stalling, where a doubled-reach
+            // vector read would overlap them partially and stall.
+            if (distance >= 16) {
+                while (@intFromPtr(dst) < @intFromPtr(end)) {
+                    dst[0..16].* = src[0..16].*;
+                    dst[16..32].* = src[16..32].*;
+                    dst[32..40].* = src[32..40].*;
+                    src += 40;
+                    dst += 40;
+                }
+            } else {
+                while (@intFromPtr(dst) < @intFromPtr(end)) {
+                    inline for (0..5) |_| {
+                        dst[0..8].* = src[0..8].*;
+                        src += 8;
+                        dst += 8;
+                    }
+                }
+            }
+        }
+    } else if (distance == 1) {
+        // A run of one repeated byte: broadcast it and store whole words,
+        // no loads at all.
+        const v: u64 = @as(u64, 0x0101010101010101) *% src[0];
+        inline for (0..4) |_| {
+            dst[0..8].* = @bitCast(v);
+            dst += 8;
+        }
+        while (@intFromPtr(dst) < @intFromPtr(end)) {
+            inline for (0..4) |_| {
+                dst[0..8].* = @bitCast(v);
+                dst += 8;
+            }
+        }
+    } else {
+        // The range repeats with a period of 2-7 bytes. First materialize a
+        // whole word of repeats with stores that advance by the period: each
+        // store writes a full word but only its leading `distance` bytes are
+        // final, so bytes before the cursor never change once written. The
+        // trailing garbage of the last store sits at or past the cursor and
+        // is overwritten below or left in the slop.
+        var materialized: usize = 0;
+        while (materialized < 8) {
+            dst[0..8].* = src[0..8].*;
+            src += distance;
+            dst += distance;
+            materialized += distance;
+        }
+        // Everything before the cursor is now final and repeats with a
+        // word-sized period, so the rest runs in the same five-word bursts
+        // as the long-distance case, reading one period multiple back.
+        if (@intFromPtr(dst) < @intFromPtr(end)) {
+            src = dst - materialized;
+            while (true) {
+                inline for (0..5) |_| {
+                    dst[0..8].* = src[0..8].*;
+                    src += 8;
+                    dst += 8;
+                }
+                if (@intFromPtr(dst) >= @intFromPtr(end)) break;
+            }
+        }
+    }
+
+    if (elements_refcounted) {
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            inc(inc_context, base + (original_len + i) * element_width);
+        }
+    }
+
+    output.length = original_len + count;
+}
+
+/// Append `len` elements of `src` beginning at `start` to `list`. The caller
+/// has already clamped the range to `src`'s length. `src` is borrowed: its
+/// refcount is untouched, and copied refcounted elements gain a reference.
+pub fn listAppendSublist(
+    list: RocList,
+    src: RocList,
+    start_u64: u64,
+    len_u64: u64,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const count: usize = @intCast(len_u64);
+    if (count == 0) return list;
+    const original_len = list.len();
+    const start: usize = @intCast(start_u64);
+
+    var output = listReserveForAppend(
+        list,
+        alignment,
+        len_u64,
+        element_width,
+        elements_refcounted,
+        inc_context,
+        inc,
+        dec_context,
+        dec,
+        update_mode,
+        roc_ops,
+    );
+    const base = output.bytes.?;
+    // When the source aliases the destination, the reserve above may have
+    // moved (and freed) the destination's old allocation. The old contents
+    // survive as the output's prefix, so read the range from there.
+    const src_ptr = if (src.bytes == list.bytes) base else src.bytes.?;
+    @memcpy(
+        (base + original_len * element_width)[0 .. count * element_width],
+        (src_ptr + start * element_width)[0 .. count * element_width],
+    );
+
+    if (elements_refcounted) {
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            inc(inc_context, base + (original_len + i) * element_width);
+        }
+    }
+
+    output.length = original_len + count;
+    return output;
+}
+
+/// The number of elements that can be appended in place without any further
+/// ownership or capacity check: capacity minus length when this list uniquely
+/// owns a non-slice allocation, and zero otherwise (so the caller's next
+/// append takes the checked path, which clones or grows as needed).
+/// One when this list uniquely owns a non-slice allocation, so element
+/// overwrites may skip their per-call ownership check; zero otherwise.
+pub fn listOwnedUnique(
+    list: RocList,
+    roc_ops: *RocOps,
+) callconv(.c) u64 {
+    if (list.isSeamlessSlice()) return 0;
+    if (list.bytes == null) return 0;
+    if (!list.isUnique(roc_ops)) return 0;
+    return 1;
+}
+
+/// Number of elements appendable in place without any further ownership or
+/// capacity check: the unused capacity when the list is uniquely owned and
+/// not a seamless slice, zero otherwise.
+pub fn listSlackUnique(
+    list: RocList,
+    roc_ops: *RocOps,
+) callconv(.c) u64 {
+    if (list.isSeamlessSlice()) return 0;
+    if (!list.isUnique(roc_ops)) return 0;
+    return @intCast(list.getCapacity() - list.len());
+}
+
+/// Append the low `count` bytes of `value` to a byte list, least significant
+/// byte first. The caller has already verified `count <= 8`. One uniqueness
+/// and capacity check covers the whole write.
+pub fn listAppendLeBytes(
+    list: RocList,
+    value: u64,
+    count_u64: u64,
+    alignment: u32,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const count: usize = @intCast(count_u64);
+    if (count == 0) return list;
+    const original_len = list.len();
+
+    var output = listReserveForAppend(
+        list,
+        alignment,
+        count_u64,
+        1,
+        false,
+        null,
+        @ptrCast(&utils.rcNone),
+        null,
+        @ptrCast(&utils.rcNone),
+        update_mode,
+        roc_ops,
+    );
+    const base = output.bytes.?;
+    var i: usize = 0;
+    var word = value;
+    while (i < count) : (i += 1) {
+        base[original_len + i] = @truncate(word);
+        word >>= 8;
+    }
+    output.length = original_len + count;
+    return output;
 }
 
 /// Reduce memory usage by trimming unused capacity when list has shrunk significantly.
@@ -719,11 +1120,12 @@ pub fn listAppendUnsafe(
     var output = list;
     output.length += 1;
 
-    if (output.bytes) |bytes| {
-        if (element) |source| {
-            const target = bytes + old_length * element_width;
-            copy(target, source, element_width);
-        }
+    // The caller has discharged every check: the list uniquely owns an
+    // allocation with a spare slot, so the data pointer cannot be null.
+    // Zero-sized elements have no bytes to copy (and may pass null).
+    if (element_width > 0) {
+        const target = output.bytes.? + old_length * element_width;
+        copy(target, element.?, element_width);
     }
 
     return output;
@@ -3192,7 +3594,7 @@ test "listReplace with wide element through copy_fallback" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    const Elem = [3]u64; // 24-byte element type — must use copy_fallback (not a specialized helper)
+    const Elem = [3]u64; // 24-byte element type—must use copy_fallback (not a specialized helper)
     const elem_align: u32 = @alignOf(Elem);
     const elem_width: usize = @sizeOf(Elem);
 

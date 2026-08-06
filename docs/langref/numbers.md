@@ -135,7 +135,7 @@ When nothing pins the bounds' type, range literals [default](#defaulting-to-dec)
 the same way other number literals do.
 
 A range counts up in steps of 1, and is empty when `start` is not below (`..<`)
-or at (`..=`) `end` — there are no reversed ranges. All the builtin number
+or at (`..=`) `end`—there are no reversed ranges. All the builtin number
 types support ranges, including the fractional ones: `0.5..<3.5` yields `0.5`,
 `1.5`, and `2.5`. For `F32` and `F64`, once the values are large enough that
 adding 1 can no longer produce a bigger float, the range yields that value once

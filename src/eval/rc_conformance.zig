@@ -2,7 +2,7 @@
 //! builtins actually do to refcounts.
 //!
 //! `base/rc_effect_rules.zig` rejects rows that contradict themselves. A row
-//! can still be structurally valid and simply false — the case that shipped as
+//! can still be structurally valid and simply false—the case that shipped as
 //! roc-lang/roc#10023, where a family of ops claimed a unique result while
 //! returning a slice of an argument's allocation, and every call leaked one
 //! reference. Nothing but running the builtin can tell those rows apart.
@@ -18,11 +18,11 @@
 //! "declared behavior that did not happen on this path". A row is a claim
 //! about what the op *may* do, and a single execution takes one path: a
 //! copy-on-write op given a unique input never exercises its copy path. So an
-//! unexercised claim is not a finding, while an unclaimed effect always is —
+//! unexercised claim is not a finding, while an unclaimed effect always is—
 //! it is ownership traffic ARC did not plan for.
 //!
-//! The two effects that must therefore be driven in both regimes — unique
-//! input and shared input — are `result_unique` and copy-on-write. The sweep
+//! The two effects that must therefore be driven in both regimes—unique
+//! input and shared input—are `result_unique` and copy-on-write. The sweep
 //! in `test/rc_conformance_tests.zig` is what supplies both.
 //!
 //! ## Who accounts for a count
@@ -61,7 +61,7 @@ pub const enabled = builtin.mode == .Debug and builtin.target.os.tag != .freesta
 pub const max_observed_args = 8;
 
 /// The most allocations collected from one value's refcounted interior.
-/// Overflow only weakens the alias rules — they fire on allocations that were
+/// Overflow only weakens the alias rules—they fire on allocations that were
 /// found, never on ones that were not.
 pub const max_collected_allocations = 96;
 
@@ -214,8 +214,8 @@ pub fn begin() void {
     open_statements = 0;
     active_flag = true;
     DebugRefcountTracker.enable();
-    // Only the operation log is read here — which allocations were born, freed,
-    // or moved during one op — never the tracker's derived shadow counts.
+    // Only the operation log is read here—which allocations were born, freed,
+    // or moved during one op—never the tracker's derived shadow counts.
     DebugRefcountTracker.setShadowDiagnostics(false);
 }
 
@@ -440,8 +440,8 @@ pub fn record(observation: Observation) void {
     }
 }
 
-/// An argument's own allocation showing up anywhere inside the result — as the
-/// result itself, or as one of its interior handles — has to be a link the row
+/// An argument's own allocation showing up anywhere inside the result—as the
+/// result itself, or as one of its interior handles—has to be a link the row
 /// names, because that is the link ARC follows to keep the lender alive.
 ///
 /// Interior allocations *of* an argument (a list's elements, a box's payload)

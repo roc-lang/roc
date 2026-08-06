@@ -545,7 +545,7 @@ pub const CFStmt = union(enum) {
         unique_args: u64 = 0,
         /// For `list_map_can_reuse`: whether the input and output element
         /// layouts are interchangeable in one allocation, computed per pointer
-        /// width. Resolved at codegen for the target being built — a `false`
+        /// width. Resolved at codegen for the target being built—a `false`
         /// width forces the op to a constant `0` (reuse statically impossible),
         /// so the in-place branch is never taken there. Target-independent
         /// because both widths are stored; ignored by every other op.

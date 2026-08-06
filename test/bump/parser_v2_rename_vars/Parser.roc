@@ -1,4 +1,4 @@
-## parser_v1 with all type variables alpha-renamed — a PATCH-level change.
+## parser_v1 with all type variables alpha-renamed—a PATCH-level change.
 
 Parser(i, v) := { run : i -> [Ok(v, i), Err(Str)] }.{
 

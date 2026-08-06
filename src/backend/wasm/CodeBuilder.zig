@@ -212,7 +212,7 @@ fn testModule() WasmModule {
     return WasmModule.init(testing.allocator);
 }
 
-test "CodeBuilder.emitRelocatableCall — records code_pos relative to function start" {
+test "CodeBuilder.emitRelocatableCall—records code_pos relative to function start" {
     var cb = Self.init();
     defer cb.deinit(testing.allocator);
 
@@ -220,7 +220,7 @@ test "CodeBuilder.emitRelocatableCall — records code_pos relative to function 
     try cb.code.append(testing.allocator, WasmModule.Op.nop); // byte 0
     try cb.code.append(testing.allocator, WasmModule.Op.nop); // byte 1
 
-    // Now emit a relocatable call — the call opcode lands at byte 2,
+    // Now emit a relocatable call—the call opcode lands at byte 2,
     // and the 5-byte placeholder starts at byte 3.
     try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(42), 12);
 
@@ -240,7 +240,7 @@ test "CodeBuilder.emitRelocatableCall — records code_pos relative to function 
     try testing.expectEqual(@as(u8, 0x00), cb.code.items[7]);
 }
 
-test "CodeBuilder.insertIntoModule — function appended at correct code_bytes position" {
+test "CodeBuilder.insertIntoModule—function appended at correct code_bytes position" {
     var module = testModule();
     defer module.deinit();
 
@@ -254,7 +254,7 @@ test "CodeBuilder.insertIntoModule — function appended at correct code_bytes p
 
     const fn_offset = try cb.insertIntoModule(testing.allocator, &module);
 
-    // First function — should start at offset 0
+    // First function—should start at offset 0
     try testing.expectEqual(@as(u32, 0), fn_offset);
     // function_offsets should have one entry
     try testing.expectEqual(@as(usize, 1), module.function_offsets.items.len);
@@ -268,7 +268,7 @@ test "CodeBuilder.insertIntoModule — function appended at correct code_bytes p
     try testing.expectEqual(WasmModule.Op.end, module.code_bytes.items[2]); // code
 }
 
-test "CodeBuilder.insertIntoModule — relocation offset accounts for body length prefix" {
+test "CodeBuilder.insertIntoModule—relocation offset accounts for body length prefix" {
     var module = testModule();
     defer module.deinit();
 
@@ -298,7 +298,7 @@ test "CodeBuilder.insertIntoModule — relocation offset accounts for body lengt
     try testing.expectEqual(@as(u32, 7), reloc.index.symbol_index);
 }
 
-test "CodeBuilder.insertIntoModule — relocation offset accounts for preamble size" {
+test "CodeBuilder.insertIntoModule—relocation offset accounts for preamble size" {
     var module = testModule();
     defer module.deinit();
 
@@ -325,7 +325,7 @@ test "CodeBuilder.insertIntoModule — relocation offset accounts for preamble s
     try testing.expectEqual(body_len_prefix_size + preamble_size + code_pos, reloc.index.offset);
 }
 
-test "CodeBuilder.insertIntoModule — multiple relocations in one function" {
+test "CodeBuilder.insertIntoModule—multiple relocations in one function" {
     var module = testModule();
     defer module.deinit();
 
@@ -361,7 +361,7 @@ test "CodeBuilder.insertIntoModule — multiple relocations in one function" {
     try testing.expectEqual(@as(u32, 20), reloc1.index.symbol_index);
 }
 
-test "CodeBuilder — two functions inserted sequentially have non-overlapping offsets" {
+test "CodeBuilder—two functions inserted sequentially have non-overlapping offsets" {
     var module = testModule();
     defer module.deinit();
 
@@ -397,7 +397,7 @@ test "CodeBuilder — two functions inserted sequentially have non-overlapping o
     try testing.expect(reloc2_offset >= reloc1_offset + 5);
 }
 
-test "CodeBuilder — clear resets state for next function without leaking relocations" {
+test "CodeBuilder—clear resets state for next function without leaking relocations" {
     var cb = Self.init();
     defer cb.deinit(testing.allocator);
 
@@ -417,7 +417,7 @@ test "CodeBuilder — clear resets state for next function without leaking reloc
     try testing.expect(cb.import_relocations.capacity > 0);
 }
 
-test "CodeBuilder.prependToCode — shifts relocations and inserts prefix" {
+test "CodeBuilder.prependToCode—shifts relocations and inserts prefix" {
     var cb = Self.init();
     defer cb.deinit(testing.allocator);
 

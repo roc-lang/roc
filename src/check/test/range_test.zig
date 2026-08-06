@@ -82,7 +82,7 @@ test "range bounds must unify with each other" {
     // `from_numeral` constraint undischarged. That yields two errors: TYPE
     // MISMATCH (the bound mismatch, primary/actionable) followed by a cascade
     // MISSING METHOD (numeral defaulting can't pick a type). This is the same
-    // shared numeral-defaulting cascade `<` exhibits — it is not specific to
+    // shared numeral-defaulting cascade `<` exhibits—it is not specific to
     // ranges. Assert on the first (primary) one.
     try test_env.assertFirstTypeError("Type Mismatch");
 }

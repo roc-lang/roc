@@ -1728,7 +1728,7 @@ fn replExprSource(repl: *ReplSession, expr: []const u8) ReplTestError![]u8 {
 }
 
 /// Evaluate `expr` on the two native backends (interpreter and dev) and assert
-/// both render `expected`. Only the native target is lowered — wasm coverage is
+/// both render `expected`. Only the native target is lowered—wasm coverage is
 /// exercised explicitly by `expectAllBackends` on a representative subset, so it
 /// is not re-run for every native assertion.
 fn expectAllNative(expr: []const u8, expected: []const u8) ReplTestError!void {
@@ -1754,7 +1754,7 @@ fn expectAllNative(expr: []const u8, expected: []const u8) ReplTestError!void {
     try expectCompiledBackend(.dev, expr, expected, &compiled.lowered);
 }
 
-/// Evaluate `expr` on all backends — interpreter, dev, and wasm. Lowers both the
+/// Evaluate `expr` on all backends—interpreter, dev, and wasm. Lowers both the
 /// native and wasm targets, so reserve this for a representative subset rather
 /// than every assertion.
 fn expectAllBackends(expr: []const u8, expected: []const u8) ReplTestError!void {
@@ -2574,8 +2574,8 @@ test "issue 9364: F64.to_str non-integer float literal" {
 
 // Representative wasm coverage. The bulk of expression assertions run on the
 // native backends only (`expectAllNative`); this test runs a representative
-// spread of value kinds — ints, floats, strings, bools, lists, lambdas, and
-// result/tag values — through all backends including wasm, so wasm codegen and
+// spread of value kinds—ints, floats, strings, bools, lists, lambdas, and
+// result/tag values—through all backends including wasm, so wasm codegen and
 // bytebox execution stay covered without paying for them on every assertion.
 // Stateful wasm behavior (assignments, redefinition, for-loops) is additionally
 // covered by the `expectStateful(.wasm, ...)` tests above.

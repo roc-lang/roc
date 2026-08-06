@@ -9,10 +9,10 @@
 //! Each test goes through a front-end (parse, canonicalize, type-check)
 //! and is then evaluated by up to four independent backends:
 //!
-//!   1. **Interpreter** — walks the LIR directly.
-//!   2. **Dev backend** — lowers LIR to native machine code.
-//!   3. **WASM backend** — statement-only LIR compiled to wasm.
-//!   4. **LLVM backend** — lowers statement-only LIR to LLVM bitcode when
+//!   1. **Interpreter**—walks the LIR directly.
+//!   2. **Dev backend**—lowers LIR to native machine code.
+//!   3. **WASM backend**—statement-only LIR compiled to wasm.
+//!   4. **LLVM backend**—lowers statement-only LIR to LLVM bitcode when
 //!      the runner is invoked with `--llvm`.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
@@ -495,7 +495,7 @@ fn forkAndEval(
         _ = std.c.setsid();
 
         // Arena batches allocations into fewer mmap calls; child _exit()s
-        // immediately so the OS reclaims everything — no deinit needed.
+        // immediately so the OS reclaims everything—no deinit needed.
         var child_arena = collections.SingleThreadArena.init(base.defaultGpa());
         const child_alloc = child_arena.allocator();
         const result_str = eval_fn(child_alloc, lowered) catch |err| {
@@ -603,7 +603,7 @@ fn forkAndEval(
         return .{ .child_error = "ChildExecFailed" };
     }
 
-    // Success — return the string read from the pipe.
+    // Success—return the string read from the pipe.
     const owned = result_buf.toOwnedSlice(base.defaultGpa()) catch {
         result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
@@ -796,7 +796,7 @@ fn forkAndEvalWithStats(
 //
 
 //
-// Test execution — unified interpreter + backend comparison
+// Test execution—unified interpreter + backend comparison
 //
 
 fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) TestOutcome {
@@ -808,7 +808,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 var compiled = helpers.compileInspectedProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
-                        .message = "INVALID_SYNTAX — skipped inspect test has parse/check/lower errors",
+                        .message = "INVALID_SYNTAX—skipped inspect test has parse/check/lower errors",
                         .has_backend_details = false,
                         .backends = undefined,
                     };
@@ -827,7 +827,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                     helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports)) catch {
                     return .{
                         .status = .fail,
-                        .message = "INVALID_SYNTAX — skipped allocation test has parse/check/lower errors",
+                        .message = "INVALID_SYNTAX—skipped allocation test has parse/check/lower errors",
                         .has_backend_details = false,
                         .backends = undefined,
                     };
@@ -843,7 +843,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 var resources = helpers.parseAndCanonicalizeProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
-                        .message = "INVALID_SYNTAX — skipped compile-time float-bits test has parse/check errors",
+                        .message = "INVALID_SYNTAX—skipped compile-time float-bits test has parse/check errors",
                         .has_backend_details = false,
                         .backends = undefined,
                     };
@@ -859,7 +859,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 var compiled = helpers.compileInspectedProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
-                        .message = "INVALID_SYNTAX — skipped crash test has parse/check/lower errors",
+                        .message = "INVALID_SYNTAX—skipped crash test has parse/check/lower errors",
                         .has_backend_details = false,
                         .backends = undefined,
                     };
@@ -905,7 +905,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
         };
     };
 
-    // Any skipped backend means the test didn't get full coverage — report as skip.
+    // Any skipped backend means the test didn't get full coverage—report as skip.
     if (outcome.status == .pass and hasAnySkip(tc.skip)) {
         var backends: [NUM_BACKENDS]BackendDetail = undefined;
         if (outcome.has_backend_details) backends = outcome.backends;
@@ -1496,7 +1496,7 @@ fn runTestProblem(
 ) RunnerError!TestOutcome {
     var timer = Timer.start() catch unreachable;
     var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports) catch {
-        // Parse or canonicalize error means a problem was found — that's a pass.
+        // Parse or canonicalize error means a problem was found—that's a pass.
         const elapsed = timer.read();
         return .{
             .status = .pass,
@@ -1808,7 +1808,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
 }
 
 //
-// Serialization — child-to-parent result protocol
+// Serialization—child-to-parent result protocol
 //
 
 /// Build the wire bytes for a TestOutcome into an in-memory buffer. Used by
@@ -1982,7 +1982,7 @@ fn retryFailedForAttribution(
         }
 
         for (BACKEND_NAMES, 0..) |name, bi| {
-            // Skip backends that aren't implemented at compile time — no
+            // Skip backends that aren't implemented at compile time—no
             // point retrying. (When Phase-1 set has_backend_details=true,
             // these rows are already populated correctly; when it didn't,
             // the placeholder is .fail and we'd otherwise spuriously retry.)
@@ -2223,7 +2223,7 @@ fn printHelp() void {
         \\      Traces all refcount operations: alloc, dealloc, realloc, incref, decref, free.
         \\      Shows pointer addresses, sizes, and list/str metadata for each RC operation.
         \\
-        \\  Both flags are comptime — they are compiled out when disabled (zero overhead).
+        \\  Both flags are comptime—they are compiled out when disabled (zero overhead).
         \\  Combine with --filter and --threads 1 for readable single-test output.
         \\
         \\EXIT CODE:

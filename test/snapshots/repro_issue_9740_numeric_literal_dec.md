@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=repro for https://github.com/roc-lang/roc/issues/9740 — literal 0 in a U64-annotated recursive arg position must unify with U64, not infer Dec
+description=repro for https://github.com/roc-lang/roc/issues/9740—literal 0 in a U64-annotated recursive arg position must unify with U64, not infer Dec
 type=file
 ~~~
 # SOURCE

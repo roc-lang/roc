@@ -700,7 +700,7 @@ test "prologue and epilogue" {
     // With no callee-saved registers used and 0 stack allocation:
     // push rbp: 55 (1 byte)
     // mov rbp, rsp: 48 89 E5 (3 bytes)
-    // sub rsp, <callee_saved_area>: 48 81 EC xx xx xx xx (7 bytes) — always reserves callee-saved area
+    // sub rsp, <callee_saved_area>: 48 81 EC xx xx xx xx (7 bytes)—always reserves callee-saved area
     // (no MOV saves since callee_saved_used = 0)
     // (no MOV restores since callee_saved_used = 0)
     // mov rsp, rbp: 48 89 EC (3 bytes)
