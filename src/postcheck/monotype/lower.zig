@@ -152,6 +152,10 @@ pub const Timing = struct {
     layout_requests_ns: u64 = 0,
     static_data_requests_ns: u64 = 0,
     finalization_ns: u64 = 0,
+    /// Wall time inside the instantiation graph's relation production, and how
+    /// many relations produced it. Zero unless a measurement run set the clock.
+    graph_relation_ns: u64 = 0,
+    graph_relation_calls: u64 = 0,
     body_work_timing_enabled: bool = false,
     active_procedure_phase: ?ProcedureTimingPhase = null,
     active_procedure_phase_started_ns: i64 = 0,
@@ -182,6 +186,8 @@ pub const Timing = struct {
             .layout_requests_ns = self.layout_requests_ns,
             .static_data_requests_ns = self.static_data_requests_ns,
             .finalization_ns = self.finalization_ns,
+            .graph_relation_ns = self.graph_relation_ns,
+            .graph_relation_calls = self.graph_relation_calls,
         };
     }
 
@@ -269,6 +275,8 @@ pub const TimingSnapshot = struct {
     layout_requests_ns: u64 = 0,
     static_data_requests_ns: u64 = 0,
     finalization_ns: u64 = 0,
+    graph_relation_ns: u64 = 0,
+    graph_relation_calls: u64 = 0,
 };
 
 const TimingPhase = enum {
@@ -422,6 +430,21 @@ pub fn run(
     // only exists while that specialization is being lowered. Directed
     // instantiation reads its environments in every build mode, so it is
     // unconditional; only the Debug seam comparison also compares through it.
+    // A measurement run weighs the worksheet's relation production against the
+    // rest of compilation. Enabled by the same flag as the detailed body rows,
+    // because the timestamping costs the same kind of overhead they do.
+    var relation_clock: ?solve.RelationClock = if (options.timing) |timing|
+        if (timing.body_work_timing_enabled) solve.RelationClock.init(timing.std_io) else null
+    else
+        null;
+    if (relation_clock != null) builder.relation_clock = &relation_clock.?;
+    defer if (options.timing) |timing| {
+        if (relation_clock) |clock| {
+            timing.graph_relation_ns = clock.ns;
+            timing.graph_relation_calls = clock.calls;
+        }
+    };
+
     builder.rehearsal = try builder.createRehearsal();
     defer if (builder.rehearsal) |rehearsal| rehearsal.destroy();
 
@@ -2037,6 +2060,8 @@ const Builder = struct {
     /// checked data alone and compares them against what this builder's graphs
     /// seal. Null unless `ROC_REUNIFY_SHADOW` is set; it selects no behavior.
     rehearsal: ?*spec_rehearsal.Rehearsal = null,
+    /// Set only by a measurement run; see `solve.RelationClock`.
+    relation_clock: ?*solve.RelationClock = null,
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
@@ -2193,6 +2218,9 @@ const Builder = struct {
             diagnostics.body.graphs_created += 1;
             graph.setDiagnostics(&diagnostics.graph);
         }
+        // A measurement run weighs the worksheet's own relation production
+        // against the rest of compilation; ordinary runs carry no clock.
+        if (self.relation_clock) |clock| graph.relation_clock = clock;
         return graph;
     }
 

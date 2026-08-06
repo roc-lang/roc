@@ -297,8 +297,47 @@ const GeneratedIteratorDepthFrame = struct {
 /// change. Cross-specialization edges import final Monotypes as closed
 /// structure, so a specialization that tries to exceed its requested type is a
 /// unification conflict, not a silent divergence.
+/// Accumulates the wall time spent inside the instantiation graph's relation
+/// production, so the cost of the worksheet itself can be weighed against the
+/// rest of compilation. Opt-in: timestamping every relation is measurable
+/// overhead, so the pointer is null unless a measurement run set it. Nested
+/// relations are folded into the outermost one, which keeps the total a sum of
+/// disjoint intervals rather than a multiple of them.
+pub const RelationClock = struct {
+    std_io: std.Io,
+    ns: u64 = 0,
+    calls: u64 = 0,
+    depth: u32 = 0,
+
+    pub fn init(std_io: std.Io) RelationClock {
+        return .{ .std_io = std_io };
+    }
+
+    fn now(self: *const RelationClock) i64 {
+        return @intCast(@max(0, std.Io.Timestamp.now(self.std_io, .awake).nanoseconds));
+    }
+
+    fn enter(self: *RelationClock) ?i64 {
+        self.calls +%= 1;
+        if (self.depth != 0) {
+            self.depth += 1;
+            return null;
+        }
+        self.depth = 1;
+        return self.now();
+    }
+
+    fn leave(self: *RelationClock, started: ?i64) void {
+        self.depth -= 1;
+        const start_ns = started orelse return;
+        self.ns +%= @intCast(@max(0, self.now() - start_ns));
+    }
+};
+
 pub const InstGraph = struct {
     allocator: Allocator,
+    /// Set only by a measurement run; see `RelationClock`.
+    relation_clock: ?*RelationClock = null,
     relation_state: RelationState,
     types: *Type.Store,
     name_store: *const names.NameStore,
@@ -2726,6 +2765,10 @@ pub const InstGraph = struct {
     }
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
+        var clock_start: ?i64 = null;
+        const clock = self.relation_clock;
+        if (clock) |active| clock_start = active.enter();
+        defer if (clock) |active| active.leave(clock_start);
         // Debug-only: whether this relation states anything. A relation whose
         // operands already share a class, and whose classes carry no
         // undisposed residual either side, changed nothing that a directed

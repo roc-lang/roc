@@ -13984,6 +13984,7 @@ fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [24]pr
 fn finishPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.CheckedPipeline.Timing) void {
     const snapshot = timing.snapshot();
     reporter.endWithBreakdownSequential(&postCheckLoweringBreakdown(snapshot));
+    reporter.recordCounters("Monotype instantiation graph cost", &monotypeGraphCostCounters(snapshot));
     reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
@@ -14009,6 +14010,24 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
         .{ .name = "Missing evidence", .count = counters.evidence_missing },
         .{ .name = "Total specialization misses", .count = counters.template_misses +| counters.nested_misses },
+    };
+}
+
+/// What the instantiation graph itself costs, as an OVERLAY on the phase
+/// breakdown rather than a row in it: relation production runs inside several
+/// of those phases, so adding it to them would double-count. Reported in
+/// microseconds because the counter channel carries integers.
+fn monotypeGraphCostCounters(snapshot: lir.CheckedPipeline.TimingSnapshot) [5]progress.Counter {
+    const graph_setup_ns = snapshot.monotype_procedure_body_graph_setup_ns;
+    const type_graph_ns = snapshot.monotype_procedure_body_type_graph_ns;
+    const seal_ns = snapshot.monotype_procedure_body_finalization_ns;
+    const relation_ns = snapshot.monotype_graph_relation_ns;
+    return .{
+        .{ .name = "Graph setup (us)", .count = graph_setup_ns / 1000 },
+        .{ .name = "Graph reads (us)", .count = type_graph_ns / 1000 },
+        .{ .name = "Relation production (us)", .count = relation_ns / 1000 },
+        .{ .name = "Sealing + commit (us)", .count = seal_ns / 1000 },
+        .{ .name = "Relations produced", .count = snapshot.monotype_graph_relation_calls },
     };
 }
 
@@ -14146,6 +14165,18 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
         .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
         &compileTimeEvaluationBreakdown(compile_time),
     );
+    // Compile-time evaluation lowers through Monotype too, so the worksheet's
+    // cost is reported for this run as well as the post-check one.
+    if (compile_time.monotype_graph_reads_ns != 0 or compile_time.monotype_graph_relation_ns != 0) {
+        reporter.recordCounters("CTFE instantiation graph cost", &.{
+            .{ .name = "Graph setup (us)", .count = compile_time.monotype_graph_setup_ns / 1000 },
+            .{ .name = "Graph reads (us)", .count = compile_time.monotype_graph_reads_ns / 1000 },
+            .{ .name = "Relation production (us)", .count = compile_time.monotype_graph_relation_ns / 1000 },
+            .{ .name = "Sealing + commit (us)", .count = compile_time.monotype_graph_seal_ns / 1000 },
+            .{ .name = "Relations produced", .count = compile_time.monotype_graph_relation_calls },
+            .{ .name = "Monotype total (us)", .count = compile_time.monotype_ns / 1000 },
+        });
+    }
 }
 
 /// Print the friendly post-build summary line and (optionally) cache statistics.

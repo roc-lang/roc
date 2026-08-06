@@ -71,11 +71,23 @@ pub const Timing = struct {
         };
     }
 
+    /// Enable the fine-grained Monotype body rows and the instantiation-graph
+    /// cost clock for the compile-time evaluation run, which lowers through
+    /// Monotype exactly as the post-check run does.
+    pub fn enableDetailedMonotypeBody(self: *Timing) void {
+        self.lowering.enableDetailedMonotypeBody();
+    }
+
     pub fn snapshot(self: *const Timing) TimingSnapshot {
         const lowering = self.lowering.snapshot();
         return .{
             .total_ns = self.total_ns.load(),
             .monotype_ns = lowering.monotype_ns,
+            .monotype_graph_setup_ns = lowering.monotype_procedure_body_graph_setup_ns,
+            .monotype_graph_reads_ns = lowering.monotype_procedure_body_type_graph_ns,
+            .monotype_graph_relation_ns = lowering.monotype_graph_relation_ns,
+            .monotype_graph_seal_ns = lowering.monotype_procedure_body_finalization_ns,
+            .monotype_graph_relation_calls = lowering.monotype_graph_relation_calls,
             .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.inline_plan_ns + lowering.lir_gen_ns,
             .lir_passes_ns = lowering.lir_passes_ns,
             .arc_ns = lowering.arc_ns,
@@ -91,6 +103,11 @@ pub const Timing = struct {
     pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
         self.lowering.addSnapshot(.{
             .monotype_ns = snapshot_value.monotype_ns,
+            .monotype_procedure_body_graph_setup_ns = snapshot_value.monotype_graph_setup_ns,
+            .monotype_procedure_body_type_graph_ns = snapshot_value.monotype_graph_reads_ns,
+            .monotype_graph_relation_ns = snapshot_value.monotype_graph_relation_ns,
+            .monotype_procedure_body_finalization_ns = snapshot_value.monotype_graph_seal_ns,
+            .monotype_graph_relation_calls = snapshot_value.monotype_graph_relation_calls,
             // The compile-time evaluation report shows lowering as one
             // category; re-attribute the merged span to its first stage.
             .lift_ns = snapshot_value.postcheck_to_lir_ns,
@@ -138,6 +155,13 @@ const TimingCounter = base.ConcurrentU64;
 pub const TimingSnapshot = struct {
     total_ns: u64 = 0,
     monotype_ns: u64 = 0,
+    /// The instantiation graph's own cost inside `monotype_ns`, as an overlay
+    /// on that total rather than a partition of it.
+    monotype_graph_setup_ns: u64 = 0,
+    monotype_graph_reads_ns: u64 = 0,
+    monotype_graph_relation_ns: u64 = 0,
+    monotype_graph_seal_ns: u64 = 0,
+    monotype_graph_relation_calls: u64 = 0,
     postcheck_to_lir_ns: u64 = 0,
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,

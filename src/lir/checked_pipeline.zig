@@ -96,6 +96,8 @@ pub const Timing = struct {
     monotype_procedure_body_graph_setup_ns: TimingCounter = .{},
     monotype_procedure_body_lowering_ns: TimingCounter = .{},
     monotype_procedure_body_type_graph_ns: TimingCounter = .{},
+    monotype_graph_relation_ns: TimingCounter = .{},
+    monotype_graph_relation_calls: TimingCounter = .{},
     monotype_procedure_body_call_dispatch_ns: TimingCounter = .{},
     monotype_procedure_body_draft_ir_ns: TimingCounter = .{},
     monotype_procedure_body_reachability_ns: TimingCounter = .{},
@@ -115,7 +117,13 @@ pub const Timing = struct {
     arc_ns: TimingCounter = .{},
 
     pub fn init(std_io: std.Io) Timing {
-        return .{ .std_io = std_io };
+        var timing = Timing{ .std_io = std_io };
+        // A measurement run weighs the instantiation graph's own cost against
+        // the rest of compilation, in every pipeline that lowers through
+        // Monotype rather than only the one the CLI flag reaches. Opt-in for
+        // the same reason the flag is: the timestamping is not free.
+        if (std.c.getenv("ROC_GRAPH_COST") != null) timing.detailed_monotype_body = true;
+        return timing;
     }
 
     /// Enable fine-grained, per-node Monotype body timing. This is opt-in
@@ -136,6 +144,8 @@ pub const Timing = struct {
             .monotype_procedure_body_graph_setup_ns = self.monotype_procedure_body_graph_setup_ns.load(),
             .monotype_procedure_body_lowering_ns = self.monotype_procedure_body_lowering_ns.load(),
             .monotype_procedure_body_type_graph_ns = self.monotype_procedure_body_type_graph_ns.load(),
+            .monotype_graph_relation_ns = self.monotype_graph_relation_ns.load(),
+            .monotype_graph_relation_calls = self.monotype_graph_relation_calls.load(),
             .monotype_procedure_body_call_dispatch_ns = self.monotype_procedure_body_call_dispatch_ns.load(),
             .monotype_procedure_body_draft_ir_ns = self.monotype_procedure_body_draft_ir_ns.load(),
             .monotype_procedure_body_reachability_ns = self.monotype_procedure_body_reachability_ns.load(),
@@ -167,6 +177,8 @@ pub const Timing = struct {
         self.monotype_procedure_body_graph_setup_ns.add(snapshot_value.monotype_procedure_body_graph_setup_ns);
         self.monotype_procedure_body_lowering_ns.add(snapshot_value.monotype_procedure_body_lowering_ns);
         self.monotype_procedure_body_type_graph_ns.add(snapshot_value.monotype_procedure_body_type_graph_ns);
+        self.monotype_graph_relation_ns.add(snapshot_value.monotype_graph_relation_ns);
+        self.monotype_graph_relation_calls.add(snapshot_value.monotype_graph_relation_calls);
         self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.monotype_procedure_body_call_dispatch_ns);
         self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.monotype_procedure_body_draft_ir_ns);
         self.monotype_procedure_body_reachability_ns.add(snapshot_value.monotype_procedure_body_reachability_ns);
@@ -215,6 +227,8 @@ pub const Timing = struct {
         self.monotype_procedure_body_graph_setup_ns.add(snapshot_value.procedure_body_graph_setup_ns);
         self.monotype_procedure_body_lowering_ns.add(snapshot_value.procedure_body_lowering_ns);
         self.monotype_procedure_body_type_graph_ns.add(snapshot_value.procedure_body_type_graph_ns);
+        self.monotype_graph_relation_ns.add(snapshot_value.graph_relation_ns);
+        self.monotype_graph_relation_calls.add(snapshot_value.graph_relation_calls);
         self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.procedure_body_call_dispatch_ns);
         self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.procedure_body_draft_ir_ns);
         self.monotype_procedure_body_reachability_ns.add(snapshot_value.procedure_body_reachability_ns);
@@ -254,6 +268,8 @@ pub const TimingSnapshot = struct {
     monotype_procedure_body_graph_setup_ns: u64 = 0,
     monotype_procedure_body_lowering_ns: u64 = 0,
     monotype_procedure_body_type_graph_ns: u64 = 0,
+    monotype_graph_relation_ns: u64 = 0,
+    monotype_graph_relation_calls: u64 = 0,
     monotype_procedure_body_call_dispatch_ns: u64 = 0,
     monotype_procedure_body_draft_ir_ns: u64 = 0,
     monotype_procedure_body_reachability_ns: u64 = 0,
