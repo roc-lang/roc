@@ -1,32 +1,38 @@
+import {
+  activeCell,
+  advanceCell,
+  completionDocumentRange,
+  utf16ToUtf8Offset,
+} from "./cells.js";
+
 const source = document.querySelector("#source");
 const transcript = document.querySelector("#transcript");
 const runButton = document.querySelector("#run");
 const stopButton = document.querySelector("#stop");
 const clearButton = document.querySelector("#clear");
-const historyPrevButton = document.querySelector("#history-prev");
-const historyNextButton = document.querySelector("#history-next");
+const detailsButton = document.querySelector("#toggle-details");
+const details = document.querySelector("#details");
+const workspace = document.querySelector("#workspace");
 const workerState = document.querySelector("#worker-state");
 const revisionLabel = document.querySelector("#revision");
 const editorStatus = document.querySelector("#editor-status");
 const completion = document.querySelector("#completion");
 const definitions = document.querySelector("#definitions");
 const modules = document.querySelector("#modules");
-
-const encoder = new TextEncoder();
+const toasts = document.querySelector("#toasts");
 
 let worker;
 let ready = false;
+let evaluating = false;
 let nextToken = 1;
 let nextRequestId = 1;
+let nextExecution = 1;
 let pending = new Map();
 let replayDefinitionSource = "";
 let replayModules = [];
 let completionState = null;
 let completionTimer = null;
 let completionVersion = 0;
-const submissionHistory = [];
-let historyIndex = 0;
-let historyDraft = "";
 
 function makeElement(tag, className, text) {
   const node = document.createElement(tag);
@@ -37,6 +43,10 @@ function makeElement(tag, className, text) {
 
 function setRevision(revision) {
   if (revision != null) revisionLabel.textContent = String(revision);
+}
+
+function syncRunButton() {
+  runButton.disabled = !ready || evaluating;
 }
 
 function send(request) {
@@ -51,7 +61,9 @@ async function call(op, params) {
   const request = { protocol: 1, id: nextRequestId++, op };
   if (params !== undefined) request.params = params;
   const response = await send(request);
-  if (!response.ok) throw new Error(`${response.error?.code || "repl_error"}: ${response.error?.message || "Request failed"}`);
+  if (!response.ok) {
+    throw new Error(`${response.error?.code || "repl_error"}: ${response.error?.message || "Request failed"}`);
+  }
   setRevision(response.result?.revision);
   return response.result;
 }
@@ -91,6 +103,33 @@ function definitionSummary(snippet) {
   }
 }
 
+function showToast(payload) {
+  const toast = makeElement("div", "toast", payload);
+  toasts.append(toast);
+  setTimeout(() => toast.remove(), 4000);
+}
+
+const effectHandlers = new Map([
+  ["log", (payload) => console.log(`[Roc REPL] ${payload}`)],
+  ["toast", showToast],
+]);
+
+function renderEvent(event, runEffects) {
+  if (event.kind !== "effect") {
+    return makeElement("div", "event", `${event.kind}: ${event.message}`);
+  }
+
+  const handler = effectHandlers.get(event.name);
+  let disposition = "unhandled";
+  if (!runEffects) {
+    disposition = "suppressed";
+  } else if (handler) {
+    handler(event.payload);
+    disposition = "handled";
+  }
+  return makeElement("div", `event effect ${disposition}`, `effect ${event.name}: ${event.payload} (${disposition})`);
+}
+
 function renderSnippet(snippet) {
   const node = makeElement("div", "snippet");
   if (snippet.status === "ok" && snippet.kind === "definition") {
@@ -105,7 +144,7 @@ function renderSnippet(snippet) {
   }
   for (const event of snippet.events || []) {
     if (event.kind === "crashed") continue;
-    node.append(makeElement("div", "event", `${event.kind}: ${event.message}`));
+    node.append(renderEvent(event, snippet.status === "ok"));
   }
   if (snippet.status === "crashed") {
     node.append(makeElement(
@@ -117,15 +156,29 @@ function renderSnippet(snippet) {
   return node;
 }
 
-function renderEvaluation(input, result) {
+function renderEvaluation(input, result, execution) {
+  transcript.querySelector(".empty-output")?.remove();
   const turn = makeElement("article", "turn");
-  turn.append(makeElement("pre", "", `› ${input}`));
+  const heading = makeElement("div", "turn-heading", `Cell ${execution}`);
+  const snapshot = makeElement("pre", "source-snapshot", input);
+  turn.append(heading, snapshot);
   for (const snippet of result.snippets) turn.append(renderSnippet(snippet));
   if (!result.completed && result.committed_count > 0) {
     turn.append(makeElement("div", "notice", `${result.committed_count} earlier definition(s) remain committed.`));
   }
   transcript.append(turn);
   transcript.scrollTop = transcript.scrollHeight;
+}
+
+function renderRequestFailure(input, error, execution) {
+  transcript.querySelector(".empty-output")?.remove();
+  const turn = makeElement("article", "turn");
+  turn.append(
+    makeElement("div", "turn-heading", `Cell ${execution}`),
+    makeElement("pre", "source-snapshot", input),
+    makeElement("div", "diagnostic request-failure", String(error)),
+  );
+  transcript.append(turn);
 }
 
 async function replayState() {
@@ -142,7 +195,8 @@ function rejectPending(message) {
 
 function startWorker({ replay = false } = {}) {
   ready = false;
-  runButton.disabled = true;
+  evaluating = false;
+  syncRunButton();
   workerState.textContent = "loading";
   hideCompletion();
 
@@ -155,8 +209,9 @@ function startWorker({ replay = false } = {}) {
         if (replay) await replayState();
         await refreshSessionState();
         ready = true;
-        runButton.disabled = false;
         workerState.textContent = "ready";
+        editorStatus.textContent = replay ? "Session restored" : "Ready";
+        syncRunButton();
         scheduleCompletion();
       } catch (error) {
         workerState.textContent = "replay failed";
@@ -177,53 +232,51 @@ function startWorker({ replay = false } = {}) {
   };
 }
 
-async function evaluate() {
-  const input = source.value.trim();
-  if (!ready || !input) return;
+async function evaluateActiveCell() {
+  if (!ready || evaluating) return;
+  const cell = activeCell(source.value, source.selectionStart);
+  const input = cell.source;
+  const advanced = advanceCell(source.value, cell.index);
+  source.value = advanced.text;
+  source.setSelectionRange(advanced.cursor, advanced.cursor);
+  source.focus();
   completionVersion += 1;
   hideCompletion();
-  runButton.disabled = true;
+
+  if (!input.trim()) {
+    editorStatus.textContent = "Skipped empty cell";
+    scheduleCompletion();
+    return;
+  }
+
+  const execution = nextExecution++;
+  evaluating = true;
+  syncRunButton();
   workerState.textContent = "running";
-  submissionHistory.push(input);
-  historyIndex = submissionHistory.length;
-  historyDraft = "";
+  editorStatus.textContent = `Running cell ${execution}…`;
 
   try {
     const result = await call("eval", { source: input });
-    renderEvaluation(input, result);
+    renderEvaluation(input, result, execution);
     await refreshSessionState();
-    source.value = "";
-    editorStatus.textContent = result.completed ? "Complete" : `Stopped: ${result.stop_reason}`;
+    editorStatus.textContent = result.completed ? `Cell ${execution} complete` : `Cell ${execution} stopped: ${result.stop_reason}`;
   } catch (error) {
+    renderRequestFailure(input, error, execution);
     editorStatus.textContent = String(error);
   } finally {
-    if (ready) runButton.disabled = false;
+    evaluating = false;
+    syncRunButton();
     workerState.textContent = ready ? "ready" : "stopped";
+    scheduleCompletion();
   }
-}
-
-function utf16ToUtf8Offset(text, utf16Index) {
-  return encoder.encode(text.slice(0, utf16Index)).length;
-}
-
-function utf8ToUtf16Offset(text, utf8Offset) {
-  let bytes = 0;
-  let utf16 = 0;
-  for (const scalar of text) {
-    if (bytes === utf8Offset) return utf16;
-    const scalarBytes = encoder.encode(scalar).length;
-    if (bytes + scalarBytes > utf8Offset) throw new Error("Completion returned a non-boundary UTF-8 offset");
-    bytes += scalarBytes;
-    utf16 += scalar.length;
-  }
-  if (bytes === utf8Offset) return utf16;
-  throw new Error("Completion returned an out-of-range UTF-8 offset");
 }
 
 function hideCompletion() {
   completionState = null;
   completion.hidden = true;
   completion.replaceChildren();
+  source.setAttribute("aria-expanded", "false");
+  source.removeAttribute("aria-activedescendant");
 }
 
 function renderCompletion() {
@@ -234,6 +287,7 @@ function renderCompletion() {
   }
   completionState.items.forEach((item, index) => {
     const button = makeElement("button", index === completionState.index ? "selected" : "");
+    button.id = `completion-${index}`;
     button.type = "button";
     button.setAttribute("role", "option");
     button.setAttribute("aria-selected", String(index === completionState.index));
@@ -243,35 +297,43 @@ function renderCompletion() {
     completion.append(button);
   });
   completion.hidden = false;
+  source.setAttribute("aria-expanded", "true");
+  source.setAttribute("aria-activedescendant", `completion-${completionState.index}`);
   completion.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
 }
 
 function acceptCompletion(index = completionState?.index ?? 0) {
-  if (!completionState) return;
+  if (!completionState || source.value !== completionState.document) return;
   const item = completionState.items[index];
-  const start = utf8ToUtf16Offset(completionState.source, completionState.replacement.start);
-  const end = utf8ToUtf16Offset(completionState.source, completionState.replacement.end);
-  source.setRangeText(item.insert_text, start, end, "end");
+  const range = completionDocumentRange(completionState.cell, completionState.replacement);
+  source.setRangeText(item.insert_text, range.start, range.end, "end");
   hideCompletion();
   source.focus();
   scheduleCompletion();
 }
 
 async function requestCompletion({ force = false } = {}) {
-  if (!ready) return;
+  if (!ready || evaluating) return;
   const version = ++completionVersion;
-  const text = source.value;
+  const documentSnapshot = source.value;
   const selection = source.selectionStart;
-  const cursor = utf16ToUtf8Offset(text, selection);
+  const cell = activeCell(documentSnapshot, selection);
+  const cursor = utf16ToUtf8Offset(cell.source, cell.localCursor);
   try {
-    const result = await call("complete", { source: text, cursor });
-    if (version !== completionVersion || source.value !== text || source.selectionStart !== selection) return;
+    const result = await call("complete", { source: cell.source, cursor });
+    if (version !== completionVersion || source.value !== documentSnapshot || source.selectionStart !== selection) return;
     if (result.items.length === 0 || (!force && result.prefix.length === 0)) {
       hideCompletion();
       editorStatus.textContent = result.items.length === 0 ? "No session completions" : "Ctrl/⌘ + Space for completions";
       return;
     }
-    completionState = { items: result.items, index: 0, replacement: result.replacement, source: text };
+    completionState = {
+      items: result.items,
+      index: 0,
+      replacement: result.replacement,
+      document: documentSnapshot,
+      cell,
+    };
     editorStatus.textContent = `${result.items.length} completion${result.items.length === 1 ? "" : "s"}`;
     renderCompletion();
   } catch (error) {
@@ -284,23 +346,14 @@ function scheduleCompletion() {
   completionTimer = setTimeout(() => requestCompletion(), 120);
 }
 
-function navigateHistory(direction) {
-  if (submissionHistory.length === 0) return;
-  if (historyIndex === submissionHistory.length) historyDraft = source.value;
-  historyIndex = Math.max(0, Math.min(submissionHistory.length, historyIndex + direction));
-  source.value = historyIndex === submissionHistory.length ? historyDraft : submissionHistory[historyIndex];
-  source.setSelectionRange(source.value.length, source.value.length);
-  source.focus();
-  scheduleCompletion();
-}
-
-runButton.addEventListener("click", evaluate);
+runButton.addEventListener("click", evaluateActiveCell);
 source.addEventListener("input", scheduleCompletion);
 source.addEventListener("click", scheduleCompletion);
+source.addEventListener("select", scheduleCompletion);
 source.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
     event.preventDefault();
-    evaluate();
+    evaluateActiveCell();
     return;
   }
   if ((event.ctrlKey || event.metaKey) && event.code === "Space") {
@@ -332,19 +385,25 @@ stopButton.addEventListener("click", () => {
 });
 
 clearButton.addEventListener("click", async () => {
-  if (!ready) return;
+  if (!ready || evaluating) return;
   try {
     await call("clear");
     replayDefinitionSource = "";
-    transcript.replaceChildren();
+    nextExecution = 1;
+    transcript.replaceChildren(makeElement("div", "empty empty-output", "Run a cell to see its structured result."));
     await refreshSessionState();
-    editorStatus.textContent = "Session cleared";
+    editorStatus.textContent = "Session and output cleared; source kept";
   } catch (error) {
     editorStatus.textContent = String(error);
   }
 });
 
-historyPrevButton.addEventListener("click", () => navigateHistory(-1));
-historyNextButton.addEventListener("click", () => navigateHistory(1));
+detailsButton.addEventListener("click", () => {
+  const showing = details.hidden;
+  details.hidden = !showing;
+  workspace.classList.toggle("details-open", showing);
+  detailsButton.setAttribute("aria-expanded", String(showing));
+  detailsButton.textContent = showing ? "Hide details" : "Show details";
+});
 
 startWorker();

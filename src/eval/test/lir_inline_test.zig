@@ -5584,6 +5584,13 @@ fn expectRecordedRunsEqual(
             std.meta.activeTag(expected_event),
             std.meta.activeTag(actual_event),
         );
+        switch (expected_event) {
+            .effect => |expected_effect| switch (actual_event) {
+                .effect => |actual_effect| try std.testing.expectEqualStrings(expected_effect.name, actual_effect.name),
+                else => unreachable,
+            },
+            else => {},
+        }
         try std.testing.expectEqualStrings(expected_event.bytes(), actual_event.bytes());
     }
 }

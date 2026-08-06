@@ -64,6 +64,17 @@ fn requireContains(response: []const u8, expected: []const u8) !void {
     return error.UnexpectedResponse;
 }
 
+fn requireInOrder(response: []const u8, expected: []const []const u8) !void {
+    var offset: usize = 0;
+    for (expected) |fragment| {
+        const relative = std.mem.find(u8, response[offset..], fragment) orelse {
+            std.debug.print("Expected ordered fragment:\n{s}\nAfter offset {d} in response:\n{s}\n", .{ fragment, offset, response });
+            return error.UnexpectedResponse;
+        };
+        offset += relative + fragment.len;
+    }
+}
+
 fn sendAndRequire(interface: Interface, allocator: std.mem.Allocator, request: []const u8, expected: []const []const u8) !void {
     const response = try invoke(interface, allocator, request);
     defer allocator.free(response);
@@ -118,7 +129,7 @@ pub fn main(init: std.process.Init) !void {
 
     try sendAndRequire(interface, gpa,
         \\{"protocol":1,"id":1,"op":"capabilities"}
-    , &.{ "\"ok\":true", "one_session_per_wasm_instance", "\"revision_bits\":32", "\"presentation_strings\":false", "\"diagnostic_scope\":\"blocking_only\"", "\"completion_scope\":\"session_definitions\"", "\"filesystem\":false" });
+    , &.{ "\"ok\":true", "one_session_per_wasm_instance", "\"revision_bits\":32", "\"presentation_strings\":false", "\"diagnostic_scope\":\"blocking_only\"", "\"completion_scope\":\"session_definitions\"", "\"filesystem\":false", "\"platform_effects\":\"one_way_events\"", "\"effect_module\":\"Repl\"", "\"effect_function\":\"emit!\"", "\"effect_payload_encoding\":\"caller_defined_utf8\"", "\"effect_responses\":false" });
 
     try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":2,"op":"eval","params":{"source":"x = 41"}}
@@ -176,6 +187,32 @@ pub fn main(init: std.process.Init) !void {
         \\{"protocol":1,"id":13,"op":"eval","params":{"source":"1 + 1"}}
     , &.{ "\"status\":\"ok\"", "\"value\":\"2.0\"" });
 
+    const effect_response = try invoke(interface, gpa,
+        \\{"protocol":1,"id":130,"op":"eval","params":{"source":"import Repl\n{\n    Repl.emit!({ name: \"log\", payload: \"héllo\" })\n    dbg \"middle\"\n    Repl.emit!({ name: \"toast\", payload: \"done\" })\n}"}}
+    );
+    defer gpa.free(effect_response);
+    try requireInOrder(effect_response, &.{
+        "\"definition_kind\":\"import\"",
+        "\"kind\":\"effect\",\"name\":\"log\",\"payload\":\"héllo\"",
+        "\"kind\":\"dbg\"",
+        "\"kind\":\"effect\",\"name\":\"toast\",\"payload\":\"done\"",
+    });
+    try requireContains(effect_response, "\"type\":\"{}\"");
+
+    try sendAndRequire(interface, gpa,
+        \\{"protocol":1,"id":1300,"op":"inspect","params":{"source":"Repl.emit!({ name: \"log\", payload: \"inspection does not run\" })"}}
+    , &.{ "\"status\":\"ok\"", "\"type\":\"{}\"" });
+
+    const crashed_effect_response = try invoke(interface, gpa,
+        \\{"protocol":1,"id":1301,"op":"eval","params":{"source":"{\n    Repl.emit!({ name: \"log\", payload: \"before crash\" })\n    crash \"effect boom\"\n}"}}
+    );
+    defer gpa.free(crashed_effect_response);
+    try requireContains(crashed_effect_response, "\"crash\":{\"message\":\"effect boom\"}");
+    try requireInOrder(crashed_effect_response, &.{
+        "\"kind\":\"effect\",\"name\":\"log\",\"payload\":\"before crash\"",
+        "\"kind\":\"crashed\"",
+    });
+
     try sendAndRequire(interface, gpa,
         \\{"protocol":1,"id":131,"op":"eval","params":{"source":"pending : Str"}}
     , &.{ "\"definition_kind\":\"annotation\"", "\"name\":\"pending\"", "\"committed\":true" });
@@ -225,6 +262,10 @@ pub fn main(init: std.process.Init) !void {
     , &.{ "\"ok\":false", "\"code\":\"duplicate_module\"" });
 
     try sendAndRequire(interface, gpa,
+        \\{"protocol":1,"id":1511,"op":"set_modules","params":{"modules":[{"name":"Repl","source":"Repl := [].{}"}]}}
+    , &.{ "\"ok\":false", "\"code\":\"reserved_module\"" });
+
+    try sendAndRequire(interface, gpa,
         \\{"protocol":1,"id":152,"op":"eval","params":{"source":"Util.answer"}}
     , &.{ "\"status\":\"ok\"", "\"value\":\"42.0\"" });
 
@@ -239,4 +280,12 @@ pub fn main(init: std.process.Init) !void {
     try sendAndRequire(interface, gpa,
         \\{"protocol":1,"id":18,"op":"eval","params":{"source":"import \"secret.txt\" as secret : Str"}}
     , &.{ "\"status\":\"diagnostic\"", "\"definition_kind\":\"file_import\"", "\"code\":\"unsupported_file_import\"", "File imports are not available" });
+
+    try sendAndRequire(interface, gpa,
+        \\{"protocol":1,"id":19,"op":"set_modules","params":{"modules":[{"name":"Other","source":"Other := [].{\n    emit! : { name : Str, payload : Str } => {}\n}"}]}}
+    , &.{ "\"ok\":true", "\"module_names\":[\"Other\"]" });
+
+    try sendAndRequire(interface, gpa,
+        \\{"protocol":1,"id":20,"op":"eval","params":{"source":"import Other\nOther.emit!({ name: \"log\", payload: \"not Repl\" })"}}
+    , &.{ "\"status\":\"diagnostic\"", "This REPL only supports the hosted function Repl.emit!." });
 }

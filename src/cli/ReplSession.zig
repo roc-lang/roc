@@ -206,11 +206,14 @@ pub fn clear(self: *ReplSession) void {
 
 /// Atomically replace the virtual module set. Successful replacement clears
 /// definitions because their checked import identities may have changed.
-pub fn replaceVirtualModules(self: *ReplSession, modules: []const ModuleSource) (Allocator.Error || error{DuplicateVirtualModule})!void {
+pub fn replaceVirtualModules(self: *ReplSession, modules: []const ModuleSource) (Allocator.Error || error{ DuplicateVirtualModule, ReservedVirtualModule })!void {
     var replacement: VirtualModuleStore = .{};
     errdefer replacement.deinit(self.allocator);
 
     for (modules) |module| {
+        if (std.mem.eql(u8, module.name, eval.InspectedRun.repl_effect_module_name)) {
+            return error.ReservedVirtualModule;
+        }
         if (replacement.find(module.name) != null) return error.DuplicateVirtualModule;
         try replacement.append(self.allocator, module.name, module.source);
     }
@@ -633,7 +636,10 @@ fn addModuleRecursive(
         try visited.put(key, .in_progress);
     }
 
-    const source = if (self.virtual_modules.find(module_name)) |virtual_source|
+    const source = if (self.import_policy == .virtual_only and
+        std.mem.eql(u8, module_name, eval.InspectedRun.repl_effect_module_name))
+        try self.allocator.dupe(u8, eval.InspectedRun.repl_effect_module_source)
+    else if (self.virtual_modules.find(module_name)) |virtual_source|
         try self.allocator.dupe(u8, virtual_source)
     else source: {
         if (self.import_policy == .virtual_only) {
@@ -877,7 +883,7 @@ pub fn inspectExpressionType(
 
     const source = try std.fmt.allocPrint(
         self.allocator,
-        "{s}\nrepl_inspect_value = {s}\nmain = \"\"\n",
+        "{s}\nrepl_inspect_value = || {{\n{s}\n}}\nmain = \"\"\n",
         .{ definitions, expr },
     );
     defer self.allocator.free(source);
@@ -908,9 +914,25 @@ pub fn inspectExpressionType(
 
     const def_idx = getDefOfName(parsed.module_env, "repl_inspect_value") orelse
         return .{ .diagnostic = try self.allocator.dupe(u8, "Expression did not produce a checked definition") };
+
+    var current_var = ModuleEnv.varFrom(def_idx);
+    const return_var = while (true) {
+        const resolved = parsed.module_env.types.resolveVar(current_var);
+        switch (resolved.desc.content) {
+            .alias => |alias| current_var = parsed.module_env.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |function| {
+                    if (function.args.len() != 0) return error.Internal;
+                    break function.ret;
+                },
+                else => return error.Internal,
+            },
+            .err, .flex, .rigid => return error.Internal,
+        }
+    };
     var tw = try parsed.module_env.initTypeWriter();
     defer tw.deinit();
-    try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
+    try tw.write(return_var, .one_line);
     return .{ .output = try self.allocator.dupe(u8, tw.get()) };
 }
 
@@ -1238,6 +1260,8 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
                 error.TypeCheckError,
                 error.Unexpected,
                 error.Unseekable,
+                error.UnsupportedHostedFunction,
+                error.InvalidHostedFunctionSignature,
                 error.UnsupportedLirImageVersion,
                 error.UnsupportedLlvmTriple,
                 error.UnsupportedLowLevel,
@@ -1341,6 +1365,8 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
                 error.ThreadQuotaExceeded,
                 error.Unexpected,
                 error.Unseekable,
+                error.UnsupportedHostedFunction,
+                error.InvalidHostedFunctionSignature,
                 error.UnsupportedLirImageVersion,
                 error.UnsupportedLlvmTriple,
                 error.UnsupportedLowLevel,
@@ -1449,6 +1475,8 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         error.ThreadQuotaExceeded,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
@@ -1581,6 +1609,8 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         error.ThreadQuotaExceeded,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
@@ -1616,11 +1646,26 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         .boxy_sidecar_desc = lir.LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),
     };
-    const result = switch (self.backend_kind) {
-        .interpreter => try eval.InspectedRun.run(self.allocator, .interpreter, program),
-        .dev => try eval.InspectedRun.run(self.allocator, .dev, program),
-        .wasm => try eval.InspectedRun.run(self.allocator, .wasm, program),
-        .llvm => try eval.InspectedRun.run(self.allocator, .llvm, program),
+    const result = (switch (self.backend_kind) {
+        .interpreter => eval.InspectedRun.run(
+            self.allocator,
+            .interpreter,
+            program,
+            if (self.import_policy == .virtual_only) eval.InspectedRun.replEffectHost() else .reject,
+        ),
+        .dev => eval.InspectedRun.run(self.allocator, .dev, program, {}),
+        .wasm => eval.InspectedRun.run(self.allocator, .wasm, program, {}),
+        .llvm => eval.InspectedRun.run(self.allocator, .llvm, program, {}),
+    }) catch |err| switch (err) {
+        error.UnsupportedHostedFunction => return .{ .diagnostic = try self.allocator.dupe(
+            u8,
+            "This REPL only supports the hosted function Repl.emit!.",
+        ) },
+        error.InvalidHostedFunctionSignature => return .{ .diagnostic = try self.allocator.dupe(
+            u8,
+            "Repl.emit! has an invalid runtime signature.",
+        ) },
+        else => return err,
     };
     self.last_events = result.events;
     return switch (result.outcome) {
@@ -1716,6 +1761,8 @@ fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const
         error.TypeCheckError,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
@@ -2349,6 +2396,66 @@ test "Repl - language stepping returns structured definition metadata" {
         .definition => |definition| {
             try testing.expectEqualStrings("answer", definition.name);
             try testing.expectEqual(DefinitionKind.value, definition.kind);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - virtual session records ordered one-way effects" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    repl.import_policy = .virtual_only;
+    const config = reporting.ReportingConfig.initColorTerminal();
+
+    const imported = try repl.stepLanguageWithConfig("import Repl", config);
+    defer imported.deinit(testing.allocator);
+    switch (imported) {
+        .definition => |definition| try testing.expectEqual(DefinitionKind.import, definition.kind),
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl import failed:\n{s}\n", .{diagnostic.message});
+            return error.TestUnexpectedResult;
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const inspected = try repl.inspectExpressionType(
+        "Repl.emit!({ name: \"log\", payload: \"héllo\" })",
+        config,
+    );
+    defer inspected.deinit(testing.allocator);
+    switch (inspected) {
+        .output => |type_name| try testing.expectEqualStrings("{}", type_name),
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl emit inspection failed:\n{s}\n", .{diagnostic});
+            return error.TestUnexpectedResult;
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const emitted = try repl.stepLanguageWithConfig(
+        "Repl.emit!({ name: \"log\", payload: Str.concat(\"a long runtime-allocated \", \"effect payload\") })",
+        config,
+    );
+    defer emitted.deinit(testing.allocator);
+    switch (emitted) {
+        .expression => {},
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl emit failed:\n{s}\n", .{diagnostic.message});
+            return error.TestUnexpectedResult;
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const events = repl.takeEvents();
+    defer {
+        for (events) |*event| event.deinit(testing.allocator);
+        testing.allocator.free(events);
+    }
+    try testing.expectEqual(@as(usize, 1), events.len);
+    switch (events[0]) {
+        .effect => |effect| {
+            try testing.expectEqualStrings("log", effect.name);
+            try testing.expectEqualStrings("a long runtime-allocated effect payload", effect.payload);
         },
         else => return error.TestUnexpectedResult,
     }

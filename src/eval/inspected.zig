@@ -90,6 +90,8 @@ pub const Error = Allocator.Error || std.Thread.SpawnError || std.DynLib.Error |
     TempFileError,
     LinkFailed,
     UnsupportedLowLevel,
+    UnsupportedHostedFunction,
+    InvalidHostedFunctionSignature,
     TestExpectedEqual,
     TestUnexpectedResult,
 };
@@ -2354,6 +2356,7 @@ fn copyRuntimeHostEvents(allocator: Allocator, runtime_env: *const RuntimeHostEn
             .dbg => |message| .{ .dbg = try allocator.dupe(u8, message) },
             .expect_failed => |message| .{ .expect_failed = try allocator.dupe(u8, message) },
             .crashed => |message| .{ .crashed = try allocator.dupe(u8, message) },
+            .effect => unreachable,
         };
         events_len += 1;
     }
@@ -2946,6 +2949,9 @@ fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.
         .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
         .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),
+    }, switch (backend_kind) {
+        .interpreter => .reject,
+        .dev, .wasm, .llvm => {},
     });
     result.deinitEvents(allocator);
     return switch (result.outcome) {
@@ -3058,6 +3064,7 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
                 null;
             outcome = .{ .aborted = .{ .kind = .expect_err, .message = message } };
         },
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     }
 
     var dbg_list = std.ArrayList([]u8).empty;
@@ -3074,6 +3081,7 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         .dbg => |bytes| try dbg_list.append(allocator, try allocator.dupe(u8, bytes)),
         .expect_failed => |bytes| try expect_list.append(allocator, try allocator.dupe(u8, bytes)),
         .crashed => {},
+        .effect => unreachable,
     };
 
     const dbg_events = try dbg_list.toOwnedSlice(allocator);
