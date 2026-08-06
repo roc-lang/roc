@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Roc WebAssembly REPL</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      --surface: color-mix(in srgb, Canvas 94%, CanvasText 6%);
+      --surface-strong: color-mix(in srgb, Canvas 88%, CanvasText 12%);
+      --border: color-mix(in srgb, CanvasText 22%, transparent);
+      --muted: color-mix(in srgb, CanvasText 62%, transparent);
+      --accent: #5b7cfa;
+      --success: #1f9d61;
+      --danger: #d84c4c;
+      --event: #a45bd4;
+    }
+    * { box-sizing: border-box; }
+    body { max-width: 1180px; margin: 0 auto; padding: 2.5rem 1rem 4rem; background: Canvas; color: CanvasText; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+    h1, h2 { margin: 0; }
+    h1 { font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.04em; }
+    h2 { font-size: .8rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+    p { margin: .4rem 0 0; color: var(--muted); }
+    .badge { border: 1px solid var(--border); border-radius: 999px; padding: .4rem .7rem; font: 12px ui-monospace, monospace; white-space: nowrap; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 1rem; }
+    .panel { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+    .editor-wrap { position: relative; }
+    textarea { width: 100%; min-height: 11rem; resize: vertical; border: 0; border-bottom: 1px solid var(--border); padding: 1rem; background: Canvas; color: CanvasText; font: 15px/1.55 ui-monospace, SFMono-Regular, monospace; outline: none; }
+    textarea:focus { box-shadow: inset 0 0 0 2px var(--accent); }
+    .completion { position: absolute; z-index: 2; min-width: 260px; max-width: min(520px, calc(100% - 2rem)); max-height: 220px; overflow: auto; left: 1rem; top: calc(100% - .6rem); border: 1px solid var(--border); border-radius: 10px; background: Canvas; box-shadow: 0 12px 30px #0003; padding: .3rem; }
+    .completion[hidden] { display: none; }
+    .completion button { display: grid; grid-template-columns: 1fr auto; gap: 1rem; width: 100%; border: 0; border-radius: 7px; padding: .5rem .65rem; background: transparent; color: CanvasText; text-align: left; font: 13px ui-monospace, monospace; }
+    .completion button.selected { background: var(--surface-strong); }
+    .completion small { color: var(--muted); }
+    .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; padding: .7rem; }
+    button { border: 1px solid var(--border); border-radius: 8px; padding: .48rem .75rem; background: Canvas; color: CanvasText; cursor: pointer; }
+    button.primary { border-color: var(--accent); background: var(--accent); color: white; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    .toolbar .status { margin-left: auto; color: var(--muted); font-size: .82rem; }
+    #transcript { min-height: 22rem; max-height: 58vh; overflow: auto; padding: .8rem; }
+    .turn { margin: 0 0 .8rem; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: Canvas; }
+    .turn pre { margin: 0; padding: .8rem; border-bottom: 1px solid var(--border); color: var(--muted); white-space: pre-wrap; font: 14px/1.5 ui-monospace, monospace; }
+    .snippet { padding: .7rem .8rem; }
+    .snippet + .snippet { border-top: 1px solid var(--border); }
+    .value, .definition { color: var(--success); font: 15px/1.5 ui-monospace, monospace; }
+    .type { color: var(--muted); font: italic 13px/1.5 ui-monospace, monospace; }
+    .diagnostic { color: var(--danger); white-space: pre-wrap; font: 13px/1.45 ui-monospace, monospace; }
+    .event { color: var(--event); white-space: pre-wrap; font: 13px/1.45 ui-monospace, monospace; }
+    .notice { padding: .6rem .8rem; color: var(--muted); font-size: .82rem; }
+    aside { padding: 1rem; }
+    aside section + section { margin-top: 1.5rem; }
+    .state-list { display: grid; gap: .45rem; margin-top: .7rem; }
+    .state-item { display: flex; justify-content: space-between; gap: .6rem; border-bottom: 1px solid var(--border); padding-bottom: .4rem; font: 13px ui-monospace, monospace; }
+    .state-item span:last-child { color: var(--muted); }
+    .empty { margin-top: .7rem; color: var(--muted); font-size: .85rem; }
+    kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: .08rem .3rem; background: Canvas; font: 11px ui-monospace, monospace; }
+    .shortcuts { display: grid; grid-template-columns: auto 1fr; gap: .45rem .6rem; margin-top: .7rem; color: var(--muted); font-size: .82rem; }
+    @media (max-width: 820px) { .layout { grid-template-columns: 1fr; } header { align-items: start; flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Roc REPL</h1>
+      <p>A stateful, self-contained REPL running in a Web Worker.</p>
+    </div>
+    <span class="badge">worker <strong id="worker-state">loading</strong> · revision <strong id="revision">0</strong></span>
+  </header>
+
+  <div class="layout">
+    <main class="panel">
+      <div class="editor-wrap">
+        <textarea id="source" autofocus spellcheck="false" aria-label="Roc source" placeholder="foo = &quot;bar&quot;&#10;bar = &quot;${foo}: bar&quot;&#10;bar"></textarea>
+        <div id="completion" class="completion" role="listbox" hidden></div>
+      </div>
+      <div class="toolbar">
+        <button id="run" class="primary" disabled>Run</button>
+        <button id="stop">Stop</button>
+        <button id="clear">Clear session</button>
+        <button id="history-prev" aria-label="Previous history">↑ History</button>
+        <button id="history-next" aria-label="Next history">↓ History</button>
+        <span id="editor-status" class="status">Ctrl/⌘ + Enter to run</span>
+      </div>
+      <div id="transcript" aria-live="polite"></div>
+    </main>
+
+    <aside class="panel">
+      <section>
+        <h2>Session definitions</h2>
+        <div id="definitions" class="state-list"></div>
+      </section>
+      <section>
+        <h2>Virtual modules</h2>
+        <div id="modules" class="state-list"></div>
+      </section>
+      <section>
+        <h2>Shortcuts</h2>
+        <div class="shortcuts">
+          <kbd>Ctrl ↵</kbd><span>Evaluate</span>
+          <kbd>Ctrl Space</kbd><span>Complete</span>
+          <kbd>Tab</kbd><span>Accept completion</span>
+          <kbd>Esc</kbd><span>Close completion</span>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

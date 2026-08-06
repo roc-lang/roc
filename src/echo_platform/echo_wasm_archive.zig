@@ -4,7 +4,7 @@
 //! Usage: echo_wasm_archive <input.wasm> <output.wasm.zst>
 //!
 //! Invoked by `zig build build-echo-wasm-archive`, which builds `echo.wasm`
-//! first and then runs this tool to emit `zig-out/lib/echo.wasm.zst`.
+//! first and then runs this tool to emit `zig-out/lib/echo/echo.wasm.zst`.
 
 const std = @import("std");
 const build_options = @import("build_options");

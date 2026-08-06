@@ -28,8 +28,11 @@ const LayoutStore = layout.Store;
 const LirImage = lir.LirImage;
 const LirProcSpecId = lir.LirProcSpecId;
 const RocStr = builtins.str.RocStr;
-const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+const RuntimeHostEnv = @import("runtime_host.zig");
 const GuardedList = lir.LirStore.GuardedList;
+
+/// An ordered host event produced while running the inspected root.
+pub const Event = RuntimeHostEnv.HostEvent;
 
 const WasmRunner = if (builtin.target.os.tag == .freestanding) struct {
     const StubOutcome = union(enum) {
@@ -40,6 +43,7 @@ const WasmRunner = if (builtin.target.os.tag == .freestanding) struct {
     const StubResult = struct {
         outcome: StubOutcome,
         allocation_count: u32,
+        events: []Event,
     };
 
     fn runWasmOutcomeWithStats(_: Allocator, _: []const u8, _: u32, _: bool) error{WasmExecFailed}!StubResult {
@@ -81,10 +85,17 @@ pub const Outcome = union(enum) {
 /// Backend-neutral semantic outcome plus host-observed allocation count.
 pub const Result = struct {
     outcome: Outcome,
+    events: []Event,
     allocation_count: u32,
 
     pub fn deinit(self: Result, allocator: Allocator) void {
         self.outcome.deinit(allocator);
+        self.deinitEvents(allocator);
+    }
+
+    pub fn deinitEvents(self: Result, allocator: Allocator) void {
+        for (self.events) |*event| event.deinit(allocator);
+        allocator.free(self.events);
     }
 };
 
@@ -158,14 +169,52 @@ pub fn run(allocator: Allocator, comptime backend_kind: Backend, program: Progra
 fn crashResult(
     allocator: Allocator,
     runtime_env: *RuntimeHostEnv,
-    fallback_message: ?[]const u8,
+    runtime_message: ?[]const u8,
 ) (Allocator.Error || error{Internal})!Result {
-    const message = runtime_env.takeCrashMessage() orelse if (fallback_message) |bytes|
+    var recorded = try runtime_env.snapshot(allocator);
+    errdefer recorded.deinit(allocator);
+
+    var event_message: ?[]const u8 = null;
+    for (recorded.events) |event| {
+        switch (event) {
+            .crashed => |bytes| event_message = bytes,
+            else => {},
+        }
+    }
+
+    const message = if (event_message orelse runtime_message) |bytes|
         try allocator.dupe(u8, bytes)
     else
         return error.Internal;
+    errdefer allocator.free(message);
+
+    if (event_message == null) {
+        const explicit_message = runtime_message orelse return error.Internal;
+        const extended = try allocator.alloc(Event, recorded.events.len + 1);
+        errdefer allocator.free(extended);
+        @memcpy(extended[0..recorded.events.len], recorded.events);
+        extended[recorded.events.len] = .{ .crashed = try allocator.dupe(u8, explicit_message) };
+        allocator.free(recorded.events);
+        recorded.events = extended;
+    }
+
     return .{
         .outcome = .{ .crashed = message },
+        .events = recorded.events,
+        .allocation_count = runtime_env.allocationCallCount(),
+    };
+}
+
+fn returnedResult(
+    allocator: Allocator,
+    runtime_env: *const RuntimeHostEnv,
+    output: []u8,
+) Allocator.Error!Result {
+    errdefer allocator.free(output);
+    const recorded = try runtime_env.snapshot(allocator);
+    return .{
+        .outcome = .{ .returned = output },
+        .events = recorded.events,
         .allocation_count = runtime_env.allocationCallCount(),
     };
 }
@@ -211,16 +260,13 @@ fn runInterpreter(allocator: Allocator, program: Program) InterpreterError!Resul
         => return err,
     };
     const ret_layout = program.store.getProcSpec(program.main_proc).ret_layout;
-    return .{
-        .outcome = .{ .returned = try copyReturnedRocStr(
-            allocator,
-            program.layouts,
-            ret_layout,
-            eval_result.value.ptr,
-            null,
-        ) },
-        .allocation_count = runtime_env.allocationCallCount(),
-    };
+    return returnedResult(allocator, &runtime_env, try copyReturnedRocStr(
+        allocator,
+        program.layouts,
+        ret_layout,
+        eval_result.value.ptr,
+        null,
+    ));
 }
 
 fn runDev(allocator: Allocator, program: Program) DevError!Result {
@@ -295,16 +341,13 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             .crashed => return crashResult(allocator, &runtime_env, null),
         }
 
-        return .{
-            .outcome = .{ .returned = try copyReturnedRocStr(
-                allocator,
-                program.layouts,
-                ret_layout,
-                ret_buf.ptr,
-                runtime_env.get_ops(),
-            ) },
-            .allocation_count = runtime_env.allocationCallCount(),
-        };
+        return returnedResult(allocator, &runtime_env, try copyReturnedRocStr(
+            allocator,
+            program.layouts,
+            ret_layout,
+            ret_buf.ptr,
+            runtime_env.get_ops(),
+        ));
     }
 }
 
@@ -344,6 +387,7 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
             .returned => |output| .{ .returned = output },
             .crashed => |message| .{ .crashed = message },
         },
+        .events = result.events,
         .allocation_count = result.allocation_count,
     };
 }
@@ -476,16 +520,13 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         .crashed => return crashResult(allocator, &runtime_env, null),
     }
 
-    return .{
-        .outcome = .{ .returned = try copyReturnedRocStr(
-            allocator,
-            program.layouts,
-            ret_layout,
-            ret_buf.ptr,
-            runtime_env.get_ops(),
-        ) },
-        .allocation_count = runtime_env.allocationCallCount(),
-    };
+    return returnedResult(allocator, &runtime_env, try copyReturnedRocStr(
+        allocator,
+        program.layouts,
+        ret_layout,
+        ret_buf.ptr,
+        runtime_env.get_ops(),
+    ));
 }
 
 fn installBoxyGlobal(
