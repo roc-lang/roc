@@ -138,7 +138,7 @@ pub const ObjectFileCompiler = struct {
     ///
     /// Dispatches at runtime to the correct compile-time LirCodeGen
     /// instantiation for the requested target. Works for both native and
-    /// cross-compilation — the caller just passes the desired target.
+    /// cross-compilation—the caller just passes the desired target.
     ///
     /// Returns CompilationError.UnsupportedTarget for arm32 and wasm32 targets.
     pub fn compileToObjectFile(

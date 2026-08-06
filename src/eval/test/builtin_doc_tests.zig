@@ -82,7 +82,7 @@ const BuiltinDocTestError = test_helpers.TestHelperError || eval_mod.BuiltinModu
 
 /// Builtin module viewed and published once in the parent test process and
 /// reused (read-only) by every block: directly for the in-parent check phase,
-/// and — via fork copy-on-write — by the child eval phase. Reusing it avoids
+/// and—via fork copy-on-write—by the child eval phase. Reusing it avoids
 /// re-creating the view and re-publishing the Builtin module ~700 times. File-scope
 /// because the C-ABI child work fns dispatched through `runInChild` cannot
 /// capture it, and because it must already be in the parent's address space
@@ -129,12 +129,12 @@ test "numeric arithmetic API uses method-aligned names" {
 }
 
 const BlockKind = enum {
-    /// All top-level statements are `expect` — runs via `roc test` logic.
+    /// All top-level statements are `expect`—runs via `roc test` logic.
     expects_only,
-    /// At least one top-level definition (`name = ...`) — wrap as a module
+    /// At least one top-level definition (`name = ...`)—wrap as a module
     /// with an auto-generated `main` and evaluate.
     module_with_def,
-    /// Top-level expressions only (no defs, no expects) — each expression is
+    /// Top-level expressions only (no defs, no expects)—each expression is
     /// evaluated independently.
     expression_block,
 };
@@ -275,7 +275,7 @@ fn analyze(source: []const u8) Analysis {
 }
 
 fn classify(a: Analysis) BlockKind {
-    // Any block with expects is treated as a test — defs and helper code in
+    // Any block with expects is treated as a test—defs and helper code in
     // the same block are supporting context for those expects.
     if (a.has_expect) return .expects_only;
     if (a.has_def) return .module_with_def;
@@ -381,8 +381,8 @@ fn splitTopLevelStatements(allocator: Allocator, source: []const u8) BuiltinDocT
     return statements.toOwnedSlice(allocator);
 }
 
-/// Net `{` minus `}` (and bracket / paren) count on a line. Naive — does not
-/// understand string literals or comments — but good enough for the doc
+/// Net `{` minus `}` (and bracket / paren) count on a line. Naive—does not
+/// understand string literals or comments—but good enough for the doc
 /// snippets in Builtin.roc where every brace pair lives on its own.
 fn braceDelta(line: []const u8) i32 {
     var d: i32 = 0;
@@ -414,7 +414,7 @@ const ForkOutcome = union(enum) {
     success,
     /// Child exited non-zero with an error message read from its pipe.
     failed: []u8,
-    /// Child terminated by a signal — typically a panic / abort triggered by a
+    /// Child terminated by a signal—typically a panic / abort triggered by a
     /// compiler invariant when the block exercises unimplemented code.
     crashed: u8,
     /// fork() / pipe() failed; fall through to inline execution.
@@ -646,7 +646,7 @@ fn workerEvalExpr(allocator: Allocator, source: []const u8) BuiltinDocTestError!
 
 /// Process a block.
 ///
-/// Stage 1 (check) runs in the parent — it uses `parseAndCheckProgramForProblems`
+/// Stage 1 (check) runs in the parent—it uses `parseAndCheckProgramForProblems`
 /// which only canonicalizes and type-checks, paths that don't crash on
 /// in-progress Builtin.roc code.
 ///
@@ -876,7 +876,7 @@ test "Builtin.roc doc code blocks check and evaluate" {
                 if (!repro) {
                     phantom_failures += 1;
                     std.debug.print(
-                        "[builtin-doc-tests] PHANTOM FAILURE: in-memory check reported a failure for block #{d} (Builtin.roc line {d}) but the roc binary succeeded — investigate!\nMessage was: {s}\n",
+                        "[builtin-doc-tests] PHANTOM FAILURE: in-memory check reported a failure for block #{d} (Builtin.roc line {d}) but the roc binary succeeded—investigate!\nMessage was: {s}\n",
                         .{ i, block.start_line, message },
                     );
                 }
@@ -907,12 +907,12 @@ test "Builtin.roc doc code blocks check and evaluate" {
             );
         }
         std.debug.print(
-            "\n[builtin-doc-tests] Failing blocks were written to {s}/builtin_doc_block_<N>_line_<L>.roc — open the corresponding file to debug a specific block.\n",
+            "\n[builtin-doc-tests] Failing blocks were written to {s}/builtin_doc_block_<N>_line_<L>.roc—open the corresponding file to debug a specific block.\n",
             .{debug_dir},
         );
         if (phantom_failures != 0) {
             std.debug.print(
-                "[builtin-doc-tests] {d} of those failures could NOT be reproduced by the roc binary — the in-memory checker may disagree with the binary.\n",
+                "[builtin-doc-tests] {d} of those failures could NOT be reproduced by the roc binary—the in-memory checker may disagree with the binary.\n",
                 .{phantom_failures},
             );
             return error.PhantomFailuresDetected;
@@ -936,7 +936,7 @@ fn eintrTestSignalHandler(_: std.c.SIG) callconv(.c) void {
 
 /// Child-side work fn for the EINTR regression test. Sends SIGUSR1 to the
 /// parent to interrupt its `waitpid`, then crashes via `abort()`. The parent
-/// must report `.crashed` — without the EINTR retry, `waitpid` would return
+/// must report `.crashed`—without the EINTR retry, `waitpid` would return
 /// -1 with `status` left at 0 and the harness would falsely report `.success`.
 fn eintrTestChildWork(_: Allocator, _: []const u8) BuiltinDocTestError!?[]u8 {
     if (comptime !has_fork) return null;

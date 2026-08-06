@@ -10,7 +10,7 @@ representation: `isFlatRangeMethodText`
 method call, and the flat self-recursive construction in
 `Builtin.roc` (`Iter.exclusive_range`/`inclusive_range` over
 `iter_from_step` + `range_done()`) closes at the minted type. Wrapped
-in adapters, these chains lower with zero heap allocations — the
+in adapters, these chains lower with zero heap allocations—the
 property the `iter alloc` gates in
 `src/eval/test/eval_iter_alloc_tests.zig` and the `iter alloc static`
 gates in `src/eval/test/lir_inline_test.zig` enforce.
@@ -27,7 +27,7 @@ heap-boxes its inner iterator state per step while the same chain over
 `U64` is flat.
 
 This is correct but quietly slower, and it is a representation cliff
-keyed on the element type — exactly the kind of silent perf divergence
+keyed on the element type—exactly the kind of silent perf divergence
 the zero-alloc gates exist to catch, except no gate covers floats.
 
 ## Background
@@ -78,8 +78,8 @@ step closure joins the minted callable set the same way the integer
 ranges' step closures do after the de-freeze of non-evidence slots in
 evidence-bearing call instantiation.
 
-The alternative — porting float ranges onto the integer-style flat
-recursion — does not generalize: fractional stepping needs seed state,
+The alternative—porting float ranges onto the integer-style flat
+recursion—does not generalize: fractional stepping needs seed state,
 and the `Iter.custom` gap would remain for every other custom source.
 Minting custom sources fixes the class; float ranges are its
 acceptance case.
@@ -115,5 +115,5 @@ existing `range` eval tests cover.
 
 ## Related projects
 
-- `projects/small/spec-constr-specialization-limits.md` — bounds on
+- `projects/small/spec-constr-specialization-limits.md`—bounds on
   the specialization machinery the minted chains feed.

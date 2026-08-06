@@ -149,7 +149,7 @@ fn resolveThreadDefaults(max_threads: ?usize) struct { usize, Mode } {
 }
 
 /// Options for constructing the orchestration core (`BuildEnv`) for a CLI
-/// command. Every entry path — check, build, run, test, docs, bundle — wires
+/// command. Every entry path—check, build, run, test, docs, bundle—wires
 /// the core through `initCliBuildEnv`, so thread defaults, the working
 /// directory, cache attachment, and the publication mode are configured in
 /// exactly one place.
@@ -879,8 +879,8 @@ fn configuredSharedMemorySize() usize {
 }
 
 /// Floor for the retry loop in `createSharedMemory`. Set to the
-/// macOS/Windows reservation — documented as "ample headroom for real
-/// programs" — so a smaller reservation still produces a usable arena. On
+/// macOS/Windows reservation—documented as "ample headroom for real
+/// programs"—so a smaller reservation still produces a usable arena. On
 /// 32-bit targets the preferred size is already smaller than 8 GiB and an
 /// 8 GiB literal doesn't fit in `usize`, so the floor is the preferred size
 /// itself (single attempt, no retry); `-Dshared-memory-size` builds are
@@ -1207,7 +1207,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     var gpa, const is_safe = gpa: {
         // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
         // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
-        // else uses the fast target allocator — see base.defaultGpa.
+        // else uses the fast target allocator—see base.defaultGpa.
         const use_debug_allocator = builtin.os.tag != .freestanding and
             (builtin.mode == .Debug or build_options.debug_gpa);
         if (use_debug_allocator) {
@@ -2585,7 +2585,7 @@ const SourceRefResolveError = CliError || Allocator.Error || error{ UnsupportedW
 
 /// A source argument resolved to a compilable local path, together with the
 /// bundle URL it came from when the source was a managed URL/installed root.
-/// The URL — not the extracted path — is the root's package identity.
+/// The URL—not the extracted path—is the root's package identity.
 const ResolvedSourceArg = struct {
     path: []const u8,
     url: ?[]const u8,
@@ -2629,7 +2629,7 @@ const ResolvedInstalledEntry = struct {
 
 /// Resolve a shorthand to its published install entry, validating the
 /// manifest and the presence of the built artifact. Missing or corrupt state
-/// is an explicit error — never a fallback to a cache entry or a redownload.
+/// is an explicit error—never a fallback to a cache entry or a redownload.
 fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.Error)!ResolvedInstalledEntry {
     const root = install_store.installRootDir(ctx.coreCtx(), ctx.arena) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -2699,7 +2699,7 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
     defer parsed.deinit();
 
     // The recorded URL is the entry's identity, so it must still be a valid
-    // bundle URL — a manifest that fails this check is corrupt, and nothing
+    // bundle URL—a manifest that fails this check is corrupt, and nothing
     // downstream may be handed an unvalidated URL.
     _ = base.url.parseUrlPath(parsed.manifest().url) catch {
         return ctx.fail(.{ .install_entry_corrupt = .{
@@ -3925,7 +3925,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         };
     }
 
-    // Headerless default apps never hot reload — they compile through throwaway synthetic
+    // Headerless default apps never hot reload—they compile through throwaway synthetic
     // source files, so there is nothing stable to reload. They just run once.
     const internal_static_data = successfulInternalStaticData(&lowered_result, "default app run");
     const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, false);
@@ -5583,7 +5583,7 @@ fn successfulInternalStaticData(result: *const LoweredCoordinatorResult, label: 
 
 /// Render every report drained from the core and print the run-path summary
 /// trailer. Draining moves the reports out of the core, so calling this again
-/// renders nothing new — re-rendering a report is structurally impossible
+/// renders nothing new—re-rendering a report is structurally impossible
 /// rather than a call-site convention (the PR 9759 bug class). Version-bump
 /// notes and synthetic default-app path remapping are applied by the core
 /// during the drain.
@@ -7367,7 +7367,7 @@ fn discoverAndAddBundleModules(
     var build_env = try initCliBuildEnv(ctx, .{ .max_threads = 1 });
     defer build_env.deinit();
 
-    // Run the build — the Coordinator discovers all transitive module dependencies
+    // Run the build—the Coordinator discovers all transitive module dependencies
     build_env.build(abs_entry) catch {
         // Drain and display any errors from the build
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
@@ -7386,7 +7386,7 @@ fn discoverAndAddBundleModules(
                 }
             }
         }
-        // Build errors are not fatal for bundling — continue to check what we can
+        // Build errors are not fatal for bundling—continue to check what we can
     };
 
     // Detect platform from BuildEnv packages using the accessor
@@ -7569,7 +7569,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     // inside the archive (the unbundle side rejects them, and a relative path
     // is what the user actually wants extracted). If any input is absolute we
     // rebase all paths against their longest common parent directory and pass
-    // that directory to the bundle library — so the archive itself only ever
+    // that directory to the bundle library—so the archive itself only ever
     // contains relative paths.
     var any_absolute = false;
     for (paths_to_use) |path| {
@@ -11416,6 +11416,13 @@ fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+fn proveRangesForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 fn optimizedDbgWarningsForBuild(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -11526,6 +11533,7 @@ fn lowerCheckedSourceToLir(
             },
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
+            .prove_ranges = proveRangesForOpt(opt),
             .proc_debug_names = proc_debug_names,
             .timing = timing,
         },
@@ -14926,7 +14934,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
 
     // The line editor handles Ctrl-C itself (press twice in a row to quit).
     // Ignore SIGINT at the process level so a Ctrl-C while the terminal is
-    // momentarily in cooked mode — during startup or while evaluating — can't
+    // momentarily in cooked mode—during startup or while evaluating—can't
     // hard-kill the REPL instead of going through that flow.
     if (mode == .interactive and builtin.os.tag != .windows) {
         const ignore_sigint = std.posix.Sigaction{
@@ -14942,7 +14950,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
 
     // Publishing the Builtin module here is the dominant startup cost (~1s). Do
     // it before printing the greeting so the greeting and the first prompt appear
-    // together and the REPL is immediately interactive — otherwise the greeting
+    // together and the REPL is immediately interactive—otherwise the greeting
     // shows with no prompt until this finishes.
     var session = try ReplSession.init(
         ctx.gpa,
@@ -17397,7 +17405,7 @@ fn generateDocs(
             // yet no module was scheduled to document. This happens when the
             // source's module name shadows a compiler builtin (e.g. a file
             // declaring `Builtin`) or otherwise isn't built as a standalone
-            // module — there are no canonicalization or type errors to report.
+            // module—there are no canonicalization or type errors to report.
             std.debug.print(
                 "  The file compiled successfully but produced no standalone module to document.\n" ++
                     "  This typically means its module name shadows a compiler builtin, or it is a\n" ++
@@ -17822,7 +17830,7 @@ test "longestCommonParentDir" {
         .{ .paths = &.{ "/tmp/pkg/main.roc", "/tmp/pkg/Mod.roc" }, .expected = "/tmp/pkg" },
         // Files in sibling subdirectories: common parent.
         .{ .paths = &.{ "/tmp/nested/a/main.roc", "/tmp/nested/b/Mod.roc" }, .expected = "/tmp/nested" },
-        // Names share a byte prefix but no directory boundary — must back up.
+        // Names share a byte prefix but no directory boundary—must back up.
         .{ .paths = &.{ "/tmp/abc/a.roc", "/tmp/abd/b.roc" }, .expected = "/tmp" },
         // Only root in common.
         .{ .paths = &.{ "/etc/foo.roc", "/var/bar.roc" }, .expected = "/" },

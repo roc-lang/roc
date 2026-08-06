@@ -534,7 +534,7 @@ fn compareFieldNames(
         if (!found) {
             // Check if there's a typo candidate among the actual fields that are
             // themselves unmatched. A field present in both records is a real,
-            // matched field — never a typo source (otherwise an extra field like
+            // matched field—never a typo source (otherwise an extra field like
             // `z` gets misreported as a typo of a legitimate field like `x`).
             if (findBestTypoSuggestionExcluding(exp_name_idx, act_names, exp_names, ident_store)) |suggestion| {
                 hints.append(.{ .field_typo = .{

@@ -426,6 +426,10 @@ pub fn runWasmOutcomeWithStats(
         env_imports.addHostFunction("roc_list_replace", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReplace, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_set", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I32, .I32 }, &[_]bytebox.ValType{}, hostListSet, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_swap", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListSwap, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_append_range_within", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListAppendRangeWithin, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_copy_range_within", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListCopyRangeWithin, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_append_sublist", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListAppendSublist, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_append_le_bytes", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListAppendLeBytes, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_builtins_simd_store_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I64, .I32, .I32 }, &[_]bytebox.ValType{}, hostSimdStore16, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_builtins_simd_append_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostSimdAppend16, &run_state) catch return error.WasmExecFailed;
 
@@ -2416,6 +2420,157 @@ fn hostListSet(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
     writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(len));
 }
 
+fn hostListAppendRangeWithin(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    var buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const elem_width: usize = @intCast(params[1].I32);
+    const alignment: u32 = @bitCast(params[2].I32);
+    const start: usize = @intCast(params[3].I64);
+    const count: usize = @intCast(params[4].I64);
+    const result_ptr: usize = @intCast(params[5].I32);
+
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const new_len = len + count;
+
+    if (elem_width == 0) {
+        writeIntLittle(u32, buffer, result_ptr, 0);
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+        writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(new_len));
+        return;
+    }
+
+    const new_data = allocWasmData(state, module, alignment, new_len * elem_width);
+    buffer = module.store.getMemory(0).buffer();
+    if (len != 0 and data_ptr != 0) {
+        @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
+    }
+    // Copy one element at a time so the range may read through elements this
+    // call has just appended.
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const src = new_data + (start + i) * elem_width;
+        const dst = new_data + (len + i) * elem_width;
+        var b: usize = 0;
+        while (b < elem_width) : (b += 1) {
+            buffer[dst + b] = buffer[src + b];
+        }
+    }
+
+    writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(new_len));
+}
+
+fn hostListCopyRangeWithin(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    var buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const elem_width: usize = @intCast(params[1].I32);
+    const alignment: u32 = @bitCast(params[2].I32);
+    const dest_index: usize = @intCast(params[3].I64);
+    const src_index: usize = @intCast(params[4].I64);
+    const count: usize = @intCast(params[5].I64);
+    const result_ptr: usize = @intCast(params[6].I32);
+
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+
+    if (elem_width == 0 or len == 0) {
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+        writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(len));
+        return;
+    }
+
+    // This test mode has no uniqueness tracking, so always copy into a fresh
+    // allocation before moving the range.
+    const new_data = allocWasmData(state, module, alignment, len * elem_width);
+    buffer = module.store.getMemory(0).buffer();
+    if (data_ptr != 0) {
+        @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
+    }
+    if (count != 0 and dest_index != src_index) {
+        const src = new_data + src_index * elem_width;
+        const dest = new_data + dest_index * elem_width;
+        const total = count * elem_width;
+        @memmove(buffer[dest..][0..total], buffer[src..][0..total]);
+    }
+
+    writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(len));
+}
+
+fn hostListAppendLeBytes(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    var buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const value: u64 = @bitCast(params[1].I64);
+    const count: usize = @intCast(params[2].I64);
+    const result_ptr: usize = @intCast(params[3].I32);
+
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const new_len = len + count;
+
+    const new_data = allocWasmData(state, module, 1, new_len);
+    buffer = module.store.getMemory(0).buffer();
+    if (len != 0 and data_ptr != 0) {
+        @memcpy(buffer[new_data..][0..len], buffer[data_ptr..][0..len]);
+    }
+    var word = value;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        buffer[new_data + len + i] = @truncate(word);
+        word >>= 8;
+    }
+
+    writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(new_len));
+}
+
+fn hostListAppendSublist(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    var buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const src_ptr: usize = @intCast(params[1].I32);
+    const elem_width: usize = @intCast(params[2].I32);
+    const alignment: u32 = @bitCast(params[3].I32);
+    const start: usize = @intCast(params[4].I64);
+    const count: usize = @intCast(params[5].I64);
+    const result_ptr: usize = @intCast(params[6].I32);
+
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const src_data: usize = @intCast(readIntLittle(u32, buffer, src_ptr));
+    const new_len = len + count;
+
+    if (elem_width == 0) {
+        writeIntLittle(u32, buffer, result_ptr, 0);
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+        writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(new_len));
+        return;
+    }
+
+    const new_data = allocWasmData(state, module, alignment, new_len * elem_width);
+    buffer = module.store.getMemory(0).buffer();
+    if (len != 0 and data_ptr != 0) {
+        @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
+    }
+    if (count != 0 and src_data != 0) {
+        @memcpy(
+            buffer[new_data + len * elem_width ..][0 .. count * elem_width],
+            buffer[src_data + start * elem_width ..][0 .. count * elem_width],
+        );
+    }
+
+    writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(new_len));
+}
 fn hostListSwap(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const state: *WasmRunState = @ptrCast(@alignCast(ctx));
     var buffer = module.store.getMemory(0).buffer();

@@ -491,6 +491,10 @@ dec_from_str_import: ?u32 = null,
 float_from_str_import: ?u32 = null,
 list_append_unsafe_import: ?u32 = null,
 list_concat_import: ?u32 = null,
+list_append_range_within_import: ?u32 = null,
+list_copy_range_within_import: ?u32 = null,
+list_append_sublist_import: ?u32 = null,
+list_append_le_bytes_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
 list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
@@ -808,6 +812,19 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .str_from_utf8_result => null,
             .list_append_unsafe => self.list_append_unsafe_import,
             .list_concat => self.list_concat_import,
+            .list_append_range_within => self.list_append_range_within_import,
+            .list_copy_range_within => self.list_copy_range_within_import,
+            // The host-import test mode never reaches the unsafe variant:
+            // list_slack_unique answers zero there, so promoted appends
+            // always take the checked path; its codegen calls the checked
+            // import for validation's sake.
+            .list_append_range_within_unsafe => null,
+            .list_append_sublist => self.list_append_sublist_import,
+            .list_append_le_bytes => self.list_append_le_bytes_import,
+            // The host-import test mode never calls these builtins: their
+            // code paths emit constants (zero slack / not owned) instead.
+            .list_slack_unique => null,
+            .list_owned_unique => null,
             .list_drop_at => self.list_drop_at_import,
             .list_reserve => self.list_reserve_import,
             .list_replace => self.list_replace_import,
@@ -2128,6 +2145,22 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
 
     const list_concat_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.list_concat_import = try self.module.addImport("env", "roc_list_concat", list_concat_type);
+
+    // roc_list_append_range_within(list_ptr, elem_width, alignment, start, count, result_ptr)
+    const list_append_range_within_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i64, .i32 }, &.{});
+    self.list_append_range_within_import = try self.module.addImport("env", "roc_list_append_range_within", list_append_range_within_type);
+
+    // roc_list_copy_range_within(list_ptr, elem_width, alignment, dest_index, src_index, count, result_ptr)
+    const list_copy_range_within_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i64, .i64, .i32 }, &.{});
+    self.list_copy_range_within_import = try self.module.addImport("env", "roc_list_copy_range_within", list_copy_range_within_type);
+
+    // roc_list_append_sublist(list_ptr, src_ptr, elem_width, alignment, start, len, result_ptr)
+    const list_append_sublist_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i64, .i64, .i32 }, &.{});
+    self.list_append_sublist_import = try self.module.addImport("env", "roc_list_append_sublist", list_append_sublist_type);
+
+    // roc_list_append_le_bytes(list_ptr, value, count, result_ptr)
+    const list_append_le_bytes_type = try self.module.addFuncType(&.{ .i32, .i64, .i64, .i32 }, &.{});
+    self.list_append_le_bytes_import = try self.module.addImport("env", "roc_list_append_le_bytes", list_append_le_bytes_type);
 
     const list_drop_at_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.list_drop_at_import = try self.module.addImport("env", "roc_list_drop_at", list_drop_at_type);
@@ -3832,7 +3865,7 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomic
 ///
 /// Compilation has two phases. First a pre-order traversal of the helper-plan DAG
 /// reserves a module function slot for every transitively-reachable helper that
-/// needs a compiled body — the same pre-order in which on-demand compilation would
+/// needs a compiled body—the same pre-order in which on-demand compilation would
 /// assign function indices, and the `rc_helper_funcs` cache doubles as the visited
 /// set so runtime-recursive (self-referential) helpers terminate. Then each newly
 /// reserved helper's body is emitted; because every child slot is already reserved,
@@ -4510,7 +4543,7 @@ fn emitStructuralEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, negate: boo
         }
     }
 
-    // Generate both operand expressions — each pushes an i32 pointer
+    // Generate both operand expressions—each pushes an i32 pointer
     try self.emitProcLocal(lhs);
     const lhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(lhs_local);
@@ -4541,7 +4574,7 @@ fn emitStructuralEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, negate: boo
                     }
                     return;
                 }
-                // No heap types — fall through to bytewise comparison
+                // No heap types—fall through to bytewise comparison
             },
             .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => {},
         }
@@ -4619,7 +4652,7 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
 }
 
 /// Emit an inline element-by-element comparison loop for two lists whose elements
-/// need structural (non-bytewise) equality — e.g. lists of records/tuples/tag-unions
+/// need structural (non-bytewise) equality—e.g. lists of records/tuples/tag-unions
 /// containing refcounted fields.
 /// lhs_local/rhs_local are i32 pointers to 12-byte RocList structs.
 /// Pushes i32 (1=equal, 0=not equal) onto the WASM stack.
@@ -6784,7 +6817,7 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
     self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), cross) catch return error.OutOfMemory;
 
-    // cross = cross + al0*bl1 (may overflow u64 — need to track carry)
+    // cross = cross + al0*bl1 (may overflow u64—need to track carry)
     // Save old cross for overflow detection
     const old_cross = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7207,7 +7240,7 @@ fn emitI64MulToI128(self: *Self, a_local: u32, b_local: u32) Allocator.Error!voi
     self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), cross) catch return error.OutOfMemory;
 
-    // cross2 = cross1 + a0*b1 (can carry past 64 bits — must track carry)
+    // cross2 = cross1 + a0*b1 (can carry past 64 bits—must track carry)
     // Save old cross for overflow detection
     const old_cross = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -8108,7 +8141,7 @@ fn emitI128TryNarrow(
 
 /// Emit i128 → u128 try conversion (or signed widening → u128 try).
 /// Source is an i32 pointer to 16 bytes. Check high word sign bit is 0.
-/// Result is a Result(U128, {}) — 16-byte payload at offset 0, disc at offset 16.
+/// Result is a Result(U128, {})—16-byte payload at offset 0, disc at offset 16.
 fn emitI128TryToU128(self: *Self, _: bool) Allocator.Error!void {
     const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -8610,7 +8643,7 @@ fn buildProcArgCountsTable(self: *Self, proc_specs: []const LirProcSpec) Allocat
 }
 
 /// Compile a single LirProcSpec as a wasm function.
-/// Does NOT compile the body — that's done by compileProcSpecBody.
+/// Does NOT compile the body—that's done by compileProcSpecBody.
 fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
     const key: u32 = @intFromEnum(proc_id);
 
@@ -8660,7 +8693,7 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
 fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
     const key: u32 = @intFromEnum(proc_id);
 
-    // Get the pre-registered func_idx (must exist — registerProcSpec runs in pass 1)
+    // Get the pre-registered func_idx (must exist—registerProcSpec runs in pass 1)
     const func_idx = self.registered_procs.get(key) orelse unreachable;
 
     const args = self.store.getLocalSpan(proc.args);
@@ -8675,7 +8708,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     self.current_proc_id = proc_id;
-    // Note: registered_procs is NOT cleared — all pre-registered proc_specs remain
+    // Note: registered_procs is NOT cleared—all pre-registered proc_specs remain
     // visible. This is critical for mutual recursion: when compiling is_even's
     // body, calls to is_odd must find its func_idx without re-compilation.
     self.stack_frame_size = 0;
@@ -9750,7 +9783,7 @@ const SavedState = struct {
     local_types_items: []ValType,
     local_types_capacity: usize,
     active_fn_stack_len: usize,
-    // Note: registered_procs is NOT saved/restored — once a proc is registered,
+    // Note: registered_procs is NOT saved/restored—once a proc is registered,
     // its entry persists globally since the wasm function code is already emitted.
     stack_frame_size: u32,
     uses_stack_memory: bool,
@@ -9800,7 +9833,7 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.storage.local_types.deinit(self.allocator);
     self.storage.local_types.items = saved.local_types_items;
     self.storage.local_types.capacity = saved.local_types_capacity;
-    // Note: registered_procs is NOT restored — entries added during nested
+    // Note: registered_procs is NOT restored—entries added during nested
     // compilation must persist since the wasm function code is already emitted.
     self.stack_frame_size = saved.stack_frame_size;
     self.uses_stack_memory = saved.uses_stack_memory;
@@ -11802,7 +11835,7 @@ fn emitZeroInit(self: *Self, base_local: u32, byte_count: u32) Allocator.Error!v
 fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const l = ls.getLayout(self.runtimeRepresentationLayoutIdx(r.struct_layout));
-    // Empty structs (ZST) have scalar layout, not struct_ — push dummy pointer
+    // Empty structs (ZST) have scalar layout, not struct_—push dummy pointer
     if (l.tag != .struct_) {
         self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
         WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
@@ -11811,7 +11844,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
 
     const size = try WasmLayout.structSizeWithStore(l.getStruct().idx, ls);
     if (size == 0) {
-        // Zero-sized struct — push dummy pointer
+        // Zero-sized struct—push dummy pointer
         self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
         WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
         return;
@@ -11895,7 +11928,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
             // The local holds an i32 pointer to source data. Copy to record slot.
             try self.emitMemCopy(base_local, field_offset, field_val_locals[i], field_byte_size);
         } else {
-            // Primitive — push value from local, then store to record
+            // Primitive—push value from local, then store to record
             self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), field_val_locals[i]) catch return error.OutOfMemory;
             try self.emitStoreToMemSized(base_local, field_offset, field_val_types[i], field_byte_size);
@@ -12011,7 +12044,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     }
     const variant_payload_layout = variants.get(t.variant_index).payload_layout;
     if (tu_size <= 4 and disc_offset == 0) {
-        // Small tag union — discriminant only, no payload (enum).
+        // Small tag union—discriminant only, no payload (enum).
         // Still evaluate payload for side effects (e.g., early_return from ? operator).
         // Payload must be zero-sized since the tag has no payload room.
         if (t.payload) |payload_local| {
@@ -12032,7 +12065,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), base_local) catch return error.OutOfMemory;
 
     // Store payload FIRST (payload may overlap discriminant if it is wider than
-    // the payload slot, e.g. i64 for a u32 tag payload — the i64 store would
+    // the payload slot, e.g. i64 for a u32 tag payload—the i64 store would
     // clobber the discriminant).
     if (t.payload) |payload_local| {
         const payload_byte_size = try self.layoutByteSize(variant_payload_layout);
@@ -12128,7 +12161,7 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     const elems = self.store.getLocalSpan(l.elems);
 
     if (elems.len == 0) {
-        // Empty list — same as empty_list
+        // Empty list—same as empty_list
         const base_offset = try self.allocStackMemory(12, 4);
         const base_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitFpOffset(base_offset);
@@ -12171,13 +12204,13 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
 
         const offset = @as(u32, @intCast(i)) * elem_size;
         if (try self.isCompositeLayout(l.elem_layout) and elem_size > 0) {
-            // Composite element — copy from source pointer
+            // Composite element—copy from source pointer
             const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), src_local) catch return error.OutOfMemory;
             try self.emitMemCopy(data_base, offset, src_local, elem_size);
         } else {
-            // Primitive element — store directly
+            // Primitive element—store directly
             const expr_vt = try self.procLocalValType(elem_expr_id);
             try self.emitConversion(expr_vt, elem_vt);
             try self.emitStoreToMemSized(data_base, offset, elem_vt, elem_size);
@@ -12381,7 +12414,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(GuardedList.at(args, 0));
             const arg_vt = try self.procLocalValType(GuardedList.at(args, 0));
             if (arg_vt == .i64) {
-                // Already i64 — no extension needed
+                // Already i64—no extension needed
                 return;
             }
             self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
@@ -12390,7 +12423,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(GuardedList.at(args, 0));
             const arg_vt = try self.procLocalValType(GuardedList.at(args, 0));
             if (arg_vt == .i64) {
-                // Already i64 — no extension needed
+                // Already i64—no extension needed
                 return;
             }
             self.currentCode().append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
@@ -13124,7 +13157,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .list_drop_first => {
             // list_drop_first(list, count) -> list
             // Returns a RocList with adjusted elements_ptr and length
-            // No allocation needed — returns a view
+            // No allocation needed—returns a view
             try self.emitProcLocal(GuardedList.at(args, 0));
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -13400,6 +13433,38 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_concat(list_a, list_b) -> concatenated list
             try self.generateLLListConcat(args, ll.ret_layout, ll.target, ll.unique_args);
         },
+        .list_append_range_within_unsafe => {
+            // list_append_range_within_unsafe(list, start, count) -> extended list
+            try self.generateLLListAppendRangeWithinUnsafe(args, ll.ret_layout);
+        },
+        .list_append_range_within => {
+            // list_append_range_within(list, start, count) -> extended list
+            try self.generateLLListAppendRangeWithin(args, ll.ret_layout, ll.unique_args);
+        },
+        .list_copy_range_within => {
+            // list_copy_range_within(list, dest_index, src_index, count) -> same-length list
+            try self.generateLLListCopyRangeWithin(args, ll.ret_layout);
+        },
+        .list_append_sublist => {
+            // list_append_sublist(list, src, start, len) -> extended list
+            try self.generateLLListAppendSublist(args, ll.ret_layout, ll.unique_args);
+        },
+        .list_slack_unique => {
+            // list_slack_unique(list) -> U64. The host-import test mode has no
+            // in-place reuse at all, so zero slack (always take the checked
+            // path) is the correct answer there; the linked-builtin mode asks
+            // the real builtin.
+            try self.generateLLListSlackUnique(args);
+        },
+        .list_owned_unique => {
+            // list_owned_unique(list) -> U64, same host-import reasoning as
+            // list_slack_unique: never owned there, so sets stay checked.
+            try self.generateLLListOwnedUnique(args);
+        },
+        .list_append_le_bytes => {
+            // list_append_le_bytes(list, value, count) -> extended list
+            try self.generateLLListAppendLeBytes(args, ll.unique_args);
+        },
         .list_reverse => {
             // list_reverse(list) -> reversed list
             try self.generateLLListReverse(args, ll.ret_layout, ll.target, ll.unique_args);
@@ -13411,6 +13476,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // list_set(list, index, value) -> list with value at index
         .list_set => {
             try self.generateLLListSet(args, ll.ret_layout, ll.target, ll.unique_args);
+        },
+        // The promotion pass proved arg0 uniquely owned: force the in-place
+        // update mode instead of consulting ARC's per-site bit.
+        .list_set_in_place_unsafe => {
+            try self.generateLLListSet(args, ll.ret_layout, ll.target, ll.unique_args | 1);
         },
         // list_reserve(list, capacity) -> list with at least that capacity
         .list_reserve => {
@@ -14762,11 +14832,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             }
         },
         .ptr_cast => {
-            // ptr_cast: identity bits — both sides are i32 pointers.
+            // ptr_cast: identity bits—both sides are i32 pointers.
             try self.emitProcLocal(GuardedList.at(args, 0));
         },
 
-        // Compare — returns Ordering enum (EQ=0, GT=1, LT=2)
+        // Compare—returns Ordering enum (EQ=0, GT=1, LT=2)
         .compare => {
             try self.emitProcLocal(GuardedList.at(args, 0));
             try self.emitProcLocal(GuardedList.at(args, 1));
@@ -14897,7 +14967,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
 
-        // Integer try conversions — return Result(TargetInt, {}) tag union
+        // Integer try conversions—return Result(TargetInt, {}) tag union
         // Layout: payload at offset 0, discriminant (1 byte) after payload. Ok=1, Err=0.
         // Narrowing i32 → smaller signed
         .i32_to_i8_try, .i16_to_i8_try, .u16_to_i8_try => {
@@ -15082,7 +15152,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), r.result_local) catch return error.OutOfMemory;
         },
-        // i8/i16 → unsigned wider types (always succeed since value fits — but need sign check)
+        // i8/i16 → unsigned wider types (always succeed since value fits—but need sign check)
         .i8_to_u16_try,
         .i8_to_u32_try,
         .i8_to_u64_try,
@@ -15561,7 +15631,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .dec_to_attos,
         .dec_from_attos,
         => {
-            // Same representation — just pass through (pointer stays the same)
+            // Same representation—just pass through (pointer stays the same)
             try self.emitProcLocal(GuardedList.at(args, 0));
         },
         // i128/u128 → float conversions. These go through the shared exact
@@ -16054,6 +16124,14 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_map_cast_unsafe,
         .list_map_extract_unsafe,
         .list_map_write_unsafe,
+        .list_append_range_within,
+        .list_copy_range_within,
+        .list_append_range_within_unsafe,
+        .list_append_sublist,
+        .list_append_le_bytes,
+        .list_slack_unique,
+        .list_owned_unique,
+        .list_set_in_place_unsafe,
         .bool_not,
         .dict_pseudo_seed,
         .hasher_finish,
@@ -16502,7 +16580,7 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
         }
         return self.emitCompositeNumericOp(plain_op, args, ret_layout, operand_layout);
     }
-    // I128/U128 shifts: LHS is composite but RHS is U8 — needs dedicated handling.
+    // I128/U128 shifts: LHS is composite but RHS is U8—needs dedicated handling.
     if (is_shift and (try self.isCompositeLocal(GuardedList.at(args, 0)) or try self.isCompositeLayout(operand_layout))) {
         // For unsigned 128-bit values, `num_shift_right_by` is a logical shift,
         // which is exactly what `num_shift_right_zf_by` emits.
@@ -16726,7 +16804,7 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_ge_s) catch return error.OutOfMemory;
-                    // select(x, -x, x >= 0) — returns x if true, -x if false
+                    // select(x, -x, x >= 0)—returns x if true, -x if false
                     self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
                 },
                 .i64 => {
@@ -17284,7 +17362,7 @@ fn emitExtractStrPtrLen(self: *Self, str_local: u32, ptr_local: u32, len_local: 
     self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), ptr_local) catch return error.OutOfMemory;
 
-    // else — heap path
+    // else—heap path
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
 
     // len = *(str_local + 8)
@@ -17953,7 +18031,7 @@ fn emitStrFromUtf8Lossy(self: *Self, list_arg: ProcLocalId) Allocator.Error!void
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 12) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
 
-    // if (len < 12) — SSO
+    // if (len < 12)—SSO
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
     {
@@ -20248,6 +20326,336 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx, tar
     try self.emitMemCopyLoop(new_data, dst_off, old_data, old_byte_len);
 
     try self.buildRocList(new_data, new_len);
+}
+
+/// Generate LowLevel list_append_range_within: append elements copied from
+/// the list itself, reading through freshly appended elements.
+fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListAppendRangeWithin.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+
+    const start_local = try self.materializeListIndex(GuardedList.at(args, 1));
+    const count_local = try self.materializeListIndex(GuardedList.at(args, 2));
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    if (elem_size == 0) {
+        // ZST elements: only the length grows.
+        const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(list_ptr);
+        try self.emitLoadOp(.i32, 4);
+        try self.emitLocalGet(count_local);
+        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitLocalSet(len);
+
+        const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        try self.emitLocalSet(zero);
+
+        try self.buildRocListWithCap(zero, len, len);
+        return;
+    }
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(count_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), self.list_append_range_within_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(count_local);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(@intCast(unique_args & 1));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_range_within", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
+/// Generate LowLevel list_copy_range_within: copy elements within the list,
+/// overwriting the destination range, with both ranges already validated.
+fn generateLLListCopyRangeWithin(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListCopyRangeWithin.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+
+    const dest_local = try self.materializeListIndex(GuardedList.at(args, 1));
+    const src_local = try self.materializeListIndex(GuardedList.at(args, 2));
+    const count_local = try self.materializeListIndex(GuardedList.at(args, 3));
+
+    if (elem_size == 0) {
+        // Copying zero-sized elements within the list changes nothing.
+        try self.emitLocalGet(list_ptr);
+        return;
+    }
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(dest_local);
+            try self.emitLocalGet(src_local);
+            try self.emitLocalGet(count_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_copy_range_within)), self.list_copy_range_within_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(dest_local);
+            try self.emitLocalGet(src_local);
+            try self.emitLocalGet(count_local);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_copy_range_within)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_copy_range_within", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
+/// Generate LowLevel list_append_range_within_unsafe: the loop-append
+/// promotion pass proved the list uniquely owned with capacity for the range
+/// plus copy scratch. The host-import test mode cannot take this path at
+/// runtime (its slack is always zero), so it emits a call to the checked
+/// import purely to keep the function well-typed.
+fn generateLLListAppendRangeWithinUnsafe(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListAppendRangeWithinUnsafe.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+
+    const start_local = try self.materializeListIndex(GuardedList.at(args, 1));
+    const count_local = try self.materializeListIndex(GuardedList.at(args, 2));
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    if (elem_size == 0) {
+        // ZST elements: only the length grows.
+        const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(list_ptr);
+        try self.emitLoadOp(.i32, 4);
+        try self.emitLocalGet(count_local);
+        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitLocalSet(len);
+
+        const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        try self.emitLocalSet(zero);
+
+        try self.buildRocListWithCap(zero, len, len);
+        return;
+    }
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(count_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), self.list_append_range_within_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(count_local);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within_unsafe)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_range_within_unsafe", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
+/// Generate LowLevel list_slack_unique: uniquely-owned spare capacity.
+fn generateLLListSlackUnique(self: *Self, args: anytype) Allocator.Error!void {
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitI64Const(0);
+        },
+        .builtin_relocs => {
+            try self.emitProcLocal(GuardedList.at(args, 0));
+            const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(list_ptr);
+            const fields = try self.loadRocListFields(list_ptr);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_slack_unique)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_slack_unique", .{}),
+    }
+}
+
+/// Generate LowLevel list_owned_unique: whether in-place overwrites are safe.
+fn generateLLListOwnedUnique(self: *Self, args: anytype) Allocator.Error!void {
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitI64Const(0);
+        },
+        .builtin_relocs => {
+            try self.emitProcLocal(GuardedList.at(args, 0));
+            const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(list_ptr);
+            const fields = try self.loadRocListFields(list_ptr);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_owned_unique)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_owned_unique", .{}),
+    }
+}
+
+/// Generate LowLevel list_append_le_bytes: append a value's low bytes.
+fn generateLLListAppendLeBytes(self: *Self, args: anytype, unique_args: u64) Allocator.Error!void {
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+
+    const value_local = try self.materializeListIndex(GuardedList.at(args, 1));
+    const count_local = try self.materializeListIndex(GuardedList.at(args, 2));
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitLocalGet(value_local);
+            try self.emitLocalGet(count_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_le_bytes)), self.list_append_le_bytes_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(value_local);
+            try self.emitLocalGet(count_local);
+            try self.emitI32Const(1);
+            try self.emitI32Const(@intCast(unique_args & 1));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_le_bytes)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_le_bytes", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
+/// Generate LowLevel list_append_sublist: append a range of another list.
+fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListAppendSublist.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+    try self.emitProcLocal(GuardedList.at(args, 1));
+    const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(src_ptr);
+
+    const start_local = try self.materializeListIndex(GuardedList.at(args, 2));
+    const len_local = try self.materializeListIndex(GuardedList.at(args, 3));
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    if (elem_size == 0) {
+        const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(list_ptr);
+        try self.emitLoadOp(.i32, 4);
+        try self.emitLocalGet(len_local);
+        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitLocalSet(len);
+
+        const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        try self.emitLocalSet(zero);
+
+        try self.buildRocListWithCap(zero, len, len);
+        return;
+    }
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitLocalGet(src_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(len_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)), self.list_append_sublist_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const src_fields = try self.loadRocListFields(src_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitRocListFields(src_fields);
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(len_local);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(@intCast(unique_args & 1));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_sublist", .{}),
+    }
+    try self.emitFpOffset(result_offset);
 }
 
 /// Generate LowLevel list_concat: concatenate two lists.

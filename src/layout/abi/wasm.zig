@@ -60,7 +60,7 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
                 return classifyType(store, info.variants.get(0).payload_layout);
             }
 
-            // A no-payload tag union is an enum — a single integer, passed directly. Any
+            // A no-payload tag union is an enum—a single integer, passed directly. Any
             // multi-variant tag union carrying a payload is a multi-field aggregate and is
             // passed indirectly.
             var v: usize = 0;

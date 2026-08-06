@@ -1,8 +1,8 @@
 //! Cross-engine conformance corpus for match lowering.
 //!
-//! These cases lock in the semantics of `match` compilation — branch order,
+//! These cases lock in the semantics of `match` compilation—branch order,
 //! guard order, binding visibility, exhaustiveness defaults, and every pattern
-//! kind — so the decision-tree match compiler (src/postcheck/match_tree.zig)
+//! kind—so the decision-tree match compiler (src/postcheck/match_tree.zig)
 //! is verified against the same behavior on all executors.
 
 const TestCase = @import("parallel_runner.zig").TestCase;

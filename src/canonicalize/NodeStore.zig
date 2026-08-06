@@ -4014,7 +4014,7 @@ fn anyTypeAnnoHasTypeVar(store: *const NodeStore, annos: CIR.TypeAnno.Span, comp
     return false;
 }
 
-/// Returns true if the annotation contains an `_` inference hole — in its type
+/// Returns true if the annotation contains an `_` inference hole—in its type
 /// tree (`anno`) or in any where-clause method signature. Derived once by
 /// `addAnnotation` so the check phase can read `Annotation.contains_underscore`
 /// instead of re-walking the tree.

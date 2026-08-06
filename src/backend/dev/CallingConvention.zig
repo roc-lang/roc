@@ -578,7 +578,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                         } else if (lea.offset < 0 and -lea.offset <= 4095) {
                             try self.emit.subRegRegImm12(.w64, dst, lea.base, @intCast(-lea.offset));
                         } else {
-                            // Offset too large for imm12 — use movRegImm64 + add
+                            // Offset too large for imm12—use movRegImm64 + add
                             try self.emit.movRegImm64(dst, @bitCast(@as(i64, lea.offset)));
                             try self.emit.addRegRegReg(.w64, dst, lea.base, dst);
                         }
@@ -780,7 +780,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (self.reg_arg_count == 0) return;
 
             var statuses = [_]MoveStatus{.to_move} ** CC_EMIT.PARAM_REGS.len;
-            // Mutable copy of sources — cycle breaking redirects sources to SCRATCH_REG
+            // Mutable copy of sources—cycle breaking redirects sources to SCRATCH_REG
             var sources: [CC_EMIT.PARAM_REGS.len]ArgSource = undefined;
             for (self.reg_args[0..self.reg_arg_count], 0..) |arg, i| {
                 sources[i] = arg.src;
@@ -821,7 +821,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     const src_reg = sources[j].from_reg;
                     if (src_reg != dst) continue;
 
-                    // Arg j reads from dst — we'd clobber it.
+                    // Arg j reads from dst—we'd clobber it.
                     switch (statuses[j]) {
                         .to_move => {
                             dependency = j;
@@ -842,7 +842,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     stack[depth] = .{ .i = j, .scan = 0 };
                     depth += 1;
                 } else {
-                    // All conflicting args moved — now safe to emit our instruction.
+                    // All conflicting args moved—now safe to emit our instruction.
                     try self.emitArgInst(dst, sources[frame.i]);
                     statuses[frame.i] = .moved;
                     depth -= 1;
@@ -2189,7 +2189,7 @@ fn findPattern7(buf: []const u8, b0: u8, b1: u8, b2: u8, b3: u8, b4: u8, b5: u8,
 //   mov rsi, rbx  = 48 89 DE     mov rdx, r11  = 4C 89 DA
 
 test "parallel move: non-conflicting reg args" {
-    // Sources are non-param regs — no conflicts, no scratch needed
+    // Sources are non-param regs—no conflicts, no scratch needed
     const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
@@ -2213,7 +2213,7 @@ test "parallel move: non-conflicting reg args" {
 }
 
 test "parallel move: 2-element swap cycle uses scratch" {
-    // RDI ← RSI, RSI ← RDI — a 2-cycle requiring SCRATCH_REG (R11)
+    // RDI ← RSI, RSI ← RDI—a 2-cycle requiring SCRATCH_REG (R11)
     const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
@@ -2245,7 +2245,7 @@ test "parallel move: 2-element swap cycle uses scratch" {
 }
 
 test "parallel move: 3-element rotation cycle" {
-    // RDI ← RSI, RSI ← RDX, RDX ← RDI — 3-way rotation, one scratch save
+    // RDI ← RSI, RSI ← RDX, RDX ← RDI—3-way rotation, one scratch save
     const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
@@ -2281,8 +2281,8 @@ test "parallel move: 3-element rotation cycle" {
     try std.testing.expect(p2.? < p3.?);
 }
 
-test "parallel move: LEA then REG reading same dest — reordered" {
-    // addLeaArg writes RDI, addRegArg reads RDI — old code would clobber
+test "parallel move: LEA then REG reading same dest—reordered" {
+    // addLeaArg writes RDI, addRegArg reads RDI—old code would clobber
     // The algorithm must emit mov RSI,RDI BEFORE lea RDI,[rbp-32]
     const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
@@ -2298,7 +2298,7 @@ test "parallel move: LEA then REG reading same dest — reordered" {
 
     try builder.call(0x12345678);
 
-    // mov rsi, rdi = 48 89 FE (must come first — preserves original RDI)
+    // mov rsi, rdi = 48 89 FE (must come first—preserves original RDI)
     const mov_pos = findPattern3(emit.buf.items, 0x48, 0x89, 0xFE);
     try std.testing.expect(mov_pos != null);
     // lea rdi, [rbp-32] = 48 8D BD ...
@@ -2312,7 +2312,7 @@ test "parallel move: LEA then REG reading same dest — reordered" {
     try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
 }
 
-test "aarch64 parallel move: LEA then REG reading same dest — reordered" {
+test "aarch64 parallel move: LEA then REG reading same dest—reordered" {
     const Emit = aarch64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
@@ -2397,7 +2397,7 @@ test "parallel move: self-move eliminated" {
 
     try builder.call(0x12345678);
 
-    // mov rdi, rdi would be 48 89 FF — should NOT appear
+    // mov rdi, rdi would be 48 89 FF—should NOT appear
     try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xFF) == null);
 
     // Verify the code is shorter than a call with an actual move
@@ -2433,12 +2433,12 @@ test "parallel move: chain dependency without cycle" {
     try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xF7) != null);
     // mov rsi, rdx = 48 89 D6
     try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xD6) != null);
-    // No scratch needed — no cycle
+    // No scratch needed—no cycle
     try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
 }
 
 test "parallel move: same source register for multiple args" {
-    // Both args read from RAX — no conflict (RAX isn't a param reg destination)
+    // Both args read from RAX—no conflict (RAX isn't a param reg destination)
     const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
@@ -2550,7 +2550,7 @@ test "parallel move: reg args + stack overflow args" {
 }
 
 test "parallel move: zero reg args call" {
-    // No register args, just a bare call — emitDeferredRegArgs should be a no-op
+    // No register args, just a bare call—emitDeferredRegArgs should be a no-op
     const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
@@ -2632,7 +2632,7 @@ test "relocatable call stabilizes memory args before clobbering base param regis
 }
 
 test "parallel move: swap cycle on Windows x64 (RCX/RDX)" {
-    // Windows uses RCX, RDX, R8, R9 — verify swap works with different param regs
+    // Windows uses RCX, RDX, R8, R9—verify swap works with different param regs
     const Emit = x86_64.WinEmit;
     const Builder = CallBuilder(Emit);
 

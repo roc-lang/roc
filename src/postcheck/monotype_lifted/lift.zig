@@ -238,7 +238,7 @@ fn verifyActiveCaptureInvariants(program: *const Ast.Program, graph: *const Capt
 /// stores and can leave replaced expressions behind; `recomputeCaptures` checks
 /// the active capture graph instead. Both checks fail at the mutation boundary
 /// instead of surfacing as a confusing crash five stages later. Compiled out
-/// entirely in release builds — release cost is zero.
+/// entirely in release builds—release cost is zero.
 ///
 /// It checks, per function and per `fn_ref`/`call_proc` site:
 ///   - every capture slot's local carries a CaptureId, and the slot's type
@@ -957,9 +957,9 @@ fn allocateCaptureTable(allocator: Allocator, count: usize) Allocator.Error![]st
 ///
 ///   - Otherwise the operand's declared id names the slot it fills, even when
 ///     its value-local carries a different CaptureId. spec_constr routes a
-///     value-local into a slot its own binding does not name — e.g. a
+///     value-local into a slot its own binding does not name—e.g. a
 ///     destructured successor `rest` passed as the next iterator's inner-state
-///     capture — and only the declared id records which slot that is. A
+///     capture—and only the declared id records which slot that is. A
 ///     value-local with no CaptureId, and a genuinely explicit (non-local)
 ///     value, are likewise keyed solely by the declared id.
 ///
@@ -995,8 +995,8 @@ fn operandValueForSlot(program: *const Ast.Program, existing: anytype, slot: Ast
 /// Recompute a function reference / direct call's keyed capture operand span so it
 /// matches `slots` (the target's canonically-sorted capture slots) exactly, in
 /// the same order. Each operand's value is preserved from the node's existing
-/// operands (keyed by CaptureId) when present — this keeps explicit non-local
-/// values supplied at checked closure creation and const-fn restore — otherwise
+/// operands (keyed by CaptureId) when present—this keeps explicit non-local
+/// values supplied at checked closure creation and const-fn restore—otherwise
 /// it is an implicit read of the slot's local at the reference site.
 fn rebuildCaptureOperandSpan(
     program: *Ast.Program,

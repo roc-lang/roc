@@ -185,7 +185,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
                 else
                     std.mem.alignForward(usize, max_payload, @alignOf(TagType));
 
-                // Read the discriminant as a raw, bit-width-masked integer — NEVER through
+                // Read the discriminant as a raw, bit-width-masked integer—NEVER through
                 // the enum/`switch`, which panics in safe builds on a poisoned tag (the
                 // round-trip tests fill every byte, tags included). Masking to the tag's bit
                 // width mirrors what the compiler's own tag read sees, so an in-range value
@@ -222,7 +222,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
             }
         }
     } else if (vinfo == .optional) {
-        // For optionals: when null, the payload area contains garbage — zero it all.
+        // For optionals: when null, the payload area contains garbage—zero it all.
         // When non-null, recurse into the payload to zero its internal padding,
         // then zero any trailing padding after payload + tag.
         const ChildType = vinfo.optional.child;
@@ -280,7 +280,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
     // Primitives, enums, extern structs: no padding to zero.
 }
 
-/// Whether `zeroValuePadding(V, …)` would write any bytes — i.e. whether `V` has
+/// Whether `zeroValuePadding(V, …)` would write any bytes—i.e. whether `V` has
 /// undefined padding (auto-struct inter-field gaps, tagged-union tail/overshoot, or an
 /// optional). When this is false, a verbatim byte copy of `V` is already deterministic,
 /// so serialization can iovec the source directly instead of allocating a scratch copy
@@ -320,7 +320,7 @@ pub fn needsPaddingZeroing(comptime V: type) bool {
 /// writer-owned memory, zero each element's padding (`zeroValuePadding`), and gather
 /// it. Unlike `appendSlice` (which iovecs the caller's slice verbatim, including
 /// undefined padding), this guarantees byte-identical output for byte-identical
-/// logical data — required for reproducible builds and content-stable cache bodies.
+/// logical data—required for reproducible builds and content-stable cache bodies.
 /// Returns a slice whose `.ptr` is the data's offset within the serialized buffer.
 pub fn appendSlicePodZeroed(
     self: *@This(),
@@ -354,7 +354,7 @@ pub fn appendSlicePodZeroed(
         } else {
             // `T` has no padding to zero, so the source bytes are already deterministic:
             // iovec them verbatim (no scratch alloc, no copy). The source must outlive the
-            // writer's flush — true on the serialize path, where the store owns the data.
+            // writer's flush—true on the serialize path, where the store owns the data.
             try self.iovecs.append(allocator, .{
                 .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice.ptr))),
                 .iov_len = len * @sizeOf(T),

@@ -3,7 +3,7 @@
 ## Problem
 
 Compile-time hoisting decides "may this expression become a module-level
-compile-time constant?" — and for dispatch-bearing expressions, part of
+compile-time constant?"—and for dispatch-bearing expressions, part of
 that answer is "is this dispatch evidence-dependent?" The compiler already
 computes that fact exactly once, as the total dispatch plan:
 `StaticDispatchResolution` (`src/check/static_dispatch_registry.zig:852`)
@@ -31,7 +31,7 @@ hoisting runs.
 
 There is also a generated-code cost: `varIsConcreteHoistedConstType` is
 conservative. Any dispatcher still flex at prune time is refused hoisting
-even when its dispatch plan resolves `direct` — compile-time evaluation
+even when its dispatch plan resolves `direct`—compile-time evaluation
 the program is entitled to is left as runtime work.
 
 ## Background
@@ -43,12 +43,12 @@ and prunes them after solving (`pruneSelectedHoistedRootsAfterSolving`,
 publication (`resolveTotalDispatchPlans`,
 `src/check/checked_artifact.zig:13807`). So at prune time the plan
 partition exists conceptually (solving is done; the registry has all the
-facts) but has not been materialized — a pass-ordering gap, not a missing
+facts) but has not been materialized—a pass-ordering gap, not a missing
 fact.
 
 `HoistPosition` is the structural home for the *positional* axis of
-hoistability (guarded/suppressed/eligible). The *semantic* axis — "does
-evaluating this require specialization evidence?" — has no structural
+hoistability (guarded/suppressed/eligible). The *semantic* axis—"does
+evaluating this require specialization evidence?"—has no structural
 home; it lives in the `varIsConcreteHoistedConstType` walk.
 
 ## Evidence
@@ -103,7 +103,7 @@ Every criterion below must hold; the project is not done until all do:
 
 - `grep -rn "varIsConcreteHoistedConstType" src/` matches nothing.
 - `grep -rn "interpolationDispatchOwnerVar\|typeDispatchOwnerVar" src/check/Check.zig`
-  matches nothing (the registry/publication copies may keep theirs — they
+  matches nothing (the registry/publication copies may keep theirs—they
   run after plans exist).
 - Hoist pruning contains no recursive walk over resolved type content;
   its dispatch gate is a field read.
@@ -117,7 +117,7 @@ Every criterion below must hold; the project is not done until all do:
   dispatch in an otherwise-hoistable position is NOT selected, with no
   panic anywhere in postcheck.
 - Debug invariant: at publication, every hoisted root that carries a
-  dispatch has a `direct`/`structural` resolution — the cross-check
+  dispatch has a `direct`/`structural` resolution—the cross-check
   between the stamped bit and the final plan, so the two can never drift
   silently.
 
@@ -126,15 +126,15 @@ Every criterion below must hold; the project is not done until all do:
 ### Correctness ideal
 
 "Evidence-dependent dispatch selected as a caller-less compile-time root"
-is unrepresentable, because the selector never inspects type content — it
+is unrepresentable, because the selector never inspects type content—it
 reads the same fact publication publishes. The publication-time debug
 invariant makes any future divergence loud at the producer.
 
 ### Performance ideal
 
-Checker: strictly less work — a per-candidate recursive type walk is
+Checker: strictly less work—a per-candidate recursive type walk is
 replaced by a field read. Generated code: strictly more compile-time
-evaluation — every `direct`/`structural` dispatch in a hoistable position
+evaluation—every `direct`/`structural` dispatch in a hoistable position
 is precomputed; none was lost. Verify on the snapshot corpus that the set
 of hoisted roots only grows (diff the hoist-selection debug output before
 and after on a corpus sweep).
@@ -151,7 +151,7 @@ and after on a corpus sweep).
 
 ## Related projects
 
-- The completed checked-dispatch-evidence migration — the postcheck side
+- The completed checked-dispatch-evidence migration—the postcheck side
   of the same principle: dispatch facts are consumed from checked
   evidence, never re-derived. This project is the checker's own
   consumption of its own evidence.

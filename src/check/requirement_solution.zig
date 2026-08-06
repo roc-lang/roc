@@ -24,7 +24,7 @@ pub const SolutionInput = struct {
     /// (procedure value) rather than a non-function type (const value).
     is_function: bool,
     /// The requirement type's identity variables (flex/rigid), instantiated
-    /// into the app's store, in canonical identity-slot order — the
+    /// into the app's store, in canonical identity-slot order—the
     /// first-encounter order the canonical type key digest assigns
     /// (`canonical_type_keys.identityVarsFromVar`). The index in this slice IS
     /// the identity slot shared with the platform's own published requirement

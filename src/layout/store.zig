@@ -2146,7 +2146,7 @@ pub const Store = struct {
 
     /// Get the offset of a struct field at the given sorted index.
     /// Effective alignment (in bytes) of a struct field for offset/size
-    /// computation. Padding spacers are always alignment 1 — their value
+    /// computation. Padding spacers are always alignment 1—their value
     /// layout's alignment is ignored so they never introduce internal padding
     /// nor inflate the struct's alignment.
     fn structFieldAlignmentBytes(field: StructField, size_align: SizeAlign) u32 {
@@ -2435,7 +2435,7 @@ pub const Store = struct {
         return self.layoutSizeAlign(layout).size;
     }
 
-    /// The alignment class of a struct from its (already-committed) fields — the
+    /// The alignment class of a struct from its (already-committed) fields—the
     /// max sort key of its non-padding fields. Used at commit time to compute the
     /// `sort_key` stored on the struct layout.
     fn structFieldsSortKey(self: *const Self, fields: []const StructField) layout_mod.SortKey {
@@ -2731,7 +2731,7 @@ test "putNominalStructFields keeps a padding-free declared order verbatim" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
-    // Declared order { _:U8, _:U8, _:U8, _:U8, x:U32 } — mirrors a C struct
+    // Declared order { _:U8, _:U8, _:U8, _:U8, x:U32 }—mirrors a C struct
     // with three padding bytes before a u32. Alignment sort would hoist the u32
     // first; declared order must be kept.
     const declared_fields = [_]StructField{

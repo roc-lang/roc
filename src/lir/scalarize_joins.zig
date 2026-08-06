@@ -3,8 +3,8 @@
 //! Match-arm and loop lowering shuttle multi-value state between joins inside
 //! by-value wrapper structs: each jump builds a fresh struct, the join body
 //! immediately reads the fields back out, and nothing else ever touches the
-//! whole value. The wrapper costs a build, per-field reads, and — once ARC
-//! runs — a retain on each refcounted field read paired with a release of the
+//! whole value. The wrapper costs a build, per-field reads, and—once ARC
+//! runs—a retain on each refcounted field read paired with a release of the
 //! wrapper, because the field read's lender dies at the jump.
 //!
 //! This pass runs after direct LIR lowering and before ARC insertion. For a
@@ -21,7 +21,7 @@
 //! explicit per-field descriptor parameters as well as value parameters.
 //!
 //! A join's remainder (its run-once entry path) may enter the join without an
-//! `initialize_join_param` write for a parameter — a plain tail-call
+//! `initialize_join_param` write for a parameter—a plain tail-call
 //! elimination loop header does this, entering with a bare jump because the
 //! parameters are the proc's own argument locals. Such a parameter is still
 //! scalarizable: its per-field parameters are seeded once on the remainder by
@@ -66,7 +66,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ScalarizeError!vo
         .struct_builds = collections.DenseMap(LIR.LocalId, StructBuild).init(store.allocator),
         .alias_init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
         .alias_defs = collections.DenseMap(LIR.LocalId, AliasDef).init(store.allocator),
-        .join_params = collections.DenseMap(LIR.LocalId, u32).init(store.allocator),
+        .join_params = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
         .transparent = collections.DenseMap(LIR.LocalId, void).init(store.allocator),
         .removed = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(store.allocator),
         .visited = collections.DenseMap(LIR.CFStmtId, void).init(store.allocator),
@@ -143,7 +143,7 @@ const Pass = struct {
     /// joins; scalarizing such a local for one join would steal the shared
     /// initializers from the others, so only a local listed exactly once may
     /// scalarize.
-    join_params: collections.DenseMap(LIR.LocalId, u32),
+    join_params: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
     /// Aliases proved transparent this round.
     transparent: collections.DenseMap(LIR.LocalId, void),
     /// Deleted build statements mapped to their continuations, for edge
@@ -179,6 +179,8 @@ const Pass = struct {
         while (writes.next()) |list| list.deinit(self.allocator);
         var alias_writes = self.alias_init_writes.valueIterator();
         while (alias_writes.next()) |list| list.deinit(self.allocator);
+        var listing_joins = self.join_params.valueIterator();
+        while (listing_joins.next()) |list| list.deinit(self.allocator);
         var builds = self.struct_builds.valueIterator();
         while (builds.next()) |build| build.builds.deinit(self.allocator);
     }
@@ -358,7 +360,7 @@ const Pass = struct {
                     for (0..params.len) |position| {
                         const param = GuardedList.at(params, position);
                         const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
-                        if (try self.tryScalarize(param_is_proc_arg, current, join_stmt, param, position)) {
+                        if (try self.tryScalarize(param_is_proc_arg, current, param)) {
                             changed = true;
                             break :outer;
                         }
@@ -437,9 +439,7 @@ const Pass = struct {
         self: *Pass,
         param_is_proc_arg: bool,
         join_id: LIR.CFStmtId,
-        join_stmt: anytype,
         param: LIR.LocalId,
-        position: usize,
     ) ScalarizeError!bool {
         const param_local = self.store.getLocal(param);
         const param_layout = self.layouts.getLayout(param_local.layout_idx);
@@ -459,9 +459,23 @@ const Pass = struct {
         // `initialize_join_param` writes.
         if (self.use_other.contains(param)) return false;
         if (self.write_other.contains(param)) return false;
-        // Shared across joins: every listing join reads the same initializers,
-        // so rewriting them for one would leave the others uninitialized.
-        if ((self.join_params.get(param) orelse 0) != 1) return false;
+        // Every join listing this parameter is rewritten in the same round,
+        // sharing one set of field parameters exactly as they shared the
+        // struct parameter. The write-less proc-entry seed reads the argument
+        // struct in a specific join's remainder, so that shape keeps the
+        // single-join requirement.
+        const listing_joins: []const LIR.CFStmtId = if (self.join_params.getPtr(param)) |list| list.items else &.{};
+        if (listing_joins.len == 0) return false;
+        if (param_is_proc_arg and listing_joins.len != 1) return false;
+        // A conditionally initialized parameter's metadata names the whole
+        // local; splitting it is not modeled.
+        for (listing_joins) |listing_id| {
+            const listing = self.store.getCFStmt(listing_id).join;
+            const maybe_uninitialized = self.store.getLocalSpan(listing.maybe_uninitialized_params);
+            for (0..GuardedList.borrowLen(maybe_uninitialized)) |i| {
+                if (GuardedList.at(maybe_uninitialized, i) == param) return false;
+            }
+        }
         var closure = try self.aliasClosureOf(param);
         defer closure.deinit(self.allocator);
         const empty_reads: []const LIR.CFStmtId = &.{};
@@ -513,21 +527,23 @@ const Pass = struct {
         const field_locals = field_locals_buffer[0..field_count];
         try self.new_locals.appendSlice(self.allocator, field_locals);
 
-        // The join's parameter span gets the fields in the parameter's
-        // place.
-        const old_params = self.store.getLocalSpan(join_stmt.params);
-        var new_params = std.ArrayList(LIR.LocalId).empty;
-        defer new_params.deinit(self.allocator);
-        for (0..GuardedList.borrowLen(old_params)) |old_position| {
-            const old_param = GuardedList.at(old_params, old_position);
-            if (old_position == position) {
-                try new_params.appendSlice(self.allocator, field_locals);
-            } else {
-                try new_params.append(self.allocator, old_param);
+        // Every listing join's parameter span gets the fields in the
+        // parameter's place.
+        for (listing_joins) |listing_id| {
+            const old_params = self.store.getLocalSpan(self.store.getCFStmt(listing_id).join.params);
+            var new_params = std.ArrayList(LIR.LocalId).empty;
+            defer new_params.deinit(self.allocator);
+            for (0..GuardedList.borrowLen(old_params)) |old_position| {
+                const old_param = GuardedList.at(old_params, old_position);
+                if (old_param == param) {
+                    try new_params.appendSlice(self.allocator, field_locals);
+                } else {
+                    try new_params.append(self.allocator, old_param);
+                }
             }
+            const new_span = try self.store.addLocalSpan(new_params.items);
+            self.store.getCFStmtPtr(listing_id).join.params = new_span;
         }
-        const new_span = try self.store.addLocalSpan(new_params.items);
-        self.store.getCFStmtPtr(join_id).join.params = new_span;
 
         // Field reads become aliases of the field parameters, whether they
         // read the parameter directly or through a transparent alias.
@@ -859,11 +875,8 @@ const Pass = struct {
                     const params = self.store.getLocalSpan(join_stmt.params);
                     for (0..GuardedList.borrowLen(params)) |index| {
                         const entry = try self.join_params.getOrPut(GuardedList.at(params, index));
-                        if (entry.found_existing) {
-                            entry.value_ptr.* += 1;
-                        } else {
-                            entry.value_ptr.* = 1;
-                        }
+                        if (!entry.found_existing) entry.value_ptr.* = .empty;
+                        try entry.value_ptr.append(self.allocator, current);
                     }
                     try self.stack.append(self.allocator, join_stmt.body);
                     try self.stack.append(self.allocator, join_stmt.remainder);
@@ -1799,7 +1812,7 @@ test "scalarize seeds field parameters from a non-literal initializer" {
     try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
 }
 
-test "scalarize keeps a parameter shared by two joins" {
+test "scalarize splits a parameter shared by two joins" {
     var f = try ScalarizeTest.init(testing.allocator);
     defer f.deinit();
     const store = &f.store;
@@ -1812,8 +1825,10 @@ test "scalarize keeps a parameter shared by two joins" {
     //         body: s = state.1; jump OUTER
     //         remainder: num = 1; text = "x"; state = {num, text}; jump INNER
     //
-    // Scalarizing `state` for either join would rewrite the one build that
-    // initializes both, leaving the other join's parameter unbound.
+    // Both joins scalarize in one round onto one shared set of field
+    // parameters, exactly as they shared the struct parameter: the build's
+    // splat initializes the fields for both, and values carried from INNER
+    // to OUTER stay in the shared field locals across the jump.
     const state = try store.addLocal(.{ .layout_idx = f.pair });
     const num = try store.addLocal(.{ .layout_idx = .i64 });
     const text = try store.addLocal(.{ .layout_idx = .str });
@@ -1873,12 +1888,31 @@ test "scalarize keeps a parameter shared by two joins" {
 
     try run(store, &f.layouts);
 
-    // Both spans keep the shared parameter, and the build stays.
+    // Both spans carry the same field parameters in the struct's place.
     const outer_params = store.getLocalSpan(store.getCFStmt(outer).join.params);
-    try testing.expectEqual(@as(usize, 1), outer_params.len);
-    try testing.expectEqual(state, GuardedList.at(outer_params, 0));
+    try testing.expectEqual(@as(usize, 2), outer_params.len);
     const inner_params = store.getLocalSpan(store.getCFStmt(inner).join.params);
-    try testing.expectEqual(@as(usize, 1), inner_params.len);
-    try testing.expectEqual(state, GuardedList.at(inner_params, 0));
-    try testing.expectEqual(LIR.CFStmt{ .assign_struct = store.getCFStmt(build).assign_struct }, store.getCFStmt(build));
+    try testing.expectEqual(@as(usize, 2), inner_params.len);
+    try testing.expectEqual(GuardedList.at(outer_params, 0), GuardedList.at(inner_params, 0));
+    try testing.expectEqual(GuardedList.at(outer_params, 1), GuardedList.at(inner_params, 1));
+
+    // The build became snapshot reads of its operands feeding per-field
+    // writes.
+    const first_snap = store.getCFStmt(build).assign_ref;
+    try testing.expectEqual(num, first_snap.op.local);
+    const second_snap = store.getCFStmt(first_snap.next).assign_ref;
+    try testing.expectEqual(text, second_snap.op.local);
+    const first_write = store.getCFStmt(second_snap.next).set_local;
+    try testing.expectEqual(GuardedList.at(inner_params, 0), first_write.target);
+    try testing.expectEqual(first_snap.target, first_write.value);
+    const second_write = store.getCFStmt(first_write.next).set_local;
+    try testing.expectEqual(GuardedList.at(inner_params, 1), second_write.target);
+    try testing.expectEqual(second_snap.target, second_write.value);
+    try testing.expectEqual(jump_inner, second_write.next);
+
+    // Each join's field reads alias the shared field parameters.
+    const new_read_n = store.getCFStmt(read_n).assign_ref;
+    try testing.expectEqual(GuardedList.at(outer_params, 0), new_read_n.op.local);
+    const new_read_s = store.getCFStmt(read_s).assign_ref;
+    try testing.expectEqual(GuardedList.at(inner_params, 1), new_read_s.op.local);
 }

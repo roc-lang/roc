@@ -64,9 +64,9 @@ pub const NEW_LINE = switch (SUPPORTED_OS) {
 pub const InputEvent = union(enum) {
     /// A single byte to be processed normally (typed character, control key, etc.).
     byte: u8,
-    /// A 2-byte ESC sequence (ESC X) — typically Alt-key combinations.
+    /// A 2-byte ESC sequence (ESC X)—typically Alt-key combinations.
     esc2: [2]u8,
-    /// A 3-byte CSI sequence (ESC [ X) — typically arrow keys.
+    /// A 3-byte CSI sequence (ESC [ X)—typically arrow keys.
     csi3: [3]u8,
     /// A bracketed paste began (consumed an `ESC[200~` marker).
     paste_start,
@@ -184,7 +184,7 @@ pub const InputParser = struct {
                 try events.append(gpa, .{ .esc2 = .{ buf[i], buf[i + 1] } });
                 i += 2;
             } else if (key == control_code.esc and i + 1 >= total) {
-                // Lone ESC at the end of the buffer — could be the start of a
+                // Lone ESC at the end of the buffer—could be the start of a
                 // longer sequence whose tail is in the next chunk.
                 self.saveCarry(buf[i..total]);
                 return;
@@ -842,7 +842,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
 
                     if (has_newline) {
                         // A multi-line paste is treated as a complete
-                        // input — submit it as a single REPL entry.
+                        // input—submit it as a single REPL entry.
                         done = true;
                         break;
                     }

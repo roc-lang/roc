@@ -319,7 +319,7 @@ pub fn renderTitleInline(
     try renderInline(&rctx, article.title);
 }
 
-/// Renders an article's body — everything that goes inside `.main-content`:
+/// Renders an article's body—everything that goes inside `.main-content`:
 /// an `<h1 class="module-name">` title followed by a `<section>` with the
 /// converted Markdown.
 pub fn renderArticleBody(

@@ -234,8 +234,8 @@ platform_requirement_solutions: std.ArrayListUnmanaged(requirement_solution.Solu
 /// Local block-statement (`s_decl`) function patterns whose body is currently
 /// being type-checked. Used to detect self-recursion (and references to an
 /// enclosing in-flight def) of LOCAL function defs: an unannotated in-flight
-/// reference unifies monomorphically with the pattern var — the same
-/// binding-group recursion rule as top-level defs — which is why a
+/// reference unifies monomorphically with the pattern var—the same
+/// binding-group recursion rule as top-level defs—which is why a
 /// self-capturing local `s_decl` is checked inside its own rank frame (the
 /// pattern var lives in that frame, so the monomorphic links generalize with
 /// the def at the frame's exit). An annotated local def's scheme is
@@ -271,7 +271,7 @@ type_writer: types_mod.TypeWriter,
 /// name graph; when one resolves to an unchecked, unannotated local def, the
 /// obligation is recorded in `pending_dispatch_targets` and resolved at the
 /// current group's generalization boundary by checking the target's group in
-/// its own frame — never by re-entering `checkDef` mid-body.
+/// its own frame—never by re-entering `checkDef` mid-body.
 ///
 /// Checking order for the current module's top-level defs. Owned; freed in
 /// `deinit`. Transient: computed when file checking starts, never part of
@@ -297,8 +297,8 @@ group_stack: std.ArrayListUnmanaged(GroupFrame) = .empty,
 pending_dispatch_targets: std.ArrayListUnmanaged(CIR.Def.Idx) = .empty,
 /// Standalone schemes declared from annotated top-level defs' annotations
 /// before any body checking (annotated-scheme pre-pass). A reference to such
-/// a def before its body has been checked instantiates this scheme — exactly
-/// like a reference to an imported scheme copy — and never requires the body.
+/// a def before its body has been checked instantiates this scheme—exactly
+/// like a reference to an imported scheme copy—and never requires the body.
 /// The def itself is checked entirely on the ordinary path (its annotation is
 /// generated again, in the body's frame, sharing vars with the body so
 /// dispatch-evidence publication sees one coherent scheme); references after
@@ -419,7 +419,7 @@ has_can_diagnostics: bool,
 /// ambiguity worklist below).
 instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
 /// Worklist for the local ambiguity judgment. Every dispatch-constrained
-/// receiver var enters this list at the moment it acquires a constraint —
+/// receiver var enters this list at the moment it acquires a constraint—
 /// either at a creation site (method call, desugared binop/unaryop,
 /// pattern-literal equality) or when instantiating a constrained scheme
 /// created it. The judgment consumes entries locally: candidates whose var
@@ -457,7 +457,7 @@ instantiation_dispatchers_checked: usize = 0,
 /// restores it on exit). When `instantiateVarHelp` records an ambiguity
 /// candidate, it stamps this expression onto it, so an ambiguity verdict can
 /// point a body-forced where-clause error at the exact expression whose
-/// instantiation created the unsatisfiable obligation — without scanning the
+/// instantiation created the unsatisfiable obligation—without scanning the
 /// module to rediscover it.
 instantiation_source_expr: ?CIR.Expr.Idx = null,
 /// While discharging a static-dispatch constraint, the site that constraint
@@ -485,12 +485,12 @@ scratch_evidence_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty
 /// `ModuleEnv`; failed validation discards it.
 scratch_generated_codec_calls: std.ArrayListUnmanaged(ModuleEnv.GeneratedCodecCall) = .empty,
 /// Worklist of flex vars created by literal conversions (`from_numeral`,
-/// `from_quote`, or `from_interpolation`) — open literals that may still need
+/// `from_quote`, or `from_interpolation`)—open literals that may still need
 /// defaulting. Checker bookkeeping, not type data:
 /// every registration site lives in this file (literal creation,
 /// `instantiateVarHelp`, `copyVar`), and the defaulting passes iterate it
 /// (re-resolving each entry, skipping resolved ones) instead of scanning the
-/// whole type store. Append-only within a probe scope — `Probe.rollback`
+/// whole type store. Append-only within a probe scope—`Probe.rollback`
 /// truncates it alongside the other Check-side buffers a probe grows.
 open_literal_vars: std.ArrayListUnmanaged(Var),
 /// Exact numeral facts for entries in `open_literal_vars` whose conversion came
@@ -530,7 +530,7 @@ boundary_leak_vars: std.AutoHashMap(Var, void),
 /// refilled per call.
 boundary_eql_edges: std.ArrayListUnmanaged(@FieldType(Constraint, "eql")),
 // Literal-defaulting scratch (front-loaded; cleared per round/use). Reused across
-// the per-def/finalize defaulting passes — see runLiteralDefaultingRounds. Safe as
+// the per-def/finalize defaulting passes—see runLiteralDefaultingRounds. Safe as
 // shared fields despite that function's cascade reentrancy: every buffer is cleared
 // at the start of its step and never read across the step-4 cascade.
 literal_defaulting_open_roots: std.ArrayListUnmanaged(Var),
@@ -562,7 +562,7 @@ bench_probe_refuted: usize = 0,
 /// Param-pattern spans of every checked `e_lambda` / `e_hosted_lambda`; the
 /// pinnable collection consumes this instead of re-walking the NodeStore.
 /// Union-find roots resolve at consumption time (eager roots would go stale).
-/// Duplicates are harmless — the consumer inserts into a set.
+/// Duplicates are harmless—the consumer inserts into a set.
 checked_lambda_params: std.ArrayListUnmanaged(CIR.Pattern.Span),
 /// Lambdas whose bodies actually perform effects. This records direct checker
 /// output so binding-name diagnostics do not infer effectfulness from
@@ -578,7 +578,7 @@ function_effect_dependency_frame_starts: std.ArrayListUnmanaged(usize),
 function_effect_resolution: std.AutoHashMap(Var, FunctionEffectResolution),
 /// Scratch for `beginCommitProbe`: the caller env's var-pool length per rank
 /// at probe start, restored on a failed probe's rollback. One buffer suffices
-/// because commit-probes never nest — but the type store's trail-based
+/// because commit-probes never nest—but the type store's trail-based
 /// savepoints are themselves nestable, so nothing downstream would catch a
 /// nested commit-probe clobbering this buffer. `commit_probe_active` makes the
 /// invariant load-bearing-with-a-guard instead of load-bearing-by-convention.
@@ -718,7 +718,7 @@ const InstantiationDispatcher = struct {
 /// judgment (see `ambiguity_candidates`).
 const AmbiguityCandidate = struct {
     /// The receiver (dispatcher) var as recorded at the creation or
-    /// instantiation site. Resolved through the union-find at judgment time —
+    /// instantiation site. Resolved through the union-find at judgment time—
     /// unification may have merged it with other receivers since.
     var_: Var,
     /// For `.instantiation` candidates: the expression whose checking
@@ -747,7 +747,7 @@ const AmbiguityCandidate = struct {
 };
 
 /// A candidate the local judgment found unpinnable at its judgment event. The
-/// verdict is applied — problem report plus runtime-error poisoning — in one
+/// verdict is applied—problem report plus runtime-error poisoning—in one
 /// batch at end of check (`applyAmbiguityVerdicts`), where the type store has
 /// fully settled and CIR mutation can no longer perturb later checking.
 const AmbiguityVerdict = struct {
@@ -801,7 +801,7 @@ fn literalMethodIdents(self: *const Self) literal_defaulting.LiteralMethodIdents
     };
 }
 
-/// Whether this constraint carries literal-conversion provenance — a
+/// Whether this constraint carries literal-conversion provenance—a
 /// `from_literal` origin or a `where`-clause contract naming a
 /// literal-conversion hook. The kind decision lives in the defaulting oracle
 /// (src/types/literal_defaulting.zig).
@@ -819,7 +819,7 @@ const HasProcessed = enum { processed, processing, not_processed };
 
 /// A local block-statement (`s_decl`) function def whose body is currently being
 /// checked. Block defs are `s_decl` statements (not `CIR.Def`), so there is no
-/// `Def.Idx` — only the name (for error context) and pattern are tracked.
+/// `Def.Idx`—only the name (for error context) and pattern are tracked.
 const LocalDefProcessed = struct {
     def_name: ?Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -1501,7 +1501,7 @@ fn initAssumePrepared(
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     // Finalize this module's deep content identity before any unification: the
-    // unifier only ever compares precomputed identities. Idempotent — the
+    // unifier only ever compares precomputed identities. Idempotent—the
     // coordinator already finalized coordinator-driven modules (it needs the
     // identity for the checked-cache key probe); this covers every other
     // checking entry point (tests, snapshot tool, playground, builtin bake)
@@ -3607,7 +3607,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
         },
         .recursive_anonymous => {
             // Anonymous recursion (a recursive type not routed through a
-            // nominal) is always disallowed, at every binding root — top-level
+            // nominal) is always disallowed, at every binding root—top-level
             // defs, checked expression roots, and local bindings alike. A
             // recursive type must go through a nominal to be valid. The
             // `.recursive_anonymous` vs `.infinite` classification only selects
@@ -3639,8 +3639,8 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
     }
 }
 
-/// The settled-state occurs sweep: check every binding root — top-level defs
-/// and recorded local bindings — for infinite/anonymous-recursive types, after
+/// The settled-state occurs sweep: check every binding root—top-level defs
+/// and recorded local bindings—for infinite/anonymous-recursive types, after
 /// all deferred constraints have been solved.
 fn checkBindingRootsForInfiniteTypes(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -3802,7 +3802,7 @@ fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
 ///
 /// The traversal resolves nominal backings through the store's declaration
 /// table by key (`occurs.occursDeclarationGraph`), so recursive references
-/// close cycles by declaration identity — including mutual recursion that
+/// close cycles by declaration identity—including mutual recursion that
 /// per-use instantiation copies disconnect. Classification matches the
 /// value-graph occurs rules: a cycle is valid only when it passes through
 /// both a recursion-allowed position (tag payload / record field) and a
@@ -4058,7 +4058,7 @@ fn instantiateVarHelp(
     const instantiated_var = try instantiator.instantiateVar(var_to_instantiate);
 
     if (instantiator.recursion_overflow) {
-        // Non-terminating instantiation — e.g. a self-referential static-dispatch
+        // Non-terminating instantiation—e.g. a self-referential static-dispatch
         // `where` constraint nested deeper than the `var_map` memo can collapse.
         // Report an infinite-type error and yield a fresh err var rather than
         // hang or use the partial (err-filled) result.
@@ -4948,7 +4948,7 @@ fn recordOpenLiteralVar(
             has_literal = true;
         }
         // Exact-value range validation needs the numeral payload, which only a
-        // `from_literal` origin carries — a `where`-clause hook has no literal
+        // `from_literal` origin carries—a `where`-clause hook has no literal
         // value to validate.
         switch (constraint.origin) {
             .from_literal => |lit| switch (lit) {
@@ -5767,7 +5767,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // judge the residual candidates that never generalized (value-restricted
     // bindings stay open to pinning by later defs and the final constraint
     // fixpoint, so they can only be judged here, at the settled state), then
-    // apply every verdict — problem reports plus runtime-error poisoning — in
+    // apply every verdict—problem reports plus runtime-error poisoning—in
     // one batch so problem order and CIR mutation timing stay deterministic
     // against the settled end state.
     try self.judgeResidualAmbiguityCandidates();
@@ -6994,21 +6994,21 @@ fn hoistedRootRecordDependenciesAreKept(
 /// `self.external_pinnable` and `self.pinnable_vars`.
 ///
 /// `external_pinnable` holds every resolved var reachable through the complete
-/// interface of the given scheme roots — the vars a future caller can still pin
+/// interface of the given scheme roots—the vars a future caller can still pin
 /// by choosing arguments or by supplying an expected result type.
 /// `pinnable_vars` additionally includes:
 ///
 /// - Everything reachable through a still-open literal's constraint
 ///   signatures. Open literals are never dead ends: defaulting resolves them,
 ///   the deferred dispatch fires, and the resolved method's signature pins
-///   every var in the constraint fn — return position included. Without this,
+///   every var in the constraint fn—return position included. Without this,
 ///   an instantiated helper's RETURN var (`add_x(5)` with
 ///   `add_x : a -> r where [a.plus : (a, x) -> r]`) was falsely reported
 ///   MISSING METHOD. Generalized entries are deliberately NOT skipped: a
 ///   generalized literal stays open and resolves per instantiation, which is
 ///   exactly why its chain is pinnable.
 /// - Everything reachable from the given lambda parameter spans (recorded as
-///   each lambda was checked — explicit upstream data): a direct dispatch
+///   each lambda was checked—explicit upstream data): a direct dispatch
 ///   hidden inside an uncalled function value can still be pinned when that
 ///   function is called.
 ///
@@ -7230,7 +7230,7 @@ const AmbiguitySelection = struct {
 ///   receiver.
 /// - `to_hash` is deliberately NOT skipped: a structural hash on a concrete
 ///   key resolves its receiver before judgment, so what reaches here is a
-///   `to_hash` contract on a genuinely undetermined key (issue 9644) — a real
+///   `to_hash` contract on a genuinely undetermined key (issue 9644)—a real
 ///   dead end reported via the body-forced path like any other unsatisfiable
 ///   contract.
 /// - An instantiated `where`-clause contract gets priority (it is an explicit
@@ -7241,7 +7241,7 @@ const AmbiguitySelection = struct {
 /// For a `.creation` candidate (the constraint was created at a dispatch
 /// expression the user wrote): a `where_clause` constraint on the same
 /// receiver means the dispatch is part of a declared polymorphic contract, and
-/// a literal-conversion constraint means defaulting owns it — either
+/// a literal-conversion constraint means defaulting owns it—either
 /// legitimizes the receiver. Only the remaining un-annotated origins
 /// (`method_call`, `desugared_binop`, `desugared_unaryop`) can produce an
 /// unpinnable flex dispatcher at monomorphization.
@@ -7328,7 +7328,7 @@ fn selectAmbiguityConstraint(
 /// Judge one candidate whose receiver has frozen (generalized, or settled at
 /// the end-of-check residual pass): if the origin policy selects a reportable
 /// constraint and the receiver resolves into neither pinnable set the event
-/// built, no caller can ever pin it — record a verdict for the batch apply.
+/// built, no caller can ever pin it—record a verdict for the batch apply.
 ///
 /// An instantiated `where`-clause with an IN-MODULE dispatch use is judged
 /// against the stricter `external_pinnable` set: the method is dispatched on
@@ -7401,11 +7401,11 @@ fn instantiationArgumentsCanPin(
 
 /// The generalization-time ambiguity rule. Runs immediately after a
 /// definition's type variables are promoted to `generalized` rank (and, for a
-/// recursion cycle, after the deferred def unifications have settled — a
+/// recursion cycle, after the deferred def unifications have settled—a
 /// constraint on the function's own type variable that unifies with the
 /// definition's scheme is not ambiguous, the issue 9632 lesson): every
 /// candidate receiver recorded while checking this def whose var just froze
-/// is judged here, against a pinnable frontier local to this one scheme —
+/// is judged here, against a pinnable frontier local to this one scheme—
 /// its argument positions, its own lambdas' parameters, and its still-open
 /// literals. A candidate left non-generalized may still be pinned by later
 /// defs or the final constraint fixpoint, so it stays on the worklist for the
@@ -7423,7 +7423,7 @@ fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(self: *Self, scheme_roots: 
         const resolved = self.types.resolveVar(candidate.var_);
         const constraints_range = contentConstraintRange(resolved.desc.content) orelse {
             // Grounded to a concrete type (the constraint was or will be
-            // discharged by ordinary solving) or poisoned to an error —
+            // discharged by ordinary solving) or poisoned to an error—
             // either way, never ambiguous.
             candidate.judged = true;
             continue;
@@ -7455,7 +7455,7 @@ fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(self: *Self, scheme_roots: 
 /// open to pinning by later defs and by the final constraint fixpoint, so
 /// judging them at def finalization would be premature) and instantiations
 /// performed outside any def. Judged once here at the settled state, against
-/// the whole module's remaining open surface — every top-level callable def's
+/// the whole module's remaining open surface—every top-level callable def's
 /// interface plus all recorded lambda parameters and open literals. Gated on
 /// pending candidates: a module whose receivers all resolved or were judged at
 /// generalization does zero work here.
@@ -7523,8 +7523,8 @@ fn findStaticDispatchUseForConstraint(
 /// checking of everything downstream of it.
 ///
 /// Verdicts share one dedup set keyed by resolved dispatcher var, so a
-/// receiver judged through several candidates — or reachable through several
-/// aliased vars — is reported once. Instantiation verdicts apply first
+/// receiver judged through several candidates—or reachable through several
+/// aliased vars—is reported once. Instantiation verdicts apply first
 /// because they produce the more informative two-region diagnostic; creation
 /// verdicts then cover the direct cases (`poly().to_i128()`,
 /// `poly() == poly()`) where the dispatch is created at the use site rather
@@ -7533,7 +7533,7 @@ fn applyAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
     if (builtin.mode == .Debug) {
         // The residual judgment just ran: an unjudged candidate here would
         // mean a dispatch-constrained receiver escaped both the
-        // generalization events and the end-of-check pass — a worklist bug,
+        // generalization events and the end-of-check pass—a worklist bug,
         // and exactly the kind of hole that lets an ambiguous dispatch reach
         // monotype lowering.
         for (self.ambiguity_candidates.items) |candidate| {
@@ -7554,7 +7554,7 @@ fn applyAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
 /// Apply one `.instantiation` ambiguity verdict. The judgment already
 /// established the receiver is unpinnable (see `judgeAmbiguityCandidate`);
 /// everything else is re-derived here at the settled state, because the final
-/// constraint fixpoint and the poison passes ran between judgment and apply —
+/// constraint fixpoint and the poison passes ran between judgment and apply—
 /// a receiver they grounded or erred is silently acquitted.
 fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(verdict.var_);
@@ -7609,7 +7609,7 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
         // unpinned receiver lives only in the instantiating call's result
         // type, e.g. the `Dict(x, y)` returned by `Dict.join_map(...)`). The
         // candidate recorded the exact expression whose instantiation created
-        // the obligation, so report there and mark it a runtime error — codegen
+        // the obligation, so report there and mark it a runtime error—codegen
         // then emits a crash instead of reaching the ownerless dispatch.
         if (verdict.instantiation_expr) |inst_expr| {
             primary = self.cir.store.getExprRegion(inst_expr);
@@ -7665,7 +7665,7 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
 
     // No expression passes the receiver in the relevant position: an ordinary
     // hidden dispatch whose receiver is a polymorphic function value's own
-    // parameter, which a future call can still pin — not a dead end.
+    // parameter, which a future call can still pin—not a dead end.
     if (primary == null) return;
 
     try self.reported_dispatch_vars.put(resolved.var_, {});
@@ -7765,13 +7765,13 @@ fn hasInstantiationAmbiguityVerdict(self: *Self, var_: Var) bool {
 /// Apply the `.creation` ambiguity verdicts: for each unpinnable receiver
 /// whose constraint was created directly at a dispatch expression, report at
 /// the first (innermost, node-order) expression whose own type is the
-/// receiver — that lands the underline on the dispatch use — and mark it a
+/// receiver—that lands the underline on the dispatch use—and mark it a
 /// runtime error so lowering never reaches an ownerless dispatch. The node
 /// walk only runs when creation verdicts exist, i.e. on the error path; a
 /// clean module never scans.
 fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
     // Gather the verdict vars, re-resolved at the settled state and
-    // re-validated through the origin-policy selection — the final constraint
+    // re-validated through the origin-policy selection—the final constraint
     // fixpoint and poison passes ran between judgment and apply, and a
     // receiver they grounded or erred is silently acquitted.
     self.ambiguity_verdict_vars.clearRetainingCapacity();
@@ -7788,7 +7788,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
     // Walk expressions in node order; flag any whose own type var is a
     // verdict receiver. Dedup by resolved var id (using the set shared with
     // the instantiation verdicts) so a value flowing through multiple
-    // expressions — or already reported per-instantiation — is reported once.
+    // expressions—or already reported per-instantiation—is reported once.
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
@@ -7906,13 +7906,13 @@ fn collectReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)
     }
 }
 
-/// Like `collectReachableVars`, but does NOT descend into FUNCTION types at all —
+/// Like `collectReachableVars`, but does NOT descend into FUNCTION types at all—
 /// only into data positions (tag payloads, record fields, tuple elements, nominal
 /// args). A var reachable this way is part of the actual data flowing through
 /// `var_`, not a parameter or result of a function value carried by `var_`. The
 /// instantiation-verdict apply uses this to distinguish a genuinely
 /// undetermined dispatch receiver passed as data (report) from a parameter of an
-/// uncalled polymorphic function value (do not report) — e.g. in `Str.inspect(f)`
+/// uncalled polymorphic function value (do not report)—e.g. in `Str.inspect(f)`
 /// where `f = |x| x + 1`, the receiver is `f`'s parameter and the `+`-preserving
 /// return both live inside the function type, so neither is reached here.
 fn collectDataReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
@@ -7972,7 +7972,7 @@ fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
         const def_var = ModuleEnv.varFrom(def_idx);
 
         if (self.erroneous_value_patterns.contains(def.pattern)) continue;
-        // A function — including a zero-arg thunk (`|| …`) — may generalize to a
+        // A function—including a zero-arg thunk (`|| …`)—may generalize to a
         // polymorphic type: each call site monomorphizes its return. Only a
         // non-function top-level *value* must be concrete, since it is computed
         // once and needs a single representation. (A thunk whose return is left
@@ -8175,7 +8175,7 @@ fn lambdaBodyIsEffectful(self: *Self, lambda_idx: CIR.Expr.Idx) Allocator.Error!
 }
 
 /// Whether `def_idx` belongs to a binding group that is still on the check
-/// stack — mid-check, or checked but suspended at its boundary, so its
+/// stack—mid-check, or checked but suspended at its boundary, so its
 /// members' vars are not yet generalized.
 fn defInOnStackGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
     const group_index = self.defGroupIndex(def_idx) orelse return false;
@@ -8186,7 +8186,7 @@ fn defInOnStackGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
 }
 
 /// Whether a call's callee is a recursive reference to a def that has not
-/// finished checking — a self-call, or a call between members of an on-stack
+/// finished checking—a self-call, or a call between members of an on-stack
 /// binding group (top-level or block-local).
 ///
 /// A binding group's effectfulness is a fixpoint over the effects its bodies
@@ -8194,7 +8194,7 @@ fn defInOnStackGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
 /// scheme must not seed that fixpoint: otherwise every annotated-effectful
 /// recursive function would be reported as needing a `!` name even when its
 /// body never performs an effect. Calls to defs of already-finished groups
-/// are not exempt — their effectfulness is settled.
+/// are not exempt—their effectfulness is settled.
 fn callTargetIsInFlightRecursiveRef(self: *const Self, func_expr_idx: CIR.Expr.Idx) bool {
     const func_expr = self.cir.store.getExpr(func_expr_idx);
     if (func_expr != .e_lookup_local) return false;
@@ -8850,7 +8850,7 @@ fn instantiatePlatformRequiredType(
     }
 
     // Enumerate the requirement type's identity variables (flex/rigid) in the
-    // platform's store, in canonical slot order — the same first-encounter
+    // platform's store, in canonical slot order—the same first-encounter
     // order the platform's published requirement payload assigns them.
     const platform_identity_vars = try canonical_type_keys.identityVarsFromVar(
         self.gpa,
@@ -8877,8 +8877,8 @@ fn instantiatePlatformRequiredType(
         alias_source_substitutions,
     );
 
-    // `copyVar` keyed `var_map` by the platform store's resolved vars — the
-    // same roots the identity enumeration returned — so each identity slot
+    // `copyVar` keyed `var_map` by the platform store's resolved vars—the
+    // same roots the identity enumeration returned—so each identity slot
     // maps to its copied var here, then to its instantiated var below.
     const identity_vars = try self.gpa.alloc(Var, platform_identity_vars.len);
     errdefer self.gpa.free(identity_vars);
@@ -9502,7 +9502,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 // dependency-ordered driver //
 
 /// Compute the module's dependency-ordered checking plan: the SCC condensation
-/// of the name-reference graph in deterministic topological order. Transient —
+/// of the name-reference graph in deterministic topological order. Transient—
 /// owned by this Check instance and freed in deinit, never part of the checked
 /// module.
 fn setupCheckOrder(self: *Self) std.mem.Allocator.Error!void {
@@ -9518,8 +9518,8 @@ fn setupCheckOrder(self: *Self) std.mem.Allocator.Error!void {
 }
 
 /// Declare every annotated top-level def's scheme from its annotation, before
-/// any body is checked. A reference to an annotated def — by name or by
-/// dispatch — then instantiates the scheme and never requires the referenced
+/// any body is checked. A reference to an annotated def—by name or by
+/// dispatch—then instantiates the scheme and never requires the referenced
 /// body to have been checked; bodies are later checked on the ordinary path,
 /// in graph order like everything else.
 fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
@@ -9557,9 +9557,9 @@ fn annotationIsPredeclarableScheme(
 /// diagnostics are discarded (the body pass regenerates the annotation and
 /// reports them exactly as it always has) and the annotation nodes are reset
 /// to pristine unbound slots so the body-pass generation starts fresh. The
-/// def itself therefore checks byte-for-byte as before this pre-pass existed
-/// — in particular its body shares vars with its own scheme, which
-/// dispatch-evidence publication relies on — while early references hold a
+/// def itself therefore checks byte-for-byte as before this pre-pass existed—
+/// in particular its body shares vars with its own scheme, which
+/// dispatch-evidence publication relies on—while early references hold a
 /// disjoint copy, exactly like references to an imported scheme.
 fn predeclareAnnotationScheme(self: *Self, annotation_idx: CIR.Annotation.Idx, env: *Env) std.mem.Allocator.Error!Var {
     const problems_len = self.problems.len();
@@ -9600,8 +9600,8 @@ fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem
     }
 }
 
-/// Collect every TypeAnno node in an annotation — its type tree plus its
-/// where-clause method signatures — via an explicit worklist. Rigid-var
+/// Collect every TypeAnno node in an annotation—its type tree plus its
+/// where-clause method signatures—via an explicit worklist. Rigid-var
 /// lookups are NOT followed (`.ref` can point outside this annotation, e.g.
 /// a local annotation referencing an enclosing def's type variable); the
 /// nodes a `.ref` targets inside this annotation are reached as part of the
@@ -9724,11 +9724,11 @@ fn ensureGroupChecked(self: *Self, group_index: u32, env: *Env) std.mem.Allocato
     switch (self.group_states.items[group_index]) {
         .checked => return,
         .checking => {
-            // A suspended group — the current group, or an ancestor paused at
+            // A suspended group—the current group, or an ancestor paused at
             // its own boundary. Its members are already checked (`.processed`)
             // with still-live, not-yet-generalized vars, so a dispatch
-            // back-edge resolves against them directly (the monomorphic merge)
-            // — the group is never re-entered. This also covers a pending
+            // back-edge resolves against them directly (the monomorphic merge)—
+            // the group is never re-entered. This also covers a pending
             // target recorded mid-body for a later member of the SAME group:
             // by boundary time the member loop has checked it.
             if (builtin.mode == .Debug) {
@@ -9749,7 +9749,7 @@ fn ensureGroupChecked(self: *Self, group_index: u32, env: *Env) std.mem.Allocato
 /// Check one binding group. A non-recursive singleton runs the ordinary
 /// per-def path (its RHS frame is the group's boundary). A recursive group
 /// gets one shared rank frame: members' patterns are ranked in it first (so
-/// in-group references — forward or backward — link to them monomorphically),
+/// in-group references—forward or backward—link to them monomorphically),
 /// unannotated function members' top-level lambdas are kept in the frame
 /// instead of generalizing on their own, and the whole group generalizes at
 /// the frame's boundary (the ML binding-group rule).
@@ -9757,7 +9757,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
     const scc = self.check_order.?.sccs[group_index];
     const base_rank = env.rank();
 
-    // Invariant E (boundary cleanliness): group checks start — and nest —
+    // Invariant E (boundary cleanliness): group checks start—and nest—
     // only with no mid-body state pending.
     std.debug.assert(self.suppress_generalize_expr == null);
 
@@ -9806,7 +9806,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
                 // An unannotated member's top-level RHS lives in the group
                 // frame and generalizes at the group boundary, not on its
                 // own. A pre-declared (annotated) member is decoupled by its
-                // scheme — in-group references instantiate it — so its RHS
+                // scheme—in-group references instantiate it—so its RHS
                 // generalizes independently as usual.
                 self.suppress_generalize_expr = member_def.expr;
             }
@@ -9848,14 +9848,14 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
 
 /// Run the group generalization boundary up to (not including) the generalize
 /// call: resolve pending dispatch obligations by checking their target groups
-/// in nested frames (Invariant D — nothing may generalize while an obligation
+/// in nested frames (Invariant D—nothing may generalize while an obligation
 /// into an unchecked group is outstanding), interleaved with boundary literal
 /// defaulting to a fixpoint, since a defaulting round can pin a receiver and
 /// surface a new obligation.
 fn runGroupBoundary(self: *Self, roots: []const Var, env: *Env) std.mem.Allocator.Error!void {
     while (true) {
         // Deferred dispatch receivers may have been pinned since the last
-        // in-body pass — in a recursive group, the members' def-level
+        // in-body pass—in a recursive group, the members' def-level
         // pattern=body unifications run after their bodies' dispatch passes,
         // and they can pin a recursive call's result (e.g. #9885's
         // `reverse(rest).append(first)`). Resolve those before generalizing.
@@ -9903,7 +9903,7 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const Var, env: *Env)
 /// Drain the current frame's pending dispatch targets: check each target's
 /// group (nested, in its own frame, together with the topological prefix it
 /// may name-depend on), then re-run dispatch constraint processing, which may
-/// pin further receivers and record further targets — loop to quiescence.
+/// pin further receivers and record further targets—loop to quiescence.
 fn resolveGroupPendingDispatchTargets(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const top = self.currentFramePendingTargetsTop();
     while (self.pending_dispatch_targets.items.len > top) {
@@ -9916,8 +9916,8 @@ fn resolveGroupPendingDispatchTargets(self: *Self, env: *Env) std.mem.Allocator.
     }
 }
 
-/// Record that a dispatch obligation resolved to `target_def_idx` — an
-/// unchecked, unannotated local def — for resolution at the current group's
+/// Record that a dispatch obligation resolved to `target_def_idx`—an
+/// unchecked, unannotated local def—for resolution at the current group's
 /// boundary.
 fn recordPendingDispatchTarget(self: *Self, target_def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     try self.pending_dispatch_targets.append(self.gpa, target_def_idx);
@@ -9926,7 +9926,7 @@ fn recordPendingDispatchTarget(self: *Self, target_def_idx: CIR.Def.Idx) std.mem
 /// Pin `obligation_var`'s class at the current group's boundary rank so no
 /// inner frame generalizes it before the obligation resolves (Invariant D,
 /// enforced by rank: rank adjustment at each inner generalization keeps
-/// everything the obligation touched below the generalizing rank — escaped,
+/// everything the obligation touched below the generalizing rank—escaped,
 /// alive, and un-generalized until the boundary).
 fn pinVarAtGroupBoundaryRank(self: *Self, obligation_var: Var, env: *Env) std.mem.Allocator.Error!void {
     const boundary_rank = self.currentGroupBoundaryRank();
@@ -12966,7 +12966,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const suppress_group_member_generalize = self.suppress_generalize_expr == expr_idx;
     if (suppress_group_member_generalize) self.suppress_generalize_expr = null;
 
-    // Decide whether this binding generalizes — see `shouldGeneralize` for the
+    // Decide whether this binding generalizes—see `shouldGeneralize` for the
     // three qualifying paths and why each is sound.
     const should_generalize = !suppress_group_member_generalize and
         self.shouldGeneralize(expr, expected.annotation, is_binding_rhs, is_call_arg);
@@ -13431,7 +13431,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (mb_processing_def) |processing_def| {
                 const referenced_def = self.cir.store.getDef(processing_def.def_idx);
                 // A reference to an annotated def whose body has not been
-                // checked yet instantiates the pre-declared scheme — the
+                // checked yet instantiates the pre-declared scheme—the
                 // uniform rule: annotated references never need the body.
                 // (Once the def is `.processed`, its own pattern var carries
                 // the checked scheme and the ordinary tail below applies.)
@@ -13447,7 +13447,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         {
                             // The driver checks groups in topological order, so
                             // an unchecked, un-pre-declared target can only be
-                            // a later member of the CURRENT recursive group —
+                            // a later member of the CURRENT recursive group—
                             // its pattern var was ranked in the group's shared
                             // frame before any member body ran.
                             if (builtin.mode == .Debug) {
@@ -13483,7 +13483,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         if (mb_predeclared_scheme) |scheme_var| {
                             // Annotated self-reference (or in-group reference
                             // to an in-flight annotated member): instantiate
-                            // the declared scheme — sound polymorphic
+                            // the declared scheme—sound polymorphic
                             // recursion for annotated defs.
                             const instantiated = try self.instantiateVar(scheme_var, env, .use_last_var);
                             _ = try self.unify(expr_var, instantiated, env);
@@ -13505,8 +13505,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // .not_processed arm): a self-reference, or a
                         // reference to an in-flight unannotated member,
                         // links monomorphically. The link targets the def's
-                        // RHS var — which lives in the frame that generalizes
-                        // the def — rather than its pattern var: a suspended
+                        // RHS var—which lives in the frame that generalizes
+                        // the def—rather than its pattern var: a suspended
                         // singleton's pattern sits at the outermost rank, and
                         // a dispatch back-edge linking there would pull the
                         // whole merged group out of generalization instead of
@@ -13843,7 +13843,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // NOTE: no occurs check here. Infinite/anonymous-recursive types
             // are detected at binding roots (top-level defs, local bindings,
-            // REPL roots) — a cyclic type constructed while checking this
+            // REPL roots)—a cyclic type constructed while checking this
             // body is reachable from the enclosing binding's root type, and
             // running occurs per syntactic lambda re-traversed the whole body
             // type graph once per nesting level.
@@ -14707,7 +14707,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // interleaved with boundary defaulting.
             try self.runGroupBoundary(&.{expr_var}, env);
         } else {
-            // Inner lambda: boundary defaulting runs first — it must see
+            // Inner lambda: boundary defaulting runs first—it must see
             // ranks BEFORE they are promoted to generalized. Pending dispatch
             // obligations (pinned at the group's boundary rank) escape this
             // frame and stay live for the group boundary.
@@ -14984,7 +14984,7 @@ fn lookupStaticDispatchMethodBindingInEnv(
 
 /// Resolve the module env that declares a type from the type's content-based
 /// origin identity: an exact 32-byte hash comparison against each candidate
-/// env's own content identity. No name matching — two envs match the same
+/// env's own content identity. No name matching—two envs match the same
 /// origin only when their transitive module content is byte-identical, in
 /// which case they are interchangeable as type owners by definition.
 fn ownerEnvForOriginModule(
@@ -15237,16 +15237,16 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
         expr == .e_hosted_lambda;
 }
 
-/// Should this expression generalize in its current binding context — i.e. push
+/// Should this expression generalize in its current binding context—i.e. push
 /// a rank so the generalizer can quantify its free vars? Three independent paths
 /// qualify; they are checked in order so the annotation scan runs only when the
 /// cheaper structural checks miss:
 ///
 ///   - **A function def.** Generalized at the inner lambda level only, not the
 ///     outer `e_closure` wrapper (which delegates to `e_lambda`'s own checkExpr),
-///     and not a direct call argument — those are consumed immediately, and
+///     and not a direct call argument—those are consumed immediately, and
 ///     generalizing one lets its vars escape into the enclosing value.
-///   - **A value alias** — a binding whose RHS is a bare reference to an already-
+///   - **A value alias**—a binding whose RHS is a bare reference to an already-
 ///     generalized scheme (e.g. `shorthand = FooBar.myfunc`). The reference is
 ///     non-expansive: it does no work and can hide no `dbg`/`expect`, so it raises
 ///     none of the duplicate-work/effect concerns that restrict generalization to
@@ -15257,7 +15257,7 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
 ///     surrounding context.
 ///   - **An annotated value binding** whose annotation introduces a free type var
 ///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
-///     quantify exactly the generalizable vars — with none (e.g. a concrete
+///     quantify exactly the generalizable vars—with none (e.g. a concrete
 ///     annotation) the generalize call is a no-op and the value stays monomorphic.
 fn shouldGeneralize(
     self: *const Self,
@@ -15275,8 +15275,8 @@ fn shouldGeneralize(
 /// binding-RHS position (only a binding's own right-hand side qualifies; a call
 /// argument never generalizes on its own) and has an annotation introducing a
 /// type variable. The polymorphic annotation is the opt-in, honored regardless
-/// of whether the RHS does work (an expansive definition pays per-specialization
-/// — the cost the author chose by writing the scheme).
+/// of whether the RHS does work (an expansive definition pays per-specialization—
+/// the cost the author chose by writing the scheme).
 fn isGeneralizableValueBinding(
     self: *const Self,
     annotation: ?CIR.Annotation.Idx,
@@ -15674,7 +15674,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 // An annotated local function's scheme is pre-declared from
                 // its annotation so in-flight (recursive) references
-                // instantiate it — the same rule as top-level defs; the
+                // instantiate it—the same rule as top-level defs; the
                 // statement itself is checked on the ordinary path.
                 // Conservatively limited to type-var-free annotations: a
                 // type-var-mentioning local annotation can reference the
@@ -15696,7 +15696,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // RHS, so a self-recursive def's monomorphic links (see the
                 // local recursion branch in `e_lookup_local`) generalize with
                 // the def instead of pinning it at the block's rank. Applied
-                // to every function decl — a non-recursive one's frame is a
+                // to every function decl—a non-recursive one's frame is a
                 // cheap no-op (its pattern is already an alias of the RHS's
                 // generalized scheme by the time the frame closes), and
                 // self-recursion cannot be detected syntactically up front
@@ -16175,7 +16175,7 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
     }
 }
 
-/// Whether a `?` condition is a direct call of a hosted function — the only
+/// Whether a `?` condition is a direct call of a hosted function—the only
 /// shape the hosted-try-question-widening rule (design.md "Hosted Try Question
 /// Widening") applies to. The callee is statically resolved from the call's
 /// function expression (the local or external lookup canonicalization
@@ -16194,8 +16194,8 @@ fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
 /// Widening"): `?` on a direct call of a hosted function widens the condition
 /// to a fresh `Try` at the enclosing annotated return's error row when every
 /// visible error in the callee's row is included in it. The redirect targets
-/// the fresh `Try`, so the hosted callee's declared closed row — the host
-/// ABI's shape — is what checking outputs for the callee itself. For every
+/// the fresh `Try`, so the hosted callee's declared closed row—the host
+/// ABI's shape—is what checking outputs for the callee itself. For every
 /// other callee, a closed error row meeting an open annotated row stays a
 /// type error (issue #9798's program is rejected by design); the caller gates
 /// on `tryConditionIsDirectHostedCall`.
@@ -16990,7 +16990,7 @@ fn checkBinopExpr(
 
             // Eagerly unify the operands, but ONLY when the dispatcher's
             // arithmetic method is known homogeneous (`T, T -> T`), so one
-            // operand FORCES the other — propagation of an implied fact, not a
+            // operand FORCES the other—propagation of an implied fact, not a
             // guess. Two gates, each forced:
             //
             //   1. `lhs_is_numeric`: the lhs is the dispatcher and a concrete
@@ -17000,7 +17000,7 @@ fn checkBinopExpr(
             //   2. `rhs_is_numeric and lhs_is_from_numeral`: the lhs is an open
             //      numeric LITERAL. Every numeral defaulting candidate is a
             //      builtin numeric nominal with homogeneous arithmetic, so
-            //      whatever the literal resolves to forces operand equality — the
+            //      whatever the literal resolves to forces operand equality—the
             //      concrete builtin rhs pins it now.
             //
             // A concrete builtin rhs with a NON-literal, non-numeric lhs must NOT
@@ -17025,7 +17025,7 @@ fn checkBinopExpr(
             }
 
             // Arithmetic binops are homogeneous in the RETURN only: the result
-            // type IS the receiver type. Do NOT also unify lhs with rhs — user
+            // type IS the receiver type. Do NOT also unify lhs with rhs—user
             // nominal methods may be heterogeneous (e.g.
             // `times : Duration, I64 -> Duration`). Result-position context
             // (`x : I64 = 1 + 2`) flows in here; argument-position context
@@ -17683,7 +17683,7 @@ fn constraintProvenance(intro_expr: ?CIR.Expr.Idx) StaticDispatchConstraint.Prov
 }
 
 /// Like `constraintProvenance`, but also captures the current expect-body region.
-/// Only method-dispatch constraints carry it — the region feeds the
+/// Only method-dispatch constraints carry it—the region feeds the
 /// "effectful dispatch in expect" diagnostic, matching what the old
 /// expect_region side table recorded (never for binop/unary origins).
 fn methodDispatchProvenance(self: *const Self, intro_expr: ?CIR.Expr.Idx) StaticDispatchConstraint.Provenance {
@@ -18363,7 +18363,7 @@ fn postProcessCopiedVars(self: *Self, first_new_var: usize, region: Region) std.
         self.setRegionAt(fresh_var, region);
 
         // Register a copied open literal on the worklist so this module's
-        // defaulting passes find it without a whole-store scan — the same
+        // defaulting passes find it without a whole-store scan—the same
         // bookkeeping the other literal-creation sites do.
         const fresh_content = self.types.resolveVar(fresh_var).desc.content;
         if (fresh_content == .flex) {
@@ -18397,7 +18397,7 @@ const NominalCheckResult = enum {
 /// instantiate its backing template, substituting the application's actual
 /// args for the declaration's formals (by rigid name, mirroring the type-
 /// application annotation path). Returns null when the declaration is
-/// invalid or unresolvable — callers poison the use.
+/// invalid or unresolvable—callers poison the use.
 fn openNominalBackingForApp(
     self: *Self,
     nominal_type: types_mod.NominalType,
@@ -18520,8 +18520,8 @@ fn checkNominalTypeUsage(
             .problem, .mismatch => {
                 // Unification failed - the constructor is incompatible with the nominal type
                 // Context is already set by unifyInContext
-                // (`.mismatch` is unreachable here — this call uses the poison_to_err
-                // wrapper, which only returns `.ok`/`.problem` — grouped for exhaustiveness.)
+                // (`.mismatch` is unreachable here—this call uses the poison_to_err
+                // wrapper, which only returns `.ok`/`.problem`—grouped for exhaustiveness.)
                 // Mark the entire expression as having a type error
                 try self.unifyWith(target_var, .err, env);
                 return .err;
@@ -18625,7 +18625,7 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
 
 fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     // An open literal resolves only through direct unification (annotations,
-    // signatures, the binop return contract) or through defaulting — never by
+    // signatures, the binop return contract) or through defaulting—never by
     // guessing a type from a concrete peer (the removed "peer resolution").
     // This still processes dispatch constraints deferred since the last pass.
     try self.checkAllConstraints(env);
@@ -18636,7 +18636,7 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
 /// `instantiation_dispatchers`, `open_literal_vars`), so the probe sites don't
 /// repeat the bookkeeping. Begin before invoking the unifier; `rollback`
 /// discards everything the probe did to the store and those buffers. (The store's
-/// own child lists — vars, tags, etc. — are handled inside
+/// own child lists—vars, tags, etc.—are handled inside
 /// begin/rollbackToSavepoint.)
 const Probe = struct {
     check: *Self,
@@ -18729,7 +18729,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
 /// A speculative scope whose SUCCESS is committed in place instead of being
 /// rolled back and redone. Unlike a plain `Probe` (whose unifications run against
 /// throwaway problem/snapshot stores precisely because they never survive), a
-/// commit-probe runs its unifications through the REAL `runUnify` wrapper — full
+/// commit-probe runs its unifications through the REAL `runUnify` wrapper—full
 /// bookkeeping: fresh vars ranked into the caller env's var pool, regions
 /// stamped, and deferred dispatch constraints copied out. A caller that owns its
 /// mismatch diagnostic uses `.write_no_report`, because occurrence-directed
@@ -18818,7 +18818,7 @@ fn probeUnifyWithoutRecordingProblems(
     defer probe_snapshots.deinit();
 
     // Probe against throwaway problem/snapshot stores so a mismatch here is
-    // neither recorded nor poisoned — only the ok/not-ok answer matters.
+    // neither recorded nor poisoned—only the ok/not-ok answer matters.
     var env = self.unifyEnv();
     env.problems = &probe_problems;
     env.snapshots = &probe_snapshots;
@@ -18834,7 +18834,7 @@ fn probeUnifyWithoutRecordingProblems(
 /// HARD REQUIREMENT: top-level def order must never affect whether a program
 /// type-checks or which types are inferred. The worklist (`open_literal_vars`) is
 /// registered in check order, which IS def order, so the rounds must never let
-/// worklist position influence a commit's outcome — see the ORDER-INDEPENDENCE
+/// worklist position influence a commit's outcome—see the ORDER-INDEPENDENCE
 /// contract on `runLiteralDefaultingRounds`.
 ///
 /// Already-resolved and generalized (let-polymorphic) literals are skipped to
@@ -18860,8 +18860,8 @@ const FinalizeScope = union(enum) {
 
 /// THE type-finalization point: every checking entry point (module check and
 /// both REPL flavors) lands here exactly once, after its own constraint
-/// traversal. Literal defaults are decided here — by the defaulting oracle
-/// (src/types/literal_defaulting.zig) driving `runLiteralDefaultingRounds` —
+/// traversal. Literal defaults are decided here—by the defaulting oracle
+/// (src/types/literal_defaulting.zig) driving `runLiteralDefaultingRounds`—
 /// and every validation that needs final types (open-numeral range checks,
 /// default-type method compatibility, instantiated dispatch constraints)
 /// runs after the decision, so dispatch plans and evidence freeze only on
@@ -18869,7 +18869,7 @@ const FinalizeScope = union(enum) {
 ///
 /// The generalization-boundary defaulting (`defaultLiteralsAtGeneralizationBoundary`)
 /// is NOT a second decision point: it runs the same engine under the same
-/// oracle for the vars a def's generalize call is about to promote — a rank
+/// oracle for the vars a def's generalize call is about to promote—a rank
 /// constraint (the leak warning and let-polymorphism filtering must see
 /// pre-promotion ranks), not a separate policy.
 fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator.Error!void {
@@ -18914,7 +18914,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     try self.checkAllConstraints(env);
 }
 
-/// The candidate universe `runLiteralDefaultingRounds` gathers from — the only
+/// The candidate universe `runLiteralDefaultingRounds` gathers from—the only
 /// structural difference between module finalize and a def's generalization
 /// boundary. Both lengths are SNAPSHOTS taken before the first round: committing
 /// a default appends fresh vars (default candidates, in-probe instantiations) to
@@ -18929,7 +18929,7 @@ const LiteralDefaultUniverse = union(enum) {
     /// the var-pool rank the boundary's generalize call will promote; a candidate
     /// is still flex AT that rank with literal-conversion provenance AND not
     /// signature-reachable (`boundary_reachable_vars`, populated by the caller for
-    /// the current boundary before the rounds run) — signature-reachable literals
+    /// the current boundary before the rounds run)—signature-reachable literals
     /// must stay open so generalization quantifies them. The pool slice is
     /// re-fetched every round (commits can grow and reallocate the pool), but only
     /// the snapshotted prefix is scanned. Boundary commits additionally carry the
@@ -18938,7 +18938,7 @@ const LiteralDefaultUniverse = union(enum) {
     boundary: struct { rank: Rank, pool_len: usize },
 };
 
-/// Default every still-open literal in `universe` — ORDER-INDEPENDENT BY
+/// Default every still-open literal in `universe`—ORDER-INDEPENDENT BY
 /// CONSTRUCTION. Shared core of `finalizeLiteralDefaults` and
 /// `defaultLiteralsAtGeneralizationBoundary`.
 ///
@@ -18946,7 +18946,7 @@ const LiteralDefaultUniverse = union(enum) {
 /// here: a literal's first-satisfier probe can "satisfy" a constraint by
 /// speculatively pinning a still-open PEER literal (or a flex var another open
 /// literal's constraints also reach) without consulting that peer's own
-/// constraints — so whichever literal came first won, and reordering defs (or
+/// constraints—so whichever literal came first won, and reordering defs (or
 /// statements within a def) flipped programs between accept and reject.
 ///
 /// Structure: rounds, each over the universe snapshot taken at entry.
@@ -18962,7 +18962,7 @@ const LiteralDefaultUniverse = union(enum) {
 ///      literal-conversion provenance (a PASSIVE) has footprint {itself}. Two
 ///      literals share a component iff their footprints intersect. Only
 ///      still-flex roots interfere: a commit pins exactly the flex vars its
-///      unifications reach, all inside the committing literal's footprint — so
+///      unifications reach, all inside the committing literal's footprint—so
 ///      disjoint components cannot observe each other's commits, and
 ///      concrete/rigid/err vars cannot be re-pinned by anyone.
 ///   3. COMMIT each component:
@@ -18972,7 +18972,7 @@ const LiteralDefaultUniverse = union(enum) {
 ///          passives is now sound: every var it can pin lies inside this
 ///          component, so no OTHER pending literal's constraints are speculated
 ///          away;
-///        - several drivers: `commitLiteralGroupDefault` — one shared candidate
+///        - several drivers: `commitLiteralGroupDefault`—one shared candidate
 ///          for the whole group, the first candidate satisfying ALL the drivers'
 ///          constraints simultaneously.
 ///      Passives inside a driver's component are NOT committed this round: their
@@ -18981,7 +18981,7 @@ const LiteralDefaultUniverse = union(enum) {
 ///      next round and defaults canonically then.
 ///   4. CASCADE the deferred dispatches the commits unblocked, to fixpoint, so
 ///      pins propagate across multi-hop dispatch chains before the next round
-///      re-gathers. One pass can be too few — a constraint re-defers while its
+///      re-gathers. One pass can be too few—a constraint re-defers while its
 ///      receiver is flex AT VISIT TIME, so a dispatch pinned by a later commit in
 ///      the same pass waits for the next one. Each pass consumes every resolved
 ///      receiver, so the loop terminates (runaway recursion capped by
@@ -18997,9 +18997,9 @@ const LiteralDefaultUniverse = union(enum) {
 /// order is unobservable. A multi-driver group assigns the same candidate to
 /// every driver before checking anything, then verifies the conjunction of all
 /// the drivers' constraints; a conjunction of unifications succeeds iff the
-/// equation set is simultaneously unifiable, independent of equation order — so
+/// equation set is simultaneously unifiable, independent of equation order—so
 /// driver enumeration order is unobservable too. The single-driver probe consults
-/// only that driver's own constraint set, in canonical candidate order — no order
+/// only that driver's own constraint set, in canonical candidate order—no order
 /// input there either.
 ///
 /// TERMINATION: rounds iterate a universe snapshot of fixed length, and an open
@@ -19007,7 +19007,7 @@ const LiteralDefaultUniverse = union(enum) {
 /// pre-probe state). Every round with a non-empty gather commits at least one
 /// literal: every component contains a lone passive or at least one driver, all
 /// committed, and a commit always resolves the var away from flex (candidate on
-/// success, the head default — possibly merging to `.err` — otherwise). Passives
+/// success, the head default—possibly merging to `.err`—otherwise). Passives
 /// deferred behind drivers become lone passives once their drivers resolve, so
 /// rounds <= snapshot length + 1. The per-round cascade terminates by
 /// `checkStaticDispatchConstraints`' own consume-or-re-defer contract (see
@@ -19045,7 +19045,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                     if (resolved.desc.rank != boundary.rank) continue;
                     if (self.varLiteralKind(resolved.var_) == null) continue;
                     // A signature-reachable literal stays open (let-polymorphic) and
-                    // generalizes — quotes and interpolations included (interpolations
+                    // generalizes—quotes and interpolations included (interpolations
                     // are publishable while open thanks to the checked-interpolation
                     // reachability handling). A zero-arg thunk's return is
                     // signature-reachable too, so its literal also stays open; the
@@ -19064,8 +19064,8 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         // A quote literal has exactly one possible type (Str), so committing it is
         // never a guess. A numeral's first-satisfier probe IS a guess: when several
         // candidate types satisfy its constraints it commits the head candidate
-        // (Dec). Resolving every open quote first — and letting step 4's cascade
-        // propagate the dispatches that unblocks — lets a producer dispatch whose
+        // (Dec). Resolving every open quote first—and letting step 4's cascade
+        // propagate the dispatches that unblocks—lets a producer dispatch whose
         // receiver is a string (e.g. `s.count_utf8_bytes() : Str -> U64`) pin a
         // numeral's type BEFORE the numeral would otherwise be guessed. Without
         // this, `intermediate.count_utf8_bytes() > 0` commits `0` to Dec (the head
@@ -19138,7 +19138,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             var member_count: usize = 0;
             // A candidate the component commits pins EVERY member literal, so
             // the digit-fit precheck must consult every member's exact value
-            // facts — not just the driver's own. Intersecting the members'
+            // facts—not just the driver's own. Intersecting the members'
             // precomputed fit sets keeps the check O(1) per candidate and
             // makes the outcome independent of which member carries the
             // driving constraint (mirror-image programs commit identically).
@@ -19160,7 +19160,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             // literal-conversion provenance when its component commits: commits
             // of OTHER components only touch their own (disjoint) footprints, and
             // this component commits exactly once. So the kind lookups below
-            // cannot fail — gather guaranteed them non-null.
+            // cannot fail—gather guaranteed them non-null.
             if (self.literal_defaulting_group_drivers.items.len == 0) {
                 // A component without drivers is a lone passive (a passive's
                 // footprint is just itself, so only a driver can merge it).
@@ -19185,7 +19185,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
 }
 
 /// Commit one gathered literal root (lone passive or single driver) via the
-/// single-literal first-satisfier probe — plus, at a generalization boundary, the
+/// single-literal first-satisfier probe—plus, at a generalization boundary, the
 /// per-literal LITERAL DEFAULTED leak warning. The leak check and warning region
 /// capture run while the literal is still flex (before the commit resolves it);
 /// the warning is emitted after, rendered from the committed default var.
@@ -19207,14 +19207,14 @@ fn commitGatheredLiteral(
     }
 }
 
-/// Commit a multi-driver literal component via the shared group probe — plus, at
+/// Commit a multi-driver literal component via the shared group probe—plus, at
 /// a generalization boundary, a per-driver LITERAL DEFAULTED leak warning
 /// bracketing the commit, exactly as `commitGatheredLiteral` does for the single
 /// case. `warnings_scratch` is a caller-owned reused buffer (cleared here).
 ///
 /// BOUNDARY WARNING SEMANTICS FOR GROUPS: the leak check is per literal (it walks
 /// one literal's constraint signatures), so it runs for EVERY group member
-/// pre-commit — while all drivers are still flex — and each leaking member gets
+/// pre-commit—while all drivers are still flex—and each leaking member gets
 /// its own LITERAL DEFAULTED warning post-commit, exactly as if it had committed
 /// alone. Non-leaking members default silently (def-local), and the component's
 /// passives are never committed here, matching the single-commit paths.
@@ -19268,7 +19268,7 @@ fn componentUnion(parent: []usize, a: usize, b: usize) void {
 /// GROUP DEFAULT POLICY for a component with SEVERAL drivers: mutually
 /// constrained open literals where no single literal's first-satisfier scan may
 /// run alone (it would speculatively pin its peers while ignoring their
-/// constraints — the order-dependence `runLiteralDefaultingRounds` exists to
+/// constraints—the order-dependence `runLiteralDefaultingRounds` exists to
 /// prevent). The group defaults TOGETHER against the canonical candidate list:
 /// the first candidate satisfying the WHOLE group's constraints wins.
 ///
@@ -19279,14 +19279,14 @@ fn componentUnion(parent: []usize, a: usize, b: usize) void {
 /// attempt.
 ///
 /// Per candidate, inside one commit-probe:
-///   phase 1 — assign: unify EVERY driver (all still flex; the round committed
+///   phase 1—assign: unify EVERY driver (all still flex; the round committed
 ///     nothing else in this component) with its own fresh candidate var. All
 ///     assignments happen before any constraint is consulted, so no driver's
 ///     verification can observe a not-yet-assigned peer.
-///   phase 2 — verify: check every driver's every non-literal constraint
+///   phase 2—verify: check every driver's every non-literal constraint
 ///     against the candidate (`staticDispatchConstraintAcceptsCandidate`, the
 ///     same check the single-literal probe uses). Passives and other in-footprint
-///     vars are pinned here by the resolved method signatures — with every driver
+///     vars are pinned here by the resolved method signatures—with every driver
 ///     already concrete, the verification is a plain conjunction of unifications.
 /// Success commits the probe in place; failure rolls everything back and the next
 /// candidate is tried.
@@ -19294,7 +19294,7 @@ fn componentUnion(parent: []usize, a: usize, b: usize) void {
 /// ORDER-INDEPENDENCE: phase 1's outcome is the same var-disjoint assignment
 /// regardless of driver enumeration order; phase 2 succeeds iff its equation set
 /// is simultaneously unifiable, which is order-independent. So the chosen
-/// candidate — and the types it pins — depend only on the group's constraint set
+/// candidate—and the types it pins—depend only on the group's constraint set
 /// and the canonical candidate order.
 ///
 /// The structural refutation pre-filter (`numeralCandidateStructurallyRefuted`)
@@ -19306,7 +19306,7 @@ fn componentUnion(parent: []usize, a: usize, b: usize) void {
 /// When no candidate satisfies the group, each driver falls back to its kind's
 /// canonical head default (`commitLiteralDefaultHead` / Dec for numerals,
 /// `commitQuoteDefault` / Str for quotes), so the dispatch cascade reports the
-/// conflicts against the documented default type — the same failure shape as the
+/// conflicts against the documented default type—the same failure shape as the
 /// single-literal path.
 fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: exact_numeral.FitSet, env: *Env) Allocator.Error!void {
     std.debug.assert(drivers.len >= 2);
@@ -19336,10 +19336,10 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
 
     candidate: for (candidate_scan) |candidate_kind| {
         // The component's passive literals get pinned by phase 1's assignments
-        // too, so their exact values must accept the candidate — the O(1) bit
+        // too, so their exact values must accept the candidate—the O(1) bit
         // test on the precomputed intersection runs before the per-driver walk.
         if (has_numeral_driver and !componentFitsAcceptNumKind(component_fits, candidate_kind)) continue :candidate;
-        // Digit-fit precheck for every numeral driver's literal payload — pure
+        // Digit-fit precheck for every numeral driver's literal payload—pure
         // arithmetic on the constraint payloads, before any speculation. Not
         // subsumed by the bit test above: a driver's range can carry
         // from_literal QUOTE constraints (a numeral flex unified with a quote
@@ -19357,7 +19357,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
         // Runs on every exit from this loop body, `continue :candidate` included.
         defer if (!committed) commit_probe.rollback();
 
-        // Phase 1: assign each driver its kind's candidate — the scanned numeric
+        // Phase 1: assign each driver its kind's candidate—the scanned numeric
         // candidate for numeral drivers, Str for quote drivers. Driver roots are
         // distinct and still flex, so these unifications are independent of each
         // other; flex-vs-concrete cannot mismatch (the drivers' dispatch
@@ -19394,7 +19394,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
 
     // No candidate satisfies the group: commit each driver's documented head
     // default (Dec for numerals, Str for quotes) so the dispatch pass reports the
-    // conflicts. (All drivers are flex again — every failed probe rolled back —
+    // conflicts. (All drivers are flex again—every failed probe rolled back—
     // but re-check defensively.)
     for (drivers, self.literal_defaulting_kinds.items) |driver, kind| {
         if (self.types.resolveVar(driver).desc.content != .flex) continue;
@@ -19405,19 +19405,19 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
     }
 }
 
-/// Boundary defaulting — the Haskell Report §4.3.4 / GHC `-Wtype-defaults`
+/// Boundary defaulting—the Haskell Report §4.3.4 / GHC `-Wtype-defaults`
 /// analogue. At a def's generalization boundary, default every still-open literal
 /// var NOT reachable from the def's type (constraint-signature edges included),
 /// then cascade the deferred dispatches it unblocks BEFORE generalization.
 ///
 /// Why forced: instantiation copies only signature-reachable vars, so an
-/// unreachable literal is SHARED by every use of the def — it cannot adapt per
+/// unreachable literal is SHARED by every use of the def—it cannot adapt per
 /// call site even in principle. This is Haskell's "ambiguous type variable"
 /// (constrained but not appearing in the type).
 ///
 /// A LITERAL DEFAULTED warning fires only when the default leaks into the def's
 /// interface (`boundaryDefaultLeaksIntoSignature`); def-local defaults are silent
-/// (GHC warns on those too — which is why `-Wtype-defaults` is muted in practice).
+/// (GHC warns on those too—which is why `-Wtype-defaults` is muted in practice).
 ///
 /// Signature-reachable literals stay open (e.g. `|x| 5 + x`): generalization
 /// quantifies them and each use defaults its own instantiated copy.
@@ -19434,7 +19434,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
 /// Clear `out`, then collect every var reachable from the var's non-`from_literal`
 /// dispatch constraints into it. Single source of truth for the "signature
 /// footprint" used by both interference partitioning (runLiteralDefaultingRounds)
-/// and boundary-leak detection (boundaryDefaultLeaksIntoSignature) — they MUST
+/// and boundary-leak detection (boundaryDefaultLeaksIntoSignature)—they MUST
 /// agree, or a literal could be partitioned non-interfering yet warned.
 /// collectReachableVars only reads the store, so holding the constraint slice
 /// across it is safe.
@@ -19468,7 +19468,7 @@ fn boundaryDefaultLeaksIntoSignature(self: *Self, literal_var: Var) std.mem.Allo
 /// signatures, and for numerals the warning region comes from the `from_numeral`
 /// payload (exact even when the root is an instantiated copy), reachable only
 /// while the var is flex. Quote constraints carry no payload, so they fall back to
-/// the var's own region — right for direct literals, possibly imprecise for
+/// the var's own region—right for direct literals, possibly imprecise for
 /// instantiated copies.
 const PendingBoundaryWarning = struct {
     leaks_into_signature: bool,
@@ -19476,7 +19476,7 @@ const PendingBoundaryWarning = struct {
     kind: StaticDispatchConstraint.LiteralKind,
 };
 
-/// See `PendingBoundaryWarning` — must be called while `literal_root` is
+/// See `PendingBoundaryWarning`—must be called while `literal_root` is
 /// still flex, with `boundary_reachable_vars` populated for the current
 /// boundary.
 fn boundaryWarningBeforeCommit(self: *Self, literal_root: Var) std.mem.Allocator.Error!PendingBoundaryWarning {
@@ -19502,8 +19502,8 @@ fn boundaryWarningBeforeCommit(self: *Self, literal_root: Var) std.mem.Allocator
 /// it leaks into the def's interface. `snapshot_var` is any var in the committed
 /// equivalence class (the returned default var for single commits, the driver
 /// root itself for group commits): its union-find root carries the concrete
-/// committed content, so the snapshot renders the clean committed type either way
-/// — identical to a pre-commit snapshot of the fresh candidate.
+/// committed content, so the snapshot renders the clean committed type either way—
+/// identical to a pre-commit snapshot of the fresh candidate.
 fn emitBoundaryWarningAfterCommit(
     self: *Self,
     pending: PendingBoundaryWarning,
@@ -19512,8 +19512,8 @@ fn emitBoundaryWarningAfterCommit(
 ) std.mem.Allocator.Error!void {
     // Only numerals warn on default. A numeral has many sensible types (I8…U64,
     // Dec, F64), so silently committing it to Dec is a real choice worth flagging.
-    // A quote/interpolation defaults to Str — almost always what was meant, and how
-    // main defaulted them (silently) — so flagging it is just noise.
+    // A quote/interpolation defaults to Str—almost always what was meant, and how
+    // main defaulted them (silently)—so flagging it is just noise.
     if (pending.kind != .numeral) return;
     if (!pending.leaks_into_signature) return;
     const default_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, snapshot_var);
@@ -19583,8 +19583,8 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: 
 
     // Pending `eql` constraints are recursive-group cross-reference edges; a
     // literal awaiting unification with the def's type through one is NOT
-    // ambiguous. Close the set over them — when one side of an edge is in,
-    // collect both sides — to fixpoint, since collecting one edge can make
+    // ambiguous. Close the set over them—when one side of an edge is in,
+    // collect both sides—to fixpoint, since collecting one edge can make
     // another edge's side reachable.
     var changed = true;
     while (changed) {
@@ -19599,9 +19599,9 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: 
         }
     }
 
-    // Default every unreachable candidate through the shared component machinery
-    // — identical to `finalizeLiteralDefaults` except for the candidate universe
-    // and the per-commit leak warnings — and cascade the dispatches whose
+    // Default every unreachable candidate through the shared component machinery—
+    // identical to `finalizeLiteralDefaults` except for the candidate universe
+    // and the per-commit leak warnings—and cascade the dispatches whose
     // receivers each round defaulted, pinning their signatures' other vars before
     // generalization promotes them. The pool length is snapshotted here:
     // defaulting appends fresh default vars to this same pool entry, and those
@@ -19613,7 +19613,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: 
 }
 
 /// Whether any deferred static-dispatch constraint's receiver has resolved to
-/// something other than a flex var — i.e. whether another
+/// something other than a flex var—i.e. whether another
 /// `checkStaticDispatchConstraints` pass can make progress (it re-defers only
 /// still-flex receivers; every other receiver is consumed: fired or errored).
 fn anyDeferredDispatchReceiverResolved(self: *Self, env: *Env) Allocator.Error!bool {
@@ -19906,7 +19906,7 @@ fn nominalHasPendingOpenLiteralForDerivedEncode(
 }
 
 /// The source region of the numeral literal that put a `from_numeral` constraint
-/// on this var, straight from the numeral payload — explicit upstream data, exact
+/// on this var, straight from the numeral payload—explicit upstream data, exact
 /// even after the literal var was unified with other vars. Quote constraints
 /// carry no payload, so this returns null for them and the caller falls back to
 /// the var's own region.
@@ -19919,7 +19919,7 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
     return null;
 }
 
-/// The literal kind this var is an open literal of — derived from its constraint
+/// The literal kind this var is an open literal of—derived from its constraint
 /// set, never stored. Returns null if the var carries no literal-conversion
 /// constraint. The kind tie-break lives in the defaulting oracle
 /// (src/types/literal_defaulting.zig), the one implementation every stage uses.
@@ -19939,7 +19939,7 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
 /// Default a still-open literal var and COMMIT the result, returning the var the
 /// literal was resolved against (for the boundary warning's snapshot).
 /// Haskell-style: commit the FIRST candidate in the kind's canonical order that
-/// satisfies every dispatch constraint the var accumulated — and the successful
+/// satisfies every dispatch constraint the var accumulated—and the successful
 /// probe IS the commit (no rollback-and-redo; see `tryCommitNumeralCandidate`). A
 /// literal whose only obligation is its own literal conversion takes the list head
 /// directly (the common case, no probing). If no candidate satisfies, the head is
@@ -19959,7 +19959,7 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
                         // In safety-checked builds, prove the refutation: run the
                         // skipped probe and assert it fails. A failed probe rolls
                         // back completely (`CommitProbe`), so a passing assertion
-                        // leaves observable state — var numbering included —
+                        // leaves observable state—var numbering included—
                         // identical to having skipped. A firing assertion means
                         // the refutation logic has drifted from the unifier's
                         // actual semantics (see the per-pair soundness fence on
@@ -19991,7 +19991,7 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
             }
             return try self.commitLiteralDefaultHead(literal_var, env);
         },
-        // Str is the single candidate for string literals — a one-element
+        // Str is the single candidate for string literals—a one-element
         // candidate list whose head is committed directly, no probing (and no
         // structural pre-filter: there is no scan to prune). If the var's other
         // constraints refute Str, the post-finalize dispatch pass reports the
@@ -20000,8 +20000,8 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
     }
 }
 
-/// Commit Str — the single (and therefore default) candidate for string literals
-/// — to `literal_var` through the normal unify path. The committed var reuses the
+/// Commit Str—the single (and therefore default) candidate for string literals—
+/// to `literal_var` through the normal unify path. The committed var reuses the
 /// literal's region so later diagnostics stay anchored to the source; the deferred
 /// from_quote dispatch fires against Str as usual.
 fn commitQuoteDefault(self: *Self, literal_var: Var, env: *Env) Allocator.Error!Var {
@@ -20016,8 +20016,8 @@ fn commitQuoteDefault(self: *Self, literal_var: Var, env: *Env) Allocator.Error!
 /// conflict against the documented default type with problems recorded.
 fn commitLiteralDefaultHead(self: *Self, literal_var: Var, env: *Env) Allocator.Error!Var {
     // The synthetic default var reuses the literal's region: if it ends up the
-    // union-find root, a later diagnostic would otherwise anchor at Region.zero()
-    // — the useless 1:1.
+    // union-find root, a later diagnostic would otherwise anchor at Region.zero()—
+    // the useless 1:1.
     const literal_region = self.getRegionAt(literal_var);
     const default_var = try self.freshFromContent(
         try self.mkBuiltinNumberTypeContentFromKind(numeral_default_candidates[0]),
@@ -20029,7 +20029,7 @@ fn commitLiteralDefaultHead(self: *Self, literal_var: Var, env: *Env) Allocator.
 }
 
 /// Candidate order for numeral defaulting, owned by the defaulting oracle
-/// (src/types/literal_defaulting.zig — see its doc for the ordering rationale)
+/// (src/types/literal_defaulting.zig—see its doc for the ordering rationale)
 /// and mapped here into the `CIR.NumKind` values the probe machinery consumes.
 const numeral_default_candidates = blk: {
     var kinds: [literal_defaulting.numeral_default_candidates.len]CIR.NumKind = undefined;
@@ -20048,7 +20048,7 @@ fn numKindFromNumeralTarget(target: exact_numeral.Target) CIR.NumKind {
 }
 
 /// Whether the constraint range carries any obligation besides literal-conversion
-/// provenance — i.e. whether defaulting must consult the candidate probe at all.
+/// provenance—i.e. whether defaulting must consult the candidate probe at all.
 fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.SafeList.Range) bool {
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
         if (constraint.origin != .from_literal) return true;
@@ -20061,7 +20061,7 @@ fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.Saf
 /// skipped without observable difference (a failed probe is fully rolled back, so
 /// skipping it leaves identical state). Resolves vars in the relevant stores but
 /// NEVER mutates them. Anything uncertain returns false (fall through to the
-/// probe) — refutation is exact logic, probing is the default.
+/// probe)—refutation is exact logic, probing is the default.
 ///
 /// This filter implements no language rule of its own: the acceptance rule is
 /// `staticDispatchConstraintAcceptsCandidate`'s (see its doc comment), and this
@@ -20078,34 +20078,34 @@ fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.Saf
 /// 1. Method lookup miss: the candidate's owner env has no method for the
 ///    constraint's `fn_name`. The probe performs the IDENTICAL lookup
 ///    (`staticDispatchConstraintAcceptsCandidate` resolves the candidate nominal's
-///    origin/source-decl — the very values computed here without minting the
-///    candidate var — and calls `lookupMethodBindingFromEnvAndDeclConst`, a pure
+///    origin/source-decl—the very values computed here without minting the
+///    candidate var—and calls `lookupMethodBindingFromEnvAndDeclConst`, a pure
 ///    read of finalized tables) and returns false on a miss, failing the probe.
 ///    This fact does not depend on any mutable type state, so it refutes
 ///    unconditionally.
 ///
 /// 2. Dispatcher-position mismatch: a `.refuting` pair from
-///    `unifier.structurallyIncompatiblePair` — a signature position where the
+///    `unifier.structurallyIncompatiblePair`—a signature position where the
 ///    method is the dispatcher type C itself while the constraint's corresponding
 ///    position is already a CONCRETE builtin numeric nominal with a different
 ///    source decl. Nominal unification requires identical identity
 ///    (`sameNominalIdentity`: origin + source decl), so that position's unify must
-///    throw — the probe cannot succeed. (The dispatcher-position check is made per
+///    throw—the probe cannot succeed. (The dispatcher-position check is made per
 ///    position, not assumed; the filter's EFFECTIVENESS comes from builtin numeric
 ///    methods being homogeneous (`T, T -> T`, e.g. `Dec.plus : Dec, Dec -> Dec`),
 ///    which puts the dispatcher type at every position.)
 ///
-/// Fact 2's per-pair soundness fence — the unifier's err-backed-nominal
+/// Fact 2's per-pair soundness fence—the unifier's err-backed-nominal
 /// short-circuit (a SUCCESSFUL err merge), flex-side constraint deferral, and
-/// never-written nominal backings — is documented on and encoded in
+/// never-written nominal backings—is documented on and encoded in
 /// `structurallyIncompatiblePair` in src/check/unify.zig, co-located with the
 /// unify internals it reasons about. This function supplies the RANGE-WIDE side of
 /// that fence: it classifies every argument/return position of EVERY constraint in
 /// the range, requires matching arities (so every classified pair is exactly the
 /// pair `unifyFunc` would visit), and abandons refutation for the whole candidate
-/// on any `.uninspectable` position. Any deviation — aliases, records, tag unions,
+/// on any `.uninspectable` position. Any deviation—aliases, records, tag unions,
 /// tuples, err content, polymorphic method positions, unexpected arity, non-fn
-/// shapes — makes the whole candidate fall through to the probe rather than
+/// shapes—makes the whole candidate fall through to the probe rather than
 /// weakening soundness.
 fn numeralCandidateStructurallyRefuted(
     self: *Self,
@@ -20128,7 +20128,7 @@ fn numeralCandidateStructurallyRefuted(
     for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
         if (constraint.origin == .from_literal) continue;
 
-        // Method lookup short of instantiation — same env, owner decl, and method
+        // Method lookup short of instantiation—same env, owner decl, and method
         // ident the probe's lookup uses, via the same const lookup.
         const method_lookup = self.lookupStaticDispatchMethodBinding(
             owner_env,
@@ -20164,12 +20164,12 @@ fn numeralCandidateStructurallyRefuted(
 }
 
 /// Probe whether committing builtin numeric `candidate_kind` to the open
-/// numeral `literal_var` satisfies every constraint in `constraint_range` — and
+/// numeral `literal_var` satisfies every constraint in `constraint_range`—and
 /// if so, COMMIT the probe's work in place, returning the committed candidate var.
 /// The probe runs against the real stores through the normal `unify` wrapper, so
 /// success needs no rollback-and-redo: the literal var is already resolved to the
 /// candidate, with full bookkeeping (var pool, regions, deferred dispatch
-/// constraints — which the later dispatch pass fires exactly as it fires the
+/// constraints—which the later dispatch pass fires exactly as it fires the
 /// redo-unify's today). Failure returns null after `CommitProbe.rollback` restores
 /// every store and buffer the attempt grew.
 fn tryCommitNumeralCandidate(
@@ -20181,8 +20181,8 @@ fn tryCommitNumeralCandidate(
     env: *Env,
 ) Allocator.Error!?Var {
     // The candidate must be able to represent every literal in this literal's
-    // interference component — the O(1) bit test on the precomputed
-    // intersection runs first — AND every from_literal payload in the
+    // interference component—the O(1) bit test on the precomputed
+    // intersection runs first—AND every from_literal payload in the
     // driver's own range. The walk is NOT subsumed by the bit test: a range
     // can carry from_literal QUOTE constraints (a numeral flex unified with a
     // quote flex defers the conflict), which refute every numeric candidate
@@ -20196,10 +20196,10 @@ fn tryCommitNumeralCandidate(
     var committed = false;
     defer if (!committed) commit_probe.rollback();
 
-    // The candidate (and every other var this attempt creates — the unify's fresh
+    // The candidate (and every other var this attempt creates—the unify's fresh
     // vars, instantiated method vars) registers in the CALLER's env pool: on
     // success the work survives into generalization, so the generalizer must see
-    // these vars at their real ranks. (A probe-local pool — the previous design —
+    // these vars at their real ranks. (A probe-local pool—the previous design—
     // would be released on success and leave the committed store vars invisible to
     // rank adjustment; conversely, the dangling-entry hazard that design avoided
     // is now closed by `CommitProbe.rollback` truncating the pool's rank lists on
@@ -20232,7 +20232,7 @@ fn literalInfoAcceptsBuiltinNumKind(lit: StaticDispatchConstraint.LiteralInfo, n
     };
 }
 
-/// The method-acceptance rule of static dispatch — the intended language rule,
+/// The method-acceptance rule of static dispatch—the intended language rule,
 /// not an implementation convenience: a candidate nominal type satisfies a
 /// dispatch constraint `fn_name : F` iff the type's declaring module provides
 /// a method binding named `fn_name` whose declared type, instantiated fresh,
@@ -20242,7 +20242,7 @@ fn literalInfoAcceptsBuiltinNumKind(lit: StaticDispatchConstraint.LiteralInfo, n
 /// upstream of this check).
 ///
 /// Speculatively mutates the real stores (copyVar/instantiateVar, real
-/// unification) and does NOT roll them back itself — the caller's commit-probe
+/// unification) and does NOT roll them back itself—the caller's commit-probe
 /// rollback does (or its commit keeps them). The `*CommitProbe` parameter is a
 /// scope-proof token making that contract compile-time: this function is
 /// unreachable without an open commit-probe scope that settles the speculation one
@@ -20299,7 +20299,7 @@ fn componentFitsAcceptNumKind(component_fits: exact_numeral.FitSet, candidate_ki
 
 /// Whether the builtin numeric candidate `candidate_kind` can represent every
 /// `from_literal` numeral payload in `range` (digit fit). Pure arithmetic on the
-/// constraint payloads — no speculation. Shared digit-fit precheck for the
+/// constraint payloads—no speculation. Shared digit-fit precheck for the
 /// single-literal and group numeral probes.
 fn rangeNumeralDigitsFit(
     self: *Self,
@@ -20362,7 +20362,7 @@ fn isBuiltinNumericNominal(self: *Self, var_: Var) bool {
         ident.eql(self.cir.idents.dec_type);
 }
 
-/// Whether `var_` resolved to the builtin `Dec` nominal — the canonical head
+/// Whether `var_` resolved to the builtin `Dec` nominal—the canonical head
 /// default a numeral literal falls to. Distinguishes a numeral-defaulted
 /// dispatcher (Dec) from a quote-defaulted one (Str), so the "this numeric
 /// literal was given the type Dec" hint only fires for the former. The hint text
@@ -20683,8 +20683,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
             // Runaway: a non-terminating static-dispatch cycle keeps re-deriving an
             // unsatisfiable `where` constraint on the same type because the
             // recursion never bottoms out (the element type's method has the wrong
-            // shape). Report the *unsatisfied method* precisely — naming the
-            // dispatcher type and method — rather than a generic infinite type,
+            // shape). Report the *unsatisfied method* precisely—naming the
+            // dispatcher type and method—rather than a generic infinite type,
             // then stop. (See `max_deferred_dispatch_iterations`.)
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             const resolved_content = self.types.resolveVar(deferred_constraint.var_).desc.content;
@@ -20854,7 +20854,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     // either this nominal is a builtin (validated just below) or it
                     // declares its own `from_` (dispatched further down). We do NOT walk
                     // into the backing chain to manufacture an opt-in the nominal never
-                    // declared — `from_` is the explicit, per-nominal opt-in. To put a
+                    // declared—`from_` is the explicit, per-nominal opt-in. To put a
                     // literal into a transparent newtype that declares no `from_`, use
                     // explicit construction (`Nominal.(value)`).
                     if (!try self.validateFromNumeralLiteralForBuiltinNominal(
@@ -21052,7 +21052,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 } else {
                                     // Unannotated, unchecked local target. A
                                     // dispatch edge cannot be in the name
-                                    // graph, so this is discovered here — but
+                                    // graph, so this is discovered here—but
                                     // never checked here: record the target
                                     // for the enclosing group's boundary, pin
                                     // the constraint's vars at the boundary
@@ -21082,7 +21082,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     } else {
                                         // In-flight unannotated target (self-
                                         // dispatch, or an in-group member):
-                                        // the binding-group recursion rule —
+                                        // the binding-group recursion rule—
                                         // link monomorphically to the def's
                                         // in-flight RHS var, which lives in
                                         // the frame that generalizes it.
@@ -21665,7 +21665,7 @@ fn reportEffectfulDispatchInExpect(
     if (!try self.varIsEffectfulFunction(constraint.fn_var)) return;
     const expect_region = constraint.provenance.expect_region.get() orelse return;
     // Report each constraint once even though constraint checking revisits it
-    // across passes — the dedup set replaces the old side table's fetchRemove.
+    // across passes—the dedup set replaces the old side table's fetchRemove.
     if ((try self.reported_effectful_expect.getOrPut(constraint.fn_var)).found_existing) return;
     _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
         .region = expect_region,
@@ -23064,8 +23064,8 @@ fn numeralTargetFromNumKind(num_kind: CIR.NumKind) ?exact_numeral.Target {
     };
 }
 
-/// Whether the literal's exact value is representable at the builtin target —
-/// answered by the precomputed fit set (the one fits() authority) — and, when
+/// Whether the literal's exact value is representable at the builtin target—
+/// answered by the precomputed fit set (the one fits() authority)—and, when
 /// it is not, which problem flavor the diagnostic should carry.
 fn validateBuiltinFromNumeralLiteral(
     num_kind: CIR.NumKind,
@@ -24017,7 +24017,7 @@ fn satisfyDerivedIsEqConstraint(
 }
 
 /// Satisfy a derived `to_hash` constraint for an anonymous structural type.
-/// `to_hash : self, Hasher -> Hasher` — the receiver is the dispatcher, and the
+/// `to_hash : self, Hasher -> Hasher`—the receiver is the dispatcher, and the
 /// Hasher argument is threaded straight through to the return type. The method
 /// call is rewritten to an explicit structural-hash node so later stages
 /// decompose the hash structurally instead of dispatching to a method.
@@ -26759,7 +26759,7 @@ fn probeBranchCompatible(self: *Self, body_var: Var, target: Var) std.mem.Alloca
 
 /// Record a branch-vs-`mismatch_against` diagnostic (actual = branch body,
 /// region on it) and locally poison the branch so it does not cascade.
-/// `mismatch_against` is rendered as "the previous branch(es) result" — either
+/// `mismatch_against` is rendered as "the previous branch(es) result"—either
 /// the annotated return type or the branch accumulator, whichever the body
 /// failed against. `expected_ret` is always used to mark the erroneous branch.
 fn reportBranchMismatchAndPoison(
@@ -26793,13 +26793,13 @@ fn reportBranchMismatchAndPoison(
 ///   1. A pure, fully-rolled-back probe (see `probeBranchCompatible`) against the
 ///      pristine `expected_ret`: catches a body that does not match the annotated
 ///      return type. Reported against `expected_ret`. This MUST stay a
-///      rolled-back probe — branches never merge into the shared annotation var
+///      rolled-back probe—branches never merge into the shared annotation var
 ///      (see above).
 ///   2. One real unify against `acc` inside a `CommitProbe`: the fold and the
-///      compatibility check are the same operation. Success commits in place — the
+///      compatibility check are the same operation. Success commits in place—the
 ///      wrapper already propagated regions/rank/deferred-constraints into the live
 ///      `env`, so nothing is redone. Failure catches a body that matches the
-///      annotation yet diverges from an earlier sibling already folded in — only
+///      annotation yet diverges from an earlier sibling already folded in—only
 ///      observable when the annotation is LOOSER than the accumulated branches,
 ///      e.g. an inferred `_` return, where step (1) passes for every branch but
 ///      the branches still disagree. The commit-probe rollback then restores every
@@ -26819,7 +26819,7 @@ fn checkBranchBodyAgainstExpected(
 
     // Cheap guards: already-unified or already-erroneous pairs need no work.
     // If body already resolves to expected, it is correctly constrained and we
-    // must NOT fold it into `acc` — that would run `unify(expected_ret, acc)` and
+    // must NOT fold it into `acc`—that would run `unify(expected_ret, acc)` and
     // redirect the shared expected var into the accumulator (the very mutation
     // this accumulator design exists to avoid).
     const rb = self.types.resolveVar(body_var);

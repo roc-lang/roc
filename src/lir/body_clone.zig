@@ -382,9 +382,9 @@ pub fn localIdLessThan(_: void, a: LocalId, b: LocalId) bool {
 /// `Rewriter` carries the pass-specific destination state and supplies the
 /// hooks that diverge between passes:
 ///
-///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId)` — required.
+///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId)`—required.
 ///     Produces the cloned tail for a source `ret value`.
-///   * `interceptStmt(self: *Rewriter, cloner: anytype, stmt: LIR.CFStmt)` —
+///   * `interceptStmt(self: *Rewriter, cloner: anytype, stmt: LIR.CFStmt)`—
 ///     optional. Returns a cloned statement id to short-circuit the default
 ///     clone, letting the pass fuse a direct constructor/concat return into
 ///     the tail, or `null` to fall through to the ordinary clone.

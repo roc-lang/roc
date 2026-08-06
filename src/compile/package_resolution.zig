@@ -2674,7 +2674,7 @@ test "retraction prunes a loser's entire subtree without downloading it" {
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
 
-    // q 1.2.0 pulls in r, which pulls in t — but s bumps q to 1.4.0 (which
+    // q 1.2.0 pulls in r, which pulls in t—but s bumps q to 1.4.0 (which
     // has no deps) before q 1.2.0's subtree is ever followed, so r and t are
     // never even downloaded.
     const q_120 = "https://example.com/q/1.2.0/hashQ12o.tar.zst";
@@ -2718,7 +2718,7 @@ test "an over-downloaded intermediate version is retracted and does not violate 
 
     // c 1.2.0 mentions a 1.3.0, briefly making it the chosen version of a
     // (so it gets downloaded). Then d bumps c to 1.5.0, which does not
-    // mention a at all — retracting the 1.3.0 mention, restoring the app's
+    // mention a at all—retracting the 1.3.0 mention, restoring the app's
     // pinned 1.2.3, and reporting no conflict. The intermediate download is
     // intended waste.
     const a_123 = "https://example.com/a/1.2.3/hashA123.tar.zst";
@@ -2898,9 +2898,9 @@ test "transitive tally counts retracted downloads against every root that reache
     defer registry.deinit();
 
     // big is pulled in by q 1.0.0 and downloaded before t bumps q to 1.1.0
-    // (which would retract it). The tally deliberately keeps counting it —
+    // (which would retract it). The tally deliberately keeps counting it—
     // it is a safety mechanism over everything resolution caused to enter
-    // the graph — and counts it against both direct dependencies, since
+    // the graph—and counts it against both direct dependencies, since
     // both reach it.
     const q_100 = "https://example.com/q/1.0.0/hashQ1oo.tar.zst";
     const q_110 = "https://example.com/q/1.1.0/hashQ11o.tar.zst";
@@ -2968,7 +2968,7 @@ test "mirrors of the same content are distinct packages sharing one download" {
     var resolved = try resolver.resolve("/app/main.roc");
     defer resolved.deinit();
 
-    // Different url ids: two separate packages, even with identical hashes —
+    // Different url ids: two separate packages, even with identical hashes—
     // but the content was only fetched once and they share an extraction.
     try std.testing.expectEqual(@as(usize, 3), resolved.packages.len);
     const one = testFindPackage(&resolved, mirror_one).?;

@@ -39,7 +39,7 @@ const Ident = base.Ident;
 /// instantiation; freshly minted vars are those `var_map` values not equal to
 /// a seeded arg.
 ///
-/// The declaration must be valid and its arity must match `args` — callers
+/// The declaration must be valid and its arity must match `args`—callers
 /// check `NominalDecl.isValid` (and poison to err) before opening.
 pub fn instantiateNominalBacking(
     store: *TypesStore,

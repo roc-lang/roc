@@ -3,7 +3,7 @@
 ## Problem
 
 `src/bundle` (archive writer) and `src/unbundle` (archive reader) each
-maintain their own copy of the archive-path safety rules — and the
+maintain their own copy of the archive-path safety rules—and the
 copies already disagree. This is a security-relevant validator
 (directory traversal, Windows reserved names) whose writer and reader
 halves can drift independently:
@@ -25,9 +25,9 @@ halves can drift independently:
 - The max path length is a named constant on one side
   (`TAR_PATH_MAX_LENGTH: usize = 255`, `bundle.zig:33`) and a bare
   `255` literal on the other (`unbundle.zig:302`).
-- The reserved-character rule is encoded two different ways — an array
+- The reserved-character rule is encoded two different ways—an array
   consumed by `inline for` in bundle (`bundle.zig:258-267`) and an
-  inline switch in unbundle (`unbundle.zig:372-391`) — and the
+  inline switch in unbundle (`unbundle.zig:372-391`)—and the
   encodings differ: unbundle's switch handles backslash-on-unix;
   bundle's array does not include it.
 - The `UnbundleError` sets differ by ~9 members (`bundle.zig:91-104`
@@ -42,14 +42,14 @@ The directories are already a dependency pair with a shared layer:
 `src/unbundle/format.zig` holds `TAR_EXTENSION` and
 `STREAM_BUFFER_SIZE`, and `bundle.zig:23-36` imports them. unbundle is
 the lower, wasm-compatible layer; bundle depends on it. The
-consolidation direction is therefore already established — the path
+consolidation direction is therefore already established—the path
 rules just never moved.
 
 ## Evidence
 
 - The paired declarations cited above (side-by-side diff makes the
   divergences obvious).
-- `bundle.zig:318` — the comment claiming unbundle-equivalence while
+- `bundle.zig:318`—the comment claiming unbundle-equivalence while
   calling the local, weaker function.
 - No test in either directory feeds one validator's accepted paths to
   the other.
@@ -114,5 +114,5 @@ neither is hot (per-path validation during bundling).
 
 ## Related projects
 
-- [cache-and-identity-residuals.md](cache-and-identity-residuals.md)
-  — same philosophy applied to the cache boundary's composed facts.
+- [cache-and-identity-residuals.md](cache-and-identity-residuals.md)—
+  same philosophy applied to the cache boundary's composed facts.

@@ -42,9 +42,9 @@ pub const RelocatableEncodeError = Allocator.Error || error{
 /// Relocation sites and the symbols they reference come from externally
 /// produced object files (LLVM-compiled host/platform objects) parsed by
 /// `preload`. `InvalidRelocation` means those bytes violate the shape the
-/// relocation encoding requires — a missing patch site, an unexpected opcode
+/// relocation encoding requires—a missing patch site, an unexpected opcode
 /// preceding the patch, an undefined or out-of-range symbol, or a relocation
-/// that writes into a zero-fill segment — so the module cannot be linked.
+/// that writes into a zero-fill segment—so the module cannot be linked.
 pub const RelocationError = Allocator.Error || error{InvalidRelocation};
 
 /// Errors from encoding a linked module to its final wasm binary.
@@ -513,7 +513,7 @@ const funcref: u8 = 0x70;
 /// WASM32 layout of the RocOps struct in linear memory.
 ///
 /// On native 64-bit targets, RocOps is 72 bytes with 8-byte pointers and function
-/// pointers. On wasm32, function pointers don't exist in linear memory — instead,
+/// pointers. On wasm32, function pointers don't exist in linear memory—instead,
 /// functions are referenced by u32 table indices for use with `call_indirect`.
 /// This makes the WASM layout 36 bytes with all fields being i32.
 ///
@@ -604,7 +604,7 @@ dead_import_dummy_count: u32,
 /// Number of function imports (may differ from imports.items.len after linking).
 import_fn_count: u32,
 /// Number of global imports parsed from the import section.
-/// Tracked for validation — global imports are not stored in the imports array.
+/// Tracked for validation—global imports are not stored in the imports array.
 import_global_count: u32,
 /// LEB128 byte size of the function count in the code section header.
 /// Relocation offsets in reloc.CODE are relative to the section body (which
@@ -1515,7 +1515,7 @@ pub fn linkHostToAppCalls(self: *Self, host_to_app_map: []const HostToAppEntry) 
         }
 
         const host_idx = host_fn_index orelse {
-            // The host doesn't import this function — export the app's definition
+            // The host doesn't import this function—export the app's definition
             // so it can be called from JS.
             try self.exports.append(self.allocator, .{
                 .name = app_fn_name,
@@ -1526,7 +1526,7 @@ pub fn linkHostToAppCalls(self: *Self, host_to_app_map: []const HostToAppEntry) 
         };
 
         // 2. Swap: remove the last import and put it where the host import was.
-        //    This keeps all other import indices stable — only the host and swap
+        //    This keeps all other import indices stable—only the host and swap
         //    indices need relocation updates.
         const swap_import = self.imports.items[last_fn_index];
         self.imports.items.len -= 1;
@@ -1741,7 +1741,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             }
         }
         func_remap[src_idx] = matched orelse {
-            // Source imports a function self doesn't have — add it as a new import.
+            // Source imports a function self doesn't have—add it as a new import.
             func_remap[src_idx] = try self.addImport(src_imp.module_name, src_imp.field_name, remapped_type);
             continue;
         };
@@ -1851,14 +1851,14 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
         switch (src_sym.kind) {
             .function => {
                 if (src_sym.isUndefined()) {
-                    // Undefined function in source — resolve against self's symbol table.
+                    // Undefined function in source—resolve against self's symbol table.
                     if (src_name) |name| {
                         if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |existing| {
                             symbol_remap[src_sym_idx] = existing;
                             continue;
                         }
                     }
-                    // Not found — add as new undefined symbol referencing the (possibly new) import.
+                    // Not found—add as new undefined symbol referencing the (possibly new) import.
                     const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
                     try self.linking.symbol_table.append(gpa, .{
                         .kind = .function,
@@ -1868,7 +1868,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                     });
                     symbol_remap[src_sym_idx] = new_sym_idx;
                 } else {
-                    // Defined function in source — add as defined in self.
+                    // Defined function in source—add as defined in self.
                     if (!src_sym.isLocal()) {
                         if (src_name) |name| {
                             if (try self.resolveUndefinedFunctionSymbols(
@@ -1894,7 +1894,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             },
             .data => {
                 if (src_sym.isUndefined()) {
-                    // Undefined data — resolve against self.
+                    // Undefined data—resolve against self.
                     if (src_name) |name| {
                         if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |existing| {
                             symbol_remap[src_sym_idx] = existing;
@@ -1907,7 +1907,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                     symbol_remap[src_sym_idx] = new_sym_idx;
                     if (src_name) |name| try undefined_data.add(name, new_sym_idx);
                 } else {
-                    // Defined data — keep the symbol's segment-relative offset.
+                    // Defined data—keep the symbol's segment-relative offset.
                     // The segment itself was remapped above; final relocation
                     // resolution computes the absolute address from the segment.
                     const new_segment_idx = if (src_sym.index < data_segment_remap.len)
@@ -2669,7 +2669,7 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
     self.dead_import_dummy_count += eliminated_import_count;
 
     // Insert function signatures for the new dummy functions.
-    // Dummies use type signature 0 (arbitrary — they never execute).
+    // Dummies use type signature 0 (arbitrary—they never execute).
     for (0..eliminated_import_count) |_| {
         try self.func_type_indices.insert(gpa, 0, 0);
     }
@@ -2961,7 +2961,7 @@ fn traceLiveFunctions(
 /// Validate that memory and table ownership is correctly configured.
 ///
 /// In relocatable WASM objects, memory, table, and __stack_pointer are imported.
-/// Our parser already strips non-function imports from the imports array — only
+/// Our parser already strips non-function imports from the imports array—only
 /// function imports are stored. Memory and table state is tracked via `has_memory`
 /// and `has_table` flags, and will be emitted as defined sections (not imports)
 /// when the module is encoded.
@@ -3379,7 +3379,7 @@ fn parseElementSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseErr
     for (0..count) |_| {
         const seg_flags = try readU32(bytes, cursor);
 
-        // Only handle flags=0 (active, table 0) — this is what LLVM/Zig emit for PIC.
+        // Only handle flags=0 (active, table 0)—this is what LLVM/Zig emit for PIC.
         // Skip other segment types (passive, declarative, etc.) gracefully.
         if (seg_flags != 0) {
             cursor.* = section_end;
@@ -3419,7 +3419,7 @@ fn parseCodeSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError!v
 
     // Record how many bytes the function count LEB128 consumed.
     // reloc.CODE offsets are relative to section body (including fn count),
-    // but code_bytes starts after it — this delta is needed to adjust offsets.
+    // but code_bytes starts after it—this delta is needed to adjust offsets.
     self.code_section_fn_count_leb_size = @intCast(cursor.* - before_fn_count);
 
     // Store raw bytes of the entire code section body (after the count).
@@ -3457,7 +3457,7 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
             if (mem_idx != 0) return error.InvalidSection;
         }
         if (seg_flags == 1) {
-            // Passive segment — no init expression, just data
+            // Passive segment—no init expression, just data
             const data_len = try readU32(bytes, cursor);
             const data_start = cursor.*;
             try skipBytes(bytes, cursor, data_len);
@@ -3472,7 +3472,7 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
                 .flags = 0,
             });
         } else {
-            // Active segment — parse init expression: i32.const <offset> end
+            // Active segment—parse init expression: i32.const <offset> end
             if (cursor.* >= bytes.len) return error.UnexpectedEnd;
             cursor.* += 1; // skip i32.const opcode
             const offset: u32 = @bitCast(try readI32(bytes, cursor));
@@ -4405,37 +4405,37 @@ fn decodePaddedI32(bytes: []const u8) i32 {
     return @bitCast(result);
 }
 
-test "overwritePaddedU32 — value 0 encodes as [0x80, 0x80, 0x80, 0x80, 0x00]" {
+test "overwritePaddedU32—value 0 encodes as [0x80, 0x80, 0x80, 0x80, 0x00]" {
     var buf = [_]u8{0} ** 5;
     overwritePaddedU32(&buf, 0, 0);
     try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
-test "overwritePaddedU32 — value 1 encodes as [0x81, 0x80, 0x80, 0x80, 0x00]" {
+test "overwritePaddedU32—value 1 encodes as [0x81, 0x80, 0x80, 0x80, 0x00]" {
     var buf = [_]u8{0} ** 5;
     overwritePaddedU32(&buf, 0, 1);
     try std.testing.expectEqualSlices(u8, &.{ 0x81, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
-test "overwritePaddedU32 — value 0x7F encodes as [0xFF, 0x80, 0x80, 0x80, 0x00]" {
+test "overwritePaddedU32—value 0x7F encodes as [0xFF, 0x80, 0x80, 0x80, 0x00]" {
     var buf = [_]u8{0} ** 5;
     overwritePaddedU32(&buf, 0, 0x7F);
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
-test "overwritePaddedU32 — value 128 encodes as [0x80, 0x81, 0x80, 0x80, 0x00]" {
+test "overwritePaddedU32—value 128 encodes as [0x80, 0x81, 0x80, 0x80, 0x00]" {
     var buf = [_]u8{0} ** 5;
     overwritePaddedU32(&buf, 0, 128);
     try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x81, 0x80, 0x80, 0x00 }, &buf);
 }
 
-test "overwritePaddedU32 — max u32 (0xFFFFFFFF) encodes correctly" {
+test "overwritePaddedU32—max u32 (0xFFFFFFFF) encodes correctly" {
     var buf = [_]u8{0} ** 5;
     overwritePaddedU32(&buf, 0, 0xFFFFFFFF);
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x0F }, &buf);
 }
 
-test "overwritePaddedU32 — round-trip: write then decode matches original value" {
+test "overwritePaddedU32—round-trip: write then decode matches original value" {
     const test_values = [_]u32{ 0, 1, 127, 128, 255, 256, 16383, 16384, 2097151, 2097152, 0x0FFFFFFF, 0xFFFFFFFF };
     for (test_values) |val| {
         var buf = [_]u8{0} ** 5;
@@ -4444,14 +4444,14 @@ test "overwritePaddedU32 — round-trip: write then decode matches original valu
     }
 }
 
-test "overwritePaddedI32 — negative value (-1) encodes correctly" {
+test "overwritePaddedI32—negative value (-1) encodes correctly" {
     var buf = [_]u8{0} ** 5;
     overwritePaddedI32(&buf, 0, -1);
     // -1 in signed padded LEB128: all 7-bit groups are 0x7F, last byte keeps sign bit
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x7F }, &buf);
 }
 
-test "overwritePaddedI32 — positive value round-trips correctly" {
+test "overwritePaddedI32—positive value round-trips correctly" {
     const test_values = [_]i32{ 0, 1, -1, 127, -128, 32767, -32768, std.math.maxInt(i32), std.math.minInt(i32) };
     for (test_values) |val| {
         var buf = [_]u8{0} ** 5;
@@ -4460,14 +4460,14 @@ test "overwritePaddedI32 — positive value round-trips correctly" {
     }
 }
 
-test "appendPaddedU32 — appends exactly 5 bytes" {
+test "appendPaddedU32—appends exactly 5 bytes" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendPaddedU32(std.testing.allocator, &output, 42);
     try std.testing.expectEqual(@as(usize, 5), output.items.len);
 }
 
-test "appendPaddedU32 — output is decodable as standard LEB128" {
+test "appendPaddedU32—output is decodable as standard LEB128" {
     const test_values = [_]u32{ 0, 1, 127, 128, 16384, 0xFFFFFFFF };
     for (test_values) |val| {
         var output: std.ArrayList(u8) = .empty;
@@ -4479,40 +4479,40 @@ test "appendPaddedU32 — output is decodable as standard LEB128" {
 
 // --- Tests for LEB128 decoding ---
 
-test "readU32 — decodes single-byte value" {
+test "readU32—decodes single-byte value" {
     const bytes = [_]u8{42};
     var cursor: usize = 0;
     try std.testing.expectEqual(@as(u32, 42), try readU32(&bytes, &cursor));
     try std.testing.expectEqual(@as(usize, 1), cursor);
 }
 
-test "readU32 — decodes multi-byte value" {
+test "readU32—decodes multi-byte value" {
     const bytes = [_]u8{ 0x80, 0x01 }; // 128
     var cursor: usize = 0;
     try std.testing.expectEqual(@as(u32, 128), try readU32(&bytes, &cursor));
     try std.testing.expectEqual(@as(usize, 2), cursor);
 }
 
-test "readU32 — decodes max u32 padded" {
+test "readU32—decodes max u32 padded" {
     const bytes = [_]u8{ 0xFF, 0xFF, 0xFF, 0xFF, 0x0F };
     var cursor: usize = 0;
     try std.testing.expectEqual(@as(u32, 0xFFFFFFFF), try readU32(&bytes, &cursor));
 }
 
-test "readI32 — decodes negative value" {
+test "readI32—decodes negative value" {
     // -1 in signed LEB128 = 0x7F
     const bytes = [_]u8{0x7F};
     var cursor: usize = 0;
     try std.testing.expectEqual(@as(i32, -1), try readI32(&bytes, &cursor));
 }
 
-test "readI32 — decodes positive value" {
+test "readI32—decodes positive value" {
     const bytes = [_]u8{42};
     var cursor: usize = 0;
     try std.testing.expectEqual(@as(i32, 42), try readI32(&bytes, &cursor));
 }
 
-test "readString — reads length-prefixed string" {
+test "readString—reads length-prefixed string" {
     const bytes = [_]u8{ 3, 'f', 'o', 'o' };
     var cursor: usize = 0;
     const s = try readString(&bytes, &cursor);
@@ -4688,22 +4688,22 @@ fn writeSectionBody(allocator: Allocator, out: *std.ArrayList(u8), body: []const
     try out.appendSlice(allocator, body);
 }
 
-test "preload — rejects bytes without WASM magic number" {
+test "preload—rejects bytes without WASM magic number" {
     const bad_bytes = [_]u8{ 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 };
     try std.testing.expectError(error.InvalidMagic, preload(std.testing.allocator, &bad_bytes, false));
 }
 
-test "preload — rejects wrong version" {
+test "preload—rejects wrong version" {
     const bad_bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D, 0x02, 0x00, 0x00, 0x00 };
     try std.testing.expectError(error.InvalidVersion, preload(std.testing.allocator, &bad_bytes, false));
 }
 
-test "preload — rejects too-short input" {
+test "preload—rejects too-short input" {
     const bad_bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D };
     try std.testing.expectError(error.UnexpectedEnd, preload(std.testing.allocator, &bad_bytes, false));
 }
 
-test "preload — parses minimal valid module (magic + version only)" {
+test "preload—parses minimal valid module (magic + version only)" {
     const bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00 };
     var module = try preload(std.testing.allocator, &bytes, false);
     defer module.deinit();
@@ -4711,7 +4711,7 @@ test "preload — parses minimal valid module (magic + version only)" {
     try std.testing.expectEqual(@as(usize, 0), module.imports.items.len);
 }
 
-test "preload — parses type section with multiple signatures" {
+test "preload—parses type section with multiple signatures" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
@@ -4725,7 +4725,7 @@ test "preload — parses type section with multiple signatures" {
     try std.testing.expectEqual(@as(?ValType, null), module.func_type_results.items[0]);
 }
 
-test "preload — parses import section with function import" {
+test "preload—parses import section with function import" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
@@ -4740,7 +4740,7 @@ test "preload — parses import section with function import" {
     try std.testing.expectEqual(@as(u32, 1), module.import_fn_count);
 }
 
-test "preload — records correct function_offsets for code section" {
+test "preload—records correct function_offsets for code section" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
@@ -4757,7 +4757,7 @@ test "preload — records correct function_offsets for code section" {
     try std.testing.expect(module.code_bytes.items.len > 0);
 }
 
-test "preload — parses linking section symbol table" {
+test "preload—parses linking section symbol table" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
@@ -4783,7 +4783,7 @@ test "preload — parses linking section symbol table" {
     try std.testing.expectEqual(@as(u32, 1), sym1.index);
 }
 
-test "preload — parses reloc.CODE section entries" {
+test "preload—parses reloc.CODE section entries" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
@@ -4806,13 +4806,13 @@ test "preload — parses reloc.CODE section entries" {
     }
 }
 
-test "preload — require_relocatable rejects module without linking section" {
+test "preload—require_relocatable rejects module without linking section" {
     // A minimal valid module with no custom sections
     const bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00 };
     try std.testing.expectError(error.MissingLinkingSection, preload(std.testing.allocator, &bytes, true));
 }
 
-test "preload — parsed module has correct function count" {
+test "preload—parsed module has correct function count" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
@@ -4830,7 +4830,7 @@ test "preload — parsed module has correct function count" {
     );
 }
 
-test "preload — parses export section" {
+test "preload—parses export section" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
@@ -4860,7 +4860,7 @@ test "function types match structurally rather than by table index" {
     try std.testing.expect(!module.funcTypeMatches(duplicate, &.{ .i32, .v128 }, &.{.i32}));
 }
 
-test "removeFunctionExports — removes only named function exports" {
+test "removeFunctionExports—removes only named function exports" {
     const allocator = std.testing.allocator;
     var module = init(allocator);
     defer module.deinit();
@@ -4878,7 +4878,7 @@ test "removeFunctionExports — removes only named function exports" {
     try std.testing.expectEqual(ExportKind.memory, module.exports.items[1].kind);
 }
 
-test "preload — parses memory section" {
+test "preload—parses memory section" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
@@ -4890,7 +4890,7 @@ test "preload — parses memory section" {
     try std.testing.expectEqual(@as(u32, 1), module.memory_min_pages);
 }
 
-test "preload — symbol name resolution from imports" {
+test "preload—symbol name resolution from imports" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
@@ -4898,7 +4898,7 @@ test "preload — symbol name resolution from imports" {
     var module = try preload(allocator, wasm_bytes, false);
     defer module.deinit();
 
-    // Symbol 0 is implicitly named — resolve via imports
+    // Symbol 0 is implicitly named—resolve via imports
     const sym0 = module.linking.symbol_table.items[0];
     const resolved_name = sym0.resolveName(module.imports.items, module.global_imports.items, module.table_imports.items);
     try std.testing.expect(resolved_name != null);
@@ -4915,10 +4915,10 @@ test "preload — symbol name resolution from imports" {
 ///
 /// Function index space:
 ///   0: js_foo          (import, env)
-///   1: roc__main_exposed (import, env) — the app function to link
+///   1: roc__main_exposed (import, env)—the app function to link
 ///   2: js_bar          (import, env)
-///   3: defined_0       — body calls roc__main_exposed (fn 1)
-///   4: defined_1       — body calls js_bar (fn 2)
+///   3: defined_0—body calls roc__main_exposed (fn 1)
+///   4: defined_1—body calls js_bar (fn 2)
 ///
 /// Each function body in code_bytes:
 ///   [body_size] [0x00 locals] [Op.call] [padded_leb128 fn_index] [Op.end]
@@ -4973,9 +4973,9 @@ fn buildLinkingTestModule(allocator: Allocator) Allocator.Error!Self {
     try module.function_offsets.append(allocator, 9); // fn4 at offset 9
 
     // Symbol table:
-    //   sym 0: undefined function index 0 (js_foo) — implicitly named
-    //   sym 1: undefined function index 1 (roc__main_exposed) — implicitly named
-    //   sym 2: undefined function index 2 (js_bar) — implicitly named
+    //   sym 0: undefined function index 0 (js_foo)—implicitly named
+    //   sym 1: undefined function index 1 (roc__main_exposed)—implicitly named
+    //   sym 2: undefined function index 2 (js_bar)—implicitly named
     //   sym 3: defined function index 3 (defined_0)
     //   sym 4: defined function index 4 (defined_1)
     try module.linking.symbol_table.appendSlice(allocator, &.{
@@ -4997,7 +4997,7 @@ fn buildLinkingTestModule(allocator: Allocator) Allocator.Error!Self {
     return module;
 }
 
-test "linkHostToAppCalls — single app function: import removed, dummy inserted" {
+test "linkHostToAppCalls—single app function: import removed, dummy inserted" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5016,12 +5016,12 @@ test "linkHostToAppCalls — single app function: import removed, dummy inserted
     try std.testing.expectEqual(@as(u32, 1), module.dead_import_dummy_count);
 }
 
-test "linkHostToAppCalls — verifies call instruction patched to app function index" {
+test "linkHostToAppCalls—verifies call instruction patched to app function index" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
 
-    // Before: fn3 calls fn 1 (roc__main_exposed) — LEB128 at code_bytes[3..8]
+    // Before: fn3 calls fn 1 (roc__main_exposed)—LEB128 at code_bytes[3..8]
     try std.testing.expectEqual(@as(u32, 1), decodePaddedU32(module.code_bytes.items[3..8]));
 
     try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
@@ -5030,7 +5030,7 @@ test "linkHostToAppCalls — verifies call instruction patched to app function i
     try std.testing.expectEqual(@as(u32, 5), decodePaddedU32(module.code_bytes.items[3..8]));
 }
 
-test "linkHostToAppCalls — last import swapped into vacated slot" {
+test "linkHostToAppCalls—last import swapped into vacated slot" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5042,12 +5042,12 @@ test "linkHostToAppCalls — last import swapped into vacated slot" {
     try std.testing.expectEqualStrings("js_bar", module.imports.items[1].field_name);
 }
 
-test "linkHostToAppCalls — swap import's call sites updated to new index" {
+test "linkHostToAppCalls—swap import's call sites updated to new index" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
 
-    // Before: fn4 calls fn 2 (js_bar) — LEB128 at code_bytes[12..17]
+    // Before: fn4 calls fn 2 (js_bar)—LEB128 at code_bytes[12..17]
     try std.testing.expectEqual(@as(u32, 2), decodePaddedU32(module.code_bytes.items[12..17]));
 
     try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
@@ -5056,7 +5056,7 @@ test "linkHostToAppCalls — swap import's call sites updated to new index" {
     try std.testing.expectEqual(@as(u32, 1), decodePaddedU32(module.code_bytes.items[12..17]));
 }
 
-test "linkHostToAppCalls — multiple app functions linked in sequence" {
+test "linkHostToAppCalls—multiple app functions linked in sequence" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5073,7 +5073,7 @@ test "linkHostToAppCalls — multiple app functions linked in sequence" {
     try std.testing.expectEqual(@as(usize, 4), module.func_type_indices.items.len); // 2 dummies + 2 original
 }
 
-test "linkHostToAppCalls — dead_import_dummy_count incremented correctly" {
+test "linkHostToAppCalls—dead_import_dummy_count incremented correctly" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5087,7 +5087,7 @@ test "linkHostToAppCalls — dead_import_dummy_count incremented correctly" {
     try std.testing.expectEqual(@as(u32, 2), module.dead_import_dummy_count);
 }
 
-test "linkHostToAppCalls — func_type_indices has dummy signature at position 0" {
+test "linkHostToAppCalls—func_type_indices has dummy signature at position 0" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5097,12 +5097,12 @@ test "linkHostToAppCalls — func_type_indices has dummy signature at position 0
 
     try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
 
-    // After: func_type_indices = [0, 0, 0] — dummy at position 0
+    // After: func_type_indices = [0, 0, 0]—dummy at position 0
     try std.testing.expectEqual(@as(usize, 3), module.func_type_indices.items.len);
     try std.testing.expectEqual(@as(u32, 0), module.func_type_indices.items[0]); // dummy type signature
 }
 
-test "linkHostToAppCalls — total function count unchanged after linking" {
+test "linkHostToAppCalls—total function count unchanged after linking" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5118,7 +5118,7 @@ test "linkHostToAppCalls — total function count unchanged after linking" {
     try std.testing.expectEqual(@as(usize, 5), total_after);
 }
 
-test "linkHostToAppCalls — unfound import exports app function instead" {
+test "linkHostToAppCalls—unfound import exports app function instead" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5137,7 +5137,7 @@ test "linkHostToAppCalls — unfound import exports app function instead" {
     try std.testing.expectEqual(@as(u32, 7), new_export.idx);
 }
 
-test "linkHostToAppCalls — import_fn_count decremented" {
+test "linkHostToAppCalls—import_fn_count decremented" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5149,7 +5149,7 @@ test "linkHostToAppCalls — import_fn_count decremented" {
     try std.testing.expectEqual(@as(u32, 2), module.import_fn_count);
 }
 
-test "linkHostToAppCalls — symbol table updated for linked function" {
+test "linkHostToAppCalls—symbol table updated for linked function" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5163,7 +5163,7 @@ test "linkHostToAppCalls — symbol table updated for linked function" {
     try std.testing.expectEqual(@as(u32, 5), module.linking.symbol_table.items[1].index);
 }
 
-test "linkHostToAppCalls — symbol table updated for swapped function" {
+test "linkHostToAppCalls—symbol table updated for swapped function" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -5177,12 +5177,12 @@ test "linkHostToAppCalls — symbol table updated for swapped function" {
     try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[2].index);
 }
 
-test "linkHostToAppCalls — linking last import is a no-op swap" {
+test "linkHostToAppCalls—linking last import is a no-op swap" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
 
-    // Link js_bar (the last import) — swap_fn_index == host_fn_index, no swap needed
+    // Link js_bar (the last import)—swap_fn_index == host_fn_index, no swap needed
     try module.linkHostToAppCalls(&.{.{ .name = "js_bar", .fn_index = 5 }});
 
     // js_bar removed, js_foo and roc__main_exposed remain
@@ -5193,13 +5193,13 @@ test "linkHostToAppCalls — linking last import is a no-op swap" {
     // fn4's call should be patched from 2 to 5
     try std.testing.expectEqual(@as(u32, 5), decodePaddedU32(module.code_bytes.items[12..17]));
 
-    // No swap relocation needed — sym 1 (roc__main_exposed) should be unchanged
+    // No swap relocation needed—sym 1 (roc__main_exposed) should be unchanged
     try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[1].index);
 }
 
 // --- Tests for loading a real relocatable host module ---
 
-test "preload — parses real Zig-compiled wasm host object" {
+test "preload—parses real Zig-compiled wasm host object" {
     const allocator = std.testing.allocator;
     const host_bytes = @import("wasm_host_fixture").host_wasm;
 
@@ -5223,7 +5223,7 @@ test "preload — parses real Zig-compiled wasm host object" {
     // Should have relocation entries for code
     try std.testing.expect(module.reloc_code.entries.items.len > 0);
 
-    // The host imports the app's roc_main entrypoint — verify we can find it by name
+    // The host imports the app's roc_main entrypoint—verify we can find it by name
     var found_roc_main = false;
     for (module.imports.items) |imp| {
         if (std.mem.eql(u8, imp.field_name, "roc_main")) {
@@ -5290,7 +5290,7 @@ fn buildPhase5TestModule(allocator: Allocator) Allocator.Error!Self {
     return module;
 }
 
-test "setup — memory and table imports removed from host module" {
+test "setup—memory and table imports removed from host module" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
@@ -5307,7 +5307,7 @@ test "setup — memory and table imports removed from host module" {
     try std.testing.expect(module.has_table);
 }
 
-test "setup — import_fn_count unchanged after removing non-function imports" {
+test "setup—import_fn_count unchanged after removing non-function imports" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
@@ -5315,12 +5315,12 @@ test "setup — import_fn_count unchanged after removing non-function imports" {
     const fn_count_before = module.import_fn_count;
     module.removeMemoryAndTableImports();
 
-    // import_fn_count should be unchanged — it only counts function imports
+    // import_fn_count should be unchanged—it only counts function imports
     try std.testing.expectEqual(fn_count_before, module.import_fn_count);
     try std.testing.expectEqual(@as(u32, 2), module.import_fn_count);
 }
 
-test "setup — __stack_pointer global defined with correct initial value" {
+test "setup—__stack_pointer global defined with correct initial value" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
@@ -5335,7 +5335,7 @@ test "setup — __stack_pointer global defined with correct initial value" {
     try std.testing.expectEqual(module.memory_min_pages * 65536, module.stack_pointer_init);
 }
 
-test "setup — memory section has correct minimum pages" {
+test "setup—memory section has correct minimum pages" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
@@ -5357,7 +5357,7 @@ test "setup — memory section has correct minimum pages" {
     try std.testing.expectEqual(@as(u32, 2), module.memory_min_pages);
 }
 
-test "setup — table size matches element count after finalization" {
+test "setup—table size matches element count after finalization" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
@@ -5428,7 +5428,7 @@ test "setup — memory exported as 'memory'" {
     try std.testing.expect(found_memory_export);
 }
 
-test "setup — global import count tracked correctly" {
+test "setup—global import count tracked correctly" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
@@ -5437,7 +5437,7 @@ test "setup — global import count tracked correctly" {
     try std.testing.expectEqual(@as(u32, 1), module.import_global_count);
 }
 
-test "setup — finalized module encodes and re-parses as valid WASM" {
+test "setup—finalized module encodes and re-parses as valid WASM" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
@@ -5476,7 +5476,7 @@ test "setup — finalized module encodes and re-parses as valid WASM" {
     try std.testing.expect(decoded.has_stack_pointer);
 }
 
-test "phase5 — real host module: removeMemoryAndTableImports preserves function imports" {
+test "phase5—real host module: removeMemoryAndTableImports preserves function imports" {
     const allocator = std.testing.allocator;
     const host_bytes = @import("wasm_host_fixture").host_wasm;
 
@@ -5496,7 +5496,7 @@ test "phase5 — real host module: removeMemoryAndTableImports preserves functio
     try std.testing.expect(module.has_memory);
 }
 
-test "phase5 — real host module: full setup and finalization produces valid WASM" {
+test "phase5—real host module: full setup and finalization produces valid WASM" {
     const allocator = std.testing.allocator;
     const host_bytes = @import("wasm_host_fixture").host_wasm;
 
@@ -5527,7 +5527,7 @@ test "phase5 — real host module: full setup and finalization produces valid WA
 
 // --- Phase 6 tests: WASM Function Pointer Representation & RocOps Layout ---
 
-test "RocOps struct — correct field offsets for wasm32 (36 bytes total)" {
+test "RocOps struct—correct field offsets for wasm32 (36 bytes total)" {
     const W = Self.WasmRocOps;
     try std.testing.expectEqual(@as(u32, 0), W.env_ptr);
     try std.testing.expectEqual(@as(u32, 4), W.roc_alloc_table_idx);
@@ -5543,7 +5543,7 @@ test "RocOps struct — correct field offsets for wasm32 (36 bytes total)" {
     try std.testing.expectEqual(@as(u32, 9 * 4), W.total_size);
 }
 
-test "call_indirect — roc_alloc uses 2-arg callback type, not RocCall type" {
+test "call_indirect—roc_alloc uses 2-arg callback type, not RocCall type" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -5565,7 +5565,7 @@ test "call_indirect — roc_alloc uses 2-arg callback type, not RocCall type" {
     try std.testing.expect(module.imports.items[roc_alloc_idx].type_idx != roc_call_type);
 }
 
-test "call_indirect — hosted function uses 3-arg RocCall type" {
+test "call_indirect—hosted function uses 3-arg RocCall type" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -5588,7 +5588,7 @@ test "call_indirect — hosted function uses 3-arg RocCall type" {
     try std.testing.expectEqual(@as(u32, 0), module.table_func_indices.items[0]);
 }
 
-test "call_indirect — mismatched type index would trap (validate type separation)" {
+test "call_indirect—mismatched type index would trap (validate type separation)" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -5617,7 +5617,7 @@ test "call_indirect — mismatched type index would trap (validate type separati
     try std.testing.expectEqual(@as(?ValType, null), module.func_type_results.items[roc_call_type]);
 }
 
-test "function table — all RocOps functions have valid table entries after linking" {
+test "function table—all RocOps functions have valid table entries after linking" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -5667,7 +5667,7 @@ test "function table — all RocOps functions have valid table entries after lin
     }
 }
 
-test "function table — hosted functions added to table with correct indices" {
+test "function table—hosted functions added to table with correct indices" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -5682,7 +5682,7 @@ test "function table — hosted functions added to table with correct indices" {
     const roc_dealloc_idx = try module.addImport("env", "roc_dealloc", roc_ops_type);
     _ = try module.addTableElement(roc_dealloc_idx);
 
-    // Now add hosted functions — they follow the RocOps entries in the table
+    // Now add hosted functions—they follow the RocOps entries in the table
     const hosted_0_table = try module.addHostedFunctionToTable("env", "hosted_fn_0", roc_call_type);
     const hosted_1_table = try module.addHostedFunctionToTable("env", "hosted_fn_1", roc_call_type);
     const hosted_2_table = try module.addHostedFunctionToTable("env", "hosted_fn_2", roc_call_type);
@@ -5709,7 +5709,7 @@ test "function table — hosted functions added to table with correct indices" {
     try std.testing.expectEqual(@as(u32, 4), module.table_func_indices.items[4]); // hosted_fn_2
 }
 
-test "findFunctionIdxBySuffix — ignores imported symbols and finds defined host callback" {
+test "findFunctionIdxBySuffix—ignores imported symbols and finds defined host callback" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -5727,7 +5727,7 @@ test "findFunctionIdxBySuffix — ignores imported symbols and finds defined hos
     try std.testing.expectEqual(callback_idx, module.findFunctionIdxBySuffix("roc_dbg").?);
 }
 
-test "ensureTableElement — reuses existing table entry" {
+test "ensureTableElement—reuses existing table entry" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -5751,15 +5751,15 @@ test "ensureTableElement — reuses existing table entry" {
 /// Function index space:
 ///   0: roc_alloc       (import, env)
 ///   1: roc_dealloc     (import, env)
-///   2: host_fn_0       (defined) — body calls roc_alloc (fn 0)
+///   2: host_fn_0       (defined)—body calls roc_alloc (fn 0)
 ///
 /// Types:
 ///   0: (i32, i32) → void   (roc_alloc signature)
 ///   1: () → void            (simple void function)
 ///
 /// Symbol table:
-///   sym 0: undefined function index 0 (roc_alloc) — implicitly named
-///   sym 1: undefined function index 1 (roc_dealloc) — implicitly named
+///   sym 0: undefined function index 0 (roc_alloc)—implicitly named
+///   sym 1: undefined function index 1 (roc_dealloc)—implicitly named
 ///   sym 2: defined function index 2 (host_fn_0)
 fn buildMergeHostModule(allocator: Allocator) Allocator.Error!Self {
     var module = Self.init(allocator);
@@ -5812,19 +5812,19 @@ fn buildMergeHostModule(allocator: Allocator) Allocator.Error!Self {
 /// Build a "builtins" module for merge testing.
 ///
 /// Function index space:
-///   0: roc_alloc       (import, env) — shared with host
-///   1: builtin_fn_0    (defined) — body calls roc_alloc (fn 0)
-///   2: builtin_fn_1    (defined) — body is just Op.end
+///   0: roc_alloc       (import, env)—shared with host
+///   1: builtin_fn_0    (defined)—body calls roc_alloc (fn 0)
+///   2: builtin_fn_1    (defined)—body is just Op.end
 ///
 /// Types:
-///   0: (i32, i32) → void   (roc_alloc — same as host type 0)
+///   0: (i32, i32) → void   (roc_alloc—same as host type 0)
 ///   1: (i32) → i32          (new type, not in host)
 ///
 /// Data segment:
 ///   Segment 0: 4 bytes "DATA" at offset 0
 ///
 /// Symbol table:
-///   sym 0: undefined function index 0 (roc_alloc) — implicitly named
+///   sym 0: undefined function index 0 (roc_alloc)—implicitly named
 ///   sym 1: defined function index 1 (roc_builtins_str_trim)
 ///   sym 2: defined function index 2 (roc_builtins_str_concat)
 ///   sym 3: defined data segment 0, offset 0, size 4
@@ -5838,7 +5838,7 @@ fn buildMergeBuiltinsModule(allocator: Allocator) Allocator.Error!Self {
     // Type 1: (i32) -> i32 (new type)
     _ = try module.addFuncType(&.{.i32}, &.{.i32});
 
-    // 1 import (roc_alloc — shared with host)
+    // 1 import (roc_alloc—shared with host)
     _ = try module.addImport("env", "roc_alloc", 0);
     module.import_fn_count = 1;
 
@@ -5920,7 +5920,7 @@ fn buildMergeDataRelocModule(allocator: Allocator) Allocator.Error!Self {
     return module;
 }
 
-test "mergeModule — type deduplication: identical signatures share index" {
+test "mergeModule—type deduplication: identical signatures share index" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
     defer host.deinit();
@@ -5981,7 +5981,7 @@ test "mergeModule — function indices remapped correctly" {
     try std.testing.expectEqualStrings(builtin_signatures.sigOf(.str_concat).name, concat_sym.name.?);
 }
 
-test "mergeModule — code bytes appended at correct offset" {
+test "mergeModule—code bytes appended at correct offset" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
     defer host.deinit();
@@ -6006,7 +6006,7 @@ test "mergeModule — code bytes appended at correct offset" {
     try std.testing.expectEqual(@as(u32, @intCast(host_code_len + 9)), host.function_offsets.items[2]); // builtin_fn_1
 }
 
-test "mergeModule — undefined symbol in builtins resolved to host's roc_alloc import" {
+test "mergeModule—undefined symbol in builtins resolved to host's roc_alloc import" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
     defer host.deinit();
@@ -6023,7 +6023,7 @@ test "mergeModule — undefined symbol in builtins resolved to host's roc_alloc 
     try std.testing.expectEqual(@as(usize, 2), host.imports.items.len);
 }
 
-test "mergeModule — later weak definition resolves earlier undefined function import" {
+test "mergeModule—later weak definition resolves earlier undefined function import" {
     const allocator = std.testing.allocator;
 
     var host = Self.init(allocator);
@@ -6088,7 +6088,7 @@ test "mergeModule — later weak definition resolves earlier undefined function 
     try std.testing.expectEqual(@as(usize, 0), host.imports.items.len);
 }
 
-test "mergeModule — relocation offsets shifted by base_code_offset" {
+test "mergeModule—relocation offsets shifted by base_code_offset" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
     defer host.deinit();
@@ -6114,7 +6114,7 @@ test "mergeModule — relocation offsets shifted by base_code_offset" {
     try std.testing.expectEqual(@as(u32, 0), host.reloc_code.entries.items[1].getSymbolIndex());
 }
 
-test "mergeModule — data segment merged with adjusted offset" {
+test "mergeModule—data segment merged with adjusted offset" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
     defer host.deinit();
@@ -6137,7 +6137,7 @@ test "mergeModule — data segment merged with adjusted offset" {
     try std.testing.expect(new_ds.offset >= 1024);
 }
 
-test "mergeModule + resolveDataRelocations — patches merged data segment bytes" {
+test "mergeModule + resolveDataRelocations—patches merged data segment bytes" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
     defer host.deinit();
@@ -6217,7 +6217,7 @@ fn encodedDataSummary(bytes: []const u8) ParseError!EncodedDataSummary {
     return .{ .count = 0, .payload_len = 0 };
 }
 
-test "encode — omits bss payload when final memory starts zero-filled" {
+test "encode—omits bss payload when final memory starts zero-filled" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6243,7 +6243,7 @@ test "encode — omits bss payload when final memory starts zero-filled" {
     try std.testing.expectEqual(@as(u32, 4), summary.payload_len);
 }
 
-test "encode — keeps bss payload when imported memory may be uninitialized" {
+test "encode—keeps bss payload when imported memory may be uninitialized" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6268,7 +6268,7 @@ test "encode — keeps bss payload when imported memory may be uninitialized" {
     try std.testing.expectEqual(@as(u32, 68), summary.payload_len);
 }
 
-test "mergeModule — element section entries remapped and appended" {
+test "mergeModule—element section entries remapped and appended" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
     defer host.deinit();
@@ -6294,7 +6294,7 @@ test "mergeModule — element section entries remapped and appended" {
     try std.testing.expect(host.has_table);
 }
 
-test "resolveCodeRelocations — table_index_sleb resolves to table index not function index" {
+test "resolveCodeRelocations—table_index_sleb resolves to table index not function index" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6350,7 +6350,7 @@ test "resolveCodeRelocations — table_index_sleb resolves to table index not fu
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
 
-test "parseElementSection_ — parses function indices into table_func_indices" {
+test "parseElementSection_—parses function indices into table_func_indices" {
     const allocator = std.testing.allocator;
 
     // Build a module with known table entries, encode it, then re-parse.
@@ -6389,7 +6389,7 @@ test "parseElementSection_ — parses function indices into table_func_indices" 
     try std.testing.expect(parsed.has_table);
 }
 
-test "BuiltinSymbols — all symbols found after merge" {
+test "BuiltinSymbols—all symbols found after merge" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6430,24 +6430,24 @@ test "BuiltinSymbols — all symbols found after merge" {
     try std.testing.expectEqual(@as(u32, @intFromEnum(BuiltinKind.str_trim)) + 1, syms.get(.str_trim));
 }
 
-test "BuiltinSymbols — fails when symbol missing" {
+test "BuiltinSymbols—fails when symbol missing" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
 
-    // Empty symbol table — should fail
+    // Empty symbol table—should fail
     const result = BuiltinSymbols.populate(&module);
     try std.testing.expectError(error.MissingBuiltinSymbol, result);
 }
 
-test "resolveCodeRelocations — patches function call in code_bytes" {
+test "resolveCodeRelocations—patches function call in code_bytes" {
     const allocator = std.testing.allocator;
     var module = try buildMergeHostModule(allocator);
     defer module.deinit();
 
     // Before resolution, the call operand at offset 3 is padded LEB128(0).
     // Symbol 0 is roc_alloc at function index 0.
-    // After resolution it should still be 0 — but let's change the symbol's index
+    // After resolution it should still be 0—but let's change the symbol's index
     // to verify the patch actually happens.
 
     // Change roc_alloc's symbol to point to function index 42.
@@ -6461,7 +6461,7 @@ test "resolveCodeRelocations — patches function call in code_bytes" {
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
 
-test "resolveCodeRelocations — function_index_leb rewrites function reference to table index" {
+test "resolveCodeRelocations—function_index_leb rewrites function reference to table index" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6492,7 +6492,7 @@ test "resolveCodeRelocations — function_index_leb rewrites function reference 
     try std.testing.expectEqual(defined.function.raw(), module.table_func_indices.items[0]);
 }
 
-test "resolveCodeRelocations — global_index_leb function symbol rewrites function reference to table index" {
+test "resolveCodeRelocations—global_index_leb function symbol rewrites function reference to table index" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6523,7 +6523,7 @@ test "resolveCodeRelocations — global_index_leb function symbol rewrites funct
     try std.testing.expectEqual(defined.function.raw(), module.table_func_indices.items[0]);
 }
 
-test "resolveCodeRelocations — global_index_leb data symbol rewrites data reference to memory address" {
+test "resolveCodeRelocations—global_index_leb data symbol rewrites data reference to memory address" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6556,7 +6556,7 @@ test "resolveCodeRelocations — global_index_leb data symbol rewrites data refe
     try std.testing.expectEqual(@as(u32, 4100), decodePaddedU32(module.code_bytes.items[1..6]));
 }
 
-test "resolveCodeRelocations — function_offset_i32 resolves to function body offset" {
+test "resolveCodeRelocations—function_offset_i32 resolves to function body offset" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6591,7 +6591,7 @@ test "resolveCodeRelocations — function_offset_i32 resolves to function body o
     try std.testing.expectEqual(@as(u32, 0x4d9), decodePaddedU32(module.code_bytes.items[1..6]));
 }
 
-test "resolveDataRelocations — function_offset_i32 writes raw function body offset" {
+test "resolveDataRelocations—function_offset_i32 writes raw function body offset" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6624,7 +6624,7 @@ test "resolveDataRelocations — function_offset_i32 writes raw function body of
     try std.testing.expectEqual(@as(u32, 0x1023), std.mem.readInt(u32, module.data_segments.items[0].data[0..4], .little));
 }
 
-test "materializeFuncBodies — produces correct function bodies from code_bytes" {
+test "materializeFuncBodies—produces correct function bodies from code_bytes" {
     const allocator = std.testing.allocator;
     var module = try buildMergeHostModule(allocator);
     defer module.deinit();
@@ -6638,7 +6638,7 @@ test "materializeFuncBodies — produces correct function bodies from code_bytes
     try std.testing.expectEqual(@as(usize, 8), module.func_bodies.items[0].body.len);
 }
 
-test "materializeFuncBodies — includes dummy functions for dead imports" {
+test "materializeFuncBodies—includes dummy functions for dead imports" {
     const allocator = std.testing.allocator;
     var module = try buildLinkingTestModule(allocator);
     defer module.deinit();
@@ -6656,7 +6656,7 @@ test "materializeFuncBodies — includes dummy functions for dead imports" {
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, module.func_bodies.items[0].body);
 }
 
-test "verifyNoBuiltinImports — passes when only RocOps imports remain" {
+test "verifyNoBuiltinImports—passes when only RocOps imports remain" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6672,7 +6672,7 @@ test "verifyNoBuiltinImports — passes when only RocOps imports remain" {
     try module.verifyNoBuiltinImports();
 }
 
-test "verifyNoBuiltinImports — fails if roc_str_trim import still present" {
+test "verifyNoBuiltinImports—fails if roc_str_trim import still present" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6685,7 +6685,7 @@ test "verifyNoBuiltinImports — fails if roc_str_trim import still present" {
     try std.testing.expectError(error.UnresolvedBuiltinImport, result);
 }
 
-test "verifyNoBuiltinImports — allows non-roc imports" {
+test "verifyNoBuiltinImports—allows non-roc imports" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -6697,7 +6697,7 @@ test "verifyNoBuiltinImports — allows non-roc imports" {
     try module.verifyNoBuiltinImports();
 }
 
-test "verifyNoBuiltinImports — allows roc_panic platform import" {
+test "verifyNoBuiltinImports—allows roc_panic platform import" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
@@ -7046,9 +7046,9 @@ test "encodeRelocatable roundtrip - preserves data symbols and data relocations"
 ///   import 0: js_log     (type 0)
 ///   import 1: js_unused  (type 0)
 ///   import 2: js_helper  (type 0)
-///   defined 3: main_fn   — calls js_log (import 0) and helper_fn (defined 4)
-///   defined 4: helper_fn — calls js_helper (import 2)
-///   defined 5: dead_fn   — calls js_unused (import 1)
+///   defined 3: main_fn—calls js_log (import 0) and helper_fn (defined 4)
+///   defined 4: helper_fn—calls js_helper (import 2)
+///   defined 5: dead_fn—calls js_unused (import 1)
 ///
 /// Exports: main_fn (index 3) as "main"
 ///
@@ -7156,12 +7156,12 @@ fn buildDCETestModule(allocator: Allocator) Allocator.Error!Self {
     return module;
 }
 
-test "eliminateDeadCode — exported function and its callees are preserved" {
+test "eliminateDeadCode—exported function and its callees are preserved" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
 
-    // No extra called_fns — only exports seed the live set.
+    // No extra called_fns—only exports seed the live set.
     var called_fns = [_]bool{false} ** 6;
     try module.eliminateDeadCode(&called_fns);
 
@@ -7184,7 +7184,7 @@ test "eliminateDeadCode — exported function and its callees are preserved" {
     try std.testing.expect(helper_body.len > DUMMY_FUNCTION.len);
 }
 
-test "eliminateDeadCode — unreachable function body replaced with unreachable stub" {
+test "eliminateDeadCode—unreachable function body replaced with unreachable stub" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
@@ -7201,7 +7201,7 @@ test "eliminateDeadCode — unreachable function body replaced with unreachable 
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, dead_body);
 }
 
-test "eliminateDeadCode — dead import removed, dead_import_dummy_count incremented" {
+test "eliminateDeadCode—dead import removed, dead_import_dummy_count incremented" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
@@ -7228,7 +7228,7 @@ test "eliminateDeadCode — dead import removed, dead_import_dummy_count increme
     try std.testing.expect(has_js_helper);
 }
 
-test "eliminateDeadCode — non-function imports are preserved" {
+test "eliminateDeadCode—non-function imports are preserved" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
@@ -7246,7 +7246,7 @@ test "eliminateDeadCode — non-function imports are preserved" {
     try std.testing.expect(module.has_table);
 }
 
-test "eliminateDeadCode — indirect call targets (element section) preserved" {
+test "eliminateDeadCode—indirect call targets (element section) preserved" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
@@ -7267,7 +7267,7 @@ test "eliminateDeadCode — indirect call targets (element section) preserved" {
     try std.testing.expect(dead_body.len > DUMMY_FUNCTION.len);
 }
 
-test "eliminateDeadCode — table indices follow compacted function imports" {
+test "eliminateDeadCode—table indices follow compacted function imports" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
@@ -7284,7 +7284,7 @@ test "eliminateDeadCode — table indices follow compacted function imports" {
     try std.testing.expectEqual(@as(u32, 1), module.table_func_indices.items[0]);
 }
 
-test "eliminateDeadCode — transitive callees preserved (A calls B calls C → all live)" {
+test "eliminateDeadCode—transitive callees preserved (A calls B calls C → all live)" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
@@ -7303,7 +7303,7 @@ test "eliminateDeadCode — transitive callees preserved (A calls B calls C → 
     try std.testing.expect(found_js_helper);
 }
 
-test "eliminateDeadCode — init functions preserved" {
+test "eliminateDeadCode—init functions preserved" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
@@ -7311,7 +7311,7 @@ test "eliminateDeadCode — init functions preserved" {
     // Remove the export so main_fn would normally be dead.
     module.exports.items.len = 0;
 
-    // But mark dead_fn (sym 5) as an init function — it should stay live.
+    // But mark dead_fn (sym 5) as an init function—it should stay live.
     try module.linking.init_funcs.append(allocator, .{ .priority = 0, .symbol_index = 5 });
 
     var called_fns = [_]bool{false} ** 6;
@@ -7331,7 +7331,7 @@ test "eliminateDeadCode — init functions preserved" {
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, helper_body);
 }
 
-test "eliminateDeadCode — call_indirect conservatively keeps matching-signature functions" {
+test "eliminateDeadCode—call_indirect conservatively keeps matching-signature functions" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
@@ -7371,7 +7371,7 @@ test "eliminateDeadCode — call_indirect conservatively keeps matching-signatur
     try std.testing.expect(dead_body.len > DUMMY_FUNCTION.len);
 }
 
-test "eliminateDeadCode — function indices unchanged after elimination" {
+test "eliminateDeadCode—function indices unchanged after elimination" {
     const allocator = std.testing.allocator;
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
@@ -7469,7 +7469,7 @@ fn buildEncodeTestModule(allocator: Allocator) Allocator.Error!Self {
     return module;
 }
 
-test "encode — output is valid WASM (magic, version, section ordering)" {
+test "encode—output is valid WASM (magic, version, section ordering)" {
     const allocator = std.testing.allocator;
     var module = try buildEncodeTestModule(allocator);
     defer module.deinit();
@@ -7506,7 +7506,7 @@ test "encode — output is valid WASM (magic, version, section ordering)" {
     try std.testing.expectEqual(output.len, pos);
 }
 
-test "encode — code section function count includes dummies" {
+test "encode—code section function count includes dummies" {
     const allocator = std.testing.allocator;
     var module = try buildEncodeTestModule(allocator);
     defer module.deinit();
@@ -7540,7 +7540,7 @@ test "encode — code section function count includes dummies" {
     try std.testing.expectEqual(@as(u32, 3), func_count);
 }
 
-test "encode — dummy functions prepended before real functions in code section" {
+test "encode—dummy functions prepended before real functions in code section" {
     const allocator = std.testing.allocator;
     var module = try buildEncodeTestModule(allocator);
     defer module.deinit();
@@ -7592,7 +7592,7 @@ test "encode — dummy functions prepended before real functions in code section
     try std.testing.expectEqual(Op.end, output[cursor + 3]);
 }
 
-test "encode — linking section NOT present in output" {
+test "encode—linking section NOT present in output" {
     const allocator = std.testing.allocator;
     var module = try buildEncodeTestModule(allocator);
     defer module.deinit();
@@ -7604,7 +7604,7 @@ test "encode — linking section NOT present in output" {
     const output = try module.encode(allocator);
     defer allocator.free(output);
 
-    // Scan all sections — no custom section should have name "linking"
+    // Scan all sections—no custom section should have name "linking"
     var pos: usize = 8;
     while (pos < output.len) {
         const section_id = output[pos];
@@ -7624,7 +7624,7 @@ test "encode — linking section NOT present in output" {
     }
 }
 
-test "encode — reloc.CODE section NOT present in output" {
+test "encode—reloc.CODE section NOT present in output" {
     const allocator = std.testing.allocator;
     var module = try buildEncodeTestModule(allocator);
     defer module.deinit();
@@ -7636,7 +7636,7 @@ test "encode — reloc.CODE section NOT present in output" {
     const output = try module.encode(allocator);
     defer allocator.free(output);
 
-    // Scan all sections — no custom section should have name "reloc.CODE"
+    // Scan all sections—no custom section should have name "reloc.CODE"
     var pos: usize = 8;
     while (pos < output.len) {
         const section_id = output[pos];

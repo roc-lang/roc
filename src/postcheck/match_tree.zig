@@ -124,7 +124,7 @@ pub const OccId = enum(u32) {
 /// `Ctx` supplies pattern access, type queries, and constructor identity:
 ///
 /// ```
-/// const PatId/TypeId/ExprId/LocalId/BindingSpan — input IR id/span types
+/// const PatId/TypeId/ExprId/LocalId/BindingSpan—input IR id/span types
 /// patKind(pat) PatKind
 /// bindLocal(pat) LocalId                                  // .bind
 /// asInfo(pat) struct { pattern: PatId, local: LocalId }   // .as_pattern
@@ -477,8 +477,8 @@ pub fn Compiler(comptime Ctx: type) type {
             /// one multiway test. Measured against plain first-column
             /// selection on the generated corpus
             /// (src/compile/test/match_corpus_test.zig) the two produced
-            /// identical statement totals — realistic matrices rarely give
-            /// row 0 multiple refutable columns with different run lengths —
+            /// identical statement totals—realistic matrices rarely give
+            /// row 0 multiple refutable columns with different run lengths—
             /// so run length is kept because it dominates first-column by
             /// construction whenever they do differ.
             fn selectColumn(self: *Builder, rows: []const Row) Col {
@@ -1826,7 +1826,7 @@ test "tag payloads specialize into payload occurrence columns" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // match { Ok(1) => 0, Ok(x) => 1, Err => 2 } — nested int test inside Ok.
+    // match { Ok(1) => 0, Ok(x) => 1, Err => 2 }—nested int test inside Ok.
     const ctx = MockCtx{
         .pats = &.{
             .{ .tag = .{ .variant = 0, .payloads = &.{.{ .index = 0, .ty = 9, .pat = 3 }} } },
@@ -1900,7 +1900,7 @@ test "string arms with identical shapes merge and retry on guard failure" {
     try std.testing.expectEqual(@as(u32, 1), first_arm.otherwise.leaf.branch_index);
     try std.testing.expectEqual(@as(usize, 1), first_arm.otherwise.leaf.binds.len);
     try std.testing.expectEqual(@as(u32, 101), first_arm.otherwise.leaf.binds[0].local);
-    // Guard failure retries the SAME arm's later row — not the group default.
+    // Guard failure retries the SAME arm's later row—not the group default.
     try std.testing.expectEqual(@as(u32, 2), node.arms[1].subtree.leaf.branch_index);
     try std.testing.expectEqual(@as(u32, 3), node.default.?.leaf.branch_index);
 }
@@ -1980,7 +1980,7 @@ test "continuation referenced from two miss sites keeps its exit join" {
     // match { Ok(1) => 0, _ => 1 }: the wildcard row is reachable both from
     // the tag test's default (scrutinee is Err) and from the inner literal
     // test's miss (scrutinee is Ok(n), n != 1). The continuation must compile
-    // once behind an exit join — re-lowering it would violate the sharing
+    // once behind an exit join—re-lowering it would violate the sharing
     // invariant.
     const ctx = MockCtx{
         .pats = &.{
@@ -2067,7 +2067,7 @@ test "column selection prefers the longer run" {
     const arena = arena_state.allocator();
 
     // Two-column matrix via tuples: rows (A, 1) / (B, 1) / (C, 1): the first
-    // column runs 3 deep, the second (int) also runs 3 — first wins ties.
+    // column runs 3 deep, the second (int) also runs 3—first wins ties.
     // Make column 2 run longer: (A, 1) / (_, 2) / would break col0... instead:
     // rows: (A, 1), (B, 2), (B, 3): col0 run = 3, col1 run = 3; tie -> col0.
     const ctx = MockCtx{

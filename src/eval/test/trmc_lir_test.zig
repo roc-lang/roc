@@ -364,7 +364,7 @@ test "ptr ops round trip a multi-word payload through a heap cell" {
 // solved_lir_lower shapes, run through Trmc.run + Arc.insert + interpreter)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// A "Peano list": U := [Nil, S(struct{ box(U) })] — the smallest recursive
+/// A "Peano list": U := [Nil, S(struct{ box(U) })]—the smallest recursive
 /// tag union, built reserve-then-fill like the shared layout commit does.
 const PeanoLayouts = struct {
     u: layout.Idx,
@@ -399,7 +399,7 @@ const PeanoLayouts = struct {
 
 /// The canonical lowered shape of
 ///   repeat = |n| match n { 0 => Nil, _ => S(repeat(n - 1)) }
-/// — done-join with the result local as its param, branches lowering into it,
+/// - done-join with the result local as its param, branches lowering into it,
 /// a box_box at the recursive field boundary, and a nominal alias hop.
 fn buildRepeatProc(
     allocator: Allocator,
@@ -712,7 +712,7 @@ test "trmc'd repeat is leak-free and allocation-exact when consumed" {
 
     const n: u64 = 50;
     try std.testing.expectEqual(@as(u64, 0), try runProcU64Args(allocator, &store, &layouts, root, &runtime_env, &.{n}));
-    // Exactly one heap cell per S node — TRMC must not change allocation counts.
+    // Exactly one heap cell per S node—TRMC must not change allocation counts.
     try std.testing.expectEqual(@as(u32, n), runtime_env.allocationCallCount());
     try runtime_env.checkForLeaks();
 }
@@ -911,7 +911,7 @@ test "mixed construct and plain-tail branches both become jumps" {
         .next = nil_jump,
     } });
 
-    // odd: res = weird(n - 1) — plain tail call targeting the done-join param
+    // odd: res = weird(n - 1)—plain tail call targeting the done-join param
     const tail_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
     const tail_call = try store.addCFStmt(.{ .assign_call = .{
         .target = res,
@@ -921,7 +921,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     } });
     const mk_m_tail = try lowLevelStmt(&store, m_tail, .num_minus, &.{ a_n, one }, tail_call);
 
-    // even: res = S(weird(n - 1)) — the construct branch
+    // even: res = S(weird(n - 1))—the construct branch
     const cons_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = res,

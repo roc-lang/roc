@@ -852,20 +852,27 @@ pub inline fn calculateCapacity(
         return requested_length;
     }
 
-    var new_capacity: usize = 0;
     if (element_width == 0) {
         return requested_length;
-    } else if (old_capacity == 0) {
-        new_capacity = 64 / element_width;
-    } else if (old_capacity < 4096 / element_width) {
-        new_capacity = old_capacity * 2;
-    } else if (old_capacity > 4096 * 32 / element_width) {
-        new_capacity = old_capacity * 2;
-    } else {
-        new_capacity = (old_capacity * 3 + 1) / 2;
     }
+    return @max(geometricGrowth(old_capacity, element_width), requested_length);
+}
 
-    return @max(new_capacity, requested_length);
+/// The next capacity step in the geometric growth progression. Appends that
+/// outgrow the current capacity reserve at least this much so a run of them
+/// stays amortized-linear.
+pub inline fn geometricGrowth(old_capacity: usize, element_width: usize) usize {
+    if (element_width == 0) {
+        return old_capacity;
+    } else if (old_capacity == 0) {
+        return 64 / element_width;
+    } else if (old_capacity < 4096 / element_width) {
+        return old_capacity * 2;
+    } else if (old_capacity > 4096 * 32 / element_width) {
+        return old_capacity * 2;
+    } else {
+        return (old_capacity * 3 + 1) / 2;
+    }
 }
 
 /// Allocates memory with space for a reference count, for C compatibility
@@ -1053,7 +1060,7 @@ pub const DebugRefcountTracker = struct {
     /// The shadow model follows an allocation from the address it was born
     /// with, through the increfs and decrefs that pass through this module. It
     /// does not see a count that is written directly, and reallocation moves a
-    /// count to an address whose history starts empty — so a shadow count can
+    /// count to an address whose history starts empty—so a shadow count can
     /// read low even when the program is balanced. Consumers that read only
     /// the operation log (which records the events themselves, not a derived
     /// count) turn these reports off rather than print anomalies they know are
@@ -1130,7 +1137,7 @@ pub const DebugRefcountTracker = struct {
         return null;
     }
 
-    /// Called from allocateWithRefcount — initial refcount = 1
+    /// Called from allocateWithRefcount—initial refcount = 1
     pub fn trackAlloc(rc_addr: usize) void {
         if (!active) return;
         if (findOrInsert(rc_addr)) |idx| {
@@ -1150,7 +1157,7 @@ pub const DebugRefcountTracker = struct {
         }
     }
 
-    /// Called from decref_ptr_to_refcount (inline fn — site identifies the caller)
+    /// Called from decref_ptr_to_refcount (inline fn—site identifies the caller)
     pub fn onDecref(rc_addr: usize, site: Site) void {
         if (!active) return;
         if (find(rc_addr)) |idx| {

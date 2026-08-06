@@ -38,7 +38,7 @@
 //! When generalizing `process` at rank 2:
 //! - `y` unifies with `α` (from `x`), pulling `y` down to rank 1
 //! - `_z` stays at rank 2
-//! - Result: `process : ∀β. (α, β) -> List(α)` — only `_z` is generalized
+//! - Result: `process : ∀β. (α, β) -> List(α)`—only `_z` is generalized
 //!
 //! Later, `process(1.U8, "hello")` constrains the shared `α` to `U8`,
 //! which also constrains `x` to `U8`.
@@ -293,7 +293,7 @@ pub const Generalizer = struct {
     /// Rank reduction shared by applied containers (aliases, nominal types,
     /// tuples): the container contributes nothing itself, so its rank is the
     /// max over its args. Seed at `generalized` (the max-identity) and let the
-    /// args raise it — seeding at `outermost` would floor the result there even
+    /// args raise it—seeding at `outermost` would floor the result there even
     /// when every arg is already generalized, wrongly blocking generalization of
     /// the type that uses the container. No args means a ground type, which sits
     /// at `outermost`.
@@ -332,7 +332,7 @@ pub const Generalizer = struct {
                 // in the alias RHS is either a reference to an arg (already visited
                 // via the args below) or a concrete type (which resolves to
                 // `outermost` on its own, so it can't raise the rank). Traversing the
-                // backing var would therefore be redundant — the rank is just the max
+                // backing var would therefore be redundant—the rank is just the max
                 // over the args.
                 return self.adjustRankOverArgs(self.store.iterAliasArgs(alias), group_rank, vars_to_generalize);
             },
@@ -515,7 +515,7 @@ pub const VarPool = struct {
     }
 
     /// Shrink the vars recorded for `rank` back to `new_len`, discarding
-    /// entries appended after a speculative probe captured the length —
+    /// entries appended after a speculative probe captured the length—
     /// the rollback counterpart to the `addVarToRank` calls the probe made.
     pub fn shrinkRank(self: *Self, rank: Rank, new_len: usize) void {
         std.debug.assert(@intFromEnum(rank) <= @intFromEnum(self.current_rank));

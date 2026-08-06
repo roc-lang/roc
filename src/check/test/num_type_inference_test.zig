@@ -39,7 +39,7 @@ test "infers type for small nums" {
 test "exact num literals outside compact range default to Dec and report invalid number" {
     // Exact integer literals that are too big for the compact payload still
     // participate in `from_numeral`; without stronger evidence, they default
-    // to Dec like other unannotated numeric literals — and since none of these
+    // to Dec like other unannotated numeric literals—and since none of these
     // values fit Dec's range, the defaulted commit must report INVALID NUMBER
     // rather than silently saturating.
     const test_cases = [_][]const u8{
@@ -302,7 +302,7 @@ test "fractional scale beyond Dec precision is a check-time error, not a wrong v
 
 test "huge literal pinned to Dec by a concrete peer reports at the huge literal" {
     // `1E80000 == max_dec` pins the huge literal to Dec (same as an
-    // annotation), so it must report INVALID NUMBER — anchored at the literal
+    // annotation), so it must report INVALID NUMBER—anchored at the literal
     // that does not fit, never at the valid Dec peer (per-literal validation
     // from per-literal exact facts).
     const source =
@@ -318,7 +318,7 @@ test "huge literal pinned to Dec by a concrete peer reports at the huge literal"
 
 test "unpinned integer literal beyond Dec range is a check-time error, not silent saturation" {
     // An unconstrained integer literal defaults to Dec. A value beyond Dec's
-    // range must report INVALID NUMBER like its fractional siblings — it used
+    // range must report INVALID NUMBER like its fractional siblings—it used
     // to commit the default silently and saturate to Dec max at lowering. The
     // discarded use keeps the instantiated copy out of any signature, so it is
     // the defaulted head commit (not probing) that must validate.

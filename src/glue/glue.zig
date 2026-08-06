@@ -641,7 +641,7 @@ fn runGlueSpecDylib(
                 => return err,
             }
             // An installed dylib is a managed artifact: never rebuild past a
-            // failure to load it — the remedy is reinstalling the shorthand.
+            // failure to load it—the remedy is reinstalling the shorthand.
             if (args.no_cache or args.installed_dylib_path != null or first.delete_after_use) return err;
 
             deleteGlueDylibCacheEntry(first, std_io);

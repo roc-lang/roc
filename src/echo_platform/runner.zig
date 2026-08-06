@@ -98,14 +98,14 @@ pub const Paths = struct {
 pub const RunOptions = struct {
     /// Single contiguous arena used for the entire pipeline (BuildEnv,
     /// lowering, LIR image, interpreter). Must own a flat virtual
-    /// region — `std.heap.ArenaAllocator` will not work because the
+    /// region—`std.heap.ArenaAllocator` will not work because the
     /// LIR image step computes offsets via `ptr - base_ptr` arithmetic
     /// (see `src/compile/README.md` "Runtime arena").
     runtime_fba: *std.heap.FixedBufferAllocator,
     /// Fallback Io that handles everything not served by EchoCtx (i.e. paths
     /// not in `Paths` and not in `extras`).
     fallback_io: Io,
-    /// `std.Io` instance used for any real OS I/O on native targets — passed
+    /// `std.Io` instance used for any real OS I/O on native targets—passed
     /// to `BuildEnv.init`, the WasmFilesystem fallback, and stored in
     /// `EchoEnv` so `echoHostedFn` can call `writeStreamingAll`. On WASM
     /// builds the value is unused (freestanding stubs trap), but callers
@@ -162,7 +162,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
 
     // BuildEnv stores std_io for any real-OS reads its workers initiate.
     // On WASM the echo pipeline only touches synthetic / extra paths served
-    // by EchoCtx, so the std_io is never actually dereferenced — but the
+    // by EchoCtx, so the std_io is never actually dereferenced—but the
     // field still must be a concrete value (no `undefined`) to avoid UB if
     // a future refactor adds a real-OS call path.
     var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd, opts.std_io) catch |err| {
@@ -194,7 +194,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     // Bail before lowering if canonicalization or type-checking produced
     // blocking-severity reports (e.g. `module_not_found`, `undefined_variable`).
     // The CIR contains runtime_error placeholder nodes in that state, and
-    // mono lowering asserts they don't appear as runtime values — proceeding
+    // mono lowering asserts they don't appear as runtime values—proceeding
     // would trap. The reports themselves are the user-facing output.
     if (try emitDiagnostics(&build_env, diag, allocator)) {
         return error.CompilationFailed;
@@ -294,7 +294,7 @@ fn runEchoView(
     // `roc_ops.hosted_fns.fns[dispatch_index]`. Dispatch indices are sorted
     // alphabetically by fully-qualified `Module.fn_name` (with trailing `!`
     // stripped). The echo platform has only `Echo.line`, so order is
-    // trivially correct — but additions must respect alphabetical order or
+    // trivially correct—but additions must respect alphabetical order or
     // the wrong function will be called silently. See README "Host functions".
     var hosted_fn_array = [_]HostedFn{echo_platform.echoLineHostedFn()};
     var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };

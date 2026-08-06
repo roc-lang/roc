@@ -40,7 +40,7 @@ const FormatFlags = enum {
 pub const Options = struct {
     /// Version string of the compiler that is running. When it is a nightly
     /// newer than the one a header pins with `roc: "..."`, formatting rewrites
-    /// that pin to name it — see `base.roc_version.shouldUpgrade`.
+    /// that pin to name it—see `base.roc_version.shouldUpgrade`.
     ///
     /// Null leaves every pin exactly as written, which is what tools that
     /// format for inspection want: the snapshot tool, the playground and the

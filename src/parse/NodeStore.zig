@@ -2506,7 +2506,7 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
 /// exactly one literal part, i.e. a plain string with no interpolation.
 ///
 /// Returns null for any other expression, and for strings whose text is split
-/// across several parts (interpolation, escapes, line continuations) — callers
+/// across several parts (interpolation, escapes, line continuations)—callers
 /// use this to read short literals like a pinned compiler version straight out
 /// of the source, which is only sound when the source says it verbatim.
 pub fn singleStringPartToken(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?Token.Idx {

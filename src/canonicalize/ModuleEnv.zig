@@ -647,19 +647,19 @@ pub const NumeralLiteral = extern struct {
 };
 
 /// One constrained-scheme use recorded by checking for static-dispatch
-/// evidence. It names the source node, the scheme root used at that edge, and
-/// — for an instantiation — the fresh var each constrained scheme var was
+/// evidence. It names the source node, the scheme root used at that edge, and—
+/// for an instantiation—the fresh var each constrained scheme var was
 /// copied to. Shared monomorphic edges have no copy pairs. Publication resolves
 /// the recorded vars after checking settles to decide how each of the callee's
 /// dispatch constraints was satisfied at this site.
 pub const SchemeUseRecord = extern struct {
     node_idx: u32,
-    /// `Slot` — distinguishes several schemes instantiated at one node (a value
+    /// `Slot`—distinguishes several schemes instantiated at one node (a value
     /// use, an expression-position function stored as a value, or the target
     /// of a dispatch constraint).
     slot_kind: u32,
     /// For `dispatch_target` slots, the raw fn `Var` of the constraint whose
-    /// discharge instantiated this scheme — unique per constraint
+    /// discharge instantiated this scheme—unique per constraint
     /// instantiation, so nested evidence chains resolve without ambiguity.
     /// 0 for value and nested-function use slots (keyed by `node_idx`
     /// instead).
@@ -1346,7 +1346,7 @@ pub fn pushMalformed(self: *Self, comptime RetIdx: type, reason: CIR.Diagnostic)
 /// Like `pushMalformed`, but does NOT register `reason` in the reported
 /// diagnostics list. The malformed node still references the diagnostic (for
 /// runtime crash text), but the diagnostic that is actually reported for this
-/// site is pushed separately and later — used when forward-reference vs
+/// site is pushed separately and later—used when forward-reference vs
 /// mutual-recursion classification of a local definition is deferred to the end
 /// of the enclosing block.
 pub fn pushRuntimeErrorExpr(self: *Self, comptime RetIdx: type, reason: CIR.Diagnostic) std.mem.Allocator.Error!RetIdx {
@@ -4001,7 +4001,7 @@ fn sortedNodeSlot(comptime T: type, entries: []const T, raw_node: u32) usize {
 }
 
 /// Insert or replace `entry` in a node-sorted SafeList. Appends are O(1) when
-/// entries arrive in increasing node order (the common case — recording
+/// entries arrive in increasing node order (the common case—recording
 /// follows node allocation); out-of-order inserts shift the tail.
 fn upsertSortedByNode(comptime T: type, list: *collections.SafeList(T), gpa: std.mem.Allocator, entry: T) std.mem.Allocator.Error!void {
     const entries = list.items.items;
@@ -4038,7 +4038,7 @@ pub fn numeralDigitsAfter(self: *const Self, literal: NumeralLiteral) []const u8
     return self.numeral_digit_bytes.items.items[start..][0..literal.after_len];
 }
 
-/// The exact-digit view of a recorded numeral — the input every literal fit
+/// The exact-digit view of a recorded numeral—the input every literal fit
 /// and bit computation consumes (src/types/numeral.zig). Borrowed from this
 /// env's digit pool.
 pub fn exactNumeral(self: *const Self, literal: NumeralLiteral) types_mod.numeral.Exact {
@@ -4909,7 +4909,7 @@ pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *cons
     return @ptrCast(bytes.ptr);
 }
 
-/// Display ident for an env-local identity index. Diagnostics only — never
+/// Display ident for an env-local identity index. Diagnostics only—never
 /// use for identity decisions.
 pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Idx) Ident.Idx {
     std.debug.assert(!idx.isNone());
@@ -4961,7 +4961,7 @@ pub fn setContentIdentity(self: *Self, hash: base.ModuleIdentity.Hash) std.mem.A
 
 /// Compute and record this module's deep content identity from its resolved
 /// direct imports: H(module name, source bytes, import identity hashes).
-/// Idempotent. Every imported env must already be finalized — imports are
+/// Idempotent. Every imported env must already be finalized—imports are
 /// checked (or at least identity-finalized) before their dependents.
 pub fn ensureContentIdentity(
     self: *Self,
@@ -4974,7 +4974,7 @@ pub fn ensureContentIdentity(
     for (imported_envs) |imported_env| {
         if (imported_env == @as(*const Self, self)) continue;
         // An import that is this module's own content (same name, same source
-        // bytes — e.g. the baked Builtin env while `roc check Builtin.roc`
+        // bytes—e.g. the baked Builtin env while `roc check Builtin.roc`
         // checks the identical source) contributes nothing to the transitive
         // closure; folding it in would make byte-identical modules disagree
         // on identity depending on which copy was loaded first.

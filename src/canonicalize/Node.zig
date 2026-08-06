@@ -1105,7 +1105,7 @@ pub const Payload = extern union {
         where_span2_idx: u32,
         /// Whether the annotation has a `where` clause.
         has_where: bool,
-        /// Whether the annotation mentions any type variable — a fresh
+        /// Whether the annotation mentions any type variable—a fresh
         /// `.rigid_var` or a `.rigid_var_lookup` reference to an enclosing one.
         mentions_type_var: bool,
         /// Whether the annotation *introduces* a type variable (`.rigid_var`), as

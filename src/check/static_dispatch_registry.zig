@@ -1032,7 +1032,7 @@ pub const StructuralDerivation = union(enum(u8)) {
 /// their `StructuralKind`. Each `name` matches the corresponding
 /// `CommonIdents` field name, so the evidence pass compares interned idents
 /// via `@field` over this table while monotype lowering's component synthesis
-/// classifies its view-local method names by text — both from this single
+/// classifies its view-local method names by text—both from this single
 /// source.
 pub const structural_method_kinds = [_]struct { method_name: [:0]const u8, common_ident: [:0]const u8, kind: StructuralKind }{
     .{ .method_name = "is_eq", .common_ident = "is_eq", .kind = .equality },
@@ -1935,7 +1935,7 @@ pub const StaticDispatchPlanTable = struct {
 
     /// Build-time-only teardown: frees the heap-owned slices. A frozen
     /// (deserialized) table's slices alias the artifact's single backing buffer and are
-    /// NEVER freed here — the artifact's `deinitInternal` frees the buffer wholesale and
+    /// NEVER freed here—the artifact's `deinitInternal` frees the buffer wholesale and
     /// does not call any sub-store `deinit` on the frozen path. (No `serialized` flag is
     /// needed because, unlike the mutation-guarded stores, this table has no post-load
     /// mutators.)
@@ -2150,7 +2150,7 @@ fn sourceCallableHasHashShape(
     // only check needed here: the `to_hash` method name has already been matched
     // and this is only reached for an anonymous-structural dispatcher with no
     // method owner, so the constraint is the derived to_hash signature. (Unlike
-    // the equality-shape check we cannot tie the second arg to the return — the
+    // the equality-shape check we cannot tie the second arg to the return—the
     // two `Hasher` occurrences are distinct vars, not a shared one like is_eq's
     // `self`, and there is no builtin-Hasher owner to match against.)
     return args.len == 2;
@@ -2301,7 +2301,7 @@ pub fn lookupCheckedMethodTarget(
 /// Rebase a method owner into an imported artifact's store: the module
 /// component crosses by 32-byte content identity (one map probe, full-value
 /// comparison), the type-name component by declared-name interning. This is
-/// the single cross-artifact owner resolution point — no module name text.
+/// the single cross-artifact owner resolution point—no module name text.
 pub fn methodOwnerInImportedStore(
     source_names: *const canonical.CanonicalNameStore,
     imported_names: *const canonical.CanonicalNameStore,

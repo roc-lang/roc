@@ -61,6 +61,14 @@ pub const LowLevel = enum(u16) {
     list_get_unsafe,
     list_append_unsafe,
     list_concat,
+    list_append_range_within,
+    list_copy_range_within,
+    list_append_range_within_unsafe,
+    list_append_sublist,
+    list_append_le_bytes,
+    list_slack_unique,
+    list_owned_unique,
+    list_set_in_place_unsafe,
     list_with_capacity,
     list_drop_at,
     list_sublist,
@@ -601,7 +609,7 @@ pub const LowLevel = enum(u16) {
     /// - `may_runtime_uniqueness_check_args`: the op reads those arguments'
     ///   counts to choose between mutating in place and copying. ARC may prove
     ///   the check redundant and pass `unique_args`, which lets the builtin
-    ///   take the in-place path unconditionally — so a named position must be
+    ///   take the in-place path unconditionally—so a named position must be
     ///   one the op consumes, and the in-place path must be sound whenever the
     ///   argument really is unique.
     /// - `consume_args`: the op takes one ownership unit of those arguments.
@@ -609,7 +617,7 @@ pub const LowLevel = enum(u16) {
     ///   release each one (or move it into the result) on every path.
     /// - `result_aliases_consumed_args`: the unit taken from those consumed
     ///   arguments lives on in the result. Only consumed positions may appear.
-    /// - `retain_args`: the op adds one count to those arguments — typically
+    /// - `retain_args`: the op adds one count to those arguments—typically
     ///   because it stores a handle to them inside the result. ARC emits no
     ///   retain of its own, so an op that declares this and does not retain
     ///   leaves the stored handle undercounted.
@@ -657,7 +665,7 @@ pub const LowLevel = enum(u16) {
         /// uniqueness-checking ops qualify on both of their paths (in place
         /// keeps an allocation whose count was already 1, the copy path
         /// returns a fresh one), as do ops that always allocate their
-        /// outermost result — interior sharing described by
+        /// outermost result—interior sharing described by
         /// `result_shares_args` is irrelevant to the outermost count.
         result_unique: bool = false,
 
@@ -863,6 +871,17 @@ pub const LowLevel = enum(u16) {
 
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
+            // Like `list_append_unsafe`: stores into a list the loop promotion
+            // pass proved uniquely owned, so there is nothing to check at
+            // runtime. The displaced element is released inside the builtin.
+            .list_set_in_place_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{2})),
+
+            // Like `list_append_unsafe`: mutates a list the loop-append
+            // promotion pass proved uniquely owned with enough capacity, so
+            // there is nothing to check at runtime. Copied refcounted
+            // elements gain their references inside the builtin.
+            .list_append_range_within_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), 0),
+
             // Moves the list's ownership unit into a new local before the
             // reuse query, forcing ARC to preserve every later use first.
             .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
@@ -892,6 +911,15 @@ pub const LowLevel = enum(u16) {
             => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{2})),
 
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
+
+            // Both appends mutate only their first list; `list_append_sublist`
+            // reads its source without consuming or retaining it. The
+            // within-list range copy mutates the one list it is given.
+            .list_append_range_within,
+            .list_copy_range_within,
+            .list_append_sublist,
+            .list_append_le_bytes,
+            => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_first,
             .list_last,
@@ -967,6 +995,8 @@ pub const LowLevel = enum(u16) {
             .str_get_utf8_byte_unsafe,
             .list_len,
             .list_capacity,
+            .list_slack_unique,
+            .list_owned_unique,
             .bool_not,
             .dict_pseudo_seed,
             .hasher_finish,

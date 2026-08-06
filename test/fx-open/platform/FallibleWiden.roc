@@ -4,7 +4,7 @@ import FallibleHost
 # channels, each asking for an error row wider than the one FallibleHost.str_ok!
 # declares. A hosted function's declared row is its host ABI (design.md "Host
 # Symbol ABI"), and only the Hosted Try Question Widening rule widens a hosted
-# result at a use site — through a generated adapter, and only for `?` on a
+# result at a use site—through a generated adapter, and only for `?` on a
 # direct hosted call. These channels have no such rule, so each is a type error
 # rather than an extern emitted at the wider row.
 FallibleWiden := [].{

@@ -416,7 +416,7 @@ pub const tests = [_]TestCase{
     .{
         // An unnamed padding field whose type is refcounted (`Str`). Its bytes
         // are uninitialized garbage and must never be refcounted, compared, or
-        // inspected — only its size is reserved. If the padding spacer were
+        // inspected—only its size is reserved. If the padding spacer were
         // treated as a live Str, dropping the value would decref garbage and
         // crash, so this exercises the refcount/equality padding skip on every
         // backend.

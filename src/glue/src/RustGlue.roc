@@ -1516,7 +1516,7 @@ generate_rust_roc_str =
 	\\        }
 	\\        let rc = unsafe { (alloc_ptr as *mut AtomicIsize).sub(1) };
 	\\        if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
-	\\            return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
+	\\            return; // REFCOUNT_STATIC_DATA—bytes are in read-only memory
 	\\        }
 	\\        let prev = unsafe { (*rc).fetch_sub(1, Ordering::Release) };
 	\\        if prev == 1 {
@@ -1761,7 +1761,7 @@ generate_rust_roc_list =
 	\\        let header_bytes = Self::header_bytes();
 	\\        let rc = unsafe { (alloc_ptr as *mut AtomicIsize).sub(1) };
 	\\        if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
-	\\            return; // REFCOUNT_STATIC_DATA — elements are in read-only memory
+	\\            return; // REFCOUNT_STATIC_DATA—elements are in read-only memory
 	\\        }
 	\\        let prev = unsafe { (*rc).fetch_sub(1, Ordering::Release) };
 	\\        if prev == 1 {

@@ -18,7 +18,7 @@ fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
 /// L-10 bounds check: reject an `(offset)`+`span_bytes` extent that would reach
 /// outside the `backing_len`-byte relocated buffer (truncated/corrupt blob), with
 /// overflow-safe arithmetic. An empty span is always valid. The single primitive
-/// behind every relocatable marker's `validateRelocations` — `SafeList.Serialized`/
+/// behind every relocatable marker's `validateRelocations`—`SafeList.Serialized`/
 /// `SafeMultiList.Serialized` call it directly, and `artifact_serialize`'s
 /// element-count-based `validateOffsetLen` delegates here after computing the byte
 /// extent (it lives in `collections`, the shared lower layer both can reach).

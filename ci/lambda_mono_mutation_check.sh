@@ -6,7 +6,7 @@
 # pack order, off-by-one callable variant target, reordered match branches,
 # off-by-one list-rest length, reversed argument evaluation order). For each
 # mutation this script rebuilds the harness, runs the generated sweep corpus,
-# and requires the harness to FAIL — a mutant that survives means the harness
+# and requires the harness to FAIL—a mutant that survives means the harness
 # is not actually protecting the direct solved-to-LIR body lowering.
 #
 # Run from anywhere; operates on the repo containing this script. The working
@@ -42,7 +42,7 @@ for patch in ci/lambda_mono_mutations/*.patch; do
     fi
 
     if zig-out/bin/lambda-mono-differential-runner generated-only fail-fast >"$run_log" 2>&1; then
-        echo "FAILED: MUTANT SURVIVED ($name) — the harness did not catch the seeded bug"
+        echo "FAILED: MUTANT SURVIVED ($name)—the harness did not catch the seeded bug"
         tail -30 "$run_log"
         failed=1
     else

@@ -268,7 +268,7 @@ pub const ProblemResources = struct {
 
 /// Reference to a pre-published Builtin module artifact. When passed into
 /// `parseAndCanonicalize…WithBuiltin` / `compileInspected…WithBuiltin`, the
-/// callee will not re-publish the Builtin and will not deinit `artifact` —
+/// callee will not re-publish the Builtin and will not deinit `artifact`—
 /// the caller retains ownership.
 pub const PrePublishedBuiltin = struct {
     env: *const ModuleEnv,
@@ -315,7 +315,7 @@ pub const ParsedResources = struct {
     }
 };
 
-// Per-test shared-memory reservation. Eval tests are small — most need a few
+// Per-test shared-memory reservation. Eval tests are small—most need a few
 // MB at most. The huge values that follow are mostly to ensure the runtime
 // image can grow if a test happens to construct large data; they are
 // reservations, not commitments. On Windows the reservation cost matters for
@@ -327,7 +327,7 @@ pub const ParsedResources = struct {
 // compiler test corpus with useful headroom.
 //
 // If the OS rejects the preferred reservation (e.g. aarch64 Linux with
-// CONFIG_ARM64_VA_BITS=39 — default on 64-bit Raspberry Pi OS — caps user
+// CONFIG_ARM64_VA_BITS=39—default on 64-bit Raspberry Pi OS—caps user
 // VA at ~256 GiB), the allocator halves down to `EVAL_SHARED_MEMORY_MIN_SIZE`.
 const EVAL_SHARED_MEMORY_SIZE: usize = if (builtin.target.os.tag == .freestanding)
     8 * 1024 * 1024
@@ -802,6 +802,7 @@ pub fn compileAllocationProgram(
     return compileProgramWithOptions(allocator, io, source_kind, source, imports, .{
         .inline_mode = .wrappers,
         .tag_reachability = true,
+        .prove_ranges = true,
     });
 }
 
@@ -1646,6 +1647,7 @@ const LowerToLirOptions = struct {
     specialization_strategy: base.SpecializationStrategy = .lss,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     tag_reachability: bool = false,
+    prove_ranges: bool = false,
     /// Match optimized builds so every backend exercises the in-place
     /// List.map path; the copy path is still covered by shared-list,
     /// slice, and layout-mismatch cases. The Lambda Mono differential
@@ -1737,6 +1739,7 @@ fn lowerCheckedRootWithViews(
             .list_in_place_map = options.list_in_place_map,
             .monotype_cache = options.monotype_cache,
             .tag_reachability = options.tag_reachability,
+            .prove_ranges = options.prove_ranges,
             .debug_materialized_out = options.debug_materialized_out,
         },
     );

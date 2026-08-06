@@ -8,7 +8,7 @@ type=repl
 » "a:b:c".split_last(":")
 » "a:b:".split_last(":")
 » "nomatch".split_last(":")
-» source = "key=value=tail — a long heap-allocated string that will not fit inline"
+» source = "key=value=tail—a long heap-allocated string that will not fit inline"
 » Str.split_last(source, "=")
 » source
 ~~~
@@ -21,8 +21,8 @@ Err(NotFound)
 ---
 assigned `source`
 ---
-Ok({ after: "tail — a long heap-allocated string that will not fit inline", before: "key=value" })
+Ok({ after: "tail—a long heap-allocated string that will not fit inline", before: "key=value" })
 ---
-"key=value=tail — a long heap-allocated string that will not fit inline"
+"key=value=tail—a long heap-allocated string that will not fit inline"
 # PROBLEMS
 NIL

@@ -1406,8 +1406,8 @@ const roc_version_key = "roc";
 
 /// Find the optional `roc: "<version>"` entry in a header's dependency record.
 ///
-/// The entry stays in the record alongside the real dependencies — the same way
-/// an app's platform entry does — so that comment attachment and formatting of
+/// The entry stays in the record alongside the real dependencies—the same way
+/// an app's platform entry does—so that comment attachment and formatting of
 /// the record need no special cases. What this returns is which of those fields
 /// pins the compiler version, so that later phases can tell it apart from a
 /// dependency without re-deriving the rule from field names.
@@ -6225,7 +6225,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .pattern_tag_args_next;
                     }
                     if (self.peek() == .Dot and self.peekN(1) == .NoSpaceOpenRound) {
-                        // `Type.(pattern)` — nominal-value destructure, the inverse
+                        // `Type.(pattern)`—nominal-value destructure, the inverse
                         // of `Type.(value)` construction. Parse the backing
                         // pattern(s) just like tag args, flagged as backing_value.
                         self.advance(); // `.`

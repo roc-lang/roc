@@ -784,7 +784,7 @@ pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
         writeU64Digits(buf[pos..], exp_abs, exp_digits);
         pos += exp_digits;
     } else if (dp_offset <= 0) {
-        // 0.000001234 — number is less than 1
+        // 0.000001234—number is less than 1
         buf[pos] = '0';
         buf[pos + 1] = '.';
         pos += 2;
@@ -796,7 +796,7 @@ pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
     } else {
         const dp_uoffset: usize = @intCast(dp_offset);
         if (dp_uoffset >= olength) {
-            // 123456000 — integer, possibly with trailing zeros
+            // 123456000—integer, possibly with trailing zeros
             writeU64Digits(buf[pos..], mantissa, olength);
             pos += olength;
             const trailing = dp_uoffset - olength;
@@ -805,7 +805,7 @@ pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
                 pos += trailing;
             }
         } else {
-            // 123.456 — decimal point within digits
+            // 123.456—decimal point within digits
             const frac_len = olength - dp_uoffset;
             var m = mantissa;
 

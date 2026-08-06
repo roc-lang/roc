@@ -59,7 +59,7 @@ while (it.next()) |entry| {
     // entry.package_name, entry.module_name, entry.report
 }
 
-// 5. Lower to LIR. The allocator must own a single contiguous buffer —
+// 5. Lower to LIR. The allocator must own a single contiguous buffer—
 //    see "Runtime arena" below.
 const root = coord.executableRootCheckedArtifact();
 const imports = try coord.collectImportedArtifactViews(arena, root);
@@ -129,7 +129,7 @@ Skip `finalizeExecutableArtifacts`, LIR lowering, and execution entirely.
 
 ### Runtime arena
 
-`fillHeaderInBuffer` and `viewMappedImage` compute offsets via `ptr - base_ptr` arithmetic, so **the image allocator must own a single contiguous virtual region**. `std.heap.ArenaAllocator` grows by allocating new pages and **will not work** — the offsets it computes will be wrong, either silently producing a broken image or tripping `error.InvalidLirImage`.
+`fillHeaderInBuffer` and `viewMappedImage` compute offsets via `ptr - base_ptr` arithmetic, so **the image allocator must own a single contiguous virtual region**. `std.heap.ArenaAllocator` grows by allocating new pages and **will not work**—the offsets it computes will be wrong, either silently producing a broken image or tripping `error.InvalidLirImage`.
 
 Use a `std.heap.FixedBufferAllocator` over a heap-allocated contiguous buffer:
 
@@ -143,11 +143,11 @@ var runtime_fba = std.heap.FixedBufferAllocator.init(runtime_buffer);
 const runtime_alloc = runtime_fba.allocator();
 ```
 
-**Sizing:** budget at least 128 MiB for a typical app — even a "hello world" needs more than 16 MiB after lowering all reachable modules. Anonymous virtual memory overcommits on Linux/macOS, so a generously-sized buffer doesn't cost real RAM until actually touched. Pick a number that comfortably exceeds your largest expected program.
+**Sizing:** budget at least 128 MiB for a typical app—even a "hello world" needs more than 16 MiB after lowering all reachable modules. Anonymous virtual memory overcommits on Linux/macOS, so a generously-sized buffer doesn't cost real RAM until actually touched. Pick a number that comfortably exceeds your largest expected program.
 
 ### Memory ownership
 
-Refcounted values that Roc returns to the host (a `RocStr`, `RocList`, or `RocBox` written through `ret_ptr`; or any of those passed as arguments to your hosted functions) are **heap-owned by the host**. The interpreter does not auto-tear-down on `eval` return — that's intentional, since embedders frequently want to inspect the return value before freeing it.
+Refcounted values that Roc returns to the host (a `RocStr`, `RocList`, or `RocBox` written through `ret_ptr`; or any of those passed as arguments to your hosted functions) are **heap-owned by the host**. The interpreter does not auto-tear-down on `eval` return—that's intentional, since embedders frequently want to inspect the return value before freeing it.
 
 The host must explicitly `decref` returned refcounted values when done. Without this, host allocator leak-checking will report leaks tracing back to `rocAllocFn` in the interpreter:
 
@@ -172,21 +172,21 @@ For embedders that don't have a filesystem at all (e.g. wasm), `Coordinator` doe
 
 Set `coord.enable_hosted_transform = true` before `coord.start()`. Hosted lambda bodies in platform modules are auto-converted during canonicalization.
 
-At execution time, `RocOps.hosted_fns.fns` is a **positional array** — the interpreter calls `fns[dispatch_index]`. The dispatch index is computed deterministically by:
+At execution time, `RocOps.hosted_fns.fns` is a **positional array**—the interpreter calls `fns[dispatch_index]`. The dispatch index is computed deterministically by:
 
-1. Within each checked artifact, hosted functions are sorted alphabetically by their fully-qualified name `Module.fn_name` (with trailing `!` stripped — so `Echo.line!` sorts as `Echo.line`), tiebroken by definition order.
+1. Within each checked artifact, hosted functions are sorted alphabetically by their fully-qualified name `Module.fn_name` (with trailing `!` stripped—so `Echo.line!` sorts as `Echo.line`), tiebroken by definition order.
 2. The global catalog concatenates artifacts in this order: the root (executable) artifact's hosted functions, then each imported artifact in import order, then each relation artifact in relation order.
 
-For a platform whose hosted functions all live in one module — the typical case — this collapses to **plain alphabetical order by `Module.fn_name`**. Build your `HostedFn` array to match.
+For a platform whose hosted functions all live in one module—the typical case—this collapses to **plain alphabetical order by `Module.fn_name`**. Build your `HostedFn` array to match.
 
-Wrong order is silent (wrong function called), not loud — be deliberate, especially when adding hosted functions across multiple modules.
+Wrong order is silent (wrong function called), not loud—be deliberate, especially when adding hosted functions across multiple modules.
 
 ### URL-resolved packages
 
-`Coordinator.discoverAppFromPath` does not download URL-specified packages — it only supports relative paths. For URL support:
+`Coordinator.discoverAppFromPath` does not download URL-specified packages—it only supports relative paths. For URL support:
 
 1. Call `compile.app_header.parseAppHeader(io, gpa, arena, path)` to get the raw header.
 2. Resolve URLs to local paths using your own caching policy.
 3. Register packages with `coord.ensurePackage` / `coord.registerInlinePackage` instead of `discoverAppFromPath`.
 
-The Roc CLI follows exactly this pattern — see `buildLirImageWithCoordinator` in `src/cli/main.zig` for a worked example.
+The Roc CLI follows exactly this pattern—see `buildLirImageWithCoordinator` in `src/cli/main.zig` for a worked example.

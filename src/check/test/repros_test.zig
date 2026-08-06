@@ -723,7 +723,7 @@ test "check - repro - issue 9670 - typed local binding of parametric fn result" 
     // result is assigned to a local binding with an explicit type annotation that
     // reuses the enclosing function's type parameters produces a spurious
     // `Parser(input, a)` != `Parser(input, a)` mismatch (the two sides print
-    // identically). NOTE: this currently FAILS — it documents the open bug.
+    // identically). NOTE: this currently FAILS—it documents the open bug.
     //
     // Root cause is NOT the local annotation (see the minimal case below): the
     // trigger is the multi-parameter alias `Parser(input, output)` used with one
@@ -754,7 +754,7 @@ test "check - repro - issue 9670 - minimal: multi-param alias, passthrough + wra
     // its first parameter (`input`) passed through unchanged and its second
     // parameter (`a`) wrapped in `List` in the return. Calling such a function
     // yields a spurious `Parser(input, a)` != `Parser(input, a)` mismatch on the
-    // argument. NOTE: this currently FAILS — it documents the open bug.
+    // argument. NOTE: this currently FAILS—it documents the open bug.
     //
     // Contrast (all pass today):
     //   * single-param alias wrapped in return:  `Wrap(a) -> Wrap(List(a))`

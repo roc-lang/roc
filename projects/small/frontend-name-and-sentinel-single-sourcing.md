@@ -3,9 +3,9 @@
 ## Problem
 
 The frontend pipeline has one genuinely enforced registry for builtin
-types — `builtin_type_specs` in `src/canonicalize/CIR.zig:156` with
+types—`builtin_type_specs` in `src/canonicalize/CIR.zig:156` with
 its registry hash validated at builtin load
-(`src/canonicalize/BuiltinStatic.zig:59-90`) — but several downstream
+(`src/canonicalize/BuiltinStatic.zig:59-90`)—but several downstream
 sites re-encode facts the registry (or another single source) already
 owns. A July 2026 duplication audit found six such seams; each is a
 small deletion or redirection, and each is the exact
@@ -17,8 +17,8 @@ name-keyed/hand-mirrored pattern that produced previous bug rounds.
    computes from the spec table. A renamed or added numeric type
    silently stops being recognized by the hand copy.
 2. **Bool's discriminant hardcoded.** `src/postcheck/solved_lir_lower.zig:6083`
-   and `:6088` emit `CFSwitchBranch{ .value = 1, .body = true_body }`
-   — baking "True == 1", which is true only because tag discriminants
+   and `:6088` emit `CFSwitchBranch{ .value = 1, .body = true_body }`—
+   baking "True == 1", which is true only because tag discriminants
    come from alphabetical sorting and "False" < "True" lexically.
    Nothing links the literal to the sort convention or to `mkBool`'s
    construction order (`src/types/store.zig:582-585`). A collation
@@ -55,7 +55,7 @@ name-keyed/hand-mirrored pattern that produced previous bug rounds.
    `:9378`) uses `else => {}`/partial
    switches where the codebase's own parallel-enum conversions
    (`reconstructCheckedExprData`, `snapshot.zig`'s deep-copies) are
-   exhaustive — the one cross-phase seam where a new checked variant
+   exhaustive—the one cross-phase seam where a new checked variant
    slips through silently.
 
 ## Background
@@ -66,18 +66,18 @@ comptime-wired (`@field` over spec names) and hash-validated;
 canonical comparator; `Ident.zig:25-27` shows the named-constant
 pattern for method names (`PLUS_METHOD_NAME`) that the rest of the
 method strings never adopted; and `tagIndex` in `solved_lir_lower.zig`
-already computes discriminants from tag names in the general case —
+already computes discriminants from tag names in the general case—
 the Bool fast path just doesn't use it.
 
 ## Evidence
 
 - Cited file:line pairs above; each duplication is verifiable by
   reading the two sites side by side.
-- `static_dispatch_registry.zig:786-793` — the "single source" doc
+- `static_dispatch_registry.zig:786-793`—the "single source" doc
   comment contradicted by postcheck's literals.
 - `mkBool`'s `{ False, True }` order plus the alphabetical-sort
   discriminant assignment (`solved_lir_lower.zig` `tagIndex`,
-  `.discriminant = @intCast(i)`) — the two facts the `.value = 1`
+  `.discriminant = @intCast(i)`)—the two facts the `.value = 1`
   literal silently couples.
 
 ## Solution design
@@ -131,7 +131,7 @@ already guard.
 Neutral or better: comptime-generated maps replace hand chains;
 the comparator unification is the same byte comparison; the Bool
 derivation (if chosen over the assertion) is one layout lookup at
-lowering time — measure with the stress-profiling harness to confirm
+lowering time—measure with the stress-profiling harness to confirm
 it is invisible, and take the assertion route if not.
 
 ## Tests to add
@@ -145,9 +145,9 @@ it is invisible, and take the assertion route if not.
 
 ## Related projects
 
-- [cross-phase-coverage-parity-tests.md](cross-phase-coverage-parity-tests.md)
-  — the parity-suite pattern; item 6 here is the structural
+- [cross-phase-coverage-parity-tests.md](cross-phase-coverage-parity-tests.md)—
+  the parity-suite pattern; item 6 here is the structural
   (exhaustiveness) complement to that project's divergence suite.
 - The landed single-source builtin registration
-  (`src/builtins/builtin_registry.zig`) — the same
+  (`src/builtins/builtin_registry.zig`)—the same
   registry-consolidation move, already made for runtime symbols.

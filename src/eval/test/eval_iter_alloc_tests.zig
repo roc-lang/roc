@@ -2,14 +2,14 @@
 //!
 //! Every iterator case asserts `max_allocations = 0`: a statically-known
 //! iterator chain must perform ZERO heap allocations, regardless of how it is
-//! consumed. Range sources are used deliberately — a range's state is two
+//! consumed. Range sources are used deliberately—a range's state is two
 //! integers, so there is no list-build allocation to confound the measurement;
 //! any allocation is the iterator machinery itself.
 //!
 //! The observed output is a static string literal chosen by comparing the
 //! iterator's computed value to its expected value ("ok" iff correct). String
 //! literals are compile-time constants, so the observation itself allocates
-//! nothing — the iterator's fold is the only possible allocator. This is
+//! nothing—the iterator's fold is the only possible allocator. This is
 //! confirmed by the two canary cases below, which must be GREEN (0 allocations).
 //!
 //! The iterator cases are RED on the recursive-nominal representation (the
@@ -203,7 +203,7 @@ pub const tests = [_]TestCase{
     // not support. They are gated statically by `box_box_count == 0` over
     // reachable procs in lir_inline_test.zig ("iter alloc static: …").
 
-    // Behavioral aliasing guard — the allocation gate is INVERTED for this bug.
+    // Behavioral aliasing guard—the allocation gate is INVERTED for this bug.
     // A list held by a live iterator must not be seen as unique: if in-place
     // mutation of the same list fired, it would corrupt the iterator's view AND
     // lower the allocation count (the gate would go greener on a miscompile).

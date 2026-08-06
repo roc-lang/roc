@@ -9,7 +9,7 @@ drifted:
 1. **Doc-comment gathering has forked (observable divergence).** The
    character-level predicates are shared (`src/base/doc_comment.zig`
    deliberately exposes strict `isDocCommentLine`, which excludes
-   `###`, and permissive `startsWithHashHash`, which includes it) —
+   `###`, and permissive `startsWithHashHash`, which includes it)—
    but the multi-line *gathering policy* is implemented twice with
    different choices: LSP hover
    (`src/lsp/doc_comments.zig:25-89`) uses the strict predicate, so a
@@ -25,7 +25,7 @@ drifted:
    has two more: `src/lsp/line_info.zig:80` (`computeLineStarts` +
    binary-search `positionFromOffset`) and
    `src/lsp/position.zig:20-46` (`buildLineOffsets` + linear-scan
-   `offsetToPosition`) — and is internally inconsistent, since
+   `offsetToPosition`)—and is internally inconsistent, since
    `position.zig:60`'s `positionToOffset` *does* reuse the
    `ModuleEnv` table while its neighbor rebuilds its own. Off-by-one
    fixes (EOF, `\r\n`) must land three times.
@@ -44,9 +44,9 @@ drifted:
 ## Background
 
 The LSP already consumes shared single sources where they were
-offered — `Token.Tag.highlightCategory` drives its semantic-token
+offered—`Token.Tag.highlightCategory` drives its semantic-token
 classification, and diagnostics go through the shared report
-constructors — so these four are omissions, not architecture. For
+constructors—so these four are omissions, not architecture. For
 item 1, the `base/doc_comment.zig` module's own doc comment
 documents the strict/permissive split, which means the divergence is
 half-intentional at the predicate level; what was never decided is
@@ -55,13 +55,13 @@ which policy is *the* policy for gathered doc blocks.
 ## Evidence
 
 - `src/lsp/doc_comments.zig:61` (strict) vs `src/docs/extract.zig:164`
-  (permissive) — feed both a def preceded by `## a`, `### b`, `## c`
+  (permissive)—feed both a def preceded by `## a`, `### b`, `## c`
   and observe different outputs.
 - The two LSP line-table builders cited above, plus
   `position.zig:60`'s use of the canonical table.
-- `semantic_tokens.zig:31` — "indices matching TOKEN_TYPES in
+- `semantic_tokens.zig:31`—"indices matching TOKEN_TYPES in
   capabilities.zig" as the only enforcement.
-- `completion/builtins.zig:9` — no reference to the registry.
+- `completion/builtins.zig:9`—no reference to the registry.
 
 ## Solution design
 
@@ -72,7 +72,7 @@ which policy is *the* policy for gathered doc blocks.
    `src/base/doc_comment.zig`; LSP and docs both call it. If hover
    legitimately wants to stop at section headers while the site
    renders them, that is a *parameter* of the one gatherer, stated at
-   the call sites — not two scanners.
+   the call sites—not two scanners.
 2. **Delete both LSP line tables.** LSP position math uses
    `ModuleEnv.getLineStartsAll()`/`RegionInfo` throughout (it already
    has the env in hand at `position.zig:60`); `line_info.zig`'s
@@ -107,7 +107,7 @@ Every criterion below must hold; the project is not done until all do:
 
 Editor-visible facts (positions, token classes, docs, completions)
 are projections of compiler-owned data, so they cannot contradict
-what the compiler ships — the drift class this project closes is
+what the compiler ships—the drift class this project closes is
 structurally gone.
 
 ### Performance ideal
@@ -127,7 +127,7 @@ file unchanged (spot-check).
 
 ## Related projects
 
-- [severity-and-report-collection.md](severity-and-report-collection.md)
-  — the LSP's other re-derived classification.
-- [syntax-fact-single-sourcing.md](syntax-fact-single-sourcing.md) —
+- [severity-and-report-collection.md](severity-and-report-collection.md)—
+  the LSP's other re-derived classification.
+- [syntax-fact-single-sourcing.md](syntax-fact-single-sourcing.md)—
   the same reuse discipline inside the parser/formatter.
