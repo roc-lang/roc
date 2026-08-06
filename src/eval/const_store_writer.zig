@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
+const can = @import("can");
 const check = @import("check");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -42,7 +43,7 @@ const TagBase = struct {
 };
 
 const StrBacking = struct {
-    data: const_store.ConstStrDataId,
+    data: const_store.ConstBlobDataId,
     len: usize,
 };
 
@@ -291,7 +292,7 @@ pub const Writer = struct {
             }
         }
 
-        const data = try self.module.const_store.addStrData(slice);
+        const data = try self.module.const_store.addBlobData(slice);
         return .{ .str = .{
             .data = data,
             .offset = 0,
@@ -311,6 +312,10 @@ pub const Writer = struct {
             writerInvariant("list const plan had non-list layout");
         }
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+        if (self.planIsScalar(elem_plan)) {
+            return try self.storePackedList(target_node, layout_value, roc_list);
+        }
+
         const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, roc_list.len());
         // `nodes` is owned here for its whole lifetime: the store copies from it (it
         // never frees inputs), so free on every path — build failure, append failure,
@@ -329,7 +334,96 @@ pub const Writer = struct {
                 writerInvariant("non-empty list had null element pointer");
             }
         }
-        self.module.const_store.fill(target_node, .{ .list = nodes });
+        self.module.const_store.fill(target_node, .{ .list = .{ .nodes = nodes } });
+    }
+
+    fn planIsScalar(self: *const Writer, plan_id: LirProgram.ConstPlanId) bool {
+        return switch (self.constPlan(plan_id)) {
+            .scalar => true,
+            .named => |named| self.planIsScalar(named.backing),
+            .pending,
+            .layout_only,
+            .zst,
+            .str,
+            .list,
+            .box,
+            .tuple,
+            .record,
+            .tag_union,
+            .fn_value,
+            .erased_fn,
+            => false,
+        };
+    }
+
+    fn packedScalarForLayout(self: *const Writer, layout_idx: layout.Idx) ?const_store.ConstPackedScalar {
+        const layout_value = self.program.layouts.getLayout(layout_idx);
+        if (layout_value.tag != .scalar) return null;
+        const scalar = layout_value.getScalar();
+        return switch (scalar.tag) {
+            .str, .opaque_ptr => null,
+            .int => switch (scalar.getInt()) {
+                .u8 => .u8,
+                .i8 => .i8,
+                .u16 => .u16,
+                .i16 => .i16,
+                .u32 => .u32,
+                .i32 => .i32,
+                .u64 => .u64,
+                .i64 => .i64,
+                .u128 => .u128,
+                .i128 => .i128,
+            },
+            .frac => switch (scalar.getFrac()) {
+                .f32 => .f32,
+                .f64 => .f64,
+                .dec => .dec,
+            },
+            .vector => switch (scalar.getVector()) {
+                .u8x16 => .u8x16,
+                .i8x16 => .i8x16,
+                .u16x8 => .u16x8,
+                .i16x8 => .i16x8,
+                .u32x4 => .u32x4,
+                .i32x4 => .i32x4,
+                .u64x2 => .u64x2,
+                .i64x2 => .i64x2,
+            },
+        };
+    }
+
+    fn storePackedList(
+        self: *Writer,
+        target_node: checked.ConstNodeId,
+        list_layout: layout.Layout,
+        roc_list: *const RocList,
+    ) Allocator.Error!void {
+        if (list_layout.tag != .list) writerInvariant("packed scalar list had non-list layout");
+        const elem_layout = list_layout.getIdx();
+        const element = self.packedScalarForLayout(elem_layout) orelse
+            writerInvariant("scalar const plan had a non-packable list element layout");
+
+        const byte_len = std.math.mul(usize, roc_list.len(), element.byteWidth()) catch
+            writerInvariant("packed list byte length overflowed");
+        const bytes = try self.allocator.alloc(u8, byte_len);
+        defer self.allocator.free(bytes);
+
+        if (roc_list.bytes) |source| {
+            const width: usize = element.byteWidth();
+            for (0..roc_list.len()) |index| {
+                const scalar = self.storeScalar(elem_layout, .{ .ptr = source + index * width });
+                writePackedScalar(bytes[index * width ..][0..width], element, scalar);
+            }
+        } else if (roc_list.len() != 0) {
+            writerInvariant("non-empty packed list had null element pointer");
+        }
+
+        const data = try self.module.const_store.addBlobData(bytes);
+        self.module.const_store.fill(target_node, .{ .list = .{ .scalar_bytes = .{
+            .bytes = .{ .data = data, .offset = 0, .len = checkedU32(byte_len, "packed list byte length exceeds ConstStore limit") },
+            .len = checkedU32(roc_list.len(), "packed list length exceeds ConstStore limit"),
+            .element = element,
+        } } });
     }
 
     fn storeBox(
@@ -629,7 +723,7 @@ pub const Writer = struct {
     }
 
     fn addStrBacking(self: *Writer, address: usize, bytes: []const u8) Allocator.Error!StrBacking {
-        const data = try self.module.const_store.addStrData(bytes);
+        const data = try self.module.const_store.addBlobData(bytes);
         const backing: StrBacking = .{
             .data = data,
             .len = bytes.len,
@@ -978,6 +1072,80 @@ fn interpreterErasedCallable(_: ?*anyopaque, data_ptr: [*]u8) ErasedCallableReso
     };
 }
 
+fn writePackedScalar(out: []u8, element: const_store.ConstPackedScalar, scalar: checked.ConstScalar) void {
+    if (out.len != element.byteWidth()) writerInvariant("packed scalar output width disagreed with its encoding");
+    switch (element) {
+        .u8 => out[0] = switch (scalar) {
+            .u8 => |value| value,
+            else => writerInvariant("packed U8 list element had different scalar data"),
+        },
+        .i8 => out[0] = @bitCast(switch (scalar) {
+            .i8 => |value| value,
+            else => writerInvariant("packed I8 list element had different scalar data"),
+        }),
+        .u16 => std.mem.writeInt(u16, out[0..2], switch (scalar) {
+            .u16 => |value| value,
+            else => writerInvariant("packed U16 list element had different scalar data"),
+        }, .little),
+        .i16 => std.mem.writeInt(i16, out[0..2], switch (scalar) {
+            .i16 => |value| value,
+            else => writerInvariant("packed I16 list element had different scalar data"),
+        }, .little),
+        .u32 => std.mem.writeInt(u32, out[0..4], switch (scalar) {
+            .u32 => |value| value,
+            else => writerInvariant("packed U32 list element had different scalar data"),
+        }, .little),
+        .i32 => std.mem.writeInt(i32, out[0..4], switch (scalar) {
+            .i32 => |value| value,
+            else => writerInvariant("packed I32 list element had different scalar data"),
+        }, .little),
+        .u64 => std.mem.writeInt(u64, out[0..8], switch (scalar) {
+            .u64 => |value| value,
+            else => writerInvariant("packed U64 list element had different scalar data"),
+        }, .little),
+        .i64 => std.mem.writeInt(i64, out[0..8], switch (scalar) {
+            .i64 => |value| value,
+            else => writerInvariant("packed I64 list element had different scalar data"),
+        }, .little),
+        .u128 => writePackedU128(out, switch (scalar) {
+            .u128 => |value| value,
+            else => writerInvariant("packed U128 list element had different scalar data"),
+        }),
+        .i128 => std.mem.writeInt(i128, out[0..16], switch (scalar) {
+            .i128 => |value| value,
+            else => writerInvariant("packed I128 list element had different scalar data"),
+        }, .little),
+        .f32 => std.mem.writeInt(u32, out[0..4], switch (scalar) {
+            .f32_bits => |value| value,
+            else => writerInvariant("packed F32 list element had different scalar data"),
+        }, .little),
+        .f64 => std.mem.writeInt(u64, out[0..8], switch (scalar) {
+            .f64_bits => |value| value,
+            else => writerInvariant("packed F64 list element had different scalar data"),
+        }, .little),
+        .dec => std.mem.writeInt(i128, out[0..16], switch (scalar) {
+            .dec_bits => |value| value,
+            else => writerInvariant("packed Dec list element had different scalar data"),
+        }, .little),
+        .u8x16,
+        .i8x16,
+        .u16x8,
+        .i16x8,
+        .u32x4,
+        .i32x4,
+        .u64x2,
+        .i64x2,
+        => writePackedU128(out, switch (scalar) {
+            .u128 => |value| value,
+            else => writerInvariant("packed vector list element had different scalar data"),
+        }),
+    }
+}
+
+fn writePackedU128(out: []u8, value: u128) void {
+    std.mem.writeInt(u128, out[0..16], value, .little);
+}
+
 fn checkedU32(value: usize, comptime message: []const u8) u32 {
     if (value > std.math.maxInt(u32)) writerInvariant(message);
     return @intCast(value);
@@ -994,17 +1162,10 @@ test "const store writer declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-test "const store writer pointer memoization is scoped to one root" {
-    const testing = std.testing;
-    const can = @import("can");
-
-    var names = check.CanonicalNames.CanonicalNameStore.init(testing.allocator);
+fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) !checked.CheckedModuleArtifact {
+    var names = check.CanonicalNames.CanonicalNameStore.init(allocator);
     const module_name = try names.internModuleName("Test");
-
-    var module_env = try can.ModuleEnv.init(testing.allocator, "");
-    defer module_env.deinit();
-
-    var artifact = checked.CheckedModuleArtifact{
+    return .{
         .key = .{},
         .canonical_names = names,
         .module_identity = .{
@@ -1015,7 +1176,7 @@ test "const store writer pointer memoization is scoped to one root" {
             .kind = .package,
         },
         .checking_context_identity = .{},
-        .module_env = .{ .checked_source = &module_env },
+        .module_env = .{ .checked_source = module_env },
         .exports = .{},
         .provides_requires = .{},
         .method_registry = .{},
@@ -1033,13 +1194,43 @@ test "const store writer pointer memoization is scoped to one root" {
         .top_level_values = .{},
         .hoisted_constants = .{},
         .const_templates = .{},
-        .const_store = const_store.ConstStore.init(testing.allocator),
+        .const_store = const_store.ConstStore.init(allocator),
     };
-    defer {
-        artifact.const_templates.deinit(testing.allocator);
-        artifact.const_store.deinit();
-        artifact.canonical_names.deinit();
-    }
+}
+
+fn deinitTestArtifact(artifact: *checked.CheckedModuleArtifact, allocator: Allocator) void {
+    artifact.const_templates.deinit(allocator);
+    artifact.const_store.deinit();
+    artifact.canonical_names.deinit();
+}
+
+fn testConstRoot(plan: LirProgram.ConstPlanId, ret_layout: layout.Idx) LirProgram.ConstRootPlan {
+    return .{
+        .root_order = 0,
+        .request = .{
+            .order = 0,
+            .module_idx = 0,
+            .kind = .compile_time_constant,
+            .source = undefined,
+            .checked_type = undefined,
+            .abi = .compile_time,
+            .exposure = .private,
+        },
+        .proc = undefined,
+        .ret_layout = ret_layout,
+        .ret_type = undefined,
+        .plan = plan,
+    };
+}
+
+test "const store writer pointer memoization is scoped to one root" {
+    const testing = std.testing;
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+
+    var artifact = try initTestArtifact(testing.allocator, &module_env);
+    defer deinitTestArtifact(&artifact, testing.allocator);
 
     var program = try LirProgram.Result.init(testing.allocator, .u64);
     defer program.deinit();
@@ -1049,22 +1240,7 @@ test "const store writer pointer memoization is scoped to one root" {
     var writer = Writer.init(testing.allocator, &artifact, &program);
     defer writer.deinit();
 
-    const root = LirProgram.ConstRootPlan{
-        .root_order = 0,
-        .request = .{
-            .order = 0,
-            .module_idx = 0,
-            .kind = .compile_time_constant,
-            .source = undefined, // storeRoot only reads request.kind for this focused writer test.
-            .checked_type = undefined, // storeRoot only reads request.kind for this focused writer test.
-            .abi = .compile_time,
-            .exposure = .private,
-        },
-        .proc = undefined, // storeRoot does not inspect the root procedure for stored values.
-        .ret_layout = .str,
-        .ret_type = undefined, // storeRoot does not inspect root type evidence in this focused test.
-        .plan = str_plan,
-    };
+    const root = testConstRoot(str_plan, .str);
 
     const first_bytes = "alpha root payload 000";
     const second_bytes = "omega root payload 111";
@@ -1091,4 +1267,71 @@ test "const store writer pointer memoization is scoped to one root" {
     try testing.expect(second_value == .str);
     try testing.expectEqualStrings(first_bytes, artifact.const_store.strBytes(first_value.str));
     try testing.expectEqualStrings(second_bytes, artifact.const_store.strBytes(second_value.str));
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10177
+test "const store writer stores 20KB scalar lists as shared blob" {
+    const testing = std.testing;
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+
+    var artifact = try initTestArtifact(testing.allocator, &module_env);
+    defer deinitTestArtifact(&artifact, testing.allocator);
+
+    var program = try LirProgram.Result.init(testing.allocator, .u64);
+    defer program.deinit();
+
+    const str_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(testing.allocator, .str);
+    const scalar_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(testing.allocator, .scalar);
+    const list_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(testing.allocator, .{ .list = scalar_plan });
+    const u8_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u8));
+    const u16_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u16));
+
+    var writer = Writer.init(testing.allocator, &artifact, &program);
+    defer writer.deinit();
+
+    const bytes = try testing.allocator.alloc(u8, 20 * 1024);
+    defer testing.allocator.free(bytes);
+    @memset(bytes, 'A');
+
+    var roc_str = RocStr{
+        .bytes = bytes.ptr,
+        .capacity_or_alloc_ptr = RocStr.encodeCapacity(bytes.len),
+        .length = bytes.len,
+    };
+    const stored_str = try writer.storeRoot(testConstRoot(str_plan, .str), .{ .ptr = @ptrCast(&roc_str) });
+
+    var roc_list = RocList{
+        .bytes = bytes.ptr,
+        .length = bytes.len,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(bytes.len),
+    };
+    const stored_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_list) });
+
+    var roc_u16_list = RocList{
+        .bytes = bytes.ptr,
+        .length = bytes.len / @sizeOf(u16),
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(bytes.len / @sizeOf(u16)),
+    };
+    const stored_u16_list = try writer.storeRoot(testConstRoot(list_plan, u16_list_layout), .{ .ptr = @ptrCast(&roc_u16_list) });
+
+    const str_value = artifact.const_store.get(stored_str.const_node);
+    try testing.expect(str_value == .str);
+    const list_value = artifact.const_store.get(stored_list.const_node);
+    try testing.expect(list_value == .list);
+    try testing.expect(list_value.list == .scalar_bytes);
+    const scalar_bytes = list_value.list.scalar_bytes;
+    try testing.expectEqual(@as(u32, 20 * 1024), scalar_bytes.len);
+    try testing.expectEqual(const_store.ConstPackedScalar.u8, scalar_bytes.element);
+    try testing.expectEqual(str_value.str.data, scalar_bytes.bytes.data);
+    try testing.expectEqualSlices(u8, bytes, artifact.const_store.blobBytes(scalar_bytes.bytes));
+
+    const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.scalar_bytes;
+    try testing.expectEqual(@as(u32, 10 * 1024), u16_scalar_bytes.len);
+    try testing.expectEqual(const_store.ConstPackedScalar.u16, u16_scalar_bytes.element);
+    try testing.expectEqual(str_value.str.data, u16_scalar_bytes.bytes.data);
 }

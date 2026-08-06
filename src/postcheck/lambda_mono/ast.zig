@@ -44,6 +44,7 @@ pub const LocalId = enum(u32) { _ };
 pub const JoinPointId = Lifted.JoinPointId;
 /// Owned string literal id shared with the lifted stage.
 pub const StringLiteralId = Lifted.StringLiteralId;
+pub const PackedListLiteral = Mono.PackedListLiteral;
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
@@ -238,7 +239,7 @@ pub const ExprData = union(enum) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
-    bytes_lit: StringLiteralId,
+    bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
     list: Span(ExprId),
     tuple: Span(ExprId),

@@ -324,8 +324,12 @@ pub fn freshSyntheticSymbol(self: *Self) Symbol {
 
 /// Interns a string literal in the store-level string table.
 pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLiteral.Idx {
+    return try self.insertStringAligned(text, 1);
+}
+
+pub fn insertStringAligned(self: *Self, text: []const u8, alignment: u32) Allocator.Error!base.StringLiteral.Idx {
     self.assertStringsInsertable();
-    return self.string_builder.insert(&self.strings, self.allocator, text);
+    return self.string_builder.insertAligned(&self.strings, self.allocator, text, alignment);
 }
 
 /// Interns string backing bytes and returns a literal view into them.
@@ -334,6 +338,18 @@ pub fn insertStringView(
     backing: []const u8,
     offset: u32,
     len: u32,
+) Allocator.Error!lir_defs.StrLiteral {
+    return try self.insertStringViewAligned(backing, offset, len, 1);
+}
+
+/// Interns shared literal backing bytes, raising their runtime alignment to the
+/// maximum required by every string or packed-list view.
+pub fn insertStringViewAligned(
+    self: *Self,
+    backing: []const u8,
+    offset: u32,
+    len: u32,
+    alignment: u32,
 ) Allocator.Error!lir_defs.StrLiteral {
     const offset_usize: usize = offset;
     const len_usize: usize = len;
@@ -345,7 +361,7 @@ pub fn insertStringView(
     }
 
     return .{
-        .backing = try self.insertString(backing),
+        .backing = try self.insertStringAligned(backing, alignment),
         .offset = offset,
         .len = len,
     };

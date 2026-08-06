@@ -16052,12 +16052,12 @@ fn generateStrLiteral(self: *Self, literal: LIR.StrLiteral) Allocator.Error!void
     }
 }
 
-/// Generate a RocList(U8) for a byte-list literal.
+/// Generate a flat scalar RocList for a byte-backed list literal.
 /// On wasm32, RocList is 12 bytes: { ptr/bytes[0..3], len/bytes[4..7], encoded cap/bytes[8..11] }.
-fn generateBytesLiteral(self: *Self, literal: LIR.StrLiteral) Allocator.Error!void {
-    const bytes = self.store.getStringLiteral(literal);
-    const backing_bytes = self.store.getStringLiteralBacking(literal);
-    const whole_backing = literal.offset == 0 and @as(usize, literal.len) == backing_bytes.len;
+fn generateBytesLiteral(self: *Self, literal: LIR.ListLiteral) Allocator.Error!void {
+    const bytes = self.store.getStringLiteral(literal.bytes);
+    const backing_bytes = self.store.getStringLiteralBacking(literal.bytes);
+    const whole_backing = literal.bytes.offset == 0 and @as(usize, literal.bytes.len) == backing_bytes.len;
 
     const base_offset = try self.allocStackMemory(12, 4);
     const base_local = self.fp_local;
@@ -16071,24 +16071,24 @@ fn generateBytesLiteral(self: *Self, literal: LIR.StrLiteral) Allocator.Error!vo
             try self.emitStoreOp(.i32, base_offset + @as(u32, @intCast(i)) * 4);
         }
     } else {
-        const data_address = try self.staticStrDataOffset(literal.backing);
+        const data_address = try self.staticStrDataOffset(literal.bytes.backing);
 
         self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, self.currentCode(), base_local) catch return error.OutOfMemory;
-        try self.emitDataAddressConst(data_address, @intCast(literal.offset));
+        try self.emitDataAddressConst(data_address, @intCast(literal.bytes.offset));
         try self.emitStoreOp(.i32, base_offset);
 
         self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, self.currentCode(), base_local) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(bytes.len)) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(literal.len)) catch return error.OutOfMemory;
         try self.emitStoreOp(.i32, base_offset + 4);
 
         self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, self.currentCode(), base_local) catch return error.OutOfMemory;
         if (whole_backing) {
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(bytes.len << 1)) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(literal.len << 1)) catch return error.OutOfMemory;
         } else {
             try self.emitDataAddressConst(data_address, 1);
         }
@@ -16109,18 +16109,20 @@ fn staticStrDataOffset(self: *Self, backing_idx: base.StringLiteral.Idx) Allocat
     if (self.static_str_offsets.get(key)) |offset| return offset;
 
     const backing_bytes = self.store.getString(backing_idx);
+    const backing_alignment = @max(@as(u32, 4), self.store.strings.alignment(backing_idx));
+    const data_offset: u32 = @intCast(std.mem.alignForward(usize, 4, backing_alignment));
     var segment_data = std.ArrayList(u8).empty;
     defer segment_data.deinit(self.allocator);
-    try segment_data.appendNTimes(self.allocator, 0, 4);
+    try segment_data.appendNTimes(self.allocator, 0, data_offset);
     try segment_data.appendSlice(self.allocator, backing_bytes);
     const segment_name = try self.allocStaticDataName(".rodata.roc_str");
     const symbol_name = try self.allocStaticDataName("roc.str");
     const data_address = try self.addStaticDataSymbol(
         segment_data.items,
-        4,
+        backing_alignment,
         segment_name,
         symbol_name,
-        4,
+        data_offset,
         @intCast(backing_bytes.len),
     );
     try self.static_str_offsets.put(key, data_address);

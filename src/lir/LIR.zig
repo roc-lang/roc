@@ -294,6 +294,12 @@ pub const StrMatchArmSpan = extern struct {
     }
 };
 
+/// A flat scalar list backed by bytes in the shared literal store.
+pub const ListLiteral = struct {
+    bytes: StrLiteral,
+    len: u32,
+};
+
 /// Literal RHS values supported by `assign_literal`.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
@@ -309,7 +315,7 @@ pub const LiteralValue = union(enum) {
     dec_literal: i128,
     str_literal: StrLiteral,
     static_data: StaticDataId,
-    bytes_literal: StrLiteral,
+    bytes_literal: ListLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,
 };
