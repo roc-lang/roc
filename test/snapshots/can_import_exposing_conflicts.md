@@ -26,9 +26,8 @@ The name `Json` is being redeclared here:
 import json.Json exposing [parse]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS ---------------------------- can_import_exposing_conflicts.md:1:1
 
-In this scope, `Json` was already defined here:
+In this scope, `Json` was already defined here (can_import_exposing_conflicts.md:1:1):
 
 import json.Json exposing [parse]
 ^

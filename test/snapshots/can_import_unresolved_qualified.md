@@ -53,9 +53,8 @@ The name `Json` is being redeclared here:
 import json.Json
 ^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS -------------------------- can_import_unresolved_qualified.md:1:1
 
-In this scope, `Json` was already defined here:
+In this scope, `Json` was already defined here (can_import_unresolved_qualified.md:1:1):
 
 import json.Json
 ^

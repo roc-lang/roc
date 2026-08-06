@@ -29,11 +29,10 @@ The type `Foo` is being redeclared.
 Foo : Str
 ^^^^^^^^^
 
--- ℹ️ DETAILS ----------------------------------- type_scope_integration.md:2:1
 
 The redeclaration is here:
 
-But Foo was already declared here:
+But Foo was already declared here (type_scope_integration.md:2:1):
 
 Foo : U64
 ^^^^^^^^^

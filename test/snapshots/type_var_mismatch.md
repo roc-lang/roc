@@ -33,9 +33,8 @@ This number is being used where a non-number type is needed.
 item = 42
        ^^
 
--- ℹ️ DETAILS -------------------------------------- type_var_mismatch.md:11:11
 
-The type was determined to be non-numeric here:
+The type was determined to be non-numeric here (type_var_mismatch.md:11:11):
 
 result = List.first(list).ok_or(item)
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

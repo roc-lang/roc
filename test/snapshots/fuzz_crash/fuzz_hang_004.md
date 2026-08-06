@@ -32,9 +32,8 @@ This number is being used where a non-number type is needed.
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
          ^
 
--- ℹ️ DETAILS ------------------------------------------- fuzz_hang_004.md:1:12
 
-The type was determined to be non-numeric here:
+The type was determined to be non-numeric here (fuzz_hang_004.md:1:12):
 
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
            ^^

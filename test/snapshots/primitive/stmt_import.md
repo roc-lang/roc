@@ -88,9 +88,8 @@ The name `Json` is being redeclared here:
 import json.Json [foo, BAR]
 ^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS ---------------------------------------------- stmt_import.md:1:1
 
-In this scope, `Json` was already defined here:
+In this scope, `Json` was already defined here (stmt_import.md:1:1):
 
 import json.Json [foo, BAR]
 ^

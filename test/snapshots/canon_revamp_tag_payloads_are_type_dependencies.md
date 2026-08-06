@@ -20,13 +20,12 @@ The type alias `A` and `B` form a recursive cycle.
 A : [Tag(B)]
 ^^^^^^^^^^^^
 
--- ℹ️ DETAILS ---------- canon_revamp_tag_payloads_are_type_dependencies.md:2:1
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
 This type is declared here:
 
-And it references B declared here:
+And it references B declared here (canon_revamp_tag_payloads_are_type_dependencies.md:2:1):
 
 B : A
 ^^^^^
@@ -38,13 +37,12 @@ The type alias `B` and `A` form a recursive cycle.
 B : A
 ^^^^^
 
--- ℹ️ DETAILS ---------- canon_revamp_tag_payloads_are_type_dependencies.md:1:1
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
 This type is declared here:
 
-And it references A declared here:
+And it references A declared here (canon_revamp_tag_payloads_are_type_dependencies.md:1:1):
 
 A : [Tag(B)]
 ^^^^^^^^^^^^

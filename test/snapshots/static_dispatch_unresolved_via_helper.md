@@ -25,9 +25,8 @@ variable, but unresolved type variables have no methods.
 ambiguous = conv(poly())
             ^^^^^^^^^^^^
 
--- ℹ️ DETAILS ------------------- static_dispatch_unresolved_via_helper.md:5:18
 
-The type was left undetermined by this call:
+The type was left undetermined by this call (static_dispatch_unresolved_via_helper.md:5:18):
 
 ambiguous = conv(poly())
                  ^^^^^^

@@ -536,14 +536,14 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ CRASH EXPECTS STRING ----------------------------- fuzz_crash_020.md:86:3
+-- ❌ NAME NOT IN SCOPE -------------------------------- fuzz_crash_020.md:86:9
 
-The `crash` keyword expects a string literal as its argument.
+Nothing is named `ke` in this scope.
 
 )crash ke"Unr!" #)
- ^^^^^^^^
+       ^^
 
-For example: `crash "Something went wrong"`
+Is it misspelled, or is there an import missing?
 
 -- ❌ NAME NOT IN SCOPE ------------------------------- fuzz_crash_020.md:87:11
 
@@ -615,9 +615,8 @@ The name `t` is being redeclared here:
 t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 ^
 
--- ℹ️ DETAILS ------------------------------------------ fuzz_crash_020.md:88:1
 
-In this scope, `t` was already defined here:
+In this scope, `t` was already defined here (fuzz_crash_020.md:88:1):
 
 t = [
 ^

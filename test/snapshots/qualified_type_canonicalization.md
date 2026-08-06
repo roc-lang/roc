@@ -76,9 +76,8 @@ The name `Try` is being redeclared here:
 import Basics.Try
 ^^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS -------------------------- qualified_type_canonicalization.md:1:1
 
-In this scope, `Try` was already defined here:
+In this scope, `Try` was already defined here (qualified_type_canonicalization.md:1:1):
 
 import Basics.Try
 ^

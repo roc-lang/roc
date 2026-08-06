@@ -5558,11 +5558,10 @@ Inner := [H].{
     inner_val = outer_val
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:14:5
 
 The redeclaration is here:
 
-But Inner was already declared here:
+But Inner was already declared here (associated_items_complete_all_patterns.md:14:5):
 
 Inner := [D].{
     inner_val = outer_val
@@ -5575,9 +5574,8 @@ The name `outer_val` is being redeclared here:
 outer_val = 500
 ^^^^^^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:15:21
 
-In this scope, `outer_val` was already defined here:
+In this scope, `outer_val` was already defined here (associated_items_complete_all_patterns.md:15:21):
 
 inner_val = outer_val
             ^^^^^^^^^
@@ -5598,9 +5596,8 @@ The name `outer_val` is being redeclared here:
 outer_val = d2_outer_refs_inner.Inner.inner_val
 ^^^^^^^^^
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:28:5
 
-In this scope, `outer_val` was already defined here:
+In this scope, `outer_val` was already defined here (associated_items_complete_all_patterns.md:28:5):
 
 outer_val = 500
 ^^^^^^^^^
@@ -5622,11 +5619,10 @@ Inner := [J].{
     inner_val = 600
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:14:5
 
 The redeclaration is here:
 
-But Inner was already declared here:
+But Inner was already declared here (associated_items_complete_all_patterns.md:14:5):
 
 Inner := [D].{
     inner_val = outer_val
@@ -5649,11 +5645,10 @@ Inner := [L].{
     inner_private = 700
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:14:5
 
 The redeclaration is here:
 
-But Inner was already declared here:
+But Inner was already declared here (associated_items_complete_all_patterns.md:14:5):
 
 Inner := [D].{
     inner_val = outer_val
@@ -5720,9 +5715,8 @@ The name `val1` is being redeclared here:
 val1 = 30
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:63:20
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:63:20):
 
 val3 = val1 + val2
        ^^^^
@@ -5739,11 +5733,10 @@ L2 := [T].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -5790,11 +5783,10 @@ L2 := [W].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -5825,11 +5817,10 @@ L2 := [Z].{
     bad_l2 = l3_secret
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -5851,11 +5842,10 @@ L2 := [AC].{
     val2 = val1 * 3
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -5872,9 +5862,8 @@ The name `val1` is being redeclared here:
 val1 = 5
 ^^^^
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:76:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:76:5):
 
 val1 = 30
 ^^^^
@@ -5922,11 +5911,10 @@ L2 := [AF].{
     val2 = 2
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -5943,9 +5931,8 @@ The name `val1` is being redeclared here:
 val1 = 1
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:119:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:119:5):
 
 val1 = 5
 ^^^^
@@ -5966,9 +5953,8 @@ The name `val1` is being redeclared here:
 val1 = 10
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:138:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:138:5):
 
 val1 = 1
 ^^^^
@@ -5989,11 +5975,10 @@ L2 := [AJ].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6028,11 +6013,10 @@ L2 := [AN].{
     val2 = val1 + 1
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6049,9 +6033,8 @@ The name `val1` is being redeclared here:
 val1 = 7
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:143:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:143:5):
 
 val1 = 10
 ^^^^
@@ -6072,9 +6055,8 @@ The name `val1` is being redeclared here:
 val1 = 15
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:172:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:172:5):
 
 val1 = 7
 ^^^^
@@ -6095,11 +6077,10 @@ L2 := [AR].{
     val2 = val1 + 5
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6131,11 +6112,10 @@ L2 := [BB].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6170,11 +6150,10 @@ L2 := [BF].{
     val2 = 4
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6209,11 +6188,10 @@ L2 := [BJ].{
     val2 = val1 + 10
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6230,9 +6208,8 @@ The name `val1` is being redeclared here:
 val1 = 3
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:177:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:177:5):
 
 val1 = 15
 ^^^^
@@ -6258,11 +6235,10 @@ L2 := [BN].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6295,11 +6271,10 @@ L2 := [BR].{
     bad = l4_secret
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6323,11 +6298,10 @@ L2 := [BV].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6357,11 +6331,10 @@ L2 := [BZ].{
     val2 = 2
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6378,9 +6351,8 @@ The name `val1` is being redeclared here:
 val1 = 1
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:233:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:233:5):
 
 val1 = 3
 ^^^^
@@ -6401,9 +6373,8 @@ The name `val1` is being redeclared here:
 val1 = 100
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:290:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:290:5):
 
 val1 = 1
 ^^^^
@@ -6428,11 +6399,10 @@ L2 := [CE].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6458,9 +6428,8 @@ The name `val1` is being redeclared here:
 val1 = 2
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:295:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:295:5):
 
 val1 = 100
 ^^^^
@@ -6485,11 +6454,10 @@ L2 := [CJ].{
     val2 = val1 + 1
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6524,11 +6492,10 @@ L2 := [CO].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6565,11 +6532,10 @@ L2 := [CT].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6608,11 +6574,10 @@ L2 := [DD].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6629,9 +6594,8 @@ The name `val1` is being redeclared here:
 val1 = 5
 ^^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:316:5
 
-In this scope, `val1` was already defined here:
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:316:5):
 
 val1 = 2
 ^^^^
@@ -6695,11 +6659,10 @@ L2 := [DI].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6716,9 +6679,8 @@ The name `bad` is being redeclared here:
 bad = deep_secret
 ^^^
 
--- ℹ️ DETAILS ----------------- associated_items_complete_all_patterns.md:246:5
 
-In this scope, `bad` was already defined here:
+In this scope, `bad` was already defined here (associated_items_complete_all_patterns.md:246:5):
 
 bad = l4_val
 ^^^
@@ -6748,11 +6710,10 @@ L2 := [DN].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{
@@ -6778,11 +6739,10 @@ L2 := [DS].{
     }
 }
 
--- ℹ️ DETAILS ------------------ associated_items_complete_all_patterns.md:61:5
 
 The redeclaration is here:
 
-But L2 was already declared here:
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
 
 L2 := [Q].{
     L3 := [R].{

@@ -29,9 +29,8 @@ The name `Json` is being redeclared here:
 import json.Json
 ^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS ------------------------------------- external_decl_lookup.md:1:1
 
-In this scope, `Json` was already defined here:
+In this scope, `Json` was already defined here (external_decl_lookup.md:1:1):
 
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 ^
