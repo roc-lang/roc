@@ -1681,6 +1681,7 @@ const Formatter = struct {
                     .if_without_else,
                     .match,
                     .dbg,
+                    .crash,
                     .record_builder,
                     .nominal_record,
                     .nominal_apply,
@@ -2057,6 +2058,17 @@ const Formatter = struct {
                 }
                 try fmt.formatExprDiscard(d.expr);
             },
+            .crash => |c| {
+                try fmt.pushAll("crash");
+                const expr_node = fmt.nodeRegion(@intFromEnum(c.expr));
+                if (multiline and try fmt.flushCommentsBefore(expr_node.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatExprDiscard(c.expr);
+            },
             .block => |b| {
                 try fmt.formatBlock(b);
             },
@@ -2194,6 +2206,7 @@ const Formatter = struct {
                     .if_without_else,
                     .match,
                     .dbg,
+                    .crash,
                     .record_builder,
                     .nominal_record,
                     .nominal_apply,
@@ -3770,6 +3783,7 @@ const Formatter = struct {
             .if_without_else => |i| fmt.groupedExprWillBeMultiline(i.condition) or fmt.groupedExprWillBeMultiline(i.then),
             .arrow_call => fmt.nodeWillBeMultiline(AST.Expr.Idx, expr_idx),
             .dbg => |d| fmt.groupedExprWillBeMultiline(d.expr),
+            .crash => |c| fmt.groupedExprWillBeMultiline(c.expr),
             .@"return" => |r| fmt.groupedExprWillBeMultiline(r.expr),
             .for_expr => |f| fmt.groupedExprWillBeMultiline(f.expr) or fmt.groupedExprWillBeMultiline(f.body),
             .int,
@@ -3946,6 +3960,7 @@ const Formatter = struct {
                 .match,
                 .ident,
                 .dbg,
+                .crash,
                 .ellipsis,
                 .@"break",
                 .@"return",
