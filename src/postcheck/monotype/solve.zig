@@ -203,6 +203,7 @@ pub const GraphDiagnostics = struct {
     produced_type_requests: u64 = 0,
     produced_type_cycle_hits: u64 = 0,
     produced_type_pairs_visited: u64 = 0,
+    produced_type_joins: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -2584,6 +2585,13 @@ pub const InstGraph = struct {
         try self.unifyRootsTransitively(a, b);
     }
 
+    /// Select the deterministic common runtime representation for two exact
+    /// produced values that meet at one control-flow continuation.
+    pub fn joinProducedTypeRepresentations(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
+        self.countDiagnostic("produced_type_joins");
+        try self.unifyRootsTransitively(a, b);
+    }
+
     fn unifyRootsTransitively(
         self: *InstGraph,
         a: NodeId,
@@ -3039,6 +3047,9 @@ pub const InstGraph = struct {
             try pending.append(self.allocator, .{ .left = backing_node, .right = other });
             return;
         }
+        // If `other` is this nominal's declared backing, redirecting it first
+        // would make the nominal point to its own union-find class. Preserve a
+        // structural copy as the backing before selecting the nominal root.
         if (self.find(backing_node) == self.find(other)) {
             const moved = try self.newNode(self.nodes.items[@intFromEnum(other)]);
             var rewired = named;

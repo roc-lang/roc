@@ -710,15 +710,14 @@ test "Monotype match lowering relates patterns before specialization and project
 
     const relate = std.mem.find(u8, match_source, "try self.graph.applyProducedTypeToRequest(").?;
     const prepare_binders = std.mem.find(u8, match_source, "try entry.ctx.preRegisterPatternBindersAtNode").?;
-    const prepare_result = std.mem.find(u8, match_source, "try entry.ctx.prepareControlFlowResultSelection").?;
     const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
     const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchBranchBody").?;
     const lower_pattern = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchPatternAtNode").?;
     try std.testing.expect(relate < prepare_binders);
-    try std.testing.expect(prepare_binders < prepare_result);
-    try std.testing.expect(prepare_result < guards);
+    try std.testing.expect(prepare_binders < guards);
     try std.testing.expect(guards < lower_body);
     try std.testing.expect(lower_body < lower_pattern);
+    try expectNotContains(match_source, "prepareControlFlowResultSelection");
 
     const binder_source = sourceSliceBetween(
         lower_source,

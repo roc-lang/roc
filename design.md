@@ -2756,15 +2756,17 @@ ConstStore preserves that exact output beside the stored value, and restoration
 uses it directly.
 
 A value-producing `if` or `match` owns one explicit exact result selection for
-all of its inhabited branches. Before emitting branch bodies, Monotype obtains
-each branch producer's exact result identity. Equal identities are already one
-type. Distinct identities select the explicit common representation required by
-their producer topology, or the continuation is explicitly cloned so no shared
-result storage exists. Match patterns first project their exact binder cells
-from the exact scrutinee, so a branch producer reached through a pattern lookup
-participates in the same pre-emission decision. Source order cannot make one
-already-emitted branch authoritative, and lowering never revises emitted branch
-code or relates the selected result back to a public interface.
+all of its inhabited branches. Each branch is lowered exactly once and returns
+its exact graph cell. Equal identities are already one type. Distinct identities
+select the explicit common representation required by their producer topology,
+or the continuation is explicitly cloned so no shared result storage exists.
+The emitted branch IR retains those live graph cells until the selection is
+complete and types are sealed, so the deterministic joined root is visible to
+every branch without a producer-discovery pre-pass, re-lowering, or rewriting
+emitted code. Match patterns first project their exact binder cells from the
+exact scrutinee, so branch-local lookups produce from those cells directly.
+Source order cannot change the joined identity, and lowering never relates the
+selected result back to a public interface.
 
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:

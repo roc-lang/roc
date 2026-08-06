@@ -29395,13 +29395,15 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         request_node: NodeId,
     ) Allocator.Error!NodeId {
-        if (self.isGeneratedIteratorEvidenceNode(request_node)) return request_node;
         const named = switch (self.graph.content(request_node)) {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated interpolation iterator request was not a named Iter type"),
         };
-        const backing = named.backing orelse
-            Common.invariant("generated interpolation iterator request had no public backing");
+        const backing = if (named.generated_iterator) |generated|
+            generated.public_source.backing
+        else
+            named.backing orelse
+                Common.invariant("generated interpolation iterator request had no public backing");
         const topology = try self.iteratorRepresentationNames();
         const len_node = try self.graph.recordFieldNode(backing.node, topology.len_field);
         const step_node = try self.graph.recordFieldNode(backing.node, topology.step_field);
@@ -40955,16 +40957,6 @@ const BodyContext = struct {
             try entry.ctx.applyAlternativeBinderRemaps(entry.pattern.binderRemapsSlice(self.view.bodies));
         }
 
-        // Select the shared result representation from every inhabited branch
-        // before any branch body is emitted. Match patterns supplied their
-        // exact binder cells above, so branch-local lookups participate in this
-        // relation-production pass as ordinary producer evidence.
-        if (value_selection) |selection| {
-            for (pending.items) |*entry| {
-                try entry.ctx.prepareControlFlowResultSelection(selection, entry.checked_body);
-            }
-        }
-
         // All checked pattern evidence must reach the shared scrutinee before
         // any branch body can request another specialization.
         for (pending.items) |*entry| {
@@ -41402,111 +41394,16 @@ const BodyContext = struct {
         has_value: bool = false,
     };
 
-    /// A value-producing control-flow expression owns one result selection
-    /// while its inhabited branches are lowered. The checked result is only a
-    /// request. The first exact branch result becomes the selection, and later
-    /// exact branch results join that representation explicitly.
+    /// A value-producing control-flow expression owns one result selection.
+    /// Each branch is lowered exactly once and returns its exact graph cell;
+    /// those cells join before sealing, so already-emitted branch IR observes
+    /// the deterministic joined root without being lowered or rewritten again.
     fn initControlFlowResultSelection(
         _: *BodyContext,
         _: checked.CheckedTypeId,
         declared: DraftTypeCell,
     ) Allocator.Error!ControlFlowResultSelection {
         return .{ .declared = declared, .selected = declared };
-    }
-
-    /// Discover exact producer types before emitting any branch so branch
-    /// order cannot decide the selected representation.
-    fn prepareControlFlowResultSelection(
-        self: *BodyContext,
-        selection: *ControlFlowResultSelection,
-        checked_value: checked.CheckedExprId,
-    ) Allocator.Error!void {
-        const request_node = try selection.selected.toGraphNode(self.graph);
-        const produced_node = (try self.controlFlowResultEvidenceNode(checked_value, request_node)) orelse return;
-        if (!selection.has_selection) {
-            const declared_node = try selection.declared.toGraphNode(self.graph);
-            _ = try self.graph.applyProducedTypeToRequest(declared_node, produced_node);
-            selection.selected = DraftTypeCell.fromGraphNode(produced_node);
-            selection.has_selection = true;
-            return;
-        }
-        const selected_node = try selection.selected.toGraphNode(self.graph);
-        if (!self.graph.sameClass(selected_node, produced_node)) {
-            try self.graph.unify(selected_node, produced_node);
-        }
-    }
-
-    /// Resolve the exact result evidence of a branch producer against the
-    /// shared live request. This is the node-native counterpart of call-
-    /// argument evidence: it deliberately keeps the expected graph cell live
-    /// so recursive producers see the same fixed point during discovery and
-    /// emission.
-    fn controlFlowResultEvidenceNode(
-        self: *BodyContext,
-        checked_value: checked.CheckedExprId,
-        expected_node: NodeId,
-    ) Allocator.Error!?NodeId {
-        if (self.checkedExprDivergesInLoweredRuntime(checked_value)) return null;
-        const expr = self.view.bodies.expr(checked_value);
-        return switch (expr.data) {
-            .call => |call| blk: {
-                const target = call.direct_target orelse break :blk null;
-                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-                const fn_node = try self.directCallTypeNode(
-                    expr.ty,
-                    call,
-                    source_fn_ty,
-                    expected_node,
-                );
-                const fn_nodes = try self.graph.functionNodes(fn_node);
-                if (self.isGeneratedIteratorEvidenceNode(fn_nodes.ret)) break :blk fn_nodes.ret;
-                if (!self.isIteratorInterfaceNode(fn_nodes.ret)) break :blk fn_nodes.ret;
-
-                try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
-                const callee = try self.fnTemplateForDirectCallAtNode(
-                    target,
-                    source_fn_ty,
-                    self.view.types.rootKey(source_fn_ty),
-                    fn_node,
-                );
-                const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
-                break :blk (try self.graph.functionNodes(completed_fn_node)).ret;
-            },
-            .dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
-                expr.ty,
-                plan,
-                expected_node,
-                .expression_lowering,
-            ),
-            .interpolation => |interpolation| try self.dispatchResultTypeNodeInPhase(
-                expr.ty,
-                interpolation.plan,
-                expected_node,
-                .expression_lowering,
-            ),
-            .type_dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
-                expr.ty,
-                plan,
-                expected_node,
-                .expression_lowering,
-            ),
-            .method_eq => |plan| try self.dispatchResultTypeNodeInPhase(
-                expr.ty,
-                plan,
-                expected_node,
-                .expression_lowering,
-            ),
-            .field_access => try self.lowerExprTypeNode(checked_value),
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            => try self.lowerExprTypeNode(checked_value),
-            .block => |block| if (block.statements.len == 0)
-                try self.controlFlowResultEvidenceNode(block.final_expr, expected_node)
-            else
-                null,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
-        };
     }
 
     fn includeControlFlowResult(
@@ -41525,7 +41422,7 @@ const BodyContext = struct {
         } else {
             const selected_node = try selection.selected.toGraphNode(self.graph);
             if (!self.graph.sameClass(selected_node, value_node)) {
-                try self.graph.unify(selected_node, value_node);
+                try self.graph.joinProducedTypeRepresentations(selected_node, value_node);
             }
         }
         selection.has_value = true;
@@ -41627,16 +41524,6 @@ const BodyContext = struct {
         comptime_site: ?DraftComptimeSiteId,
         value_selection: ?*ControlFlowResultSelection,
     ) Allocator.Error!BodyExprData {
-        // Conditions do not bind names visible in branch bodies, so all result
-        // producers can contribute their representation evidence up front.
-        // Branch emission below then consumes one settled request.
-        if (value_selection) |selection| {
-            for (if_.branches) |branch| {
-                try self.prepareControlFlowResultSelection(selection, branch.body);
-            }
-            try self.prepareControlFlowResultSelection(selection, if_.final_else);
-        }
-
         const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
         defer self.allocator.free(branches);
         for (if_.branches, 0..) |branch, index| {

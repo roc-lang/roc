@@ -15079,7 +15079,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [17]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [18]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15099,6 +15099,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [17]
         .{ .name = "Produced-type requests", .count = graph.produced_type_requests },
         .{ .name = "Produced-type cycle/repeat hits", .count = graph.produced_type_cycle_hits },
         .{ .name = "Produced-type pairs visited", .count = graph.produced_type_pairs_visited },
+        .{ .name = "Produced-type joins", .count = graph.produced_type_joins },
     };
 }
 
