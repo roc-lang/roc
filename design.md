@@ -2640,7 +2640,10 @@ branch, and return structure. The `exact_graph_from_evidence` column means that
 this can become true only when the specialization's checked dispatch evidence
 selects such a procedure. These facts follow the returned value's checked data
 flow and procedure-call edges. They do not inspect checked type structure and
-do not ask whether any type contains a generated nominal.
+do not ask whether any type contains a generated nominal. Checked body output
+collects direct result flow and dense procedure dependencies in one pass, then
+propagates the two facts with a reverse-call work queue. It must not repeatedly
+rescan procedure bodies until a fixed point is reached.
 
 A procedure with exact result flow finishes its body in the requesting
 Monotype graph before that graph is sealed. This is required because the body,

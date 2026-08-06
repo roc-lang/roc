@@ -3917,6 +3917,17 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: exact iterator result flows through procedure chain",
+        .source_kind = .module,
+        .source =
+        \\make_iter = |values| values.iter()
+        \\forward_iter = |values| make_iter(values)
+        \\
+        \\main = Iter.fold(forward_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: Iter.append yields item after iterator",
         .source =
         \\{
