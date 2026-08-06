@@ -15,7 +15,7 @@ const OutputOs = enum { windows, macos, wasm, other };
 
 fn outputOs(target: RocTarget) OutputOs {
     return switch (target) {
-        .x64win, .x64v1win, .arm64win, .arm64v1win => .windows,
+        .x64win, .x64v1win, .x64mingw, .x64v1mingw, .arm64win, .arm64v1win, .arm64mingw, .arm64v1mingw => .windows,
         .x64mac, .x64v1mac, .arm64mac => .macos,
         .wasm32, .wasm32v1 => .wasm,
         .x64freebsd,

@@ -61,11 +61,19 @@ pub const TargetFormat = embedded_lld.Format;
 pub const TargetAbi = enum {
     musl,
     gnu,
+    msvc,
+    mingw,
     /// No C runtime, startup objects, or program interpreter.
     freestanding,
 
     /// Convert from RocTarget to TargetAbi
     pub fn fromRocTarget(target: RocTarget) TargetAbi {
+        if (target.windowsAbi()) |windows_abi| {
+            return switch (windows_abi) {
+                .msvc => .msvc,
+                .mingw => .mingw,
+            };
+        }
         return if (target.isStatic()) .musl else .gnu;
     }
 };
@@ -93,7 +101,7 @@ pub const LinkConfig = struct {
     /// Target format to use for linking
     target_format: TargetFormat = TargetFormat.detectFromSystem(),
 
-    /// Target ABI - determines static vs dynamic linking strategy
+    /// Target ABI - determines the C runtime and platform linker strategy.
     target_abi: ?TargetAbi = null, // null means detect from system
 
     /// Target OS tag - for cross-compilation support
@@ -524,6 +532,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                             return LinkError.LinkFailed);
                     }
                 },
+                .msvc, .mingw => return LinkError.InvalidArguments,
             }
 
             // Link C++ standard library if Tracy is enabled
@@ -535,36 +544,57 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Add linker name for Windows COFF
             try args.append("lld-link");
 
-            const query = std.Target.Query{
-                .cpu_arch = target_arch,
-                .os_tag = .windows,
-                .abi = .msvc,
-                .ofmt = .coff,
+            const target_abi = config.target_abi orelse blk: {
+                if (builtin.target.os.tag != .windows) return LinkError.InvalidArguments;
+                break :blk switch (roc_target.windowsAbiFromStd(builtin.target.abi) orelse return LinkError.InvalidArguments) {
+                    .msvc => TargetAbi.msvc,
+                    .mingw => TargetAbi.mingw,
+                };
             };
 
-            const target = try std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
+            switch (target_abi) {
+                .msvc => {
+                    const query = std.Target.Query{
+                        .cpu_arch = target_arch,
+                        .os_tag = .windows,
+                        .abi = .msvc,
+                        .ofmt = .coff,
+                    };
 
-            var environ_map = std.process.Environ.empty.createMap(ctx.arena) catch return error.WindowsSDKNotFound;
-            defer environ_map.deinit();
-            const native_libc = std.zig.LibCInstallation.findNative(ctx.arena, ctx.io.std_io, .{
-                .target = &target,
-                .environ_map = &environ_map,
-            }) catch return error.WindowsSDKNotFound;
+                    const target = try std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
 
-            if (native_libc.crt_dir) |lib_dir| {
-                const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
-                try args.append(lib_arg);
-            } else return error.WindowsSDKNotFound;
+                    var environ_map = std.process.Environ.empty.createMap(ctx.arena) catch return error.WindowsSDKNotFound;
+                    defer environ_map.deinit();
+                    const native_libc = std.zig.LibCInstallation.findNative(ctx.arena, ctx.io.std_io, .{
+                        .target = &target,
+                        .environ_map = &environ_map,
+                    }) catch return error.WindowsSDKNotFound;
 
-            if (native_libc.msvc_lib_dir) |lib_dir| {
-                const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
-                try args.append(lib_arg);
-            } else return error.WindowsSDKNotFound;
+                    if (native_libc.crt_dir) |lib_dir| {
+                        const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
+                        try args.append(lib_arg);
+                    } else return error.WindowsSDKNotFound;
 
-            if (native_libc.kernel32_lib_dir) |lib_dir| {
-                const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
-                try args.append(lib_arg);
-            } else return error.WindowsSDKNotFound;
+                    if (native_libc.msvc_lib_dir) |lib_dir| {
+                        const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
+                        try args.append(lib_arg);
+                    } else return error.WindowsSDKNotFound;
+
+                    if (native_libc.kernel32_lib_dir) |lib_dir| {
+                        const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
+                        try args.append(lib_arg);
+                    } else return error.WindowsSDKNotFound;
+                },
+                .mingw => {
+                    // MinGW mode changes LLD's archive and symbol semantics to
+                    // match GNU Windows toolchains. Runtime and import libraries
+                    // remain explicit platform inputs.
+                    try args.append("-lldmingw");
+                    try args.append("/nodefaultlib");
+                    try args.append("/alternatename:__image_base__=__ImageBase");
+                },
+                .musl, .gnu, .freestanding => return LinkError.InvalidArguments,
+            }
 
             // Add output argument using Windows style
             const out_arg = try std.fmt.allocPrint(ctx.arena, "/out:{s}", .{config.output_path});
@@ -599,18 +629,20 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append("/stack:67108864");
             }
 
-            // These are part of the core Windows OS and are available on all Windows systems
-            try args.append("/defaultlib:kernel32");
-            try args.append("/defaultlib:ntdll");
-            try args.append("/defaultlib:msvcrt");
-            try args.append("/defaultlib:shell32");
+            if (target_abi == .msvc) {
+                // These are part of the core Windows OS and are available on all Windows systems
+                try args.append("/defaultlib:kernel32");
+                try args.append("/defaultlib:ntdll");
+                try args.append("/defaultlib:msvcrt");
+                try args.append("/defaultlib:shell32");
+            }
 
             // Suppress warnings using Windows style
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
             try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
 
             // Link C++ standard library if Tracy is enabled
-            if (build_options.enable_tracy) {
+            if (build_options.enable_tracy and target_abi == .msvc) {
                 try args.append("/defaultlib:msvcprt");
             }
 
@@ -1304,6 +1336,53 @@ test "force undefined symbols use target linker spelling" {
     };
     const linux_args = try buildLinkArgs(&ctx, linux_config);
     _ = findArg(linux_args.items, "--undefined=roc__answer") orelse return error.MissingForceUndefined;
+}
+
+test "Windows runtime ABI is carried from RocTarget into the linker" {
+    try std.testing.expectEqual(TargetAbi.msvc, TargetAbi.fromRocTarget(.x64win));
+    try std.testing.expectEqual(TargetAbi.msvc, TargetAbi.fromRocTarget(.arm64v1win));
+    try std.testing.expectEqual(TargetAbi.mingw, TargetAbi.fromRocTarget(.x64mingw));
+    try std.testing.expectEqual(TargetAbi.mingw, TargetAbi.fromRocTarget(.arm64v1mingw));
+}
+
+test "MinGW linking uses explicit platform runtime inputs without MSVC defaults" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .coff,
+        .target_abi = .mingw,
+        .target_os = .windows,
+        .target_arch = .aarch64,
+        .output_path = "app.exe",
+        .object_files = &.{"roc_app.obj"},
+        .platform_files_pre = &.{ "crt2.obj", "libhost.a" },
+        .platform_files_post = &.{ "libmingw32.a", "libkernel32.a" },
+        .lazy_platform_archives = true,
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    try std.testing.expectEqualStrings("lld-link", args.items[0]);
+    _ = findArg(args.items, "-lldmingw") orelse return error.MissingMinGWMode;
+    _ = findArg(args.items, "/nodefaultlib") orelse return error.MissingNoDefaultLib;
+    _ = findArg(args.items, "/alternatename:__image_base__=__ImageBase") orelse return error.MissingImageBaseAlias;
+    _ = findArg(args.items, "/machine:arm64") orelse return error.MissingMachine;
+    _ = findArg(args.items, "crt2.obj") orelse return error.MissingPlatformInput;
+    _ = findArg(args.items, "libhost.a") orelse return error.MissingPlatformInput;
+    _ = findArg(args.items, "roc_app.obj") orelse return error.MissingAppObject;
+    _ = findArg(args.items, "libmingw32.a") orelse return error.MissingPlatformInput;
+    _ = findArg(args.items, "libkernel32.a") orelse return error.MissingPlatformInput;
+
+    for (args.items) |arg| {
+        try std.testing.expect(!std.mem.startsWith(u8, arg, "/libpath:"));
+        try std.testing.expect(!std.mem.startsWith(u8, arg, "/defaultlib:"));
+    }
 }
 
 test "shared library exports use target linker spelling" {

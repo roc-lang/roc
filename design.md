@@ -10828,6 +10828,22 @@ chooses the output kind; `roc build` produces what the platform declares for
 the selected target, and there is no `--no-link` style flag. `--target` and
 `--output` (the output path) remain per-build choices.
 
+Windows C runtime ABI is part of target identity. `x64win` and `arm64win`
+(plus their `v1` twins) retain the existing MSVC meaning. `x64mingw` and
+`arm64mingw` (plus `x64v1mingw` and `arm64v1mingw`) select the GNU Windows
+ABI. The compiler carries that distinction through the target query, LLVM
+triple, builtin objects, platform-input directory, and final link. It never
+classifies a COFF input as MSVC or MinGW from its container format, symbols,
+or linker failures.
+
+An MSVC target uses the Windows SDK and MSVC runtime discovered for that
+target. A MinGW target does not discover or add MSVC inputs. It uses LLD's
+MinGW mode and links only the startup objects, runtime archives, and import
+libraries declared explicitly by the platform target, together with Roc's
+generated objects. This lets a platform provide a cgo host and its matching
+MinGW runtime without either the compiler or linker reconstructing the host's
+ABI from the archive.
+
 ```text
 targets: {
     inputs_dir: "targets/",
