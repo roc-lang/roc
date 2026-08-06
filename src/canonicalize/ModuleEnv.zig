@@ -735,7 +735,8 @@ pub const GeneratedCodecCall = extern struct {
     method_ident: u32,
     dispatcher_var: u32,
     callable_var: u32,
-    /// Instantiated method variable whose discharge record owns nested evidence.
+    /// Exact generated callable relation whose dispatch-target record owns the
+    /// selected method scheme's nested evidence.
     evidence_var: u32,
     /// The value shape this call handles, or `no_subject_var` when the method
     /// has no shape-specific call contract.

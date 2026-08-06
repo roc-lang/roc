@@ -24604,6 +24604,55 @@ fn finishGeneratedCodecMethodValidation(
     return .ok;
 }
 
+/// Instantiate a generated codec's selected method scheme while publishing the
+/// same explicit target-evidence edge that a source-level dispatch call would
+/// produce. `evidence_var` is the exact generated callable relation and is the
+/// durable key consumed by checked-artifact publication.
+fn instantiateGeneratedCodecMethodTarget(
+    self: *Self,
+    method_lookup: StaticDispatchMethodBinding,
+    evidence_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
+    const scheme_var = if (method_lookup.is_this_module)
+        method_type_var
+    else
+        try self.copyVar(method_type_var, method_lookup.env, region);
+
+    const records_before = self.cir.scheme_uses.items.items.len;
+    const previous_evidence_target_site = self.evidence_target_site;
+    self.evidence_target_site = .{
+        // Generated codec edges have no source expression; dispatch-target
+        // records are identified by `slot_data`, not by this placeholder node.
+        .node_idx = 0,
+        .constraint_fn_var = evidence_var,
+    };
+    defer self.evidence_target_site = previous_evidence_target_site;
+
+    const method_var = if (self.types.resolveVar(scheme_var).desc.rank == .generalized)
+        try self.instantiateVar(
+            scheme_var,
+            env,
+            if (method_lookup.is_this_module) .use_last_var else .{ .explicit = region },
+        )
+    else
+        scheme_var;
+
+    if (self.cir.scheme_uses.items.items.len == records_before and
+        try self.schemeHasEvidenceParams(scheme_var))
+    {
+        try self.recordSharedSchemeUse(
+            0,
+            .dispatch_target,
+            @intFromEnum(evidence_var),
+            scheme_var,
+        );
+    }
+    return method_var;
+}
+
 const NullTryInfo = struct {
     ok_var: Var,
     err_var: Var,
@@ -25873,18 +25922,9 @@ fn validateSetFromListMethod(
         self.cir,
         method_name,
     ) orelse return try self.reportDerivedParseMissingMethod(set_var, method_name, constraint, env);
-    const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
-    const method_var = if (method_lookup.is_this_module) blk: {
-        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
-            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
-        }
-        break :blk method_type_var;
-    } else blk: {
-        const copied_var = try self.copyVar(method_type_var, method_lookup.env, region);
-        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
-    };
     const list_var = try self.freshFromContent(try self.mkListContent(elem_var), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{list_var}, set_var), env, region);
+    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
             .constraint_var = set_var,
@@ -25892,7 +25932,7 @@ fn validateSetFromListMethod(
             .method_name = method_name,
         },
     });
-    return try self.finishGeneratedCodecMethodValidation(result, method_name, set_var, expected_fn, method_var, set_var);
+    return try self.finishGeneratedCodecMethodValidation(result, method_name, set_var, expected_fn, expected_fn, set_var);
 }
 
 fn validateSetToListMethod(
@@ -26004,17 +26044,8 @@ fn validateGeneratedNominalMethodCall(
         self.cir,
         method_name,
     ) orelse return try self.reportDerivedParseMissingMethod(dispatcher_var, method_name, constraint, env);
-    const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
-    const method_var = if (method_lookup.is_this_module) blk: {
-        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
-            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
-        }
-        break :blk method_type_var;
-    } else blk: {
-        const copied_var = try self.copyVar(method_type_var, method_lookup.env, region);
-        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
-    };
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(arg_vars, ret_var), env, region);
+    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
             .constraint_var = dispatcher_var,
@@ -26022,7 +26053,7 @@ fn validateGeneratedNominalMethodCall(
             .method_name = method_name,
         },
     });
-    return try self.finishGeneratedCodecMethodValidation(result, method_name, dispatcher_var, expected_fn, method_var, dispatcher_var);
+    return try self.finishGeneratedCodecMethodValidation(result, method_name, dispatcher_var, expected_fn, expected_fn, dispatcher_var);
 }
 
 fn validateDerivedEncodeVar(
