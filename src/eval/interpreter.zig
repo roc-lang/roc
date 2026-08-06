@@ -2861,14 +2861,19 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
+                    const arg_descs = try self.localBoxyDescs(frame, arg_locals);
                     const ret_layout = self.store.getLocal(assign.target).layout_idx;
+                    const ret_desc = try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(assign.target).boxy_desc);
                     const observation = rc_conformance.beginStatement(assign.op, arg_values.len);
                     if (observation) |obs| self.conformanceSnapshotArgs(obs, arg_values, arg_layouts);
                     const value = try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
                         .arg_layouts = arg_layouts,
+                        .arg_descs = arg_descs,
                         .ret_layout = ret_layout,
+                        .ret_desc = ret_desc,
+                        .frame = frame,
                         .callable_proc = null,
                         .unique_args = assign.unique_args,
                         .interchangeable = assign.interchangeable,
@@ -2878,6 +2883,7 @@ pub const Interpreter = struct {
                         rc_conformance.endStatement(obs);
                     }
                     try self.setLocalChecked(frame, current, assign.target, value, assign.op == .box_alloc_zeroed);
+                    frame.setLocalDesc(assign.target, ret_desc);
                     current = assign.next;
                 },
                 .assign_list => |assign| {
@@ -3661,6 +3667,17 @@ pub const Interpreter = struct {
             layouts[i] = self.store.getLocal(local_id).layout_idx;
         }
         return layouts;
+    }
+
+    fn localBoxyDescs(self: *LirInterpreter, frame: *const Frame, locals: anytype) Error![]?*const LirProgram.BoxyTypeDesc {
+        if (locals.len == 0) return &.{};
+        const descs = try self.arena.allocator().alloc(?*const LirProgram.BoxyTypeDesc, locals.len);
+        for (0..locals.len) |i| {
+            const local_id = GuardedList.at(locals, i);
+            descs[i] = frame.localDesc(local_id) orelse
+                try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(local_id).boxy_desc);
+        }
+        return descs;
     }
 
     fn localLayoutsFromSpan(self: *LirInterpreter, locals: LocalSpan) Error![]const layout_mod.Idx {
@@ -5491,7 +5508,9 @@ pub const Interpreter = struct {
 
     const ListElementRcContext = struct {
         interp: *LirInterpreter,
+        frame: *const Frame,
         elem_layout: layout_mod.Idx,
+        elem_desc: ?*const LirProgram.BoxyTypeDesc,
     };
 
     fn listElemInfo(self: *LirInterpreter, list_layout: layout_mod.Idx) ListElemInfo {
@@ -5533,14 +5552,26 @@ pub const Interpreter = struct {
         if (element == null) return;
         const ctx_ptr = context orelse unreachable;
         const ctx: *const ListElementRcContext = @ptrCast(@alignCast(ctx_ptr));
-        ctx.interp.performBuiltinInternalRc("interpreter.listElementIncref", .incref, .{ .ptr = element.? }, ctx.elem_layout, 1);
+        const value = Value{ .ptr = element.? };
+        if (ctx.elem_desc) |desc| {
+            ctx.interp.performBoxyLayoutDrop(ctx.frame, value, ctx.elem_layout, desc, .incref, 1, .atomic) catch |err|
+                ctx.interp.invariantFailed("descriptor-guided list element incref failed: {s}", .{@errorName(err)});
+        } else {
+            ctx.interp.performBuiltinInternalRc("interpreter.listElementIncref", .incref, value, ctx.elem_layout, 1);
+        }
     }
 
     fn listElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
         if (element == null) return;
         const ctx_ptr = context orelse unreachable;
         const ctx: *const ListElementRcContext = @ptrCast(@alignCast(ctx_ptr));
-        ctx.interp.performBuiltinInternalRc("interpreter.listElementDecref", .decref, .{ .ptr = element.? }, ctx.elem_layout, 1);
+        const value = Value{ .ptr = element.? };
+        if (ctx.elem_desc) |desc| {
+            ctx.interp.performBoxyLayoutDrop(ctx.frame, value, ctx.elem_layout, desc, .decref, 1, .atomic) catch |err|
+                ctx.interp.invariantFailed("descriptor-guided list element decref failed: {s}", .{@errorName(err)});
+        } else {
+            ctx.interp.performBuiltinInternalRc("interpreter.listElementDecref", .decref, value, ctx.elem_layout, 1);
+        }
     }
 
     /// Call a unary string builtin whose first argument carries the op's
@@ -5621,7 +5652,10 @@ pub const Interpreter = struct {
         op: LIR.LowLevel,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
+        arg_descs: []const ?*const LirProgram.BoxyTypeDesc,
         ret_layout: layout_mod.Idx,
+        ret_desc: ?*const LirProgram.BoxyTypeDesc,
+        frame: *const Frame,
         callable_proc: ?LirProcSpecId = null,
         /// The statement's statically-proven-unique argument mask; bit i set
         /// means argument i's runtime uniqueness check is redundant and the
@@ -5633,6 +5667,37 @@ pub const Interpreter = struct {
         /// runtime uniqueness check. Ignored by every other op.
         interchangeable: layout_mod.WidthValues(bool) = layout_mod.WidthValues(bool).both(true, true),
     };
+
+    fn listElementRcContext(self: *LirInterpreter, ll: LowLevelEvalInput, list_layout: layout_mod.Idx) Error!ListElementRcContext {
+        const elem_layout = self.listElemLayout(list_layout);
+        const elem_layout_value = self.layout_store.getLayout(elem_layout);
+        const elem_is_erased_box = elem_layout_value.tag == .box_of_zst;
+        const elem_is_box = elem_is_erased_box or elem_layout_value.tag == .box;
+        var elem_desc: ?*const LirProgram.BoxyTypeDesc = null;
+
+        if (elem_is_box) {
+            const list_desc = if (ll.arg_descs.len > 0) ll.arg_descs[0] orelse ll.ret_desc else ll.ret_desc;
+            if (list_desc) |desc| {
+                elem_desc = try self.firstNestedBoxyDesc(ll.frame, desc) orelse
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: descriptor-backed list layout {d} had no element descriptor",
+                        .{@intFromEnum(list_layout)},
+                    );
+            } else if (elem_is_erased_box) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased-box list element layout {d} reached a refcounted list builtin without a Boxy list descriptor",
+                    .{@intFromEnum(elem_layout)},
+                );
+            }
+        }
+
+        return .{
+            .interp = self,
+            .frame = ll.frame,
+            .elem_layout = elem_layout,
+            .elem_desc = elem_desc,
+        };
+    }
 
     fn lowLevelArgLayout(self: *const LirInterpreter, ll: LowLevelEvalInput, index: usize) Error!layout_mod.Idx {
         if (index < ll.arg_layouts.len) return ll.arg_layouts[index];
@@ -6157,10 +6222,7 @@ pub const Interpreter = struct {
                 if (sj != 0) {
                     return error.Crash;
                 }
-                var elem_rc_ctx = ListElementRcContext{
-                    .interp = self,
-                    .elem_layout = self.listElemLayout(arg_layout),
-                };
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listConcat(
                     list_a,
                     list_b,
@@ -6188,10 +6250,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                var elem_rc_ctx = ListElementRcContext{
-                    .interp = self,
-                    .elem_layout = self.listElemLayout(arg_layout),
-                };
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listPrepend(
                     list_val,
                     info.alignment,
@@ -6220,10 +6279,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                var elem_rc_ctx = ListElementRcContext{
-                    .interp = self,
-                    .elem_layout = self.listElemLayout(arg_layout),
-                };
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listSwap(
                     list_val,
                     info.alignment,
@@ -6312,10 +6368,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                var elem_rc_ctx = ListElementRcContext{
-                    .interp = self,
-                    .elem_layout = self.listElemLayout(arg_layout),
-                };
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listSublist(
                     source_list,
                     info.alignment,
@@ -6344,10 +6397,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                var elem_rc_ctx = ListElementRcContext{
-                    .interp = self,
-                    .elem_layout = self.listElemLayout(arg_layout),
-                };
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listDropAt(
                     source_list,
                     info.alignment,
@@ -6396,10 +6446,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                var elem_rc_ctx = ListElementRcContext{
-                    .interp = self,
-                    .elem_layout = self.listElemLayout(arg_layout),
-                };
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
 
                 // listReplace writes the displaced (old) element into the out_element slot.
                 // Aim that slot directly at the value field of the result record.
@@ -6448,10 +6495,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                var elem_rc_ctx = ListElementRcContext{
-                    .interp = self,
-                    .elem_layout = self.listElemLayout(arg_layout),
-                };
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listSet(
                     self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
@@ -6502,10 +6546,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                var elem_rc_ctx = ListElementRcContext{
-                    .interp = self,
-                    .elem_layout = self.listElemLayout(arg_layout),
-                };
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listReserve(
                     list_val,
                     info.alignment,
@@ -6532,10 +6573,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                var elem_rc_ctx = ListElementRcContext{
-                    .interp = self,
-                    .elem_layout = self.listElemLayout(arg_layout),
-                };
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
                 const result = builtins.list.listReleaseExcessCapacity(
                     list_val,
                     info.alignment,
@@ -6552,13 +6590,13 @@ pub const Interpreter = struct {
             },
             .list_first => self.evalListFirst(args[0], arg_layout, ll.ret_layout),
             .list_last => self.evalListLast(args[0], arg_layout, ll.ret_layout),
-            .list_drop_first => self.evalListDropFirst(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args)),
-            .list_drop_last => self.evalListDropLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args)),
-            .list_take_first => self.evalListTakeFirst(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args)),
-            .list_take_last => self.evalListTakeLast(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args)),
-            .list_reverse => self.evalListReverse(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args)),
-            .list_split_first => self.evalListSplitFirst(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args)),
-            .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args)),
+            .list_drop_first => self.evalListDropFirst(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
+            .list_drop_last => self.evalListDropLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
+            .list_take_first => self.evalListTakeFirst(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
+            .list_take_last => self.evalListTakeLast(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
+            .list_reverse => self.evalListReverse(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
+            .list_split_first => self.evalListSplitFirst(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
+            .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
 
             // ── Arithmetic ──
             .num_plus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, null),
@@ -8054,7 +8092,7 @@ pub const Interpreter = struct {
         return val;
     }
 
-    fn evalListDropFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode) Error!Value {
+    fn evalListDropFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
@@ -8065,6 +8103,7 @@ pub const Interpreter = struct {
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
+        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listSublist(
             rl,
             info.alignment,
@@ -8072,15 +8111,15 @@ pub const Interpreter = struct {
             elems_rc,
             1,
             std.math.maxInt(u64),
-            null,
-            &builtins.utils.rcNone,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
             update_mode,
             &self.roc_ops,
         );
         return self.rocListToValue(result, ret_layout);
     }
 
-    fn evalListDropLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode) Error!Value {
+    fn evalListDropLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
@@ -8093,6 +8132,7 @@ pub const Interpreter = struct {
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
+        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listSublist(
             rl,
             info.alignment,
@@ -8100,15 +8140,15 @@ pub const Interpreter = struct {
             elems_rc,
             0,
             len - 1,
-            null,
-            &builtins.utils.rcNone,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
             update_mode,
             &self.roc_ops,
         );
         return self.rocListToValue(result, ret_layout);
     }
 
-    fn evalListTakeFirst(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode) Error!Value {
+    fn evalListTakeFirst(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
@@ -8119,6 +8159,7 @@ pub const Interpreter = struct {
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
+        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listSublist(
             rl,
             info.alignment,
@@ -8126,15 +8167,15 @@ pub const Interpreter = struct {
             elems_rc,
             0,
             count_arg.read(u64),
-            null,
-            &builtins.utils.rcNone,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
             update_mode,
             &self.roc_ops,
         );
         return self.rocListToValue(result, ret_layout);
     }
 
-    fn evalListTakeLast(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode) Error!Value {
+    fn evalListTakeLast(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
@@ -8148,6 +8189,7 @@ pub const Interpreter = struct {
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
+        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listSublist(
             rl,
             info.alignment,
@@ -8155,15 +8197,15 @@ pub const Interpreter = struct {
             elems_rc,
             @intCast(start),
             take,
-            null,
-            &builtins.utils.rcNone,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
             update_mode,
             &self.roc_ops,
         );
         return self.rocListToValue(result, ret_layout);
     }
 
-    fn evalListReverse(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode) Error!Value {
+    fn evalListReverse(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
@@ -8172,10 +8214,7 @@ pub const Interpreter = struct {
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
-        var elem_rc_ctx = ListElementRcContext{
-            .interp = self,
-            .elem_layout = self.listElemLayout(list_layout),
-        };
+        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
         const result = builtins.list.listReverse(
             rl,
             info.alignment,
@@ -8192,7 +8231,7 @@ pub const Interpreter = struct {
         return self.rocListToValue(result, ret_layout);
     }
 
-    fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode) Error!Value {
+    fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
@@ -8224,6 +8263,7 @@ pub const Interpreter = struct {
             defer crash_boundary.deinit();
             const sj = crash_boundary.set();
             if (sj != 0) return error.Crash;
+            var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
             const rest = builtins.list.listSublist(
                 rl,
                 info.alignment,
@@ -8231,8 +8271,8 @@ pub const Interpreter = struct {
                 elems_rc,
                 1,
                 std.math.maxInt(u64),
-                null,
-                &builtins.utils.rcNone,
+                if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                 update_mode,
                 &self.roc_ops,
             );
@@ -8245,7 +8285,7 @@ pub const Interpreter = struct {
         return val;
     }
 
-    fn evalListSplitLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode) Error!Value {
+    fn evalListSplitLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
@@ -8277,6 +8317,7 @@ pub const Interpreter = struct {
             defer crash_boundary.deinit();
             const sj = crash_boundary.set();
             if (sj != 0) return error.Crash;
+            var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
             const rest = builtins.list.listSublist(
                 rl,
                 info.alignment,
@@ -8284,8 +8325,8 @@ pub const Interpreter = struct {
                 elems_rc,
                 0,
                 rl.len() - 1,
-                null,
-                &builtins.utils.rcNone,
+                if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                 update_mode,
                 &self.roc_ops,
             );
