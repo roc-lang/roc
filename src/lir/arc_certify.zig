@@ -490,9 +490,9 @@ fn paramSeededUnique(sig: arc_sig.RcSig, params: anytype, local: LIR.LocalId) bo
     if (sig.unique_params == 0) return false;
     for (0..GuardedList.borrowLen(params)) |position| {
         const param = GuardedList.at(params, position);
-        if (position >= 64) break;
+        const bit = arc_sig.paramBit(position) orelse break;
         if (param != local) continue;
-        return (sig.unique_params >> @as(u6, @intCast(position))) & 1 != 0;
+        return (sig.unique_params & bit) != 0;
     }
     return false;
 }
@@ -3533,7 +3533,7 @@ const Certifier = struct {
     ) CertifyError!void {
         const arg_locals = self.store.getLocalSpan(args);
 
-        var arg_values_buffer: [64]ValueId = undefined;
+        var arg_values_buffer: [arc_sig.tracked_param_count]ValueId = undefined;
         for (0..GuardedList.borrowLen(arg_locals)) |index| {
             const arg = GuardedList.at(arg_locals, index);
             const value = try self.requireLive(state, arg);
@@ -3559,12 +3559,11 @@ const Certifier = struct {
             switch (callee_sig.ret_mode) {
                 .owned => _ = try self.bindFresh(state, target, 1, &.{}),
                 .borrowed => {
-                    var lenders_buffer: [64]ValueId = undefined;
+                    var lenders_buffer: [arc_sig.tracked_param_count]ValueId = undefined;
                     var lender_count: usize = 0;
                     for (0..GuardedList.borrowLen(arg_locals)) |index| {
                         const arg = GuardedList.at(arg_locals, index);
-                        if (index >= 64) break;
-                        const bit = @as(u64, 1) << @as(u6, @intCast(index));
+                        const bit = arc_sig.paramBit(index) orelse break;
                         if ((callee_sig.ret_lenders & bit) == 0) continue;
                         if (!self.isRc(arg)) continue;
                         const value = arg_values_buffer[index];

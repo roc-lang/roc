@@ -13,6 +13,18 @@ const core = @import("lir_core");
 
 const LIR = core.LIR;
 
+/// Parameter positions represented in inferred signatures and mode demands.
+/// Later positions follow the exact all-owned schedule.
+pub const ParamMask = u16;
+/// Number of procedure argument positions represented by `ParamMask`.
+pub const tracked_param_count = @bitSizeOf(ParamMask);
+
+/// Returns the represented bit for one procedure argument position.
+pub fn paramBit(index: usize) ?ParamMask {
+    if (index >= tracked_param_count) return null;
+    return @as(ParamMask, 1) << @as(u4, @intCast(index));
+}
+
 /// Ownership mode of one refcounted position.
 pub const Mode = enum(u1) {
     borrowed,
@@ -22,15 +34,15 @@ pub const Mode = enum(u1) {
 /// Solved ownership signature of one proc.
 ///
 /// Argument positions are indexed by position in the proc's `args` span.
-/// Positions at or beyond 64 are always owned. Non-refcounted positions are
+/// Positions at or beyond `tracked_param_count` are always owned. Non-refcounted positions are
 /// reported as owned; their mode is never consulted.
 pub const RcSig = struct {
     /// Bit i set means argument position i is borrowed.
-    borrowed_params: u64 = 0,
+    borrowed_params: ParamMask = 0,
     ret_mode: Mode = .owned,
     /// For a borrowed return, bit i set means the result may borrow from
     /// argument position i. Unused when `ret_mode` is owned.
-    ret_lenders: u64 = 0,
+    ret_lenders: ParamMask = 0,
     /// The returned value's outermost allocation has count 1 on return:
     /// every `ret` in the proc returns a born-unique value that survives to
     /// the return with no other holder, so the return is the value's single
@@ -41,20 +53,19 @@ pub const RcSig = struct {
     /// runtime uniqueness checks that consume the parameter go check-free.
     /// Only mode-specialized variants carry these bits; solved base
     /// signatures and pinned signatures are always zero.
-    unique_params: u64 = 0,
+    unique_params: ParamMask = 0,
 
     pub const all_owned: RcSig = .{};
 
     pub fn paramMode(self: RcSig, index: usize) Mode {
-        if (index >= 64) return .owned;
-        const bit = @as(u64, 1) << @as(u6, @intCast(index));
+        const bit = paramBit(index) orelse return .owned;
         return if ((self.borrowed_params & bit) != 0) .borrowed else .owned;
     }
 
     pub fn withBorrowedParam(self: RcSig, index: usize) RcSig {
-        if (index >= 64) return self;
+        const bit = paramBit(index) orelse return self;
         var updated = self;
-        updated.borrowed_params |= @as(u64, 1) << @as(u6, @intCast(index));
+        updated.borrowed_params |= bit;
         return updated;
     }
 };
@@ -76,26 +87,28 @@ pub const SigTable = struct {
 test "all-owned signature reports owned for every position" {
     const sig = RcSig.all_owned;
     try std.testing.expectEqual(Mode.owned, sig.paramMode(0));
-    try std.testing.expectEqual(Mode.owned, sig.paramMode(63));
+    try std.testing.expectEqual(Mode.owned, sig.paramMode(15));
+    try std.testing.expectEqual(Mode.owned, sig.paramMode(16));
     try std.testing.expectEqual(Mode.owned, sig.paramMode(200));
     try std.testing.expectEqual(Mode.owned, sig.ret_mode);
     try std.testing.expectEqual(false, sig.ret_unique);
-    try std.testing.expectEqual(@as(u64, 0), sig.unique_params);
+    try std.testing.expectEqual(@as(ParamMask, 0), sig.unique_params);
 }
 
 test "borrowed param bits round-trip" {
-    const sig = RcSig.all_owned.withBorrowedParam(0).withBorrowedParam(3);
+    const sig = RcSig.all_owned.withBorrowedParam(0).withBorrowedParam(3).withBorrowedParam(15).withBorrowedParam(16);
     try std.testing.expectEqual(Mode.borrowed, sig.paramMode(0));
     try std.testing.expectEqual(Mode.owned, sig.paramMode(1));
     try std.testing.expectEqual(Mode.borrowed, sig.paramMode(3));
-    try std.testing.expectEqual(Mode.owned, sig.paramMode(64));
+    try std.testing.expectEqual(Mode.borrowed, sig.paramMode(15));
+    try std.testing.expectEqual(Mode.owned, sig.paramMode(16));
 }
 
 test "empty signature table answers all-owned" {
     const table = SigTable.all_owned;
     const sig = table.get(@enumFromInt(7));
-    try std.testing.expectEqual(@as(u64, 0), sig.borrowed_params);
+    try std.testing.expectEqual(@as(ParamMask, 0), sig.borrowed_params);
     try std.testing.expectEqual(Mode.owned, sig.ret_mode);
     try std.testing.expectEqual(false, sig.ret_unique);
-    try std.testing.expectEqual(@as(u64, 0), sig.unique_params);
+    try std.testing.expectEqual(@as(ParamMask, 0), sig.unique_params);
 }
