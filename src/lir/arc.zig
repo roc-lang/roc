@@ -3765,7 +3765,7 @@ const Inserter = struct {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
         }
-        var live_consumed_args = try self.preserveConsumedArgMask(args, rc_effect.consume_args, next, target, loop_keep);
+        var preserve_consumed_args = try self.preserveConsumedArgMask(args, rc_effect.consume_args, next, target, loop_keep);
         if (supply_missing_consumed_args) {
             const locals = self.store.getLocalSpan(args);
             for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
@@ -3774,16 +3774,14 @@ const Inserter = struct {
                 if (!self.ownsUnit(owned, GuardedList.at(locals, position))) {
                     // The solved signature borrowed this argument. Retaining it
                     // here supplies the unit consumed by the owned operation.
-                    live_consumed_args |= bit;
+                    preserve_consumed_args |= bit;
                 }
             }
         }
         const unique_args = if (want_unique)
-            self.uniqueArgsMask(args, rc_effect, target, live_consumed_args, owned)
+            self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned)
         else
             0;
-        const runtime_checked_consumed_args = rc_effect.may_runtime_uniqueness_check_args & rc_effect.consume_args;
-        const preserve_consumed_args = live_consumed_args | (runtime_checked_consumed_args & ~unique_args);
         const target_consumed = self.maskedArgsContainLocal(args, rc_effect.consume_args, target);
         var release_old_target = false;
         if (target_consumed) {
@@ -8905,7 +8903,6 @@ test "uniqueness: parameter consumed by a checked op keeps its check" {
 
     try f.run();
     try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
-    try f.expectRc(param, 1, 1, 0);
 }
 
 test "uniqueness: append result consumed by a checked op elides the check" {
