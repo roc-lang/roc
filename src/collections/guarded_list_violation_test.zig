@@ -393,5 +393,6 @@ fn dummyMonoTypeField(raw: u32, ty: Mono.Type.TypeId) Mono.Type.Field {
     return .{
         .name = @enumFromInt(raw),
         .ty = ty,
+        .default = null,
     };
 }

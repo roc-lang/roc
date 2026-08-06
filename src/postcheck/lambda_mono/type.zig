@@ -42,10 +42,14 @@ pub const Span = extern struct {
     }
 };
 
-/// Record field type entry.
+/// Record field type entry. `default` is the Monotype `??` default identity
+/// copied verbatim (both stores share the program name store): rows that
+/// disagree about defaults are distinct monotypes, and this stage's digests
+/// and const-store evidence must preserve that distinction.
 pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeId,
+    default: ?MonoType.FieldDefault,
 };
 
 /// Capture record field entry.
@@ -323,6 +327,7 @@ pub const Store = struct {
                 for (0..field_slice.len) |index| {
                     const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
+                    MonoType.writeFieldDefaultDigest(name_store, hasher, field.default);
                     self.writeTypeDigest(name_store, hasher, field.ty);
                 }
             },
@@ -494,7 +499,7 @@ test "lambda mono empty spans use shared empty descriptor" {
 
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
-    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit }});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit, .default = null }});
     const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @enumFromInt(2), .binder = null, .ty = unit, .storage_ty = unit }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(3), .checked_name = @enumFromInt(3), .payloads = nonempty_span }});
     const nonempty_variants = try store.addFnVariants(&.{.{ .id = @enumFromInt(99), .source = @enumFromInt(4), .target = @enumFromInt(40), .capture_ty = unit }});

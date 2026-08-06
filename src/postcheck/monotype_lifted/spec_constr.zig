@@ -12315,8 +12315,8 @@ test "SpecConstr preserves record update ordering while exposing its final shape
     const a = try program.names.internRecordFieldLabel("a");
     const b = try program.names.internRecordFieldLabel("b");
     const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
-        .{ .name = a, .ty = u8_ty },
-        .{ .name = b, .ty = u8_ty },
+        .{ .name = a, .ty = u8_ty, .default = null },
+        .{ .name = b, .ty = u8_ty, .default = null },
     }) });
     const base_local = try program.addLocal(@enumFromInt(1), record_ty);
     const update_local = try program.addLocal(@enumFromInt(2), u8_ty);
@@ -12832,13 +12832,13 @@ test "field access folding preserves shared residual suffix spans" {
 
     const leaf_ty = try program.types.add(.{ .primitive = .u8 });
     const inner_ty = try program.types.add(.{ .record = try program.types.addFields(&.{
-        .{ .name = leaf_name, .ty = leaf_ty },
+        .{ .name = leaf_name, .ty = leaf_ty, .default = null },
     }) });
     const middle_ty = try program.types.add(.{ .record = try program.types.addFields(&.{
-        .{ .name = middle_name, .ty = inner_ty },
+        .{ .name = middle_name, .ty = inner_ty, .default = null },
     }) });
     const outer_ty = try program.types.add(.{ .record = try program.types.addFields(&.{
-        .{ .name = outer_name, .ty = middle_ty },
+        .{ .name = outer_name, .ty = middle_ty, .default = null },
     }) });
 
     const leaf_local = try program.addLocal(@enumFromInt(1), leaf_ty);

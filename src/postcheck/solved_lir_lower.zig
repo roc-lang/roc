@@ -1541,7 +1541,7 @@ const Lowerer = struct {
                 const lowered = try self.allocator.alloc(Type.Field, fields.len);
                 defer self.allocator.free(lowered);
                 for (self.solved_types.fieldSpan(fields), 0..) |field, i| {
-                    lowered[i] = .{ .name = field.name, .ty = try self.lowerType(field.ty) };
+                    lowered[i] = .{ .name = field.name, .ty = try self.lowerType(field.ty), .default = field.default };
                 }
                 break :blk .{ .record = try self.types.addFields(lowered) };
             },
@@ -1964,6 +1964,14 @@ const Lowerer = struct {
         return self.result.const_type_names.internTagLabel(self.solved.lifted.names.tagLabelText(name));
     }
 
+    fn constFieldDefault(self: *Lowerer, default: ?MonoType.FieldDefault) std.mem.Allocator.Error!?const_store.TypeFieldDefault {
+        const field_default = default orelse return null;
+        return .{
+            .module = try self.result.const_type_names.internModuleIdentity(self.solved.lifted.names.moduleIdentityBytes(field_default.module)),
+            .expr_node = field_default.expr_node,
+        };
+    }
+
     fn constTypeDef(self: *Lowerer, def: MonoType.TypeDef) std.mem.Allocator.Error!const_store.TypeDef {
         return .{
             .module = try self.result.const_type_names.internModuleIdentity(self.solved.lifted.names.moduleIdentityBytes(def.module)),
@@ -2007,6 +2015,7 @@ const Lowerer = struct {
                     out[i] = .{
                         .name = try self.constRecordFieldName(field.name),
                         .ty = try self.constTypeOfType(field.ty),
+                        .default = try self.constFieldDefault(field.default),
                     };
                 }
                 break :blk .{ .record = try self.result.const_types.appendFieldSpan(out) };
@@ -2141,6 +2150,7 @@ const Lowerer = struct {
                     out[i] = .{
                         .name = try self.constRecordFieldName(field.name),
                         .ty = try self.constTypeOfMonoType(field.ty),
+                        .default = try self.constFieldDefault(field.default),
                     };
                 }
                 break :blk .{ .record = try self.result.const_types.appendFieldSpan(out) };

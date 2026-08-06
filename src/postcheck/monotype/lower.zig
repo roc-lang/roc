@@ -4694,9 +4694,24 @@ const Builder = struct {
             lowered[i] = .{
                 .name = try self.recordFieldName(view, field.name),
                 .ty = try self.lowerFieldSlotType(view, field),
+                .default = try self.monoFieldDefault(view, field),
             };
         }
         return .{ .record = try self.program.types.addRecordFields(&self.program.names, lowered) };
+    }
+
+    /// The Monotype default identity of one checked record field, present
+    /// exactly for `??` fields: the declaring module's identity interned into
+    /// the program name store plus the default expression's node index in
+    /// that module. Carried on `Type.Field` so rows disagreeing about
+    /// defaults are distinct monotypes (see `Type.FieldDefault`).
+    fn monoFieldDefault(self: *Builder, view: ModuleView, field: checked.CheckedRecordField) Allocator.Error!?Type.FieldDefault {
+        const default = field.kind.defaultIdentity() orelse return null;
+        const origin_module = default.origin() orelse Common.invariant("defaulted checked field carried no default origin module");
+        return .{
+            .module = try self.program.names.internModuleIdentity(view.names.moduleIdentityBytes(origin_module)),
+            .expr_node = default.expr_node,
+        };
     }
 
     fn lowerRecordRow(
@@ -4750,6 +4765,7 @@ const Builder = struct {
             try out.append(self.allocator, .{
                 .name = try self.recordFieldName(view, field.name),
                 .ty = try self.lowerFieldSlotType(view, field),
+                .default = try self.monoFieldDefault(view, field),
             });
         }
     }
@@ -15916,6 +15932,7 @@ const BodyContext = struct {
                     .required, .defaulted => value_node,
                     .optional => try self.optionalSlotNode(value_node),
                 },
+                .default = try self.builder.monoFieldDefault(self.view, field),
             };
         }
         return out;
@@ -17148,7 +17165,7 @@ const BodyContext = struct {
         for (checked_row.fields, produced_row.fields, fields) |checked_field, produced_field, *out| {
             if (checked_field.name != produced_field.name) return null;
             const ty = try self.relateCheckedNodeToProducedValueInner(checked_field.ty, produced_field.ty, visiting);
-            out.* = .{ .name = produced_field.name, .ty = ty };
+            out.* = .{ .name = produced_field.name, .ty = ty, .default = produced_field.default };
             changed = changed or !self.graph.sameClass(ty, produced_field.ty);
         }
         if (!changed) return produced_node;
@@ -19250,11 +19267,36 @@ const BodyContext = struct {
                 cursor = existing.previous_same_address;
                 continue;
             }
-            try relateRequestComponent(
-                self.graph,
-                try self.exprTypeCell(existing.expr).toGraphNode(self.graph),
-                try request_cell.toGraphNode(self.graph),
-            );
+            // Two SEALED cells need no graph relation: representation
+            // equality above already matched the finished monotypes, so
+            // relating them is a no-op — and sealed emission (a derived
+            // parser def restoring an archived constant) may not grow the
+            // graph at all. A disagreement here is an upstream invariant,
+            // not a case.
+            const reuse_relation: ?struct { existing: Type.TypeId, requested: Type.TypeId } = switch (self.exprTypeCell(existing.expr)) {
+                .sealed => |existing_ty| switch (request_cell) {
+                    .sealed => |request_ty| .{ .existing = existing_ty, .requested = request_ty },
+                    .graph_node => null,
+                },
+                .graph_node => null,
+            };
+            if (reuse_relation) |sealed_pair| {
+                if (sealed_pair.existing != sealed_pair.requested and
+                    !try self.builder.program.types.typeEql(
+                        &self.builder.program.names,
+                        sealed_pair.existing,
+                        sealed_pair.requested,
+                    ))
+                {
+                    Common.invariant("materialized ConstStore reuse cell disagreed with its sealed request type");
+                }
+            } else {
+                try relateRequestComponent(
+                    self.graph,
+                    try self.exprTypeCell(existing.expr).toGraphNode(self.graph),
+                    try request_cell.toGraphNode(self.graph),
+                );
+            }
             return existing.expr;
         }
         return null;
@@ -20684,6 +20726,7 @@ const BodyContext = struct {
                     try self.generatedIteratorStepFunctionNode(field.ty, self_node, item_node)
                 else
                     field.ty,
+                .default = field.default,
             };
         }
         return try self.graph.newNode(.{ .record = .{
@@ -20751,6 +20794,7 @@ const BodyContext = struct {
                     item_node
                 else
                     field.ty,
+                .default = field.default,
             };
         }
         return try self.graph.newNode(.{ .record = .{
@@ -22475,9 +22519,9 @@ const BodyContext = struct {
         const init_cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
         const init_remaining_name = try self.builder.program.names.internRecordFieldLabel("remaining");
         const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty },
-            .{ .name = init_cursor_name, .ty = state_ty },
-            .{ .name = init_remaining_name, .ty = u64_ty },
+            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
+            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
+            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
         };
         const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
 
@@ -23790,9 +23834,9 @@ const BodyContext = struct {
         const init_cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
         const init_remaining_name = try self.builder.program.names.internRecordFieldLabel("remaining");
         const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty },
-            .{ .name = init_cursor_name, .ty = state_ty },
-            .{ .name = init_remaining_name, .ty = u64_ty },
+            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
+            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
+            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
         };
         const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
 
@@ -23954,9 +23998,9 @@ const BodyContext = struct {
         const init_cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
         const init_remaining_name = try self.builder.program.names.internRecordFieldLabel("remaining");
         const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty },
-            .{ .name = init_cursor_name, .ty = state_ty },
-            .{ .name = init_remaining_name, .ty = u64_ty },
+            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
+            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
+            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
         };
         const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
 
@@ -24989,8 +25033,8 @@ const BodyContext = struct {
         const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
         const value_name = try self.builder.program.names.internRecordFieldLabel("value");
         const fields = [_]Type.Field{
-            .{ .name = rest_name, .ty = rest_ty },
-            .{ .name = value_name, .ty = value_ty },
+            .{ .name = rest_name, .ty = rest_ty, .default = null },
+            .{ .name = value_name, .ty = value_ty, .default = null },
         };
         return try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
     }
@@ -25050,8 +25094,8 @@ const BodyContext = struct {
         const u64_ty = try self.builder.primitiveType(.u64);
 
         const counted_fields = [_]Type.Field{
-            .{ .name = len_name, .ty = u64_ty },
-            .{ .name = rest_name, .ty = state_ty },
+            .{ .name = len_name, .ty = u64_ty, .default = null },
+            .{ .name = rest_name, .ty = state_ty, .default = null },
         };
         const counted_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &counted_fields) });
 
@@ -25175,7 +25219,8 @@ const BodyContext = struct {
         for (record_fields, 0..) |field, index| {
             field_locals[index] = try self.addLocal(self.builder.symbols.fresh(), field.ty);
             const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null or
-                self.builder.optionalFieldSlot(field.ty) != null;
+                self.builder.optionalFieldSlot(field.ty) != null or
+                self.parserFieldDefaultFor(record_ty, field.name) != null;
             if (!field_can_be_missing) {
                 const field_try_ty = try self.tryTypeLike(ret_ty, field.ty, ret_info.err_ty);
                 field_try_tys[index] = field_try_ty;
@@ -25209,9 +25254,21 @@ const BodyContext = struct {
         var field_index = record_fields.len;
         while (field_index > 0) {
             field_index -= 1;
+            const maybe_default = self.parserFieldDefaultFor(record_ty, record_fields[field_index].name);
             const field_can_be_missing = (try self.missingTryInfo(record_fields[field_index].ty)) != null or
-                self.builder.optionalFieldSlot(record_fields[field_index].ty) != null;
-            body = if (field_can_be_missing)
+                self.builder.optionalFieldSlot(record_fields[field_index].ty) != null or
+                maybe_default != null;
+            body = if (maybe_default) |default|
+                try self.finishDefaultedRecordFieldFromPresencePayload(
+                    body,
+                    ret_ty,
+                    record_slots,
+                    record_fields[field_index],
+                    field_index,
+                    field_locals[field_index],
+                    default,
+                )
+            else if (field_can_be_missing)
                 try self.finishOptionalRecordFieldFromPresencePayload(
                     body,
                     ret_ty,
@@ -28936,6 +28993,7 @@ const BodyContext = struct {
                     out[index] = .{
                         .name = try self.constRecordFieldName(store_view, field.name),
                         .ty = try self.lowerConstCaptureTypeInner(store_view, field.ty, map),
+                        .default = try self.constFieldDefault(store_view, field.default),
                     };
                 }
                 break :blk .{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, out) };
@@ -29003,6 +29061,21 @@ const BodyContext = struct {
         name: names.RecordFieldNameId,
     ) Allocator.Error!names.RecordFieldNameId {
         return try self.builder.program.names.internRecordFieldLabel(store_view.names.recordFieldLabelText(name));
+    }
+
+    /// Re-intern a field default's declaring-module identity from the const
+    /// store's name table into the program name store, like
+    /// `constRecordFieldName` does for the label.
+    fn constFieldDefault(
+        self: *BodyContext,
+        store_view: ModuleView,
+        default: ?check.ConstStore.TypeFieldDefault,
+    ) Allocator.Error!?Type.FieldDefault {
+        const field_default = default orelse return null;
+        return .{
+            .module = try self.builder.program.names.internModuleIdentity(store_view.names.moduleIdentityBytes(field_default.module)),
+            .expr_node = field_default.expr_node,
+        };
     }
 
     fn constTagName(
@@ -31581,14 +31654,48 @@ const BodyContext = struct {
         field_ty: Type.TypeId,
     ) Allocator.Error!?DraftExprId {
         const default = (try self.checkedFieldDefault(checked_ty, field_name)) orelse return null;
+        return try self.defaultedFieldValueFromDefault(default, field_ty);
+    }
+
+    /// Materialize one archived field default (by identity) at `field_ty`:
+    /// prefer the declaring module's finalized constant, falling back to
+    /// inlining the pure default expression while this module's own roots
+    /// are still being finalized (see `defaultedFieldValue`).
+    fn defaultedFieldValueFromDefault(
+        self: *BodyContext,
+        default: checked.CheckedFieldDefault,
+        field_ty: Type.TypeId,
+    ) Allocator.Error!?DraftExprId {
         const origin_module = default.origin() orelse return null;
-        const origin_hash = self.view.names.moduleIdentityBytes(origin_module);
+        return try self.defaultedFieldValueAt(self.view.names.moduleIdentityBytes(origin_module), default.expr_node, field_ty);
+    }
+
+    /// Materialize the default a record monotype carries on one of its
+    /// fields (`Type.FieldDefault`): the declaring module's identity lives
+    /// in the program name store, so parser derivations running in another
+    /// module's view (builtin formats) restore the same archived constant.
+    fn defaultedFieldValueFromMonoDefault(
+        self: *BodyContext,
+        default: Type.FieldDefault,
+        field_ty: Type.TypeId,
+    ) Allocator.Error!?DraftExprId {
+        return try self.defaultedFieldValueAt(self.builder.program.names.moduleIdentityBytes(default.module), default.expr_node, field_ty);
+    }
+
+    /// View-independent core of the two entry points above: the declaring
+    /// module comes from identity bytes.
+    fn defaultedFieldValueAt(
+        self: *BodyContext,
+        origin_hash: *const [32]u8,
+        expr_node: u32,
+        field_ty: Type.TypeId,
+    ) Allocator.Error!?DraftExprId {
         const declaring_view = if (moduleViewIdentityMatches(self.view, origin_hash))
             self.view
         else
             self.builder.moduleForIdentityHash(origin_hash) orelse
                 Common.invariant("defaulted field's declaring module was not present in the lowering input");
-        const default_expr = declaring_view.bodies.defaultExpr(default.expr_node) orelse
+        const default_expr = declaring_view.bodies.defaultExpr(expr_node) orelse
             Common.invariant("defaulted field's default expression was not archived");
         // Prefer the archived constant: compile-time finalization evaluated
         // the pure default once (its `field_default` root) in the DECLARING
@@ -31606,6 +31713,28 @@ const BodyContext = struct {
             Common.invariant("imported defaulted field's default constant was not finalized");
         }
         return try self.lowerExprAtType(default_expr, field_ty);
+    }
+
+    /// The `??` default identity carried on `field_name` of the record
+    /// monotype `record_ty` (design.md "Defaulted Fields"). Explicit
+    /// upstream data: the row itself distinguishes defaulted fields, so a
+    /// required row of the same shape is a different monotype and never
+    /// reaches this def's derivation.
+    fn parserFieldDefaultFor(
+        self: *BodyContext,
+        record_ty: Type.TypeId,
+        field_name: names.RecordFieldNameId,
+    ) ?Type.FieldDefault {
+        const span = switch (self.builder.shapeContent(record_ty)) {
+            .record => |span| span,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+        };
+        const fields = self.builder.program.types.fieldSpan(span);
+        for (0..GuardedList.borrowLen(fields)) |index| {
+            const field = GuardedList.at(fields, index);
+            if (field.name == field_name) return field.default;
+        }
+        return null;
     }
 
     /// Find `field_name`'s default identity on the checked row behind
@@ -31653,66 +31782,20 @@ const BodyContext = struct {
     /// destructure pattern's own checked row (design.md "Field Kinds"): the
     /// checker's destructure judgment (`judgeRecordDestructBinds`) directed
     /// the binder's type by this kind, so lowering consumes the same
-    /// explicit kind. The field is always on the row — the destructure's
-    /// probe put it there.
+    /// explicit kind through the shared cross-view walk
+    /// (`checkedRecordFieldByName`). The field is always concretely on the
+    /// row — the destructure's probe put it there — so an interior or
+    /// absent resolution is an upstream failure, not a case.
     fn recordDestructFieldKind(
         self: *BodyContext,
         record_checked_ty: checked.CheckedTypeId,
         destruct: checked.CheckedRecordDestruct,
     ) Allocator.Error!checked.CheckedFieldKind.Tag {
-        // The walk crosses views: a NOMINAL-backed record destructure's
-        // checked type is the nominal, whose backing row lives in the
-        // DECLARING module's store. Field kinds are annotation-determined
-        // and argument-independent, so reading the declaration's backing
-        // row (without argument substitution) yields the exact kind, and
-        // `Builder.recordFieldName` interns every view's labels into one
-        // program-global namespace, so names compare across views.
         const target = try self.builder.recordFieldName(self.view, destruct.label);
-        const Visited = struct { module: @TypeOf(self.view.key.bytes), ty: checked.CheckedTypeId };
-        var seen = std.AutoHashMap(Visited, void).init(self.allocator);
-        defer seen.deinit();
-        var view = self.view;
-        var current = record_checked_ty;
-        while (true) {
-            const visit = Visited{ .module = view.key.bytes, .ty = current };
-            if (seen.contains(visit)) break;
-            try seen.put(visit, {});
-            switch (checkedPayload(view, current)) {
-                .alias => |alias| current = alias.backing,
-                .record => |record| {
-                    for (record.fields) |checked_field| {
-                        if ((try self.builder.recordFieldName(view, checked_field.name)) == target) {
-                            return checked_field.kind.tag;
-                        }
-                    }
-                    current = record.ext;
-                },
-                .record_unbound => |tail_fields| {
-                    for (tail_fields) |checked_field| {
-                        if ((try self.builder.recordFieldName(view, checked_field.name)) == target) {
-                            return checked_field.kind.tag;
-                        }
-                    }
-                    break;
-                },
-                .nominal => |nominal| {
-                    const lookup = self.builder.nominalDeclarationFor(view, nominal) orelse break;
-                    view = lookup.view;
-                    current = lookup.declaration.backing;
-                },
-                .pending,
-                .err,
-                .flex,
-                .rigid,
-                .tuple,
-                .function,
-                .empty_record,
-                .tag_union,
-                .empty_tag_union,
-                => break,
-            }
-        }
-        Common.invariant("record destructure field was missing from its checked row");
+        return switch (try self.checkedRecordFieldByName(record_checked_ty, target)) {
+            .found => |found| found.field.kind.tag,
+            .scheme_interior, .absent => Common.invariant("record destructure field was missing from its checked row"),
+        };
     }
 
     /// Whether any destructured field's kind is `optional`. Such a pattern
@@ -32519,7 +32602,7 @@ const BodyContext = struct {
                         distinct_witness_needs_relation = true;
                     }
                 }
-                produced_fields[index] = .{ .name = field.name, .ty = child_node };
+                produced_fields[index] = .{ .name = field.name, .ty = child_node, .default = field.default };
                 break :blk pre;
             } else if (base_expr) |base_value| blk: {
                 // Record update copies unmentioned slots verbatim — for an
@@ -39173,6 +39256,7 @@ const BodyContext = struct {
                 inner_field.* = .{
                     .name = try self.generatedParseTagUnionSpecBackingFieldName(field_index),
                     .ty = str_node,
+                    .default = null,
                 };
             }
             outer_field.* = .{
@@ -39181,6 +39265,7 @@ const BodyContext = struct {
                     .fields = inner_fields,
                     .ext = try self.graph.newNode(.empty_record),
                 } }),
+                .default = null,
             };
         }
         return try self.graph.newNode(.{ .record = .{
@@ -39249,12 +39334,12 @@ const BodyContext = struct {
         const name_label = try self.builder.program.names.internRecordFieldLabel("name");
         const str_node = try self.graph.newNode(.{ .primitive = .str });
         const field_payload = try self.graphClosedRecord(&.{
-            .{ .name = field_label, .ty = field_handle_node },
-            .{ .name = rest_name, .ty = state_node },
+            .{ .name = field_label, .ty = field_handle_node, .default = null },
+            .{ .name = rest_name, .ty = state_node, .default = null },
         });
         const try_field_payload = try self.graphClosedRecord(&.{
-            .{ .name = name_label, .ty = str_node },
-            .{ .name = rest_name, .ty = state_node },
+            .{ .name = name_label, .ty = str_node, .default = null },
+            .{ .name = rest_name, .ty = state_node, .default = null },
         });
         const tag_texts = [_][]const u8{ "Continue", "Done", "Field", "TryField", "TryFieldCaseless" };
         const payloads = [_]NodeId{ state_node, state_node, field_payload, try_field_payload, try_field_payload };
@@ -39334,9 +39419,9 @@ const BodyContext = struct {
         const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
         const str_node = try self.graph.newNode(.{ .primitive = .str });
         const field_handle_backing = try self.graphClosedRecord(&.{
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("index"), .ty = u64_node },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("name"), .ty = str_node },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("name_len"), .ty = u64_node },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("index"), .ty = u64_node, .default = null },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("name"), .ty = str_node, .default = null },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("name_len"), .ty = u64_node, .default = null },
         });
         const field_handle = try self.cloneGraphNamedWithGeneratedBacking(
             field_handle_template,
@@ -39354,13 +39439,14 @@ const BodyContext = struct {
             field.* = .{
                 .name = try self.generatedParseTagUnionSpecBackingFieldName(index),
                 .ty = field_handle,
+                .default = null,
             };
         }
         const items = try self.graphClosedRecord(item_fields);
         const fields_backing = try self.graphClosedRecord(&.{
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("items"), .ty = items },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"), .ty = u64_node },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("longest_name"), .ty = u64_node },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("items"), .ty = items, .default = null },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"), .ty = u64_node, .default = null },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("longest_name"), .ty = u64_node, .default = null },
         });
         const fields_node = try self.cloneGraphNamedWithGeneratedBacking(
             target.args[1],
@@ -40290,6 +40376,12 @@ const BodyContext = struct {
                 for ((try self.graph.recordNodes(node)).fields) |field| {
                     if (try self.graphMissingTryOkNode(field.ty)) |payload| {
                         if (try self.graphParserShapeNeedsRequiredFieldError(payload, seen)) break :blk true;
+                    } else if (try self.graphOptionalFieldSlotPayload(field.ty)) |payload| {
+                        // `?:` slot: an absent key parses to `#Missing`.
+                        if (try self.graphParserShapeNeedsRequiredFieldError(payload, seen)) break :blk true;
+                    } else if (field.default != null) {
+                        // `??` field: an absent key fills the archived default.
+                        if (try self.graphParserShapeNeedsRequiredFieldError(field.ty, seen)) break :blk true;
                     } else {
                         break :blk true;
                     }
@@ -40358,6 +40450,14 @@ const BodyContext = struct {
                 for ((try self.graph.recordNodes(node)).fields) |field| {
                     if (try self.graphMissingTryOkNode(field.ty)) |payload| {
                         if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
+                    } else if (try self.graphOptionalFieldSlotPayload(field.ty)) |payload| {
+                        // `?:` slot: absence is well-defined, only the present
+                        // payload's shape can demand more error tags.
+                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
+                    } else if (field.default != null) {
+                        // `??` field: absence fills the default; the value
+                        // shape parses at the inline type.
+                        if (try self.graphParserShapeNeedsInvalidValue(field.ty, err_node, seen)) break :blk true;
                     } else {
                         if (!has_missing_required_field) break :blk true;
                         if (try self.graphParserShapeNeedsInvalidValue(field.ty, err_node, seen)) break :blk true;
@@ -40396,6 +40496,34 @@ const BodyContext = struct {
             .zst,
             => false,
         };
+    }
+
+    /// The `#Present` payload node when `raw_node` is an optional field's
+    /// tagged slot (`[#Missing, #Present(payload)]`), mirroring
+    /// `Builder.optionalFieldSlot` over graph nodes. Labels are matched by
+    /// exact text in the compiler-reserved `#` namespace, so this is a
+    /// lossless read-back of the `?:` slot encoding, not a shape guess.
+    fn graphOptionalFieldSlotPayload(self: *BodyContext, raw_node: NodeId) Allocator.Error!?NodeId {
+        const node = self.graphShapeNode(raw_node);
+        if (self.graph.content(node) != .tag_union) return null;
+        const tags = (try self.graph.tagRowNodes(node)).tags;
+        if (tags.len != 2) return null;
+        var present_payload: ?NodeId = null;
+        var saw_missing = false;
+        for (tags) |tag| {
+            const text = self.builder.program.names.tagLabelText(tag.name);
+            if (std.mem.eql(u8, text, Builder.optional_slot_missing_tag)) {
+                if (tag.payloads.len != 0) return null;
+                saw_missing = true;
+            } else if (std.mem.eql(u8, text, Builder.optional_slot_present_tag)) {
+                if (tag.payloads.len != 1) return null;
+                present_payload = tag.payloads[0];
+            } else {
+                return null;
+            }
+        }
+        if (!saw_missing) return null;
+        return present_payload;
     }
 
     fn graphNodeIsUnitTagUnion(self: *BodyContext, raw_node: NodeId) Allocator.Error!bool {
@@ -40871,6 +40999,48 @@ const BodyContext = struct {
         return try self.wrapLet(field_local, field_ty, field_value, next_body, ret_ty);
     }
 
+    /// The `??`-defaulted sibling of
+    /// `finishOptionalRecordFieldFromPresencePayload`: an absent key
+    /// materializes the field's archived default constant into the inline
+    /// slot — exactly the construction-site omission behavior `{}`
+    /// literals get (design.md "Defaulted Fields"). A present key already parsed at
+    /// the field's inline type into the payload slot.
+    fn finishDefaultedRecordFieldFromPresencePayload(
+        self: *BodyContext,
+        next_body: DraftExprId,
+        ret_ty: Type.TypeId,
+        record_slots: ParseRecordSlots,
+        field: Type.Field,
+        field_index: usize,
+        field_local: DraftLocalId,
+        default: Type.FieldDefault,
+    ) Allocator.Error!DraftExprId {
+        const field_ty = field.ty;
+        const payload_local = record_slots.payload_locals[field_index];
+        const payload_ty = record_slots.payload_tys[field_index];
+        if (!self.sameType(payload_ty, field_ty)) {
+            Common.invariant("generated defaulted record payload type differed from field type");
+        }
+        if (!self.sameType(try self.localType(field_local), field_ty)) {
+            Common.invariant("record finish field local type differed from defaulted field type");
+        }
+
+        const default_field = (try self.defaultedFieldValueFromMonoDefault(default, field_ty)) orelse
+            Common.invariant("defaulted record parse finish had no archived default to materialize");
+        const present_field = try self.localExpr(payload_local, payload_ty);
+        const presence_word = recordPresenceWordIndex(field_index);
+        const is_present_expr = try self.localExpr(record_slots.presence_locals[presence_word], record_slots.presence_tys[presence_word]);
+        const field_value = try self.addExpr(.{ .ty = field_ty, .data = .{ .if_initialized_payload = .{
+            .cond = is_present_expr,
+            .cond_mask = recordPresenceMask(field_index),
+            .payload = payload_local,
+            .uninitialized_is_cold = false,
+            .initialized = present_field,
+            .uninitialized = default_field,
+        } } });
+        return try self.wrapLet(field_local, field_ty, field_value, next_body, ret_ty);
+    }
+
     fn parseRecordFieldFromPresencePayload(
         self: *BodyContext,
         is_present_expr: DraftExprId,
@@ -40961,6 +41131,13 @@ const BodyContext = struct {
                     const field = GuardedList.at(fields, index);
                     if (try self.missingTryInfo(field.ty)) |optional| {
                         if (try self.parserShapeNeedsRequiredFieldError(optional.ok_ty, visited)) break :blk true;
+                    } else if (self.builder.optionalFieldSlot(field.ty)) |slot| {
+                        // `?:` slot: an absent key parses to `#Missing`, so the
+                        // field itself never demands MissingRequiredField.
+                        if (try self.parserShapeNeedsRequiredFieldError(slot.payload_ty, visited)) break :blk true;
+                    } else if (field.default != null) {
+                        // `??` field: an absent key fills the archived default.
+                        if (try self.parserShapeNeedsRequiredFieldError(field.ty, visited)) break :blk true;
                     } else {
                         break :blk true;
                     }
@@ -42774,8 +42951,8 @@ const BodyContext = struct {
         const len_name = try self.builder.program.names.internRecordFieldLabel("len");
         const start_name = try self.builder.program.names.internRecordFieldLabel("start");
         const fields = [_]Type.Field{
-            .{ .name = len_name, .ty = u64_ty },
-            .{ .name = start_name, .ty = u64_ty },
+            .{ .name = len_name, .ty = u64_ty, .default = null },
+            .{ .name = start_name, .ty = u64_ty, .default = null },
         };
         const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
         const exprs = [_]DraftFieldExpr{
@@ -47892,7 +48069,7 @@ test "runtime demand guards exempt only frozen impossible constructor branches" 
     const item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const item_name = try name_store.internRecordFieldLabel("item");
     const payload_fields = try graph.arena().alloc(InstField, 1);
-    payload_fields[0] = .{ .name = item_name, .ty = item };
+    payload_fields[0] = .{ .name = item_name, .ty = item, .default = null };
     const one_payload = try graph.newNode(.{ .record = .{
         .fields = payload_fields,
         .ext = try graph.newNode(.empty_record),

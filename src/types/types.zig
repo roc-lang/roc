@@ -1253,21 +1253,3 @@ pub const TwoStaticDispatchConstraints = struct {
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
 };
-
-/// Polarity of a type, or roughly, what side of an arrow it appears on.
-pub const Polarity = enum {
-    /// A type that appears in negative/input position
-    neg,
-    /// A type that appears in positive/output position
-    pos,
-
-    pub const lhs = Polarity.neg;
-    pub const rhs = Polarity.pos;
-
-    pub fn flip(pol: Polarity) Polarity {
-        return switch (pol) {
-            .pos => .neg,
-            .neg => .pos,
-        };
-    }
-};

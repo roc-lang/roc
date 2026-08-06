@@ -283,6 +283,7 @@ fn finalize(
         defer batch_root_ids.deinit(allocator);
 
         for (requests, 0..) |request, request_index| {
+            const root_id = state.rootIdForRequestIndex(request_index);
             if (!state.dependenciesComplete(request)) {
                 if (batch_requests.items.len == 0) {
                     finalizationInvariant("compile-time root request order referenced an unfinished dependency");
@@ -307,7 +308,7 @@ fn finalize(
                 }
             }
             try batch_requests.append(allocator, request);
-            try batch_root_ids.append(allocator, state.rootIdForRequestIndex(request_index));
+            try batch_root_ids.append(allocator, root_id);
         }
 
         if (batch_requests.items.len != 0) {
@@ -352,6 +353,15 @@ const RootCompletionState = struct {
     visited_templates: []u32,
     visit: u32,
     current_root_id: ?checked.ComptimeRootId = null,
+    /// Requested `field_default` roots not yet finished. Derived parsers
+    /// restore archived default constants from within OTHER roots' lowering
+    /// — which happens before those roots' own evaluation — so every
+    /// non-default root carries an implicit dependency edge on ALL field
+    /// defaults (design.md "Defaulted Fields"). Encoding the edge here (a
+    /// non-default request is not ready while this is nonzero) is what
+    /// makes the defaults evaluate as their own leading batch; the checker
+    /// registers default roots first, so the edge is satisfiable.
+    pending_field_defaults: usize,
 
     fn init(
         allocator: Allocator,
@@ -381,6 +391,13 @@ const RootCompletionState = struct {
         errdefer allocator.free(visited_templates);
         @memset(visited_templates, 0);
 
+        var pending_field_defaults: usize = 0;
+        for (module.compile_time_roots.roots, 0..) |root, i| {
+            if (root.kind == .field_default and requested_roots[i]) {
+                pending_field_defaults += 1;
+            }
+        }
+
         return .{
             .allocator = allocator,
             .module = module,
@@ -389,6 +406,7 @@ const RootCompletionState = struct {
             .request_root_ids = request_root_ids,
             .visited_templates = visited_templates,
             .visit = 0,
+            .pending_field_defaults = pending_field_defaults,
         };
     }
 
@@ -406,7 +424,13 @@ const RootCompletionState = struct {
     }
 
     fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootId) void {
-        self.statuses[@intFromEnum(root_id)] = .done;
+        const raw = @intFromEnum(root_id);
+        if (self.statuses[raw] != .done and
+            self.module.compile_time_roots.roots[raw].kind == .field_default)
+        {
+            self.pending_field_defaults -= 1;
+        }
+        self.statuses[raw] = .done;
     }
 
     fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootId {
@@ -420,9 +444,18 @@ const RootCompletionState = struct {
         self: *RootCompletionState,
         request: checked.RootRequest,
     ) bool {
+        const request_root_id = compileTimeRootForRequest(self.module, request);
+        // Every non-default root depends on ALL field defaults (see
+        // `pending_field_defaults`).
+        if (self.pending_field_defaults != 0 and
+            self.module.compile_time_roots.roots[@intFromEnum(request_root_id)].kind != .field_default)
+        {
+            return false;
+        }
+
         const saved_current_root_id = self.current_root_id;
         defer self.current_root_id = saved_current_root_id;
-        self.current_root_id = compileTimeRootForRequest(self.module, request);
+        self.current_root_id = request_root_id;
 
         self.visit +%= 1;
         if (self.visit == 0) {

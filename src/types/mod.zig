@@ -58,8 +58,6 @@ pub const ResolvedVarDescs = store.ResolvedVarDescs;
 pub const Store = store.Store;
 pub const DescStoreIdx = store.DescStoreIdx;
 
-pub const Polarity = types.Polarity;
-
 test {
     std.testing.refAllDecls(@import("test/test_rigid_instantiation.zig"));
     std.testing.refAllDecls(@import("generalize.zig"));

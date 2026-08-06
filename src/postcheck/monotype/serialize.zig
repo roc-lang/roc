@@ -2125,6 +2125,7 @@ test "monotype specialization cache round trips empty program functions imports 
     const fields = [_]Type.Field{.{
         .name = field_a,
         .ty = unit_ty,
+        .default = null,
     }};
     const tags = [_]Type.Tag{.{
         .name = tag_ok,
@@ -2255,9 +2256,9 @@ test "monotype specialization cache maps fresh single-shard program view equival
         .args = fn_arg_tys,
         .ret = unit_ty,
     } });
-    const record_fields = try program.types.addFields(&.{.{ .name = field_name, .ty = unit_ty }});
+    const record_fields = try program.types.addFields(&.{.{ .name = field_name, .ty = unit_ty, .default = null }});
     const record_ty = try program.types.add(.{ .record = record_fields });
-    const outer_record_fields = try program.types.addFields(&.{.{ .name = outer_field_name, .ty = record_ty }});
+    const outer_record_fields = try program.types.addFields(&.{.{ .name = outer_field_name, .ty = record_ty, .default = null }});
     const outer_record_ty = try program.types.add(.{ .record = outer_record_fields });
     const tag_payloads = try program.types.addSpan(&.{unit_ty});
     const tags = try program.types.addTags(&.{.{ .name = tag_name, .checked_name = tag_name, .payloads = tag_payloads }});

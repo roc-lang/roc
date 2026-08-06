@@ -2964,6 +2964,7 @@ const TypeCloner = struct {
                     lowered[i] = .{
                         .name = field.name,
                         .ty = try self.lower(field.ty),
+                        .default = field.default,
                     };
                 }
                 break :blk .{ .record = try self.solver.program.types.addFields(lowered) };

@@ -3356,6 +3356,13 @@ The kind rules:
   record does not declare at all is a missing-field error. The old
   `absent` presence state is REMOVED: a field a row genuinely lacks is
   simply not in the row, and every field on a row carries a value type.
+  One corner of this rule is under active language-design debate: a
+  CLOSED ANNOTATED parameter row also absorbs a caller's extra optional
+  fields by widening at instantiation (pinned as behavior, not a
+  guarantee, by the width-absorption eval tests in
+  src/eval/test/eval_tests.zig), and a polarity restriction (absorb only
+  into inferred `record_unbound` rows) is the designed-but-undecided
+  alternative.
 - `.?field` on a field whose kind resolved `required` or `defaulted` is
   rejected as unintended (the field is always present; use `.`). Accesses
   are recorded and judged at EVERY GENERALIZATION BOUNDARY — receivers are
@@ -3645,22 +3652,67 @@ source-node walk already records every checked expression, so the table
 is a serialized index over it, surviving the discard of the build-time
 source-node map). Monotype lowering of a record construction that omits a
 defaulted field resolves the field's default on the checked row and
-lowers the archived expression INLINE at the field's monotype — defaults
-are literals (see Restrictions above), so inlining is their evaluation.
-Checking keeps the `does_fx` → `effectful_default_value` rejection as a
-backstop invariant only: canonicalization's literal restriction already
-makes an effectful default unreachable from source.
+materializes it at the field's monotype. Inlining the archived expression
+IS the defining behavior — defaults are literals (see Restrictions
+above), so inlining is their evaluation — and the finalized `field_default`
+compile-time root is a cache of the same value: materialization prefers
+restoring the declaring module's finalized constant and inlines only
+while that module's own roots are still mid-finalization (a cache-hit
+split, not a fallback — both paths produce the identical literal).
+CROSS-MODULE materialization is COMPLETE through the same route: the
+default identity's declaring-module content hash resolves the declaring
+view (`moduleForIdentityHash`), and an imported checked module is always
+finalized, so a foreign default always restores from its archived
+constant. Checking keeps the `does_fx` → `effectful_default_value`
+rejection as a backstop invariant only: canonicalization's literal
+restriction already makes an effectful default unreachable from source.
 
-Deferred (explicitly not yet implemented): CROSS-MODULE construction-site
-lowering — a construction omitting a field whose default was declared in
-another module needs a body context over the declaring module's view to
-lower its archived expression (the identity and table make it
-resolvable); it is an explicit lowering invariant until then. Evaluating
-archived defaults once into `ConstStore` (instead of inlining per site)
-is an optimization for the same machinery. Optional-field lowering is
-COMPLETE (see Field Kinds above): an omitted optional field constructs
-the `#Missing` tag in the same `lowerRecordExpr` slot-fill where an
-omitted defaulted field materializes its default.
+Monotype default identity (`Type.FieldDefault`): the Monotype record
+field itself carries the `??` default identity — the declaring module's
+identity interned in the program name store plus the default
+expression's node index — and every Monotype digest and structural
+equality includes it. This is load-bearing, not descriptive: derived
+codecs and specializations are keyed by monotype, and a derived JSON
+parser for `{ count : U8 ?? 10 }` must FILL an absent key while the
+parser for the same-shaped `{ count : U8 }` must ERROR
+MissingRequiredField, so rows that disagree about defaults (or about
+having one) must be DISTINCT monotypes — "same monotype ⇒ same
+behavior" stays an invariant instead of an approximation. The slot
+encoding is unchanged (defaulted fields remain plain inline slots;
+layout never reads the identity), and the identity rides unchanged
+through every downstream carrier of record rows: the instantiation
+graph (`InstField`, asserted equal when rows unify), graph sealing,
+lambda-solved and lambda-mono types, and const-store type evidence
+(`ConstStore.TypeFieldDefault`, translated across name stores like
+labels). Both checked→Monotype interning routes (`Builder.lowerType`'s
+record arms and the instantiation graph's `instFields`) stamp it from
+the checked kind at the same point the kind is consumed into the slot
+encoding.
+
+Derived JSON parse of `??` fields (IMPLEMENTED): an absent key fills the
+field's archived default into the inline slot — the codec sibling of
+construction-site omission — while a present key parses at the inline
+type; an explicit `null` is an ERROR for a defaulted field (null is a
+value, absence is not — same rule as `?:`), and encode always emits the
+field. The parse ladder reads the default straight off the Monotype
+field (`parserFieldDefaultFor`), and the checker's derived-parse gate
+(`recordParseNeedsRequiredFieldError`) skips `?:`/`??`-kind fields so an
+all-self-filling record validates with a closed error row; the lowering
+mirrors of that analysis (`parserShapeNeedsRequiredFieldError` and its
+graph twin) recognize the same two self-fill cases. Pinned by
+test/cli/JsonOptionalFieldKinds.roc. Evaluation ordering: each archived
+default is a `field_default` compile-time root, registered BEFORE every
+other root kind, and finalization encodes the conservative dependency
+edge explicitly — a non-default root is not ready while any requested
+`field_default` root is unfinished
+(`RootCompletionState.pending_field_defaults`) — so the defaults always
+evaluate as their own leading batch before any parser that might
+restore them lowers.
+
+Optional-field lowering is COMPLETE (see Field Kinds above): an omitted
+optional field constructs the `#Missing` tag in the same
+`lowerRecordExpr` slot-fill where an omitted defaulted field
+materializes its default.
 
 ### Deferred: Unsetting an Optional Field (`{ ..r, x: _ }`)
 

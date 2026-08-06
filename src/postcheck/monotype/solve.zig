@@ -45,10 +45,14 @@ pub const InstTag = struct {
     payloads: []NodeId,
 };
 
-/// Record field inside an instantiation-graph row.
+/// Record field inside an instantiation-graph row. `default` carries the
+/// monotype `??` default identity through instantiation unchanged: rows
+/// disagreeing about defaults are distinct monotypes, so a graph merge of
+/// two rows that both name a field always sees identical defaults.
 pub const InstField = struct {
     name: names.RecordFieldNameId,
     ty: NodeId,
+    default: ?Type.FieldDefault,
 };
 
 /// Source of an unresolved instantiation-graph node. Sealing may default a
@@ -770,6 +774,7 @@ pub const InstGraph = struct {
                     try self.forcedDynamicIteratorStepFunctionNode(field.ty, self_node, item_node, topology)
                 else
                     field.ty,
+                .default = field.default,
             };
         }
         return try self.newNode(.{ .record = .{
@@ -844,6 +849,7 @@ pub const InstGraph = struct {
                     item_node
                 else
                     field.ty,
+                .default = field.default,
             };
         }
         return try self.newNode(.{ .record = .{
@@ -3568,6 +3574,9 @@ pub const InstGraph = struct {
             var shared = false;
             for (flat_right.fields) |right_field| {
                 if (!Ident.textEql(wanted, self.fieldLabelText(right_field.name))) continue;
+                if (!instFieldDefaultEql(left_field.default, right_field.default)) {
+                    Common.invariant("instantiation unified record rows that disagree about a field default");
+                }
                 try pending.append(self.allocator, .{ .left = left_field.ty, .right = right_field.ty });
                 shared = true;
                 break;
@@ -3718,6 +3727,7 @@ pub const InstGraph = struct {
                     inst_fields[index] = .{
                         .name = field.name,
                         .ty = try self.importMono(field.ty),
+                        .default = field.default,
                     };
                 }
                 break :blk .{ .record = .{
@@ -4126,6 +4136,7 @@ pub const GraphTypeFinals = struct {
             fields[index] = .{
                 .name = field.name,
                 .ty = try self.sealNode(field.ty),
+                .default = field.default,
             };
         }
         return try self.graph.types.addRecordFields(self.graph.name_store, fields);
@@ -4656,8 +4667,17 @@ fn instFieldSliceEql(left: []const InstField, right: []const InstField) bool {
     if (left.len != right.len) return false;
     for (left, right) |left_field, right_field| {
         if (left_field.name != right_field.name or left_field.ty != right_field.ty) return false;
+        if (!instFieldDefaultEql(left_field.default, right_field.default)) return false;
     }
     return true;
+}
+
+// The program name store interns module identities by full 256-bit value, so
+// id equality is identity equality within one graph.
+fn instFieldDefaultEql(left: ?Type.FieldDefault, right: ?Type.FieldDefault) bool {
+    const left_default = left orelse return right == null;
+    const right_default = right orelse return false;
+    return left_default.module == right_default.module and left_default.expr_node == right_default.expr_node;
 }
 
 fn instNamedEql(left: InstNamed, right: InstNamed) bool {
@@ -5080,7 +5100,7 @@ test "record field node carries contextual row evidence into receiver" {
     } });
 
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = field_fn };
+    fields[0] = .{ .name = field_name, .ty = field_fn, .default = null };
     const record = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -5135,7 +5155,7 @@ test "graph-native child reads retain live relations until final sealing" {
 
     const field_name = try name_store.internRecordFieldLabel("run");
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = function };
+    fields[0] = .{ .name = field_name, .ty = function, .default = null };
     const record = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -5203,7 +5223,7 @@ test "record field graph access distinguishes inspection from runtime constructi
     const field_name = try name_store.internRecordFieldLabel("private");
     const field_ty = try graph.newNode(.{ .primitive = .u8 });
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = field_ty };
+    fields[0] = .{ .name = field_name, .ty = field_ty, .default = null };
     const backing = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -5328,7 +5348,7 @@ test "final sealing does not mutate an earlier active snapshot" {
     const a_ty = try graph.newNode(.{ .primitive = .u64 });
 
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty };
+    fields[0] = .{ .name = a_name, .ty = a_ty, .default = null };
     const row = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -5368,7 +5388,7 @@ test "final graph function recursively replaces active snapshots" {
     const a_ty = try graph.newNode(.{ .primitive = .u64 });
 
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty };
+    fields[0] = .{ .name = a_name, .ty = a_ty, .default = null };
     const row = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -5413,7 +5433,7 @@ test "final sealed graph node does not allocate an active snapshot" {
     const a_ty = try graph.newNode(.{ .primitive = .u64 });
 
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty };
+    fields[0] = .{ .name = a_name, .ty = a_ty, .default = null };
     const ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
     const row = try graph.newNode(.{ .record = .{
         .fields = fields,
@@ -5630,6 +5650,7 @@ test "imported closed record row rejects additional evidence without mutating sh
     const requested_fields = try type_store.addRecordFields(&name_store, &.{.{
         .name = value,
         .ty = u64_ty,
+        .default = null,
     }});
     const requested = try type_store.add(.{ .record = requested_fields });
 
@@ -5644,6 +5665,7 @@ test "imported closed record row rejects additional evidence without mutating sh
     const additional_fields = [_]InstField{.{
         .name = extra,
         .ty = try graph.newNode(.{ .primitive = .u64 }),
+        .default = null,
     }};
     try std.testing.expect(graph.rowAdditionConflicts(imported.ext, additional_fields.len, .record));
     try std.testing.expectEqual(InstNode.empty_record, graph.content(imported.ext));
@@ -5759,7 +5781,7 @@ test "opaque interface relation preserves distinct public and generated-private 
 
     const field_name = try name_store.internRecordFieldLabel("value");
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }) };
+    fields[0] = .{ .name = field_name, .ty = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }), .default = null };
     const structural_record = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),

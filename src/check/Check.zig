@@ -8932,7 +8932,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         // Then, generate the type for the actual required type
         //   { [Model : model] for main : { init : model, ... } }
         //                                ^^^^^^^^^^^^^^^^^^^^^^
-        try self.generateAnnoTypeInPlace(required_type.type_anno, env, .{ .annotation = null }, .pos);
+        try self.generateAnnoTypeInPlace(required_type.type_anno, env, .{ .annotation = null });
     }
 }
 
@@ -9560,8 +9560,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // recursive, neither of which is covered by the per-def checks above.
     const expr_var = ModuleEnv.varFrom(expr_idx);
     try self.checkPendingDefaults(&env);
-    try self.judgeOptionalFieldAccesses(&env);
-    try self.judgeRecordDestructBinds(&env);
+    try self.judgeFieldKindsAtBoundary(&env);
     _ = try self.checkFlexVarConstraintCompatibility(expr_var, &env, true, .{});
     try self.validateResolvedOpenNumeralLiterals(&env);
     try self.resolvePendingTupleAccesses(&env, true);
@@ -9806,8 +9805,7 @@ fn predeclareAnnotationScheme(self: *Self, annotation_idx: CIR.Annotation.Idx, e
         env.rank(),
         .use_last_var,
     );
-    try self.judgeOptionalFieldAccesses(env);
-    try self.judgeRecordDestructBinds(env);
+    try self.judgeFieldKindsAtBoundary(env);
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     env.var_pool.popRank();
 
@@ -10071,8 +10069,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
                 try self.checkEffectfulFunctionName(member_def.pattern, member_def.expr);
             }
         }
-        try self.judgeOptionalFieldAccesses(env);
-        try self.judgeRecordDestructBinds(env);
+        try self.judgeFieldKindsAtBoundary(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
         env.var_pool.popRank();
@@ -10471,7 +10468,7 @@ fn generateAliasDecl(
         .backing_var = backing_var,
         .is_opaque = false,
         .num_args = @intCast(header_args.len),
-    } }, .pos);
+    } });
 
     if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
         self.markTypeDeclInvalid(decl_idx);
@@ -10509,9 +10506,9 @@ fn generateWhereAliasDecl(
     // parameter and must end up on that parameter's own variable.
     const header = self.cir.store.getTypeHeader(where_alias.header);
     for (self.cir.store.sliceTypeAnnos(header.args)) |param_idx| {
-        try self.generateAnnoTypeInPlace(param_idx, env, ctx, .pos);
+        try self.generateAnnoTypeInPlace(param_idx, env, ctx);
     }
-    try self.generateAnnoTypeInPlace(where_alias.receiver, env, ctx, .pos);
+    try self.generateAnnoTypeInPlace(where_alias.receiver, env, ctx);
 
     if (try self.generateRemainingWhereConstraintOwners(where_alias.where, env, ctx)) {
         try self.unifyWithTargetRank(decl_var, .err, env);
@@ -10587,7 +10584,7 @@ fn generateNominalDecl(
         .backing_var = backing_var,
         .is_opaque = nominal.is_opaque,
         .num_args = @intCast(header_args.len),
-    } }, .pos);
+    } });
 
     // A malformed backing (its error was already reported while generating
     // the annotation) invalidates the declaration: mark it in the table and
@@ -10623,7 +10620,7 @@ fn generateStandaloneTypeAnno(
     // Generate the type from the annotation
     const anno_var: Var = ModuleEnv.varFrom(type_anno.anno);
     const ctx = GenTypeAnnoCtx{ .annotation = type_anno.where };
-    try self.generateAnnoTypeInPlace(type_anno.anno, env, ctx, .pos);
+    try self.generateAnnoTypeInPlace(type_anno.anno, env, ctx);
     if (type_anno.where) |where_span| {
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(anno_var, .err, env);
@@ -10745,7 +10742,7 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
 
     // Then, generate the type for the annotation
     const ctx = GenTypeAnnoCtx{ .annotation = annotation.where };
-    try self.generateAnnoTypeInPlace(annotation.anno, env, ctx, .pos);
+    try self.generateAnnoTypeInPlace(annotation.anno, env, ctx);
     if (annotation.where) |where_span| {
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(ModuleEnv.varFrom(annotation.anno), .err, env);
@@ -10806,15 +10803,15 @@ fn completeOwnedStaticDispatchConstraint(
         return;
     }
 
-    try self.generateAnnoTypeInPlace(method.var_, env, ctx, .pos);
+    try self.generateAnnoTypeInPlace(method.var_, env, ctx);
 
     const args_anno_slice = self.cir.store.sliceTypeAnnos(method.args);
     for (args_anno_slice) |arg_anno_idx| {
-        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, .pos);
+        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
     }
     const anno_arg_vars: []Var = @ptrCast(args_anno_slice);
 
-    try self.generateAnnoTypeInPlace(method.ret, env, ctx, .pos);
+    try self.generateAnnoTypeInPlace(method.ret, env, ctx);
     const ret_var = ModuleEnv.varFrom(method.ret);
 
     const func_content = if (method.effectful)
@@ -10834,7 +10831,7 @@ fn generateRemainingWhereConstraintOwners(
     var invalid_receiver = false;
     for (self.cir.store.sliceWhereClauseOwners(where_span)) |owner| {
         if (owner.owned_by_annotation) {
-            try self.generateAnnoTypeInPlace(@enumFromInt(owner.rigid_var), env, ctx, .pos);
+            try self.generateAnnoTypeInPlace(@enumFromInt(owner.rigid_var), env, ctx);
             continue;
         }
 
@@ -11118,7 +11115,7 @@ fn generateWhereAliasReferenceArgs(
     ctx: GenTypeAnnoCtx,
 ) std.mem.Allocator.Error!void {
     for (self.whereAliasReferenceArgs(alias)) |arg_anno_idx| {
-        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, .pos);
+        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
     }
 }
 
@@ -11164,7 +11161,7 @@ fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
 /// So `a` get the node CIR.TypeAnno.rigid_var{ .. }
 /// And `b` & `c` get the node CIR.TypeAnno.rigid_var_lookup{ .ref = <a_id> }
 /// Then, any reference to `b` or `c` are replaced with `a` in `generateAnnoTypeInPlace`.
-fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, ctx: GenTypeAnnoCtx, pol: types_mod.Polarity) std.mem.Allocator.Error!void {
+fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -11389,7 +11386,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // Generate the types for the arguments
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             for (anno_args) |anno_arg| {
-                try self.generateAnnoTypeInPlace(anno_arg, env, ctx, pol);
+                try self.generateAnnoTypeInPlace(anno_arg, env, ctx);
             }
             const anno_arg_vars: []Var = @ptrCast(anno_args);
 
@@ -11629,11 +11626,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
         .@"fn" => |func| {
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             for (args_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, pol.flip());
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
             }
             const args_var_slice: []Var = @ptrCast(args_anno_slice);
 
-            try self.generateAnnoTypeInPlace(func.ret, env, ctx, pol);
+            try self.generateAnnoTypeInPlace(func.ret, env, ctx);
 
             const fn_type = inner_blk: {
                 if (func.effectful) {
@@ -11665,7 +11662,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // Generate the types for each tag arg
                 const tag_anno_args_slice = self.cir.store.sliceTypeAnnos(tag.args);
                 for (tag_anno_args_slice) |tag_arg_idx| {
-                    try self.generateAnnoTypeInPlace(tag_arg_idx, env, ctx, pol);
+                    try self.generateAnnoTypeInPlace(tag_arg_idx, env, ctx);
                 }
                 const tag_vars_slice: []Var = @ptrCast(tag_anno_args_slice);
 
@@ -11694,7 +11691,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // Process the ext if it exists. Absence means it's a closed union
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
-                    try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx, pol);
+                    try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
                     break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
                 } else {
                     break :inner_blk try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region);
@@ -11730,7 +11727,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // not real record fields: keep them out of the structural row so
                 // they are never unified, name-resolved, or required at
                 // construction (and so repeated `_` names cannot collide).
-                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx, pol);
+                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx);
                 if (rec_field.is_unnamed) continue;
                 const record_field_var = ModuleEnv.varFrom(rec_field.ty);
 
@@ -11791,7 +11788,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             // Process the ext if it exists. Absence (null) means it's a closed record.
             const ext_var = if (rec.ext) |ext_anno_idx| blk: {
-                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx, pol);
+                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
                 break :blk ModuleEnv.varFrom(ext_anno_idx);
             } else blk: {
                 break :blk try self.freshFromContent(.{ .structure = .empty_record }, env, anno_region);
@@ -11813,14 +11810,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
             for (elems_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, pol);
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
                 try self.scratch_vars.append(ModuleEnv.varFrom(arg_anno_idx));
             }
             const elems_range = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
             try self.unifyWith(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, env);
         },
         .parens => |parens| {
-            try self.generateAnnoTypeInPlace(parens.anno, env, ctx, pol);
+            try self.generateAnnoTypeInPlace(parens.anno, env, ctx);
             _ = try self.unify(anno_var, ModuleEnv.varFrom(parens.anno), env);
         },
         .malformed => {
@@ -15233,8 +15230,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // frame and stay live for the group boundary.
             try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
         }
-        try self.judgeOptionalFieldAccesses(env);
-        try self.judgeRecordDestructBinds(env);
+        try self.judgeFieldKindsAtBoundary(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         // The scheme's vars froze at generalized rank: judge this def's
         // dispatch-constrained receivers now, while the judgment is a
@@ -16301,8 +16297,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     // `judgeRecordDestructBinds`).
                     try self.judgeRecordDestructBinds(env);
                     try self.defaultLiteralsAtGeneralizationBoundary(decl_pattern_var, env);
-                    try self.judgeOptionalFieldAccesses(env);
-                    try self.judgeRecordDestructBinds(env);
+                    try self.judgeFieldKindsAtBoundary(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                     env.var_pool.popRank();
                 }
@@ -19431,6 +19426,17 @@ const FinalizeScope = union(enum) {
 /// every generalization boundary — receivers are settled by then, and
 /// pinning BEFORE the scheme forms is what makes the judgment survive
 /// instantiation — and at finalize as the monomorphic backstop.
+/// The field-kind judgment choreography run at every generalization
+/// boundary: `.?`-driven optional pins land first
+/// (`judgeOptionalFieldAccesses`), then destructure binders are judged
+/// against the pinned rows (`judgeRecordDestructBinds`). The internal
+/// ordering is load-bearing — see the two judges' doc comments — and this
+/// helper is the single place it lives.
+fn judgeFieldKindsAtBoundary(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    try self.judgeOptionalFieldAccesses(env);
+    try self.judgeRecordDestructBinds(env);
+}
+
 fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     while (self.optional_access_watermark < self.optional_field_accesses.items.len) {
         const access = self.optional_field_accesses.items[self.optional_access_watermark];
@@ -19670,8 +19676,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // the defaulting rounds and constraint validation below (design.md
     // "Defaulted Fields").
     try self.checkPendingDefaults(env);
-    try self.judgeOptionalFieldAccesses(env);
-    try self.judgeRecordDestructBinds(env);
+    try self.judgeFieldKindsAtBoundary(env);
 
     try self.checkAllConstraints(env);
     try self.resolvePendingTupleAccesses(env, false);
@@ -26156,10 +26161,23 @@ fn recordParseNeedsRequiredFieldError(
 ) Allocator.Error!bool {
     const fields = self.types.getRecordFieldsSlice(fields_range);
     for (fields.items(.presence)) |presence| {
-        {
-            const field_var = presence.typeVar();
-            if (!try self.varIsOptionalParseField(field_var)) return true;
+        // A field whose KIND can self-fill never demands the
+        // required-field error: an absent `?:` key materializes the
+        // `#Missing` slot state and an absent `??` key materializes the
+        // archived default (design.md "Field Kinds", "Defaulted Fields").
+        // A still-flex kind reads required-equivalent, matching every
+        // other read boundary.
+        if (presence.presenceVar()) |presence_var| {
+            const kind_content = self.types.resolveVar(presence_var).desc.content;
+            if (kind_content == .field_presence) {
+                switch (kind_content.field_presence) {
+                    .optional, .defaulted => continue,
+                    .required => {},
+                }
+            }
         }
+        const field_var = presence.typeVar();
+        if (!try self.varIsOptionalParseField(field_var)) return true;
     }
     return false;
 }

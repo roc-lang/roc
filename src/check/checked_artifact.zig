@@ -22711,6 +22711,26 @@ pub const CompileTimeRootTable = struct {
             roots.deinit(allocator);
         }
 
+        // Every archived field default is a compile-time constant root
+        // (design.md "Defaulted Fields"): the declaring module evaluates the
+        // pure default once, and construction sites — local and
+        // cross-module — restore the archived constant. Registered FIRST:
+        // defaults are closed literals with no dependencies (literals-only
+        // rule), and derived parsers restore them from within OTHER roots'
+        // compile-time evaluation, so every default must finalize before
+        // any ordinary root evaluates.
+        for (checked_bodies.default_exprs.items) |entry| {
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .field_default,
+                .source = .{ .expr = @enumFromInt(entry.expr_node) },
+                .pattern = null,
+                .expr = entry.checked_expr,
+                .checked_type = checked_bodies.expr(entry.checked_expr).ty,
+                .payload = .pending,
+            });
+        }
+
         var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
         defer seen_source_names.deinit(allocator);
 
@@ -22858,24 +22878,6 @@ pub const CompileTimeRootTable = struct {
                 statement_idx,
                 stmt.s_expect.body,
             );
-        }
-
-        // Every archived field default is a compile-time constant root
-        // (design.md "Defaulted Fields"): the declaring module evaluates the
-        // pure default once, and construction sites — local and
-        // cross-module — restore the archived constant. Registered after the
-        // ordinary constant roots so a default referencing a top-level
-        // constant is dependency-ordered behind it.
-        for (checked_bodies.default_exprs.items) |entry| {
-            try appendCompileTimeRoot(&roots, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .field_default,
-                .source = .{ .expr = @enumFromInt(entry.expr_node) },
-                .pattern = null,
-                .expr = entry.checked_expr,
-                .checked_type = checked_bodies.expr(entry.checked_expr).ty,
-                .payload = .pending,
-            });
         }
 
         try publishCompileTimeRootRequestEligibility(allocator, checked_types, checked_bodies, roots.items);
@@ -27962,8 +27964,11 @@ pub const CheckedModuleArtifact = struct {
     // required/optional/defaulted plus the defaulted identity, design.md
     // "Field Kinds (All-Dynamic Optional Fields)"); the body store's
     // default-expression table (`default_exprs`); and `checked_ids.OptionalId`
-    // encodings for inline optional ids.
-    const serialized_layout_version: u32 = 57;
+    // encodings for inline optional ids. Version 58: const-store record type
+    // evidence carries the `??` default identity
+    // (`ConstStore.TypeField.default`), mirroring the Monotype
+    // `Type.FieldDefault` axis (design.md "Defaulted Fields").
+    const serialized_layout_version: u32 = 58;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -33908,8 +33913,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xB6, 0x81, 0xE0, 0xA7, 0xE7, 0xF4, 0xE7, 0x2C, 0xBF, 0x92, 0x8B, 0x20, 0x11, 0x32, 0x76, 0xF5,
-        0xE5, 0xEF, 0xCC, 0x80, 0xBC, 0x77, 0xCD, 0x73, 0x80, 0xAF, 0x05, 0x02, 0x88, 0x5E, 0xE4, 0x46,
+        0x63, 0xC9, 0xBC, 0xAA, 0xD9, 0x18, 0x24, 0x09, 0xBD, 0xCE, 0xB8, 0xC8, 0x4F, 0x6F, 0xEB, 0xF7,
+        0x70, 0xCC, 0x18, 0x05, 0xD0, 0x40, 0x2E, 0xB0, 0xBD, 0x92, 0x60, 0xB2, 0x6A, 0xDF, 0x78, 0xB0,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
