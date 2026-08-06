@@ -667,7 +667,7 @@ fn enterEvidenceScope(
 }
 
 fn relateFunctionRequestInterface(graph: *InstGraph, checked_fn: NodeId, exact_fn: NodeId) Allocator.Error!void {
-    _ = try graph.applyProducedTypeToRequest(checked_fn, exact_fn);
+    _ = try graph.applyCheckedTypeMapping(checked_fn, exact_fn);
 }
 
 fn applyProducedTypeToRequest(graph: *InstGraph, request_node: NodeId, produced_node: NodeId) Allocator.Error!void {
@@ -1022,7 +1022,7 @@ fn relateCheckedNodeToMono(graph: *InstGraph, checked_node: NodeId, mono_node: N
 /// Apply an exact Monotype request to its checked source mapping and retain the
 /// exact request as specialization identity.
 fn checkedMonoRequestNode(graph: *InstGraph, checked_node: NodeId, mono_node: NodeId) Allocator.Error!NodeId {
-    return try graph.applyProducedTypeToRequest(checked_node, mono_node);
+    return try graph.applyCheckedTypeMapping(checked_node, mono_node);
 }
 
 fn functionRequestNode(

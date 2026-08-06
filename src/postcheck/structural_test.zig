@@ -395,6 +395,13 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     try expectNotContains(lower_source, "selectExprRepresentationAtNode");
 
+    const checked_request = sourceSliceBetween(
+        lower_source,
+        "fn checkedMonoRequestNode(",
+        "fn functionRequestNode(",
+    );
+    try expectContains(checked_request, "graph.applyCheckedTypeMapping(checked_node, mono_node)");
+
     const dispatch_instantiation = sourceSliceBetween(
         lower_source,
         "fn instantiateCallableDispatchPlanCallNodeFromCallerAtNode(",

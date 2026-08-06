@@ -5307,6 +5307,48 @@ test "nominal unification with its own backing preserves a distinct backing node
     try std.testing.expect(!graph.finalizesAsClosedEmptyTagUnion(nominal));
 }
 
+test "checked type mapping crosses a nominal view without changing exact root authority" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const checked_field = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const exact_field = try graph.newNode(.{ .primitive = .u64 });
+    const checked_backing = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field_name, .ty = checked_field }}),
+        .ext = try graph.newNode(.empty_record),
+    } });
+    const checked_nominal = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(3) },
+        .def = .{
+            .module = try name_store.internModuleIdentity(&([_]u8{0xAD} ** 32)),
+            .type_name = try name_store.internTypeName("Wrapper"),
+        },
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = checked_backing, .use = .inspectable },
+    } });
+    const exact_structural = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field_name, .ty = exact_field }}),
+        .ext = try graph.newNode(.empty_record),
+    } });
+
+    const selected = try graph.applyCheckedTypeMapping(checked_nominal, exact_structural);
+
+    try std.testing.expectEqual(graph.find(exact_structural), selected);
+    try std.testing.expect(!graph.sameClass(checked_nominal, exact_structural));
+    try std.testing.expect(graph.sameClass(checked_field, exact_field));
+}
+
 test "final sealing does not mutate an earlier active snapshot" {
     const gpa = std.testing.allocator;
 
