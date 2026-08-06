@@ -86,6 +86,7 @@ fn lowerModule(
 }
 
 const LowerModuleOptions = struct {
+    specialization_strategy: base.SpecializationStrategy = .lss,
     checked_module_state: lir.CheckedPipeline.CheckedModuleState = .complete,
     inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
     proc_debug_names: bool = false,
@@ -125,6 +126,7 @@ fn lowerModuleWithOptions(
         .{ .requests = resources.checked_artifact.root_requests.requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .specialization_strategy = options.specialization_strategy,
             .checked_module_state = options.checked_module_state,
             .inline_mode = inline_mode,
             .inline_expects = options.inline_expects,
@@ -2765,6 +2767,52 @@ test "interpreter captures the virtual source frame of an inlined crash" {
         try std.testing.expectEqualStrings("read", store.getString(scope.source_name));
         try std.testing.expect(scope.source_loc.hasLocation());
         try std.testing.expect(scope.call_site.hasLocation());
+        return;
+    };
+    return error.TestUnexpectedResult;
+}
+
+test "boxy lowering preserves a runtime-built crash message" {
+    const allocator = std.testing.allocator;
+    const expected_message = "runtime-built crash message long enough for heap storage: 42";
+    var lowered_source = try lowerModuleWithOptions(allocator,
+        \\main : I64
+        \\main = {
+        \\    n : I64
+        \\    n = 42
+        \\    crash "runtime-built crash message long enough for heap storage: ${n.to_str()}"
+        \\}
+    , .none, .{ .specialization_strategy = .boxy });
+    defer lowered_source.deinit(allocator);
+
+    const result = &lowered_source.lowered.lir_result;
+    var found_local_crash_message = false;
+    for (0..result.store.cf_stmts.len()) |stmt_index| {
+        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const stmt = result.store.getCFStmt(stmt_id);
+        if (std.meta.activeTag(stmt) != .crash) continue;
+        switch (stmt.crash.msg) {
+            .literal => {},
+            .local => found_local_crash_message = true,
+        }
+    }
+    try std.testing.expect(found_local_crash_message);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.initWithBoxyTables(
+        allocator,
+        &result.store,
+        &result.layouts,
+        eval.boxy_runtime.BoxyTables.fromResult(result),
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    _ = interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) }) catch |err| {
+        try std.testing.expectEqual(error.Crash, err);
+        try std.testing.expectEqualStrings(expected_message, interpreter.getCrashMessage() orelse return error.TestUnexpectedResult);
         return;
     };
     return error.TestUnexpectedResult;

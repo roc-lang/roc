@@ -3247,7 +3247,7 @@ const ProcedureBuilder = struct {
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const body = try self.result.store.addCFStmt(.{ .crash = .{
-            .msg = try self.result.store.insertString("dispatch on a value that can never exist"),
+            .msg = .{ .literal = try self.result.store.insertString("dispatch on a value that can never exist") },
         } });
         const proc_id = try self.result.store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
@@ -13126,10 +13126,10 @@ const ProcBodyBuilder = struct {
             .expect => |child| try self.lowerExpectExprInto(target, child, next),
             .expect_err => |expect_err| try self.lowerExpectErrInto(expect_err.expr, expect_err.snippet),
             .crash => |msg| try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)),
+                .msg = .{ .literal = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)) },
             } }),
             .ellipsis => try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.parent.result.store.insertString("not implemented"),
+                .msg = .{ .literal = try self.parent.result.store.insertString("not implemented") },
             } }),
             .break_ => try self.lowerBreak(),
             .return_ => |ret| try self.lowerReturn(ret.expr, ret.lambda),
@@ -13269,7 +13269,7 @@ const ProcBodyBuilder = struct {
                 moved,
             );
         const invalid = try self.parent.result.store.addCFStmt(.{ .crash = .{
-            .msg = try self.parent.result.store.insertString(invalid_message),
+            .msg = .{ .literal = try self.parent.result.store.insertString(invalid_message) },
         } });
 
         if (tag_rep.kind == .dynamic) {
@@ -14647,7 +14647,7 @@ const ProcBodyBuilder = struct {
             .scalar => |scalar| try self.assignConstScalar(target, scalar, next),
             .str => |str| try self.assignStringBytesView(target, store_module.const_store.strData(str.data), str.offset, str.len, next),
             .crash => |str| try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)),
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
             } }),
             .list => |items| try self.restoreConstListInto(target, store_module, type_module, items, checked_ty, next),
             .box => |payload| try self.restoreConstBoxInto(target, store_module, type_module, payload, checked_ty, next),
@@ -14732,7 +14732,7 @@ const ProcBodyBuilder = struct {
             .scalar => |scalar| try self.assignConstScalar(target, scalar, next),
             .str => |str| try self.assignStringBytesView(target, store_module.const_store.strData(str.data), str.offset, str.len, next),
             .crash => |str| try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)),
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
             } }),
             .list => |items| try self.restoreStoredConstListInto(target, store_module, items, stored_type, rep_id, next),
             .box => |payload| try self.restoreStoredConstBoxInto(target, store_module, payload, stored_type, rep_id, next),
@@ -17701,7 +17701,7 @@ const ProcBodyBuilder = struct {
         comptime message: []const u8,
     ) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .crash = .{
-            .msg = try self.parent.result.store.insertString(message),
+            .msg = .{ .literal = try self.parent.result.store.insertString(message) },
         } });
     }
 
@@ -21247,7 +21247,7 @@ const ProcBodyBuilder = struct {
             const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
             const matched = try self.lowerPatternThen(pattern_id, source, next, miss, &.{});
             const crash = try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.parent.result.store.insertString("pattern match failed"),
+                .msg = .{ .literal = try self.parent.result.store.insertString("pattern match failed") },
             } });
             break :blk try self.parent.result.store.addCFStmt(.{ .join = .{
                 .id = miss.join_id,
@@ -23139,7 +23139,7 @@ const ProcBodyBuilder = struct {
                 break :blk try self.lowerInspectExprInto(message, expr_id, debug_stmt);
             },
             .crash => |msg| try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)),
+                .msg = .{ .literal = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)) },
             } }),
             .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error),
             .import_,
@@ -23818,6 +23818,18 @@ const ProcBodyBuilder = struct {
         args: []const checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (op == .crash) {
+            if (args.len != 1) {
+                boxyLowerInvariant("crash low-level operation received the wrong number of arguments");
+            }
+            const lowered = try self.lowerExprsToTemps(args);
+            defer self.parent.allocator.free(lowered);
+            const crash = try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .local = lowered[0] },
+            } });
+            return try self.prependLoweredExprs(args, lowered, crash);
+        }
+
         switch (op) {
             .box_box,
             .box_unbox,
@@ -27127,7 +27139,7 @@ const ProcBodyBuilder = struct {
             .bool_tag_union => try self.lowerBoolInspectLocalsInto(target, source, next),
             .empty_record => try self.assignStringBytesLiteral(target, "{}", next),
             .empty_tag_union => try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.parent.result.store.insertString("uninhabited value reached Str.inspect"),
+                .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
             } }),
             .alias => try self.lowerInspectRepLocalInto(target, source, self.requiredSingleChild(rep_id, .alias_backing).rep, next),
             .nominal => |kind| switch (kind) {
@@ -27350,7 +27362,7 @@ const ProcBodyBuilder = struct {
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
         if (variants.len == 0) {
             return try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.parent.result.store.insertString("uninhabited value reached Str.inspect"),
+                .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
             } });
         }
         if (variants.len == 1 and self.isZstLocal(source)) {
@@ -28790,7 +28802,7 @@ const ProcBodyBuilder = struct {
 
     fn invalidNumeralLiteral(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .crash = .{
-            .msg = try self.parent.result.store.insertString("invalid numeric literal"),
+            .msg = .{ .literal = try self.parent.result.store.insertString("invalid numeric literal") },
         } });
     }
 
