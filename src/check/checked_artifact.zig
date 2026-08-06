@@ -13747,6 +13747,9 @@ pub const ProcedureUseTemplate = struct {
     intrinsic: ?IntrinsicId = null,
     /// Producer-recorded semantic role for compiler-owned iterator procedures.
     iterator_procedure: ?IteratorProcedureId = null,
+    /// Checking proved that this procedure consumes or produces a runtime
+    /// representation whose exact Monotype graph must remain its signature.
+    graph_participating: bool = false,
     /// Producer-owned reachability fact for a compiler-provided result.
     runtime_result_provenance: ?RuntimeResultProvenance,
 };
@@ -13861,6 +13864,7 @@ pub const ResolvedValueRefTable = struct {
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
         templates: *const CheckedProcedureTemplateTable,
+        method_registry: *const static_dispatch.MethodRegistry,
         hosted_procs: *const HostedProcTable,
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -13871,6 +13875,8 @@ pub const ResolvedValueRefTable = struct {
         synthetic_expr_origins: []const SyntheticExprOriginRecord,
     ) Allocator.Error!ResolvedValueRefTable {
         const module = modules.module(module_idx);
+        const graph_participating_defs = try buildGraphParticipatingDefColumn(allocator, module, method_registry);
+        defer allocator.free(graph_participating_defs);
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
 
@@ -13902,6 +13908,7 @@ pub const ResolvedValueRefTable = struct {
                 imports,
                 available_artifacts,
                 templates,
+                graph_participating_defs,
                 hosted_procs,
                 platform_required_declarations,
                 platform_required_bindings,
@@ -14111,6 +14118,7 @@ fn categorizeValueRef(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     _: *const CheckedProcedureTemplateTable,
+    graph_participating_defs: []const bool,
     hosted_procs: *const HostedProcTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -14130,6 +14138,7 @@ fn categorizeValueRef(
             hoisted_constants,
             local_pattern_roles,
             checked_bodies,
+            graph_participating_defs,
         ),
         .e_lookup_external => |external| categorizeImportedValueRef(
             module,
@@ -14144,6 +14153,7 @@ fn categorizeValueRef(
             resolved.target_def_idx,
             imports,
             available_artifacts,
+            graph_participating_defs,
             hosted_procs,
             top_level_values,
         ),
@@ -14282,6 +14292,7 @@ fn categorizeLocalValueRef(
     hoisted_constants: *const HoistedConstTable,
     local_pattern_roles: *const LocalPatternRoleIndex,
     checked_bodies: *const CheckedBodyStore,
+    graph_participating_defs: []const bool,
 ) ResolvedValueRef {
     const checked_pattern = checked_bodies.patternIdForSource(pattern) orelse {
         if (builtin.mode == .Debug) {
@@ -14304,7 +14315,7 @@ fn categorizeLocalValueRef(
             unreachable;
         }
 
-        return categorizeTopLevelValueRef(module, artifact_key, entry, hosted_procs);
+        return categorizeTopLevelValueRef(module, artifact_key, entry, graph_participating_defs, hosted_procs);
     }
 
     const binder = checked_bodies.patternBinderForSource(pattern) orelse {
@@ -14350,6 +14361,7 @@ fn categorizeTopLevelValueRef(
     module: TypedCIR.Module,
     artifact_key: CheckedModuleArtifactKey,
     entry: TopLevelValueEntry,
+    graph_participating_defs: []const bool,
     hosted_procs: *const HostedProcTable,
 ) ResolvedValueRef {
     return switch (entry.value) {
@@ -14370,18 +14382,58 @@ fn categorizeTopLevelValueRef(
                 .iterator_procedure = null,
                 .runtime_result_provenance = null,
             } }
-        else
-            .{ .top_level_proc = .{
+        else blk: {
+            const iterator_procedure = iteratorProcedureForDef(module, entry.def);
+            break :blk .{ .top_level_proc = .{
                 .binding = .{ .top_level = .{
                     .artifact = artifact_key,
                     .binding = binding,
                 } },
                 .source_fn_ty_template = .{},
                 .intrinsic = intrinsicForProcedureDef(module, entry.def),
-                .iterator_procedure = iteratorProcedureForDef(module, entry.def),
+                .iterator_procedure = iterator_procedure,
+                .graph_participating = iterator_procedure != null or
+                    graphParticipatingDef(graph_participating_defs, entry.def),
                 .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, entry.def),
-            } },
+            } };
+        },
     };
+}
+
+/// Materialize the checker-authored runtime category once as a dense column so
+/// every direct procedure-use publication is an O(1) lookup by `Def.Idx`.
+fn buildGraphParticipatingDefColumn(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    method_registry: *const static_dispatch.MethodRegistry,
+) Allocator.Error![]bool {
+    const by_def = try allocator.alloc(bool, module.nodeCount());
+    @memset(by_def, false);
+    for (method_registry.entries) |entry| {
+        if (entry.target.module_idx != module.moduleIndex()) continue;
+        switch (entry.target.kind) {
+            .procedure => |procedure| switch (procedure.runtime_target) {
+                .graph_participating => {
+                    const raw_def = @intFromEnum(entry.target.def_idx);
+                    if (raw_def >= by_def.len) {
+                        checkedArtifactInvariant("graph-participating method target definition is outside its module", .{});
+                    }
+                    by_def[raw_def] = true;
+                },
+                .procedure, .low_level, .intrinsic => {},
+            },
+            .local_proc, .structural => {},
+        }
+    }
+    return by_def;
+}
+
+fn graphParticipatingDef(by_def: []const bool, def_idx: CIR.Def.Idx) bool {
+    const raw_def = @intFromEnum(def_idx);
+    if (raw_def >= by_def.len) {
+        return checkedArtifactInvariant("procedure definition is outside its graph-participation column", .{});
+    }
+    return by_def[raw_def];
 }
 
 fn selectedHoistedConstUse(
@@ -14429,6 +14481,7 @@ fn categorizeImportedValueRef(
             .source_fn_ty_template = .{},
             .intrinsic = binding.intrinsic,
             .iterator_procedure = binding.iterator_procedure,
+            .graph_participating = binding.graph_participating,
             .runtime_result_provenance = binding.runtime_result_provenance,
         } };
     }
@@ -14456,13 +14509,14 @@ fn categorizeResolvedAssociatedValueRef(
     target_def: CIR.Def.Idx,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
+    graph_participating_defs: []const bool,
     hosted_procs: *const HostedProcTable,
     top_level_values: *const TopLevelValueTable,
 ) ResolvedValueRef {
     if (module_identity == module.moduleEnvConst().selfModuleIdentity()) {
         const entry = top_level_values.lookupByDef(target_def) orelse
             return checkedArtifactInvariant("resolved local associated lookup target is not a top-level value", .{});
-        return categorizeTopLevelValueRef(module, artifact_key, entry, hosted_procs);
+        return categorizeTopLevelValueRef(module, artifact_key, entry, graph_participating_defs, hosted_procs);
     }
 
     const origin_hash = module.moduleEnvConst().moduleIdentityHash(module_identity);
@@ -14475,6 +14529,7 @@ fn categorizeResolvedAssociatedValueRef(
             .source_fn_ty_template = .{},
             .intrinsic = binding.intrinsic,
             .iterator_procedure = binding.iterator_procedure,
+            .graph_participating = binding.graph_participating,
             .runtime_result_provenance = binding.runtime_result_provenance,
         } };
     }
@@ -20799,6 +20854,7 @@ fn clonePlatformRequiredValueUseWithRelation(
                 .source_fn_ty_payload = relation.requested_source_ty_payload,
                 .intrinsic = proc_use.procedure.intrinsic,
                 .iterator_procedure = proc_use.procedure.iterator_procedure,
+                .graph_participating = proc_use.procedure.graph_participating,
                 .runtime_result_provenance = proc_use.procedure.runtime_result_provenance,
             },
             .root_evidence = .{
@@ -21263,6 +21319,7 @@ fn platformRequiredProcedureUse(
         .source_fn_ty_payload = null,
         .intrinsic = null,
         .iterator_procedure = exported_binding.iterator_procedure,
+        .graph_participating = exported_binding.graph_participating,
         .runtime_result_provenance = exported_binding.runtime_result_provenance,
     };
 }
@@ -24032,6 +24089,7 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
         .body = .{ .callable_eval_template = @enumFromInt(3) },
         .intrinsic = .str_inspect,
         .iterator_procedure = .iter_map,
+        .graph_participating = true,
         .runtime_result_provenance = .list_element_read,
         .template_closure = stored,
     });
@@ -24045,6 +24103,7 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
     try std.testing.expectEqual(@as(usize, 1), rt.loaded.bindings.len);
     try std.testing.expectEqual(IntrinsicId.str_inspect, rt.loaded.bindings[0].intrinsic.?);
     try std.testing.expectEqual(IteratorProcedureId.iter_map, rt.loaded.bindings[0].iterator_procedure.?);
+    try std.testing.expect(rt.loaded.bindings[0].graph_participating);
     try std.testing.expectEqual(
         RuntimeResultProvenance.list_element_read,
         rt.loaded.bindings[0].runtime_result_provenance.?,
@@ -26123,6 +26182,7 @@ pub const ImportedProcedureBindingView = struct {
     body: ImportedProcedureBindingBody,
     intrinsic: ?IntrinsicId = null,
     iterator_procedure: ?IteratorProcedureId = null,
+    graph_participating: bool = false,
     runtime_result_provenance: ?RuntimeResultProvenance,
     template_closure: StoredImportedTemplateClosure = .{},
 };
@@ -26158,8 +26218,11 @@ pub const ExportedProcedureBindingTable = struct {
         platform_required_bindings: *const PlatformRequiredBindingTable,
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
+        method_registry: *const static_dispatch.MethodRegistry,
         artifact_key: CheckedModuleArtifactKey,
     ) Allocator.Error!ExportedProcedureBindingTable {
+        const graph_participating_defs = try buildGraphParticipatingDefColumn(allocator, module, method_registry);
+        defer allocator.free(graph_participating_defs);
         var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
         var closure_pool = ClosurePool.empty;
         errdefer {
@@ -26197,6 +26260,7 @@ pub const ExportedProcedureBindingTable = struct {
 
             const stored_closure = try closure_pool.commit(allocator, template_closure);
             template_closure = .{};
+            const iterator_procedure = iteratorProcedureForDef(module, def_idx);
 
             try bindings.append(allocator, .{
                 .binding = .{
@@ -26207,7 +26271,9 @@ pub const ExportedProcedureBindingTable = struct {
                 .source_scheme = binding.source_scheme,
                 .body = body,
                 .intrinsic = intrinsicForProcedureDef(module, def_idx),
-                .iterator_procedure = iteratorProcedureForDef(module, def_idx),
+                .iterator_procedure = iterator_procedure,
+                .graph_participating = iterator_procedure != null or
+                    graphParticipatingDef(graph_participating_defs, def_idx),
                 .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, def_idx),
                 .template_closure = stored_closure,
             });
@@ -27190,7 +27256,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 56;
+    const serialized_layout_version: u32 = 57;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -30571,6 +30637,7 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.available_artifacts,
         &checked_procedure_templates,
+        &method_registry,
         &hosted_procs,
         &platform_required_declarations,
         &platform_required_bindings,
@@ -30763,6 +30830,7 @@ pub fn publishFromTypedModule(
         &platform_required_bindings,
         inputs.imports,
         inputs.available_artifacts,
+        &method_registry,
         artifact_key,
     );
     errdefer exported_procedure_bindings.deinit(allocator);
@@ -31273,6 +31341,7 @@ fn expectProvidedExportKind(
         &builtin_imports,
         &.{},
         &checked_procedure_templates,
+        &method_registry,
         &hosted_procs,
         &platform_required_declarations,
         &platform_required_bindings,
@@ -33014,8 +33083,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x31, 0x6A, 0x73, 0x89, 0xF6, 0x04, 0x2C, 0xDB, 0x7D, 0x2B, 0x67, 0x74, 0x7F, 0x25, 0xBD, 0x5B,
-        0xE3, 0xDE, 0x8F, 0xC0, 0x12, 0x1D, 0x1D, 0x17, 0xF8, 0x1C, 0x4A, 0x8B, 0x38, 0x25, 0x02, 0x33,
+        0xC3, 0x20, 0x65, 0x2E, 0x15, 0xE2, 0xC2, 0x09, 0xEC, 0xC2, 0x31, 0x46, 0xAD, 0xB3, 0x53, 0x51,
+        0xD8, 0xE2, 0x1C, 0x35, 0xEA, 0xAF, 0x0B, 0x11, 0xBD, 0xA8, 0x8D, 0xC9, 0x55, 0x9A, 0x0C, 0x64,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

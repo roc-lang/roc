@@ -2361,6 +2361,30 @@ representation; other graph-sensitive procedures carry no protocol. No
 consumer may inspect a procedure body, builtin name, owner type, or result shape
 to reconstruct this category.
 
+CheckedModule preserves this category on every direct `ProcedureUseTemplate`
+and every exported or imported procedure binding. Monotype gives every
+graph-participating procedure an `exact_graph` specialization signature, not
+only procedures with an iterator construction protocol. The call's exact
+argument and result graph is therefore the procedure body's graph. For example,
+when `Iter.fold` consumes a generated iterator, its recursive `rest` binder is
+the exact generated iterator from the call; it is never reinstantiated as the
+checked-public `Iter` declaration. A checked iterator procedure identity without
+graph participation is an invariant violation.
+
+The compiler-owned interpolation protocol is graph-participating too. Its
+generated iterator operand has no source expression whose checked type could
+carry the exact implementation, so method-registry construction explicitly
+marks every selected `from_interpolation` procedure target as
+graph-participating. Downstream code consumes that category; it does not infer
+it from the method name or rediscover it from the callable shape.
+
+Compiler-generated body-local functions are exact producers too. Iterator step
+closures, field-iteration steps, parser runtimes, encoder runtimes, and encoder
+callbacks retain the complete Monotype function graph supplied when they are
+created. Later stages do not rebuild their argument or result types from the
+checked source signature; in particular, a generated iterator step's result
+keeps the exact recursive `rest` identity minted by its enclosing iterator.
+
 Ordinary calls and method dispatches to the same intrinsic consume this exact
 identity through one Monotype lowering path. A call-site intrinsic never becomes
 an ordinary procedure specialization merely because static dispatch selected it.
@@ -2559,6 +2583,31 @@ identity requires it; repeated in-session access uses the dense identity rather
 than rehashing a type graph. Different representation inputs remain different
 exact types even when checking assigned them the same public Roc type.
 
+For a minted iterator, the stable generated `TypeDigest` is SHA-256 over an
+explicit domain separator, the public source declaration identity, the producer
+kind, the exact item-type digest, the ordered digests of every
+representation-determining input type, and any callable-specialization digest.
+The digest is computed after the complete input graph is known and before the
+durable Monotype leaves its owning graph. Equal inputs therefore produce the
+same nominal identity; distinct inputs do not require a later representation
+merge merely because checking gave them the same public `Iter` type.
+
+Every representation producer consumes its current exact operand cells. An
+expected result type is a destination request, never a source from which the
+producer may recover adapter inputs, state, callable evidence, or a prior
+function interface. This remains true when the expected result is an imported
+finished generated nominal: the current producer constructs its own exact
+identity from its explicit inputs, then applies that output to the request.
+
+Representation-determining input cells are producer provenance in the active
+Monotype graph, not nominal type arguments. A generated `Iter(item)` has exactly
+the public semantic `item` argument in its durable named type. Adapter sources,
+state, step functions, lengths, and other implementation inputs remain in an
+ordered graph-local component span only until representation choice and stable
+identity have been finalized. Sealing must not make those inputs reachable as
+extra nominal arguments, because doing so makes every later type consumer walk
+implementation history that is neither source-visible nor needed for layout.
+
 Checked types still provide the explicit type-argument and type-variable
 mapping used to instantiate a specialization. Applying an exact produced
 argument or result to that mapping is directed request-to-produced
@@ -2568,6 +2617,15 @@ declared polymorphic slots, and keeps the produced root as the runtime type. At
 a generated nominal it consumes the nominal's recorded public source and
 ordered public arguments directly. It never merges the generated nominal with
 the public nominal.
+
+Procedure dispatch specializes from the values the call actually produced.
+After each operand has been lowered once, Monotype builds the callee request
+from those operands' exact output cells and the requested result cell. The
+checked callable is retained only as the source contract for the directed
+substitution. In particular, a compiler-generated interpolation iterator enters
+`from_interpolation` as its exact generated nominal; dispatch must not reuse the
+original checked-public callable argument and ask the callee to reconstruct or
+repair the representation.
 
 Applying one checker-authored function interface to another exact
 specialization is a distinct checked-mapping operation. Checking can record a
@@ -2814,6 +2872,11 @@ the minted peer's callable members into the dynamic backing. Callable evidence
 already resides in the exact produced Monotype; Lambda Solved does not perform a
 second public-to-generated structural walk. A SpecConstr-authored callable
 worker becomes visible by updating the callable slots of that exact type.
+Encountering a checked-public iterator beside an exact generated iterator in
+Lambda Solved is an invariant violation: it means an earlier producer, call
+signature, binder, or join discarded its exact Monotype. Lambda Solved must not
+repair that loss by relating the two roots, walking their children, or copying
+generated backing evidence into the public type.
 
 When a complete Monotype type clone contains a forced-dynamic iterator,
 Lambda Solved marks the callable in that iterator's backing as erased. The mark

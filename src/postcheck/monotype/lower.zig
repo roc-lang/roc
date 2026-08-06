@@ -5030,7 +5030,7 @@ const Builder = struct {
                     fn_template.source_fn_key,
                     fn_template.mono_fn_ty,
                     retained.vector,
-                    .independent_roots,
+                    .exact_graph,
                     .count,
                     null,
                     retained,
@@ -7627,6 +7627,7 @@ const Builder = struct {
             .mono_fn_ty = ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
         });
+        self.promoteFnSignatureRelation(runtime_fn_id, .exact_graph);
         var parser_expr = try fn_ctx.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
             .fn_id = draftFinalFn(runtime_fn_id),
             .args = try fn_ctx.addTypedLocalSpan(&.{
@@ -7769,6 +7770,7 @@ const Builder = struct {
             .mono_fn_ty = ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
         });
+        self.promoteFnSignatureRelation(runtime_fn_id, .exact_graph);
         var encoder_expr = try fn_ctx.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
             .fn_id = draftFinalFn(runtime_fn_id),
             .args = try fn_ctx.addTypedLocalSpan(&.{
@@ -13489,7 +13491,10 @@ const BodyContext = struct {
         return try self.draft.addLocal(symbol, ty, binder, null);
     }
 
-    fn addFn(self: *BodyContext, source: Ast.FnTemplate) Allocator.Error!DraftFnId {
+    /// Add a compiler-generated body-local function whose supplied Monotype is
+    /// its producer-authored runtime signature. Lambda Solved must consume this
+    /// graph directly instead of rebuilding it from checked-public roots.
+    fn addExactFn(self: *BodyContext, source: Ast.FnTemplate) Allocator.Error!DraftFnId {
         if (source.const_evidence.len != 0 or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
             Common.invariant("body-local function source carried evidence outside its lexical lowering context");
         }
@@ -13506,6 +13511,7 @@ const BodyContext = struct {
                 .const_evidence_frame_head = stored_evidence.head,
                 .evidence_digest = evidence_digest,
             },
+            .signature_relation = .exact_graph,
         });
     }
 
@@ -18210,6 +18216,26 @@ const BodyContext = struct {
         };
     }
 
+    fn procedureUseSignatureRelation(
+        _: *BodyContext,
+        procedure: checked.ProcedureUseTemplate,
+    ) Ast.SignatureRelation {
+        if (procedure.iterator_procedure != null and !procedure.graph_participating) {
+            Common.invariant("checked iterator procedure use did not preserve graph participation");
+        }
+        return if (procedure.graph_participating) .exact_graph else .independent_roots;
+    }
+
+    fn procedureRuntimeSignatureRelation(
+        _: *BodyContext,
+        target: static_dispatch.ProcedureRuntimeTarget,
+    ) Ast.SignatureRelation {
+        return switch (target) {
+            .graph_participating => .exact_graph,
+            .procedure, .low_level, .intrinsic => .independent_roots,
+        };
+    }
+
     fn callsiteIntrinsicForMethodTarget(
         _: *BodyContext,
         target: static_dispatch.MethodTarget,
@@ -19051,13 +19077,6 @@ const BodyContext = struct {
                 if (checked_args.len != 3 or request_fn.args.len != 3) {
                     Common.invariant("Iter.custom reached Monotype with an unexpected arity");
                 }
-                if (self.expectedGeneratedIteratorProducerNode(expected_ret, .custom)) |expected| {
-                    if (self.isForcedDynamicIteratorNode(expected)) {
-                        return try self.graphFunctionNode(request_fn.args, expected);
-                    }
-                    const components = self.generatedIteratorComponentNodes(expected, 2);
-                    return try self.graphFunctionNode(&.{ components[0], request_fn.args[1], components[1] }, expected);
-                }
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(
@@ -19072,7 +19091,6 @@ const BodyContext = struct {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("List.iter reached Monotype with an unexpected arity");
                 }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.list, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(.list, public_fn.ret, &.{request_fn.args[0]}, null),
@@ -19082,7 +19100,6 @@ const BodyContext = struct {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("Str.iter_utf8 reached Monotype with an unexpected arity");
                 }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.str, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(.str, public_fn.ret, &.{request_fn.args[0]}, null),
@@ -19092,36 +19109,32 @@ const BodyContext = struct {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("Iter.single reached Monotype with an unexpected arity");
                 }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.single, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(.single, public_fn.ret, &.{request_fn.args[0]}, null),
                 );
             },
             .iter_exclusive_range, .numeric_range_exclusive => {
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.range_exclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(.range_exclusive, public_fn.ret, &.{}, null),
                 );
             },
             .iter_inclusive_range, .numeric_range_inclusive => {
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.range_inclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(.range_inclusive, public_fn.ret, &.{}, null),
                 );
             },
-            .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(.keep_if, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(.drop_if, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(.take_first, public_fn.ret, request_fn.args, checked_args, expected_ret, null),
-            .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(.drop_first, public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, public_fn.ret, request_fn.args, checked_args, 1),
+            .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(.keep_if, public_fn.ret, request_fn.args, checked_args, 1),
+            .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(.drop_if, public_fn.ret, request_fn.args, checked_args, 1),
+            .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(.take_first, public_fn.ret, request_fn.args, checked_args, null),
+            .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(.drop_first, public_fn.ret, request_fn.args, checked_args, null),
             .iter_concat => {
                 if (checked_args.len != 2 or request_fn.args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
                 }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.concat, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0]) or
                     self.isGeneratedIteratorEvidenceNode(request_fn.args[1]))
                 {
@@ -19131,7 +19144,7 @@ const BodyContext = struct {
                     );
                 }
             },
-            .iter_append => return try self.generatedIteratorAdapterFunctionNode(.append, public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .iter_append => return try self.generatedIteratorAdapterFunctionNode(.append, public_fn.ret, request_fn.args, checked_args, null),
             .iter_from_step, .range_done => {},
         }
         return null;
@@ -19143,13 +19156,11 @@ const BodyContext = struct {
         public_ret: NodeId,
         args: []const NodeId,
         checked_args: []const checked.CheckedExprId,
-        expected_ret: ?NodeId,
         callable_index: ?usize,
     ) Allocator.Error!?NodeId {
         if (checked_args.len != 2 or args.len != 2) {
             Common.invariant("iterator adapter reached Monotype with an unexpected arity");
         }
-        if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
         if (!self.isGeneratedIteratorEvidenceNode(args[0])) return null;
         const callable_evidence = if (callable_index) |index|
             try self.callableArgumentEvidenceDigest(checked_args[index])
@@ -19159,50 +19170,6 @@ const BodyContext = struct {
             args,
             try self.generatedIteratorNode(kind, public_ret, args, callable_evidence),
         );
-    }
-
-    fn expectedGeneratedIteratorProducerNode(
-        self: *BodyContext,
-        expected_ret: ?NodeId,
-        kind: Type.IteratorKind,
-    ) ?NodeId {
-        const expected = expected_ret orelse return null;
-        if (!self.isGeneratedIteratorEvidenceNode(expected)) return null;
-        if (self.isForcedDynamicIteratorNode(expected)) return expected;
-        const named = self.graph.content(expected).named;
-        return if (named.def.iterator_kind == kind) expected else null;
-    }
-
-    fn generatedIteratorExpectedProducerFunctionNode(
-        self: *BodyContext,
-        kind: Type.IteratorKind,
-        args: []const NodeId,
-        expected_ret: ?NodeId,
-    ) Allocator.Error!?NodeId {
-        const expected = self.expectedGeneratedIteratorProducerNode(expected_ret, kind) orelse return null;
-        if (self.isForcedDynamicIteratorNode(expected)) return try self.graphFunctionNode(args, expected);
-        // Range bounds initialize the generated step state but are not stored as
-        // nominal component arguments. Their producer therefore keeps the
-        // checked two-argument request while returning the exact private range.
-        if (kind == .range_exclusive or kind == .range_inclusive) {
-            return try self.graphFunctionNode(args, expected);
-        }
-        return try self.graphFunctionNode(self.generatedIteratorComponentNodes(expected, args.len), expected);
-    }
-
-    fn generatedIteratorComponentNodes(
-        self: *BodyContext,
-        iterator: NodeId,
-        expected_components: usize,
-    ) []const NodeId {
-        const named = switch (self.graph.content(iterator)) {
-            .named => |named| named,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator component nodes requested for a non-named type"),
-        };
-        if (named.args.len != expected_components + 1) {
-            Common.invariant("generated iterator producer did not contain its component count");
-        }
-        return named.args[1..];
     }
 
     const IteratorRepresentationNames = Type.IteratorTopology;
@@ -19298,9 +19265,8 @@ const BodyContext = struct {
             mint_depth: u8,
 
             fn fill(ctx: @This(), self_node: NodeId) Allocator.Error!InstNode {
-                const args = try ctx.body.graph.arena().alloc(NodeId, ctx.components.len + 1);
+                const args = try ctx.body.graph.arena().alloc(NodeId, 1);
                 args[0] = ctx.item_node;
-                @memcpy(args[1..], ctx.components);
                 var def = ctx.public_source.def;
                 def.generated = null;
                 def.iterator_representation = .minted;
@@ -19324,6 +19290,7 @@ const BodyContext = struct {
                     },
                     .generated_iterator = .{
                         .callable_evidence = ctx.callable_evidence,
+                        .components = ctx.components,
                         .public_source = ctx.public_source,
                     },
                     .declared_order = ctx.public_source.declared_order,
@@ -19434,6 +19401,7 @@ const BodyContext = struct {
                     },
                     .generated_iterator = .{
                         .callable_evidence = null,
+                        .components = &.{},
                         .public_source = ctx.public_source,
                     },
                     .declared_order = ctx.public_source.declared_order,
@@ -19461,7 +19429,7 @@ const BodyContext = struct {
         for (public_fields, fields) |field, *out| {
             out.* = .{
                 .name = field.name,
-                .ty = if (field.name == topology.step_field)
+                .ty = if (self.builder.program.names.recordFieldLabelTextEql(field.name, topology.step_field))
                     try self.generatedIteratorStepFunctionNode(field.ty, self_node, item_node)
                 else
                     field.ty,
@@ -19520,15 +19488,17 @@ const BodyContext = struct {
         self_node: NodeId,
         item_node: NodeId,
     ) Allocator.Error!NodeId {
-        if (tag_name != topology.one_tag and tag_name != topology.skip_tag) return public_payload;
+        const name_store = &self.builder.program.names;
+        if (!name_store.tagLabelTextEql(tag_name, topology.one_tag) and
+            !name_store.tagLabelTextEql(tag_name, topology.skip_tag)) return public_payload;
         const public_fields = (try self.graph.recordNodes(public_payload)).fields;
         const fields = try self.graph.arena().alloc(InstField, public_fields.len);
         for (public_fields, fields) |field, *out| {
             out.* = .{
                 .name = field.name,
-                .ty = if (field.name == topology.rest_field)
+                .ty = if (name_store.recordFieldLabelTextEql(field.name, topology.rest_field))
                     self_node
-                else if (field.name == topology.item_field)
+                else if (name_store.recordFieldLabelTextEql(field.name, topology.item_field))
                     item_node
                 else
                     field.ty,
@@ -20141,7 +20111,7 @@ const BodyContext = struct {
         step_fn_ty: Type.TypeId,
         body: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const fn_id = try self.addFn(.{
+        const fn_id = try self.addExactFn(.{
             .fn_def = .{ .checked_generated = self.owner_template },
             .source_fn_ty = checked_source_ty,
             .source_fn_key = generatedFieldNamesIterStepKey(self.current_fn_key, source_expr_id, index, mode),
@@ -25733,7 +25703,7 @@ const BodyContext = struct {
             request_fn_node,
             requested_evidence,
             .resolved,
-            if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
+            self.procedureUseSignatureRelation(proc),
         );
     }
 
@@ -27855,7 +27825,7 @@ const BodyContext = struct {
                 request_fn_node,
                 retained_evidence.vector,
                 .resolved,
-                .independent_roots,
+                .exact_graph,
             )),
         };
     }
@@ -28098,7 +28068,7 @@ const BodyContext = struct {
                 request_fn_node,
                 retained_evidence.vector,
                 .resolved,
-                .independent_roots,
+                .exact_graph,
             )),
         };
     }
@@ -28340,7 +28310,7 @@ const BodyContext = struct {
                 &precomputed_plan,
             );
         };
-        const runtime_fn_id = try fn_ctx.addFn(.{
+        const runtime_fn_id = try fn_ctx.addExactFn(.{
             .fn_def = .{ .parser_runtime = .{
                 .owner = runtime.owner,
                 .expr = runtime.expr,
@@ -28516,7 +28486,7 @@ const BodyContext = struct {
             .const_evidence_frames = try self.builder.program.addConstFnEvidenceFrames(stored_evidence.frames),
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
-        } });
+        }, .signature_relation = .exact_graph });
         var parser_expr = try fn_ctx.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_fn_node), .{ .lambda = .{
             .fn_id = .{ .draft = runtime_fn_id },
             .args = try fn_ctx.draft.addTypedLocalSpan(&.{
@@ -28673,7 +28643,7 @@ const BodyContext = struct {
                 &precomputed_plan,
             );
         };
-        const runtime_fn_id = try fn_ctx.addFn(.{
+        const runtime_fn_id = try fn_ctx.addExactFn(.{
             .fn_def = .{ .encoder_for_runtime = .{
                 .owner = runtime.owner,
                 .expr = runtime.expr,
@@ -28876,7 +28846,7 @@ const BodyContext = struct {
             .const_evidence_frames = try self.builder.program.addConstFnEvidenceFrames(stored_evidence.frames),
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
-        } });
+        }, .signature_relation = .exact_graph });
         var encoder_expr = try fn_ctx.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_fn_node), .{ .lambda = .{
             .fn_id = .{ .draft = runtime_fn_id },
             .args = try fn_ctx.draft.addTypedLocalSpan(&.{
@@ -29356,6 +29326,35 @@ const BodyContext = struct {
         return reserved.span;
     }
 
+    /// Build the procedure specialization request from the values the caller
+    /// actually produced. The checked callable remains the source contract,
+    /// but it cannot stand in for an exact generated representation carried by
+    /// one of the lowered operands.
+    fn producedDispatchCallableNode(
+        self: *BodyContext,
+        checked_callable_node: NodeId,
+        lowered_args: DraftSpan(DraftExprId),
+    ) Allocator.Error!NodeId {
+        const callable = try self.graph.functionNodes(checked_callable_node);
+        const args = self.exprSpan(lowered_args);
+        if (args.len != callable.args.len) {
+            Common.invariant("lowered dispatch argument arity differed from its callable type");
+        }
+
+        const produced_arg_nodes = try self.graph.arena().alloc(NodeId, args.len);
+        for (args, produced_arg_nodes) |arg, *produced_node| {
+            produced_node.* = try self.exprTypeCell(arg).toGraphNode(self.graph);
+        }
+        const checked_source = self.graph.requestCheckedSource(checked_callable_node) orelse
+            checked_callable_node;
+        return try functionRequestNode(
+            self.graph,
+            checked_source,
+            produced_arg_nodes,
+            callable.ret,
+        );
+    }
+
     fn lowerDispatchOperandAtType(
         self: *BodyContext,
         operand: static_dispatch.StaticDispatchOperand,
@@ -29363,7 +29362,11 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         return switch (operand) {
             .checked_expr => |expr| try self.lowerExprAtType(expr, ty),
-            .generated_interpolation_iter => |expr| try self.lowerGeneratedInterpolationIter(expr, ty),
+            .generated_interpolation_iter => |expr| blk: {
+                const request_node = try self.graph.importMono(ty);
+                const produced_node = try self.generatedInterpolationIteratorNode(expr, request_node);
+                break :blk try self.lowerGeneratedInterpolationIter(expr, try self.activeTypeFromNode(produced_node));
+            },
             .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
             .generated_quote => |literal| try self.lowerQuoteValue(literal, ty),
         };
@@ -29420,6 +29423,17 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        const iter_named = switch (self.builder.program.types.get(ty)) {
+            .named => |named| named,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("generated interpolation iterator expected an exact named Iter type"),
+        };
+        const iter_backing = iter_named.backing orelse
+            Common.invariant("generated interpolation iterator exact type had no backing");
+        if (iter_named.def.iterator_representation == .none or
+            iter_backing.authority != .generated_private)
+        {
+            Common.invariant("generated interpolation lowering received a checked-public iterator type");
+        }
         const expr = self.view.bodies.expr(expr_id);
         const interpolation = switch (expr.data) {
             .interpolation => |interpolation| interpolation,
@@ -29645,7 +29659,7 @@ const BodyContext = struct {
         step_fn_ty: Type.TypeId,
         body: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const fn_id = try self.addFn(.{
+        const fn_id = try self.addExactFn(.{
             .fn_def = .{ .checked_generated = self.owner_template },
             .source_fn_ty = source_fn_ty,
             .source_fn_key = generatedInterpolationStepKey(self.current_fn_key, source_expr_id, index),
@@ -29692,8 +29706,6 @@ const BodyContext = struct {
         return switch (self.builder.program.types.get(ty)) {
             .named => |named| blk: {
                 const args = self.builder.program.types.span(named.args);
-                // Generated iterator identities retain their producer
-                // components after the public item argument.
                 if (args.len == 0) Common.invariant("Iter nominal did not have an item type argument");
                 break :blk GuardedList.at(args, 0);
             },
@@ -31298,7 +31310,7 @@ const BodyContext = struct {
                 callable_node,
                 evidence_vector,
                 .resolved,
-                .independent_roots,
+                self.procedureRuntimeSignatureRelation(procedure.runtime_target),
             );
             const draft_spec: ?u32 = switch (created) {
                 .local => |local| switch (local) {
@@ -33592,7 +33604,7 @@ const BodyContext = struct {
                         .resolved => .resolved,
                         .synthesize => .synthesized,
                     },
-                    if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
+                    self.procedureRuntimeSignatureRelation(procedure.runtime_target),
                 );
                 break :blk slot;
             },
@@ -33683,7 +33695,7 @@ const BodyContext = struct {
                         .resolved => .resolved,
                         .synthesize => .synthesized,
                     },
-                    if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
+                    self.procedureRuntimeSignatureRelation(procedure.runtime_target),
                 );
             },
             .local_proc => |local| blk: {
@@ -33737,11 +33749,12 @@ const BodyContext = struct {
             fn_nodes.args,
             pre_lowered,
         );
+        const produced_callable_node = try arg_ctx.producedDispatchCallableNode(callable_node, args);
         const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNode(
                 contextual_lookup,
-                callable_node,
+                produced_callable_node,
                 try self.evidenceForDispatchTarget(plan),
             )),
             .args = args,
@@ -33764,11 +33777,12 @@ const BodyContext = struct {
             fn_nodes.args,
             pre_lowered,
         );
+        const produced_callable_node = try arg_ctx.producedDispatchCallableNode(callable_node, args);
         const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeDirectAtNode(
                 contextual_lookup,
-                callable_node,
+                produced_callable_node,
                 try self.evidenceForDispatchTarget(plan),
             )),
             .args = args,
@@ -34180,7 +34194,7 @@ const BodyContext = struct {
                 &precomputed_plan,
             );
         };
-        const fn_id = try self.addFn(.{
+        const fn_id = try self.addExactFn(.{
             .fn_def = .{ .parser_runtime = .{
                 .owner = self.owner_template,
                 .expr = plan.expr,
@@ -34289,7 +34303,7 @@ const BodyContext = struct {
                 &precomputed_plan,
             );
         };
-        const fn_id = try self.addFn(.{
+        const fn_id = try self.addExactFn(.{
             .fn_def = .{ .encoder_for_runtime = .{
                 .owner = self.owner_template,
                 .expr = plan.expr,
@@ -34529,7 +34543,7 @@ const BodyContext = struct {
             Common.invariant("generated encoder callback source expression was missing");
         const lambda_index = self.generated_encoder_lambda_index;
         self.generated_encoder_lambda_index += 1;
-        const fn_id = try self.addFn(.{
+        const fn_id = try self.addExactFn(.{
             .fn_def = .{ .encoder_for_runtime = .{
                 .owner = self.owner_template,
                 .expr = source_expr,

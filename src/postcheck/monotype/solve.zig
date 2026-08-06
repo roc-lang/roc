@@ -126,6 +126,10 @@ const InstNamed = struct {
 /// Graph-owned data for a private iterator representation before sealing.
 pub const InstGeneratedIterator = struct {
     callable_evidence: ?names.TypeDigest,
+    /// Exact producer inputs used while relations are active. These are not
+    /// nominal type arguments: the durable generated definition is identified
+    /// by their final digests, and its runtime backing is already explicit.
+    components: []const NodeId = &.{},
     public_source: InstIteratorPublicSource,
 };
 
@@ -568,7 +572,7 @@ pub const InstGraph = struct {
         const digest = self.generatedIteratorInternDigest(
             named,
             named.def.iterator_kind,
-            named.args[1..],
+            provenance.components,
             provenance.callable_evidence,
         );
         const digest_entry = try self.generated_iterator_intern.getOrPut(digest);
@@ -604,12 +608,13 @@ pub const InstGraph = struct {
             candidate.def.module != public_named.def.module or
             candidate.def.type_name != public_named.def.type_name or
             candidate.def.source_decl != public_named.def.source_decl or
-            candidate.args.len != components.len + 1 or
+            candidate.args.len != 1 or
+            provenance.components.len != components.len or
             self.find(candidate.args[0]) != self.find(public_named.args[0]))
         {
             return false;
         }
-        for (components, candidate.args[1..]) |component, stored| {
+        for (components, provenance.components) |component, stored| {
             if (self.find(component) != self.find(stored)) return false;
         }
         return true;
@@ -845,6 +850,7 @@ pub const InstGraph = struct {
             },
             .generated_iterator = .{
                 .callable_evidence = null,
+                .components = &.{},
                 .public_source = provenance.public_source,
             },
             .declared_order = provenance.public_source.declared_order,
@@ -864,7 +870,7 @@ pub const InstGraph = struct {
         for (public_fields, fields) |field, *out| {
             out.* = .{
                 .name = field.name,
-                .ty = if (field.name == topology.step_field)
+                .ty = if (self.name_store.recordFieldLabelTextEql(field.name, topology.step_field))
                     try self.forcedDynamicIteratorStepFunctionNode(field.ty, self_node, item_node, topology)
                 else
                     field.ty,
@@ -930,15 +936,16 @@ pub const InstGraph = struct {
         item_node: NodeId,
         topology: Type.IteratorTopology,
     ) Allocator.Error!NodeId {
-        if (tag_name != topology.one_tag and tag_name != topology.skip_tag) return public_payload;
+        if (!self.name_store.tagLabelTextEql(tag_name, topology.one_tag) and
+            !self.name_store.tagLabelTextEql(tag_name, topology.skip_tag)) return public_payload;
         const public_fields = (try self.recordNodes(public_payload)).fields;
         const fields = try self.arena().alloc(InstField, public_fields.len);
         for (public_fields, fields) |field, *out| {
             out.* = .{
                 .name = field.name,
-                .ty = if (field.name == topology.rest_field)
+                .ty = if (self.name_store.recordFieldLabelTextEql(field.name, topology.rest_field))
                     self_node
-                else if (field.name == topology.item_field)
+                else if (self.name_store.recordFieldLabelTextEql(field.name, topology.item_field))
                     item_node
                 else
                     field.ty,
@@ -1079,11 +1086,12 @@ pub const InstGraph = struct {
                         .concat,
                         .append,
                         => adapter: {
-                            if (named.args.len == 0) {
+                            const provenance = named.generated_iterator orelse unreachable;
+                            if (named.args.len != 1) {
                                 Common.invariant("generated iterator adapter had no item argument");
                             }
                             break :adapter .{ .children = .{
-                                .count = named.args.len - 1,
+                                .count = provenance.components.len,
                                 .increment = 1,
                             } };
                         },
@@ -1119,8 +1127,8 @@ pub const InstGraph = struct {
                 row.ext
             else
                 row.fields[child_index - 1].ty,
-            .named => |named| if (named.generated_iterator != null)
-                named.args[child_index + 1]
+            .named => |named| if (named.generated_iterator) |provenance|
+                provenance.components[child_index]
             else
                 named.args[child_index],
             .redirect, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator depth frame had no structural child"),
@@ -1160,10 +1168,23 @@ pub const InstGraph = struct {
                 hasher.update("roc.generated_iterator.forced_dynamic_identity");
                 hasher.update(&item_digest.bytes);
             } else {
-                const final = try self.provisionalTypeViewForNode(node);
-                const shape = self.types.typeDigest(self.name_store, final);
-                hasher.update("roc.generated_iterator.final_identity");
-                hasher.update(&shape.bytes);
+                if (named.args.len != 1) {
+                    Common.invariant("minted iterator identity did not have exactly one item argument");
+                }
+                hasher.update("roc.generated_iterator.producer_identity.v2");
+                updateGeneratedIteratorInternU32(&hasher, @intFromEnum(provenance.public_source.def.module));
+                updateGeneratedIteratorInternU32(&hasher, @intFromEnum(provenance.public_source.def.type_name));
+                updateGeneratedIteratorInternU32(&hasher, provenance.public_source.def.source_decl orelse std.math.maxInt(u32));
+                hasher.update(&.{@intFromEnum(named.def.iterator_kind)});
+                const item = try self.provisionalTypeViewForNode(named.args[0]);
+                const item_digest = self.types.typeDigest(self.name_store, item);
+                hasher.update(&item_digest.bytes);
+                updateGeneratedIteratorInternU32(&hasher, @intCast(provenance.components.len));
+                for (provenance.components) |component| {
+                    const component_ty = try self.provisionalTypeViewForNode(component);
+                    const component_digest = self.types.typeDigest(self.name_store, component_ty);
+                    hasher.update(&component_digest.bytes);
+                }
                 if (provenance.callable_evidence) |evidence| {
                     hasher.update("callable_evidence");
                     hasher.update(&evidence.bytes);
@@ -5731,7 +5752,7 @@ test "opaque iterator relation materializes unresolved public interface from pro
         },
         .kind = .@"opaque",
         .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ private_item, try graph.newNode(.empty_record) }),
+        .args = try graph.arena().dupe(NodeId, &.{private_item}),
         .backing = .{
             .node = try graph.newNode(.empty_record),
             .use = .runtime_layout_only,
@@ -5739,6 +5760,7 @@ test "opaque iterator relation materializes unresolved public interface from pro
         },
         .generated_iterator = .{
             .callable_evidence = null,
+            .components = &.{},
             .public_source = public_source,
         },
     } });
@@ -5816,8 +5838,6 @@ test "opaque interface relation delegates nested private iterator requests to un
     const type_name = try name_store.internTypeName("Iter");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(13) };
     const item = try graph.newNode(.{ .primitive = .u64 });
-    const left_component = try graph.newNode(.empty_record);
-    const right_component = try graph.newNode(.empty_record);
     const left_iter = try graph.newNode(.{ .named = .{
         .named_type = named_type,
         .def = .{
@@ -5830,7 +5850,7 @@ test "opaque interface relation delegates nested private iterator requests to un
         },
         .kind = .@"opaque",
         .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ item, left_component }),
+        .args = try graph.arena().dupe(NodeId, &.{item}),
         .backing = .{
             .node = try graph.newNode(.empty_record),
             .use = .runtime_layout_only,
@@ -5842,14 +5862,14 @@ test "opaque interface relation delegates nested private iterator requests to un
         .def = .{
             .module = module_identity,
             .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x75} ** 32 },
+            .generated = .{ .bytes = [_]u8{0x74} ** 32 },
             .iterator_representation = .minted,
             .iterator_kind = .concat,
             .iterator_depth = 2,
         },
         .kind = .@"opaque",
         .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ item, right_component }),
+        .args = try graph.arena().dupe(NodeId, &.{item}),
         .backing = .{
             .node = try graph.newNode(.empty_record),
             .use = .runtime_layout_only,
@@ -5912,7 +5932,7 @@ test "opaque relation materializes unresolved public named shell from request" {
         },
         .kind = .@"opaque",
         .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ item, try graph.newNode(.empty_record) }),
+        .args = try graph.arena().dupe(NodeId, &.{item}),
         .backing = .{
             .node = try graph.newNode(.empty_record),
             .use = .runtime_layout_only,
@@ -5920,6 +5940,7 @@ test "opaque relation materializes unresolved public named shell from request" {
         },
         .generated_iterator = .{
             .callable_evidence = null,
+            .components = &.{},
             .public_source = public_source,
         },
     } });
@@ -5991,7 +6012,7 @@ test "generated iterator interning happens before backing work and survives late
         },
         .kind = .@"opaque",
         .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ item_at_construction, component_at_construction }),
+        .args = try graph.arena().dupe(NodeId, &.{item_at_construction}),
         .backing = .{
             .node = try graph.newNode(.empty_record),
             .use = .runtime_layout_only,
@@ -5999,6 +6020,7 @@ test "generated iterator interning happens before backing work and survives late
         },
         .generated_iterator = .{
             .callable_evidence = null,
+            .components = &.{component_at_construction},
             .public_source = public_source,
         },
     } });
@@ -6069,6 +6091,7 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
         },
         .generated_iterator = .{
             .callable_evidence = null,
+            .components = &.{},
             .public_source = public_source,
         },
     } });
@@ -6090,7 +6113,7 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
         },
         .kind = .@"opaque",
         .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ item, wide_component }),
+        .args = try graph.arena().dupe(NodeId, &.{item}),
         .backing = .{
             .node = try graph.newNode(.empty_record),
             .use = .runtime_layout_only,
@@ -6098,6 +6121,7 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
         },
         .generated_iterator = .{
             .callable_evidence = null,
+            .components = &.{wide_component},
             .public_source = public_source,
         },
     } });
@@ -6185,6 +6209,7 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
         },
         .generated_iterator = .{
             .callable_evidence = null,
+            .components = &.{},
             .public_source = public_source,
         },
     } });

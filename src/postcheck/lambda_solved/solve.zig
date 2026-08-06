@@ -109,7 +109,6 @@ const Solver = struct {
     return_contexts: std.ArrayList(ReturnContext),
     active_unifications: std.AutoHashMap(UnifyPair, void),
     unify_stack: std.ArrayList(UnifyFrame),
-    active_private_evidence_relations: std.AutoHashMap(UnifyPair, void),
     /// Per lifted Monotype: whether any `func` or `erased` node is reachable
     /// from it. Clones of callable-free types carry no unbound slots and no
     /// mutable lambda-set state, so one shared clone serves every use, and
@@ -230,7 +229,6 @@ const Solver = struct {
             .return_contexts = .empty,
             .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
             .unify_stack = .empty,
-            .active_private_evidence_relations = std.AutoHashMap(UnifyPair, void).init(allocator),
             .contains_callable = masks.contains_callable,
             .contains_forced_dynamic = masks.contains_forced_dynamic,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
@@ -244,7 +242,6 @@ const Solver = struct {
         self.shared_clones.deinit();
         self.allocator.free(self.contains_forced_dynamic);
         self.allocator.free(self.contains_callable);
-        self.active_private_evidence_relations.deinit();
         self.unify_stack.deinit(self.allocator);
         self.active_unifications.deinit();
         self.return_contexts.deinit(self.allocator);
@@ -1881,25 +1878,20 @@ const Solver = struct {
                     if (try self.unifyForcedDynamicIterator(a, b, left_named, right_named)) return;
                     if (try self.unifyIteratorOwnerStampedPublic(a, b, left_named, right_named)) return;
                     if (try self.unifyGeneratedIteratorJoin(a, b, left_named, right_named)) return;
-                    if (try self.unifyPublicGeneratedIterator(a, b, left_named, right_named)) return;
                     if (try self.unifyNominalOpaqueViews(a, b, left_named, right_named)) return;
+                    if (MonoType.iteratorRelation(left_named, right_named) == .public_minted) {
+                        Common.invariant("checked-public iterator reached Lambda Solved beside an exact generated iterator");
+                    }
                     Common.invariant("named type identity failed Lambda Solved unification");
                 }
                 if (left_named.backing) |left_backing| {
                     const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
                     if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
-                    if (left_backing.authority == right_backing.authority) {
-                        stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
-                        try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
-                    } else if (left_backing.authority == .generated_private) {
-                        try self.relateGeneratedPrivateEvidence(right_backing.ty, left_backing.ty);
-                        self.program.types.set(b, .{ .link = a });
-                    } else if (right_backing.authority == .generated_private) {
-                        try self.relateGeneratedPrivateEvidence(left_backing.ty, right_backing.ty);
-                        self.program.types.set(a, .{ .link = b });
-                    } else {
-                        Common.invariant("named type backing authorities were incompatible during Lambda Solved unification");
+                    if (left_backing.authority != right_backing.authority) {
+                        Common.invariant("exact named types reached Lambda Solved with different backing authorities");
                     }
+                    stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                    try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
                 } else if (right_named.backing != null) {
                     Common.invariant("named type backing differed during Lambda Solved unification");
                 } else {
@@ -2159,160 +2151,6 @@ const Solver = struct {
         };
     }
 
-    /// Transfer Lambda Solved callable evidence from a checked-public value
-    /// shape into its producer-authored generated-private representation.
-    /// Monotype has already sealed both representations, so this relation
-    /// deliberately preserves every composite and named root. Only callable
-    /// slots (and still-open Lambda Solved slots) are unified.
-    fn relateGeneratedPrivateEvidence(
-        self: *Solver,
-        public_ty: Type.TypeVarId,
-        private_ty: Type.TypeVarId,
-    ) Allocator.Error!void {
-        const public_root = self.program.types.rootCompressed(public_ty);
-        const private_root = self.program.types.rootCompressed(private_ty);
-        if (public_root == private_root) return;
-
-        const pair = UnifyPair.init(public_root, private_root);
-        const active = try self.active_private_evidence_relations.getOrPut(pair);
-        if (active.found_existing) return;
-        defer _ = self.active_private_evidence_relations.remove(pair);
-
-        const public = try self.resolvedContentAt(public_root);
-        const private = try self.resolvedContentAt(private_root);
-        const private_content_tag = std.meta.activeTag(private);
-        if (public == .unbound or private == .unbound or
-            public == .lambda_set or private == .lambda_set or
-            public == .erased or private == .erased)
-        {
-            try self.unify(public_root, private_root);
-            return;
-        }
-
-        switch (public) {
-            .link, .unbound, .lambda_set, .erased => unreachable,
-            .mono => Common.invariant("lazy Monotype leaf reached the generated-private evidence relation unexpanded"),
-            .forall => Common.invariant("generated-private evidence relation received a generalized public type"),
-            .primitive => |public_primitive| {
-                if (private_content_tag != .primitive) Common.invariant("generated-private evidence relation received different type structure");
-                if (public_primitive != private.primitive) Common.invariant("generated-private evidence relation received different primitive types");
-            },
-            .zst => if (private != .zst) Common.invariant("generated-private evidence relation received different type structure"),
-            .list => |public_elem| {
-                if (private_content_tag != .list) Common.invariant("generated-private evidence relation received different type structure");
-                try self.relateGeneratedPrivateEvidence(public_elem, private.list);
-            },
-            .box => |public_elem| {
-                if (private_content_tag != .box) Common.invariant("generated-private evidence relation received different type structure");
-                try self.relateGeneratedPrivateEvidence(public_elem, private.box);
-            },
-            .tuple => |public_items| {
-                if (private_content_tag != .tuple) Common.invariant("generated-private evidence relation received different type structure");
-                const private_items = private.tuple;
-                if (public_items.count() != private_items.count()) {
-                    Common.invariant("generated-private evidence relation received tuples of different arity");
-                }
-                for (0..public_items.count()) |index| {
-                    try self.relateGeneratedPrivateEvidence(
-                        self.program.types.spanItem(public_items, index),
-                        self.program.types.spanItem(private_items, index),
-                    );
-                }
-            },
-            .record => |public_fields| {
-                if (private_content_tag != .record) Common.invariant("generated-private evidence relation received different type structure");
-                const private_fields = private.record;
-                if (public_fields.count() != private_fields.count()) {
-                    Common.invariant("generated-private evidence relation received records with different fields");
-                }
-                for (0..public_fields.count()) |index| {
-                    const public_field = self.program.types.fieldItem(public_fields, index);
-                    const private_field = self.program.types.fieldItem(private_fields, index);
-                    if (public_field.name != private_field.name) {
-                        Common.invariant("generated-private evidence relation received records with different fields");
-                    }
-                    try self.relateGeneratedPrivateEvidence(public_field.ty, private_field.ty);
-                }
-            },
-            .tag_union => |public_tags| {
-                if (private_content_tag != .tag_union) Common.invariant("generated-private evidence relation received different type structure");
-                const private_tags = private.tag_union;
-                if (public_tags.count() != private_tags.count()) {
-                    Common.invariant("generated-private evidence relation received tag unions with different tags");
-                }
-                for (0..public_tags.count()) |tag_index| {
-                    const public_tag = self.program.types.tagItem(public_tags, tag_index);
-                    const private_tag = self.program.types.tagItem(private_tags, tag_index);
-                    if (public_tag.name != private_tag.name or public_tag.checked_name != private_tag.checked_name or
-                        public_tag.payloads.count() != private_tag.payloads.count())
-                    {
-                        Common.invariant("generated-private evidence relation received tag unions with different tags");
-                    }
-                    for (0..public_tag.payloads.count()) |payload_index| {
-                        try self.relateGeneratedPrivateEvidence(
-                            self.program.types.spanItem(public_tag.payloads, payload_index),
-                            self.program.types.spanItem(private_tag.payloads, payload_index),
-                        );
-                    }
-                }
-            },
-            .func => |public_fn| {
-                if (private_content_tag != .func) Common.invariant("generated-private evidence relation received different type structure");
-                const private_fn = private.func;
-                if (public_fn.args.count() != private_fn.args.count()) {
-                    Common.invariant("generated-private evidence relation received functions of different arity");
-                }
-                for (0..public_fn.args.count()) |index| {
-                    try self.relateGeneratedPrivateEvidence(
-                        self.program.types.spanItem(public_fn.args, index),
-                        self.program.types.spanItem(private_fn.args, index),
-                    );
-                }
-                try self.unify(public_fn.callable, private_fn.callable);
-                try self.relateGeneratedPrivateEvidence(public_fn.ret, private_fn.ret);
-            },
-            .named => |public_named| {
-                if (private_content_tag != .named) Common.invariant("generated-private evidence relation received different type structure");
-                const private_named = private.named;
-                const same_identity = public_named.kind == private_named.kind and
-                    std.meta.eql(public_named.def, private_named.def) and
-                    public_named.builtin_owner == private_named.builtin_owner;
-                if (!same_identity and MonoType.iteratorRelation(public_named, private_named) == .ordinary) {
-                    Common.invariant("generated-private evidence relation received different named types");
-                }
-                if (same_identity) {
-                    if (public_named.args.count() != private_named.args.count()) {
-                        Common.invariant("generated-private evidence relation received named types with different arity");
-                    }
-                    for (0..public_named.args.count()) |index| {
-                        try self.relateGeneratedPrivateEvidence(
-                            self.program.types.spanItem(public_named.args, index),
-                            self.program.types.spanItem(private_named.args, index),
-                        );
-                    }
-                    if (public_named.backing) |public_backing| {
-                        const private_backing = private_named.backing orelse
-                            Common.invariant("generated-private evidence relation received different named backing presence");
-                        if (public_backing.use != private_backing.use) {
-                            Common.invariant("generated-private evidence relation received different named backing uses");
-                        }
-                        try self.relateGeneratedPrivateEvidence(public_backing.ty, private_backing.ty);
-                    } else if (private_named.backing != null) {
-                        Common.invariant("generated-private evidence relation received different named backing presence");
-                    }
-                } else {
-                    if (public_named.args.count() == 0 or private_named.args.count() == 0) {
-                        Common.invariant("generated-private iterator evidence lacked a public item argument");
-                    }
-                    try self.relateGeneratedPrivateEvidence(
-                        self.program.types.spanItem(public_named.args, 0),
-                        self.program.types.spanItem(private_named.args, 0),
-                    );
-                }
-            },
-        }
-    }
-
     fn unifyIteratorOwnerStampedPublic(
         self: *Solver,
         left_ty: Type.TypeVarId,
@@ -2349,10 +2187,9 @@ const Solver = struct {
         }
 
         try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-        const dynamic = if (left_dynamic) left else right;
         const other = if (left_dynamic) right else left;
         switch (other.def.iterator_representation) {
-            .none => try self.relateForcedDynamicPublicEvidence(dynamic, other),
+            .none => Common.invariant("checked-public iterator reached Lambda Solved beside a forced-dynamic iterator"),
             .minted => try self.unifyGeneratedIteratorBackings(left, right),
             .forced_dynamic => Common.invariant("forced-dynamic iterator relation received two dynamic representations"),
         }
@@ -2362,19 +2199,6 @@ const Solver = struct {
             self.program.types.set(left_ty, .{ .link = right_ty });
         }
         return true;
-    }
-
-    fn relateForcedDynamicPublicEvidence(self: *Solver, dynamic: anytype, public: anytype) Allocator.Error!void {
-        const public_backing = public.backing orelse return;
-        const dynamic_backing = dynamic.backing orelse
-            Common.invariant("forced-dynamic iterator relation found dynamic backing on only one side");
-        if (public_backing.use != dynamic_backing.use) {
-            Common.invariant("forced-dynamic iterator relation found different backing uses");
-        }
-        if (public_backing.authority != .checked_public or dynamic_backing.authority != .generated_private) {
-            Common.invariant("forced-dynamic iterator evidence relation received incorrect backing authority");
-        }
-        try self.relateGeneratedPrivateEvidence(public_backing.ty, dynamic_backing.ty);
     }
 
     fn unifyGeneratedIteratorJoin(
@@ -2406,40 +2230,6 @@ const Solver = struct {
         }
 
         if (isIteratorLikeOwner(left.builtin_owner)) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
-        return true;
-    }
-
-    fn unifyPublicGeneratedIterator(
-        self: *Solver,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .public_minted) return false;
-
-        if (left.args.count() == 0 or right.args.count() == 0) {
-            Common.invariant("generated iterator evidence reached Lambda Solved without a public item argument");
-        }
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-
-        const left_minted = left.def.iterator_representation == .minted;
-        const generated = if (left_minted) left else right;
-        const public = if (left_minted) right else left;
-        if (public.backing) |public_backing| {
-            const generated_backing = generated.backing orelse
-                Common.invariant("generated iterator evidence had no private backing");
-            if (generated_backing.authority != .generated_private) {
-                Common.invariant("generated iterator evidence backing lacked private authority");
-            }
-            try self.relateGeneratedPrivateEvidence(public_backing.ty, generated_backing.ty);
-        }
-
-        if (left_minted) {
             self.program.types.set(right_ty, .{ .link = left_ty });
         } else {
             self.program.types.set(left_ty, .{ .link = right_ty });

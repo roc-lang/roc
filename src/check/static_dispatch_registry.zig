@@ -291,6 +291,7 @@ fn procedureRuntimeTargetForDef(
     module: TypedCIR.Module,
     def_idx: CIR.Def.Idx,
     method_owner: MethodOwner,
+    method_requires_exact_graph: bool,
 ) ProcedureRuntimeTarget {
     if (intrinsicForProcedureDef(module, def_idx)) |intrinsic| {
         if (intrinsic.callsiteArity() != null) return .{ .intrinsic = intrinsic };
@@ -301,6 +302,7 @@ fn procedureRuntimeTargetForDef(
     if (std.meta.activeTag(method_owner) == .builtin and isIteratorOwner(method_owner.builtin)) {
         return .{ .graph_participating = .{} };
     }
+    if (method_requires_exact_graph) return .{ .graph_participating = .{} };
     if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| return .{ .low_level = op };
     return .procedure;
 }
@@ -417,6 +419,7 @@ pub const MethodRegistry = struct {
                 unreachable;
             };
             const def_idx = entry.value.def_idx;
+            const method_requires_exact_graph = entry.key.methodIdent().eql(module_env.idents.from_interpolation);
             const method_owner = try methodOwnerForRegistryEntry(
                 module,
                 names,
@@ -442,7 +445,7 @@ pub const MethodRegistry = struct {
                         break :blk .{ .procedure = .{
                             .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
                             .template = template,
-                            .runtime_target = procedureRuntimeTargetForDef(module, def_idx, method_owner),
+                            .runtime_target = procedureRuntimeTargetForDef(module, def_idx, method_owner, method_requires_exact_graph),
                         } };
                     },
                 }
@@ -454,6 +457,7 @@ pub const MethodRegistry = struct {
                 checked_bodies,
                 entry.value,
                 method_owner,
+                method_requires_exact_graph,
             )) |referenced| blk: {
                 referenced_callable_var = referenced.callable_var;
                 break :blk referenced.kind;
@@ -622,6 +626,7 @@ fn referencedProcedureTargetForMethodBinding(
     checked_bodies: anytype,
     binding: ModuleEnv.MethodBinding,
     method_owner: MethodOwner,
+    method_requires_exact_graph: bool,
 ) ?ReferencedProcedureTarget {
     const module_env = module.moduleEnvConst();
     var expr_idx = methodBindingExpr(module, binding) orelse return null;
@@ -639,7 +644,7 @@ fn referencedProcedureTargetForMethodBinding(
                         .callable => .{ .procedure = .{
                             .proc = .{ .artifact = template_entry.template.artifact, .proc_base = template_entry.template.proc_base },
                             .template = template_entry.template,
-                            .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner),
+                            .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner, method_requires_exact_graph),
                         } },
                         .structural => |kind| .{ .structural = kind },
                     },
