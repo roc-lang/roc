@@ -408,7 +408,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn relateFormalToOperand(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
-    try expectContains(dispatch_instantiation, "try applyProducedTypeToRequest(self.graph, fn_graph.args[index], dispatcher_node)");
+    try expectContains(dispatch_instantiation, "self.graph.applyCheckedTypeMapping(fn_graph.args[index], dispatcher_node)");
 
     const entry_wrapper = sourceSliceBetween(
         lower_source,
@@ -483,13 +483,14 @@ test "Monotype expanded record-rest statements retain graph provenance" {
         "fn appendExpandedPatternStatement(",
         "fn checkedStatementHasRuntimeEffect(",
     );
-    try expectContains(record_rest, "const value_node = try self.lowerExprTypeNode(expr)");
+    try expectContains(record_rest, "const value_request_node = try self.lowerExprTypeNode(expr)");
+    try expectContains(record_rest, "const value_cell = self.exprTypeCell(value)");
+    try expectContains(record_rest, "const value_node = try value_cell.toGraphNode(self.graph)");
     try expectContains(record_rest, "addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null)");
     try expectContains(record_rest, "self.graph.recordFieldNode(value_node, name)");
     try expectContains(record_rest, "self.lowerPatternAtNode(child, field_node)");
     try expectContains(record_rest, "lowerRecordRestValueWithTypeCell");
     try expectContains(record_rest, "self.lowerPatternAtNode(child, rest_node)");
-    try expectNotContains(record_rest, "exprType(value)");
     try expectNotContains(record_rest, "activeTypeFromNode(rest_node)");
     try expectNotContains(record_rest, "lowerPatternAtType(");
 }
@@ -658,9 +659,12 @@ test "Monotype indirect calls retain graph-native function provenance" {
     try expectContains(call_source, "instantiateCallNodeFromCallerAtNode");
     try expectContains(call_source, "const fn_nodes = try self.graph.functionNodes(fn_node)");
     try expectContains(call_source, "try self.prepareExprSpanAtNodes(call.args, fn_nodes.args)");
-    try expectContains(call_source, ".callee = try self.lowerExprAtTypeCell(call.func, DraftTypeCell.fromGraphNode(fn_node))");
-    try expectContains(call_source, ".args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args)");
-    try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret)");
+    try expectContains(call_source, "const callee = try self.lowerExprAtTypeCell(");
+    try expectContains(call_source, "const produced_callee = try self.graph.functionNodes(callee_node)");
+    try expectContains(call_source, "try self.prepareExprSpanAtNodes(call.args, produced_callee.args)");
+    try expectContains(call_source, ".args = try self.lowerPreparedExprSpanAtNodes(call.args, produced_callee.args)");
+    try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(produced_callee.ret)");
+    try expectNotContains(call_source, "completed_callee_node");
     try expectNotContains(lower_source, "instantiateCallTypeFromCallerAtType");
 
     const direct_prepare = std.mem.find(u8, call_source, "try self.prepareExprSpanAtNodes(call.args, fn_nodes.args)").?;
@@ -706,8 +710,9 @@ test "Monotype match lowering relates patterns before specialization and project
         "fn lowerMatch(",
         "fn savePatternBinders(",
     );
-    try expectContains(match_source, "const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node)");
-    try expectContains(match_source, "try self.graph.applyProducedTypeToRequest(");
+    try expectContains(match_source, "const scrutinee = try self.lowerExpr(match.cond)");
+    try expectContains(match_source, "const scrutinee_node = try self.exprTypeCell(scrutinee).toGraphNode(self.graph)");
+    try expectContains(match_source, "try self.graph.applyCheckedTypeMapping(");
     try expectContains(match_source, "try entry.ctx.preRegisterPatternBindersAtNode");
     try expectContains(match_source, "entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame");
     try expectContains(match_source, "try entry.ctx.lowerMatchBranchBody");
@@ -716,7 +721,7 @@ test "Monotype match lowering relates patterns before specialization and project
     try expectNotContains(match_source, "lowerPatternAtType(entry.pattern.pattern");
     try expectNotContains(lower_source, "rebindPreRegisteredPatternBindersAtNode");
 
-    const relate = std.mem.find(u8, match_source, "try self.graph.applyProducedTypeToRequest(").?;
+    const relate = std.mem.find(u8, match_source, "try self.graph.applyCheckedTypeMapping(").?;
     const prepare_binders = std.mem.find(u8, match_source, "try entry.ctx.preRegisterPatternBindersAtNode").?;
     const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
     const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchBranchBody").?;
@@ -1125,7 +1130,7 @@ test "Monotype materialized list patterns retain graph element provenance" {
     try expectContains(materialized, "self.applyPendingMaterializedPatterns(");
     try expectContains(materialized, "sequence_index == rest_index");
     try expectContains(materialized, "self.preRegisterPatternBindersAtNode(pattern_id, value_node)");
-    try expectContains(materialized, "self.relateRecordRestNodeToSource(value_node, rest_node)");
+    try expectNotContains(materialized, "relateRecordRestNodeToSource");
     try expectContains(materialized, "fn recordRestNodeForPattern(");
     try expectNotContains(materialized, "activeTypeFromCell");
     try expectNotContains(materialized, "activeTypeFromNode");

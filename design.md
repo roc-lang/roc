@@ -2596,6 +2596,10 @@ The digest is computed after the complete input graph is known and before the
 durable Monotype leaves its owning graph. Equal inputs therefore produce the
 same nominal identity; distinct inputs do not require a later representation
 merge merely because checking gave them the same public `Iter` type.
+When an input contains another generated representation, the input digest uses
+that representation's stable digest as an opaque, fixed-size identity. One
+graph-local dense memo computes each generated digest once; an outer producer
+must not recursively rehash the nested producer's implementation history.
 
 Every representation producer consumes its current exact operand cells. An
 expected result type is a destination request, never a source from which the
@@ -2668,6 +2672,14 @@ specialization is a distinct checked-mapping operation. Checking can record a
 named public view on one side and the definition-private structural view of the
 same declaration on the other; the checked mapping follows that explicitly
 recorded nominal backing and preserves the exact specialization as authority.
+Explicit nominal-constructor syntax is itself checker-authored producer
+evidence: it returns the definition-private nominal view with an inspectable
+backing, while the checked public opaque view remains unchanged. The backing
+expression is lowered at that private cell and the completed private nominal is
+the constructor's exact result. If equivalent nominal views form a redundant
+wrapper chain, Monotype compresses the wrapper to the structural backing before
+selecting a common root; a named root and its backing must always remain
+distinct graph nodes.
 An exact value producer has no such permission: if a nominal result was
 requested, the producer must return the nominal wrapper. Treating a structural
 produced value as that nominal would hide a lowering bug. Neither operation

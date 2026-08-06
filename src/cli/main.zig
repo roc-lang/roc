@@ -15079,7 +15079,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [18]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15100,6 +15100,8 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [18]
         .{ .name = "Produced-type cycle/repeat hits", .count = graph.produced_type_cycle_hits },
         .{ .name = "Produced-type pairs visited", .count = graph.produced_type_pairs_visited },
         .{ .name = "Produced-type joins", .count = graph.produced_type_joins },
+        .{ .name = "Generated identity nodes hashed", .count = graph.generated_identity_nodes_hashed },
+        .{ .name = "Generated identity cache hits", .count = graph.generated_identity_cache_hits },
     };
 }
 

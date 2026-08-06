@@ -208,6 +208,8 @@ pub const GraphDiagnostics = struct {
     produced_type_cycle_hits: u64 = 0,
     produced_type_pairs_visited: u64 = 0,
     produced_type_joins: u64 = 0,
+    generated_identity_nodes_hashed: u64 = 0,
+    generated_identity_cache_hits: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -1135,22 +1137,24 @@ pub const InstGraph = struct {
         };
     }
 
-    fn generatedIteratorIdentityInputDigest(self: *InstGraph, node: NodeId) Allocator.Error!names.TypeDigest {
-        var writer = OpenFunctionInterfaceShapeWriter.initGeneratedIdentity(self);
+    fn generatedIteratorIdentityInputDigest(
+        self: *InstGraph,
+        finalizer: *GeneratedIteratorIdentityFinalizer,
+        node: NodeId,
+    ) Allocator.Error!names.TypeDigest {
+        var writer = OpenFunctionInterfaceShapeWriter.initGeneratedIdentity(self, finalizer);
         defer writer.deinit();
-        writer.writeBytes("roc.monotype.generated_iterator.identity_input.v1");
+        writer.writeBytes("roc.monotype.generated_iterator.identity_input.v2");
         try writer.writeNode(node);
         return .{ .bytes = writer.hasher.finalResult() };
     }
 
     /// Seal producer identities for graph-owned iterator representations only
     /// after all type relations and representation decisions have been
-    /// applied. The input writer follows graph-local generated provenance, so
-    /// an adapter identity includes the complete identities of generated
-    /// adapters nested in its item and component types even though those
-    /// implementation inputs are not durable nominal arguments. All digests
-    /// are computed before any node is stamped, so dependency order cannot
-    /// affect identity.
+    /// applied. Nested generated iterators contribute their memoized stable
+    /// identity instead of recursively expanding their implementation graph.
+    /// All digests are computed before any node is stamped, so dependency order
+    /// cannot affect identity.
     pub fn finalizeGeneratedIteratorIdentities(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
         const Pending = struct { node: NodeId, digest: names.TypeDigest };
@@ -1158,6 +1162,8 @@ pub const InstGraph = struct {
         defer pending.deinit(self.allocator);
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
+        var finalizer = GeneratedIteratorIdentityFinalizer.init(self);
+        defer finalizer.deinit();
 
         for (self.nodes.items, 0..) |_, raw_index| {
             const node = self.find(@enumFromInt(@as(u32, @intCast(raw_index))));
@@ -1167,39 +1173,10 @@ pub const InstGraph = struct {
                 .named => |named| named,
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
             };
-            const provenance = named.generated_iterator orelse continue;
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-            if (named.def.iterator_representation == .forced_dynamic) {
-                if (named.args.len != 1) {
-                    Common.invariant("forced-dynamic iterator identity did not have exactly one item argument");
-                }
-                const item_digest = try self.generatedIteratorIdentityInputDigest(named.args[0]);
-                hasher.update("roc.generated_iterator.forced_dynamic_identity");
-                hasher.update(&item_digest.bytes);
-            } else {
-                if (named.args.len != 1) {
-                    Common.invariant("minted iterator identity did not have exactly one item argument");
-                }
-                hasher.update("roc.generated_iterator.producer_identity.v2");
-                updateGeneratedIteratorInternU32(&hasher, @intFromEnum(provenance.public_source.def.module));
-                updateGeneratedIteratorInternU32(&hasher, @intFromEnum(provenance.public_source.def.type_name));
-                updateGeneratedIteratorInternU32(&hasher, provenance.public_source.def.source_decl orelse std.math.maxInt(u32));
-                hasher.update(&.{@intFromEnum(named.def.iterator_kind)});
-                const item_digest = try self.generatedIteratorIdentityInputDigest(named.args[0]);
-                hasher.update(&item_digest.bytes);
-                updateGeneratedIteratorInternU32(&hasher, @intCast(provenance.components.len));
-                for (provenance.components) |component| {
-                    const component_digest = try self.generatedIteratorIdentityInputDigest(component);
-                    hasher.update(&component_digest.bytes);
-                }
-                if (provenance.callable_evidence) |evidence| {
-                    hasher.update("callable_evidence");
-                    hasher.update(&evidence.bytes);
-                }
-            }
+            if (named.generated_iterator == null) continue;
             try pending.append(self.allocator, .{
                 .node = node,
-                .digest = .{ .bytes = hasher.finalResult() },
+                .digest = try finalizer.digestFor(node),
             });
         }
         for (pending.items) |item| {
@@ -1924,7 +1901,11 @@ pub const InstGraph = struct {
                 // A checked type variable is a substitution slot. Bind it to
                 // the exact produced type while keeping the produced node as
                 // the class authority.
-                try self.union_(private_node, public_node);
+                if (private_content == .named) {
+                    try self.selectNamedOverUnresolved(private_node, public_node);
+                } else {
+                    try self.union_(private_node, public_node);
+                }
                 return;
             },
             .primitive => |public_primitive| {
@@ -2242,7 +2223,7 @@ pub const InstGraph = struct {
         if (public_var.numeric_default_phase != null or public_var.row_default != null) {
             Common.invariant("imported generated iterator relation received a defaultable public variable");
         }
-        try self.union_(private_node, public_node);
+        try self.selectNamedOverUnresolved(private_node, public_node);
         return true;
     }
 
@@ -2591,6 +2572,39 @@ pub const InstGraph = struct {
         self.invalidateActiveSnapshots(winner);
     }
 
+    /// Select a named exact type over an unresolved request cell without ever
+    /// making the named node its own backing. A checked variable can also be
+    /// the declaration-instantiated backing slot of the named node; preserve
+    /// that distinct structural role before redirecting the request root.
+    fn selectNamedOverUnresolved(
+        self: *InstGraph,
+        raw_named: NodeId,
+        raw_unresolved: NodeId,
+    ) Allocator.Error!void {
+        const named_node = self.find(raw_named);
+        const unresolved_node = self.find(raw_unresolved);
+        if (named_node == unresolved_node) return;
+        const named_content = self.nodes.items[@intFromEnum(named_node)];
+        if (named_content != .named) Common.invariant("named selection received a non-named exact node");
+        if (self.nodes.items[@intFromEnum(unresolved_node)] != .unresolved) {
+            Common.invariant("named selection received a resolved request node");
+        }
+        const named = named_content.named;
+        if (named.backing) |backing| {
+            if (self.find(backing.node) == unresolved_node) {
+                const moved = try self.newNode(self.nodes.items[@intFromEnum(unresolved_node)]);
+                var rewired = named;
+                rewired.backing = .{
+                    .node = moved,
+                    .use = backing.use,
+                    .authority = backing.authority,
+                };
+                try self.setContent(named_node, .{ .named = rewired });
+            }
+        }
+        try self.union_(named_node, unresolved_node);
+    }
+
     /// Replace a root's content with an observationally equivalent compressed
     /// form without invalidating immutable Type-shaped snapshots. Returns
     /// whether the stored graph content changed.
@@ -2671,12 +2685,16 @@ pub const InstGraph = struct {
                 try self.union_(right, left);
             } else if (right_content == .named and right_content.named.kind == .alias) {
                 try self.unifyThroughBacking(right, right_content, left, pending);
+            } else if (right_content == .named) {
+                try self.selectNamedOverUnresolved(right, left);
             } else {
                 try self.union_(right, left);
             }
         } else if (right_content == .unresolved) {
             if (left_content == .named and left_content.named.kind == .alias) {
                 try self.unifyThroughBacking(left, left_content, right, pending);
+            } else if (left_content == .named) {
+                try self.selectNamedOverUnresolved(left, right);
             } else {
                 try self.union_(left, right);
             }
@@ -2942,7 +2960,26 @@ pub const InstGraph = struct {
                         if (left_named.backing) |left_backing| {
                             if (right_named.backing) |right_backing| {
                                 if (left_backing.authority == right_backing.authority) {
-                                    try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
+                                    const left_wraps_right = self.find(left_backing.node) == right;
+                                    const right_wraps_left = self.find(right_backing.node) == left;
+                                    if (left_wraps_right and right_wraps_left) {
+                                        Common.invariant("equivalent named nodes formed a two-node backing cycle");
+                                    }
+                                    if (left_wraps_right) {
+                                        // The left node is an extra view of the
+                                        // same nominal around the right node.
+                                        // Compress that wrapper before the
+                                        // right root redirects into the left.
+                                        var compressed = left_named;
+                                        compressed.backing = .{
+                                            .node = right_backing.node,
+                                            .use = left_backing.use,
+                                            .authority = left_backing.authority,
+                                        };
+                                        try self.setContent(left, .{ .named = compressed });
+                                    } else if (!right_wraps_left) {
+                                        try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
+                                    }
                                 } else {
                                     const private_is_left = left_backing.authority == .generated_private;
                                     const private_is_right = right_backing.authority == .generated_private;
@@ -4136,6 +4173,83 @@ fn updateGeneratedIteratorInternU32(hasher: *std.crypto.hash.sha2.Sha256, value:
     hasher.update(std.mem.asBytes(&little));
 }
 
+/// Computes each graph-owned generated iterator identity once. A generated
+/// iterator nested in another identity input is represented by this digest,
+/// so later producers do not re-walk the nested producer's complete graph.
+const GeneratedIteratorIdentityFinalizer = struct {
+    graph: *InstGraph,
+    digests: collections.DenseMap(NodeId, names.TypeDigest),
+    active: collections.DenseMap(NodeId, void),
+
+    fn init(graph: *InstGraph) GeneratedIteratorIdentityFinalizer {
+        return .{
+            .graph = graph,
+            .digests = collections.DenseMap(NodeId, names.TypeDigest).init(graph.allocator),
+            .active = collections.DenseMap(NodeId, void).init(graph.allocator),
+        };
+    }
+
+    fn deinit(self: *GeneratedIteratorIdentityFinalizer) void {
+        self.active.deinit();
+        self.digests.deinit();
+    }
+
+    fn digestFor(
+        self: *GeneratedIteratorIdentityFinalizer,
+        raw_node: NodeId,
+    ) Allocator.Error!names.TypeDigest {
+        const node = self.graph.find(raw_node);
+        if (self.digests.get(node)) |digest| {
+            self.graph.countDiagnostic("generated_identity_cache_hits");
+            return digest;
+        }
+        if (self.active.contains(node)) {
+            Common.invariant("generated iterator durable identity contained a recursive producer dependency");
+        }
+        try self.active.put(node, {});
+        defer _ = self.active.remove(node);
+
+        const named = switch (self.graph.content(node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator identity target was not named"),
+        };
+        const provenance = named.generated_iterator orelse
+            Common.invariant("graph-owned generated iterator identity lacked producer provenance");
+        if (named.args.len != 1) {
+            Common.invariant("generated iterator identity did not have exactly one item argument");
+        }
+
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        const item_digest = try self.graph.generatedIteratorIdentityInputDigest(self, named.args[0]);
+        if (named.def.iterator_representation == .forced_dynamic) {
+            if (provenance.components.len != 0 or provenance.callable_evidence != null) {
+                Common.invariant("forced-dynamic iterator retained minted producer identity inputs");
+            }
+            hasher.update("roc.generated_iterator.forced_dynamic_identity.v2");
+            hasher.update(&item_digest.bytes);
+        } else {
+            hasher.update("roc.generated_iterator.producer_identity.v3");
+            updateGeneratedIteratorInternU32(&hasher, @intFromEnum(provenance.public_source.def.module));
+            updateGeneratedIteratorInternU32(&hasher, @intFromEnum(provenance.public_source.def.type_name));
+            updateGeneratedIteratorInternU32(&hasher, provenance.public_source.def.source_decl orelse std.math.maxInt(u32));
+            hasher.update(&.{@intFromEnum(named.def.iterator_kind)});
+            hasher.update(&item_digest.bytes);
+            updateGeneratedIteratorInternU32(&hasher, @intCast(provenance.components.len));
+            for (provenance.components) |component| {
+                const component_digest = try self.graph.generatedIteratorIdentityInputDigest(self, component);
+                hasher.update(&component_digest.bytes);
+            }
+            if (provenance.callable_evidence) |evidence| {
+                hasher.update("callable_evidence");
+                hasher.update(&evidence.bytes);
+            }
+        }
+        const digest: names.TypeDigest = .{ .bytes = hasher.finalResult() };
+        try self.digests.put(node, digest);
+        return digest;
+    }
+};
+
 const OpenFunctionInterfaceShapeWriter = struct {
     const Mode = enum {
         open_interface,
@@ -4147,6 +4261,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
     unresolved_ids: collections.DenseMap(NodeId, u32),
     visiting: std.ArrayList(NodeId),
     mode: Mode,
+    generated_identity_finalizer: ?*GeneratedIteratorIdentityFinalizer = null,
     next_unresolved: u32 = 0,
     output: ?[]u8 = null,
     output_len: usize = 0,
@@ -4161,9 +4276,13 @@ const OpenFunctionInterfaceShapeWriter = struct {
         };
     }
 
-    fn initGeneratedIdentity(graph: *InstGraph) OpenFunctionInterfaceShapeWriter {
+    fn initGeneratedIdentity(
+        graph: *InstGraph,
+        finalizer: *GeneratedIteratorIdentityFinalizer,
+    ) OpenFunctionInterfaceShapeWriter {
         var writer = init(graph);
         writer.mode = .generated_identity;
+        writer.generated_identity_finalizer = finalizer;
         return writer;
     }
 
@@ -4198,6 +4317,28 @@ const OpenFunctionInterfaceShapeWriter = struct {
     fn writeNode(self: *OpenFunctionInterfaceShapeWriter, raw_node: NodeId) Allocator.Error!void {
         const node = self.graph.find(raw_node);
         const content = self.graph.nodes.items[@intFromEnum(node)];
+        if (self.mode == .generated_identity) {
+            self.graph.countDiagnostic("generated_identity_nodes_hashed");
+            if (content == .named) {
+                const named = content.named;
+                const generated_digest = if (named.generated_iterator != null)
+                    try (self.generated_identity_finalizer orelse
+                        Common.invariant("generated identity writer lacked its finalizer")).digestFor(node)
+                else if (named.def.generated) |digest|
+                    if (named.def.iterator_representation != .none and
+                        (named.builtin_owner != null and static_dispatch.isIteratorOwner(named.builtin_owner.?)))
+                        digest
+                    else
+                        null
+                else
+                    null;
+                if (generated_digest) |digest| {
+                    self.writeBytes("generated_iterator_identity");
+                    self.writeBytes(&digest.bytes);
+                    return;
+                }
+            }
+        }
         if (self.mode == .open_interface) {
             self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
             self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
@@ -5307,6 +5448,79 @@ test "nominal unification with its own backing preserves a distinct backing node
     try std.testing.expect(!graph.finalizesAsClosedEmptyTagUnion(nominal));
 }
 
+test "nominal selection over its unresolved backing preserves a distinct backing node" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const backing = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const nominal = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(3) },
+        .def = .{ .module = try name_store.internModuleIdentity(&([_]u8{0xAD} ** 32)), .type_name = @enumFromInt(3) },
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = backing, .use = .inspectable },
+    } });
+
+    try graph.unify(nominal, backing);
+    try std.testing.expect(graph.sameClass(nominal, backing));
+
+    const retained_backing = graph.content(nominal).named.backing orelse return error.TestExpectedEqual;
+    try std.testing.expect(!graph.sameClass(nominal, retained_backing.node));
+    try std.testing.expectEqual(
+        InstVariableOrigin.checked_variable,
+        graph.content(retained_backing.node).unresolved.origin,
+    );
+}
+
+test "equivalent nominal wrapper unification preserves the structural backing" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAE} ** 32));
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = @enumFromInt(4) };
+    const structural = try graph.newNode(.{ .primitive = .u64 });
+    const inner = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(4) },
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = structural, .use = .inspectable },
+    } });
+    const outer = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(4) },
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = inner, .use = .inspectable },
+    } });
+
+    try graph.unify(outer, inner);
+    try std.testing.expect(graph.sameClass(outer, inner));
+
+    const retained_backing = graph.content(outer).named.backing orelse return error.TestExpectedEqual;
+    try std.testing.expect(!graph.sameClass(outer, retained_backing.node));
+    try std.testing.expectEqual(structural, graph.find(retained_backing.node));
+}
+
 test "checked type mapping crosses a nominal view without changing exact root authority" {
     const gpa = std.testing.allocator;
 
@@ -6219,6 +6433,70 @@ test "generated iterator identity includes nested graph-local producer evidence"
     try std.testing.expect(optionalInstDigestEql(outer_a_named.def.generated, outer_equivalent_named.def.generated));
     try std.testing.expectEqual(@as(usize, 1), outer_a_named.args.len);
     try std.testing.expectEqual(@as(usize, 1), outer_b_named.args.len);
+}
+
+test "generated iterator identity hashes a nested producer chain linearly" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x67} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(15) };
+    const public_def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const public_source: InstIteratorPublicSource = .{
+        .named_type = named_type,
+        .def = public_def,
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+        },
+        .declared_order = &.{},
+    };
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    var previous = try graph.newNode(.{ .list = item });
+    const chain_len = 12;
+    var chain: [chain_len]NodeId = undefined;
+    for (&chain) |*slot| {
+        var def = public_def;
+        def.iterator_kind = .map;
+        slot.* = try graph.newNode(.{ .named = .{
+            .named_type = named_type,
+            .def = def,
+            .kind = .@"opaque",
+            .builtin_owner = .iter,
+            .args = try graph.arena().dupe(NodeId, &.{item}),
+            .backing = .{
+                .node = try graph.newNode(.empty_record),
+                .use = .runtime_layout_only,
+                .authority = .generated_private,
+            },
+            .generated_iterator = .{
+                .callable_evidence = null,
+                .components = try graph.arena().dupe(NodeId, &.{previous}),
+                .public_source = public_source,
+            },
+        } });
+        try graph.registerGeneratedIterator(slot.*);
+        previous = slot.*;
+    }
+
+    try graph.finalizeGeneratedIteratorRepresentations();
+    try graph.finalizeGeneratedIteratorIdentities();
+
+    for (chain) |node| try std.testing.expect(graph.content(node).named.def.generated != null);
+    try std.testing.expect(diagnostics.generated_identity_nodes_hashed <= chain_len * 3);
+    try std.testing.expect(diagnostics.generated_identity_cache_hits >= chain_len - 1);
 }
 
 test "generated iterator depth visits wide graphs without a size cutoff" {
