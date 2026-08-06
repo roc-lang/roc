@@ -512,6 +512,7 @@ const Pass = struct {
             .str_match => |s| self.noteUse(s.source),
             .str_match_set => |s| self.noteUse(s.source),
             .ret => |s| self.noteUse(s.value),
+            .crash => |s| if (s.msg.localId()) |message| self.noteUse(message),
             .incref => |s| self.noteUse(s.value),
             .decref => |s| self.noteUse(s.value),
             .decref_if_initialized => |s| {
@@ -524,7 +525,6 @@ const Pass = struct {
             .comptime_branch_taken,
             .join,
             .jump,
-            .crash,
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .loop_continue,

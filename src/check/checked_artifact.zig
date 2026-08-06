@@ -11924,7 +11924,8 @@ fn checkedExprDataDiverges(
         .tuple_access => |access| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, access.tuple, expr_states, statement_states, mode),
         .for_ => |for_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states, mode),
         .hosted_lambda => false,
-        .run_low_level => |run| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, run.args, expr_states, statement_states, mode),
+        .run_low_level => |run| run.op == .crash or
+            checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, run.args, expr_states, statement_states, mode),
         .dispatch_call,
         .method_eq,
         .type_dispatch_call,

@@ -109,7 +109,10 @@ main = {
 	(d-let
 		(p-assign (ident "main"))
 		(e-block
-			(e-crash (msg "todo")))
+			(e-run-low-level (op "crash")
+				(args
+					(e-string
+						(e-literal (string "todo"))))))
 		(annotation
 			(ty-record
 				(field (field "init")

@@ -2546,7 +2546,10 @@ pub const MonoLlvmCodeGen = struct {
             .join => |join_stmt| try self.emitJoin(join_stmt, wa, work),
             .jump => |jump_stmt| try self.emitJump(jump_stmt),
             .ret => |ret_stmt| try self.emitReturn(ret_stmt.value),
-            .crash => |crash_stmt| try self.emitCrashBytes(self.store.getString(crash_stmt.msg)),
+            .crash => |crash_stmt| switch (crash_stmt.msg) {
+                .literal => |literal| try self.emitCrashBytes(self.store.getString(literal)),
+                .local => |local| try self.emitCrashLocal(local),
+            },
             .expect_err => |expect_err_stmt| {
                 try self.materializeLocalIfDeferred(expect_err_stmt.message);
                 const wip = self.wip orelse return error.CompilationFailed;
@@ -6470,8 +6473,12 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        if (!try self.emitDefaultPlatformCrashWithFrames(msg)) {
+        if (!try self.emitDefaultPlatformCrashWithFrames(
+            try self.staticBytes(msg),
+            builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
+        )) {
             try self.emitStaticRocOpsMessageCall(.crashed, msg);
         }
         // Linux AArch64 eval tests handle crashes by returning to the Zig host.
@@ -6483,11 +6490,33 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    fn emitCrashLocal(self: *MonoLlvmCodeGen, message: LocalId) Error!void {
+        try self.materializeLocalIfDeferred(message);
+        const msg = try self.emitStrMatchSourceShape(self.slot(message).ptr);
+        if (!try self.emitDefaultPlatformCrashWithFrames(msg.bytes, msg.len)) {
+            try self.callBuiltinVoid(
+                builtinSymbol(.crash_str),
+                &.{ try self.ptrType(), try self.ptrType() },
+                &.{ self.slot(message).ptr, self.rocOps() },
+            );
+        }
+        const wip = self.wip orelse return error.CompilationFailed;
+        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
+            _ = wip.retVoid() catch return error.OutOfMemory;
+        } else {
+            _ = wip.@"unreachable"() catch return error.OutOfMemory;
+        }
+    }
+
     /// Call the synthetic default platform's diagnostic-only crash entrypoint
     /// with the exact virtual source-frame chain attached to the current LIR
     /// statement. This is a lossless backend encoding of LIR inline scopes, not
     /// a reconstruction from machine procedures or symbol names.
-    fn emitDefaultPlatformCrashWithFrames(self: *MonoLlvmCodeGen, msg: []const u8) Error!bool {
+    fn emitDefaultPlatformCrashWithFrames(
+        self: *MonoLlvmCodeGen,
+        msg_bytes: LlvmBuilder.Value,
+        msg_len: LlvmBuilder.Value,
+    ) Error!bool {
         if (!self.enable_default_platform_diagnostics) return false;
         const stmt_id = self.current_source_stmt orelse return false;
         var scope_id = self.store.stmtInlineScope(stmt_id);
@@ -6520,8 +6549,8 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ty = builder.fnType(.void, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty }, .normal) catch return error.OutOfMemory;
         const callback = try self.declareExternSymbol(shim_symbols.roc_default_crashed_with_frames, fn_ty);
         _ = wip.call(.normal, .ccc, .none, fn_ty, callback.toValue(builder), &.{
-            try self.staticBytes(msg),
-            builder.intValue(usize_ty, msg.len) catch return error.OutOfMemory,
+            msg_bytes,
+            msg_len,
             frames_var.toValue(builder),
             builder.intValue(usize_ty, frames.items.len) catch return error.OutOfMemory,
         }, "") catch return error.OutOfMemory;

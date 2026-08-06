@@ -802,4 +802,28 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "Text(\"hello\")" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/9856
+        .name = "issue 9856: crash accepts multiline strings on every backend",
+        .source =
+        \\{
+        \\    crash
+        \\        \\This does not
+        \\        \\work.
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9856
+        .name = "issue 9856: crash evaluates interpolation on every backend",
+        .source =
+        \\{
+        \\    n : I64
+        \\    n = 42
+        \\    crash "runtime-built crash message long enough for heap storage: ${n.to_str()}"
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
 };

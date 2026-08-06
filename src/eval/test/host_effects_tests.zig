@@ -85,6 +85,28 @@ pub const tests = [_]TestCase{
         .crashed,
     ),
     exprTest(
+        "issue 9856: crash accepts multiline strings",
+        \\{
+        \\    crash
+        \\        \\This does not
+        \\        \\work.
+        \\}
+    ,
+        &.{crashed("This does not\nwork.")},
+        .crashed,
+    ),
+    exprTest(
+        "issue 9856: crash evaluates string interpolation",
+        \\{
+        \\    n : I64
+        \\    n = 42
+        \\    crash "runtime-built crash message long enough for heap storage: ${n.to_str()}"
+        \\}
+    ,
+        &.{crashed("runtime-built crash message long enough for heap storage: 42")},
+        .crashed,
+    ),
+    exprTest(
         "host effects: crash at end of block in if branch does not fire on untaken path",
         \\{
         \\    f : Dec -> Dec
