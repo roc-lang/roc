@@ -603,6 +603,14 @@ const EvidenceChain = struct {
     vector: []const SpecEvidence = &.{},
     parent: ?*const EvidenceChain = null,
 
+    fn atScope(self: *const EvidenceChain, scope: EvidenceScope) ?EvidenceChain {
+        var chain: ?*const EvidenceChain = self;
+        while (chain) |frame| : (chain = frame.parent) {
+            if (EvidenceScope.eql(frame.scope, scope)) return frame.*;
+        }
+        return null;
+    }
+
     fn at(self: *const EvidenceChain, ref: static_dispatch.EvidenceChainIndex) ?SpecEvidence {
         var chain: *const EvidenceChain = self;
         var depth = ref.depth;
@@ -623,12 +631,12 @@ fn rootEvidence(owner: names.ProcTemplate, vector: []const SpecEvidence) Evidenc
 
 fn enterEvidenceScope(
     builder: *Builder,
-    lexical_parent: EvidenceChain,
+    evidence: EvidenceChain,
     scope_id: checked.DispatchScopeId,
     checked_expr: checked.CheckedExprId,
     vector: []const SpecEvidence,
 ) Allocator.Error!EvidenceChain {
-    const owner = lexical_parent.scope.owner;
+    const owner = evidence.scope.owner;
     const view = builder.moduleForDigest(names.procTemplateModuleDigest(owner));
     const raw_scope = @intFromEnum(scope_id);
     if (raw_scope >= view.templates.dispatch_scopes.len) {
@@ -652,11 +660,12 @@ fn enterEvidenceScope(
         .{ .generalized = parent }
     else
         .root;
-    if (!names.procedureTemplateRefEql(lexical_parent.scope.owner, owner) or
-        !std.meta.eql(lexical_parent.scope.lexical, expected_parent))
-    {
-        Common.invariant("local procedure evidence scope did not receive its checked lexical parent");
-    }
+    // A local use may come from a sibling scope. Its checked declaration
+    // parent, not the use-site head, owns the enclosing evidence depths.
+    const lexical_parent = evidence.atScope(.{
+        .owner = owner,
+        .lexical = expected_parent,
+    }) orelse Common.invariant("local procedure evidence omitted its checked lexical parent");
     const parent = try builder.evidence_arena.allocator().create(EvidenceChain);
     parent.* = lexical_parent;
     return .{
@@ -45285,15 +45294,10 @@ const BodyContext = struct {
             },
         };
 
-        var chain: ?*const EvidenceChain = &self.evidence;
-        while (chain) |frame| : (chain = frame.parent) {
-            if (names.procedureTemplateRefEql(frame.scope.owner, self.owner_template) and
-                std.meta.eql(frame.scope.lexical, wanted))
-            {
-                return frame.*;
-            }
-        }
-        Common.invariant("restored local procedure evidence omitted its checked lexical parent");
+        return self.evidence.atScope(.{
+            .owner = self.owner_template,
+            .lexical = wanted,
+        }) orelse Common.invariant("restored local procedure evidence omitted its checked lexical parent");
     }
 
     fn localProcBinder(self: *BodyContext, pattern_id: checked.CheckedPatternId) checked.PatternBinderId {
