@@ -1,0 +1,3 @@
+package [Sibling] {}
+
+import Sibling
