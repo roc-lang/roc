@@ -952,11 +952,15 @@ fn allocateCaptureTable(allocator: Allocator, count: usize) Allocator.Error![]st
 fn operandValueForSlot(program: *const Ast.Program, existing: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
     const slot_local = program.getLocal(slot.local);
     const source_id = slot_local.checked_capture_id orelse slotCaptureId(program, slot);
+    var value: ?Ast.ExprId = null;
     for (0..existing.len) |index| {
         const operand = GuardedList.at(existing, index);
-        if (operand.id == source_id) return operand.value;
+        if (operand.id == source_id) {
+            if (value != null) Common.invariant("lift-boundary capture operands declared one provisional key more than once");
+            value = operand.value;
+        }
     }
-    return null;
+    return value;
 }
 
 /// Recompute a function reference / direct call's keyed capture operand span so it
@@ -1065,14 +1069,18 @@ fn sortCaptureSlots(program: *const Ast.Program, items: []Ast.TypedLocal) void {
 fn explicitCaptureValueForSlot(program: *const Ast.Program, explicit: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
     const slot_local = program.getLocal(slot.local);
     const slot_id = slot_local.checked_capture_id orelse slotCaptureId(program, slot);
+    var value: ?Ast.ExprId = null;
     for (0..explicit.len) |index| {
         const capture = GuardedList.at(explicit, index);
         const local = program.getLocal(capture.local);
         const capture_id = local.checked_capture_id orelse local.capture_id orelse
             Common.invariant("pre-lift capture operand local had no capture identity");
-        if (capture_id == slot_id) return capture.value;
+        if (capture_id == slot_id) {
+            if (value != null) Common.invariant("pre-lift function captures declared one provisional key more than once");
+            value = capture.value;
+        }
     }
-    return null;
+    return value;
 }
 
 /// Whether an explicit pre-lift capture operand supplies the target slot.
