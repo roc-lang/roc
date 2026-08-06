@@ -288,6 +288,10 @@ pub const ProcedureMethodTarget = struct {
     /// `MethodTarget.def_idx` when an associated method is bound by reference.
     source_def_idx: CIR.Def.Idx,
     runtime_target: ProcedureRuntimeTarget = .procedure,
+    /// Evaluating this target can mint a new exact Monotype result.
+    produces_exact_graph: bool = false,
+    /// Whether exact result production depends on this target's evidence.
+    exact_graph_from_evidence: bool = false,
 };
 
 fn procedureRuntimeTargetForDef(
@@ -453,6 +457,10 @@ pub const MethodRegistry = struct {
                             .template = template,
                             .source_def_idx = def_idx,
                             .runtime_target = procedureRuntimeTargetForDef(module, def_idx, method_owner, method_requires_exact_graph),
+                            .produces_exact_graph = if (iteratorProcedureForDef(module, def_idx)) |procedure|
+                                procedure.producesIteratorValue()
+                            else
+                                false,
                         } };
                     },
                 }
@@ -661,6 +669,10 @@ fn referencedProcedureTargetForMethodBinding(
                             .template = template_entry.template,
                             .source_def_idx = target_def_idx,
                             .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner, method_requires_exact_graph),
+                            .produces_exact_graph = if (iteratorProcedureForDef(module, target_def_idx)) |procedure|
+                                procedure.producesIteratorValue()
+                            else
+                                false,
                         } },
                         .structural => |kind| .{ .structural = kind },
                     },

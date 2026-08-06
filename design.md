@@ -2632,6 +2632,34 @@ substitution. In particular, a compiler-generated interpolation iterator enters
 original checked-public callable argument and ask the callee to reconstruct or
 repair the representation.
 
+Checked procedure data records exact result flow explicitly. The
+`produces_exact_graph` column means that evaluating the procedure can return a
+representation created by its body or return a caller-supplied exact argument,
+including through ordinary record, tuple, tag, list, box, local-binding,
+branch, and return structure. The `exact_graph_from_evidence` column means that
+this can become true only when the specialization's checked dispatch evidence
+selects such a procedure. These facts follow the returned value's checked data
+flow and procedure-call edges. They do not inspect checked type structure and
+do not ask whether any type contains a generated nominal.
+
+A procedure with exact result flow finishes its body in the requesting
+Monotype graph before that graph is sealed. This is required because the body,
+not the checked public function type, says which exact argument, constructor
+child, branch result, or called procedure supplies the runtime result. A
+procedure without exact result flow remains an independent specialization whose
+body can be deferred, deduplicated, and lowered once outside the caller. A
+procedure is never made caller-owned merely because one of its parameter or
+local types could contain a generated nominal.
+
+When an exact-producing call is itself specialization input, Monotype completes
+that one call before selecting the consumer specialization and uses the
+completed result cell directly. A field read or tuple-item read first obtains
+the receiver expression's exact result cell and then selects the field or item
+from that exact shape. It never selects from the checked-public receiver and
+later tries to relate that field or item to the produced value. This work is
+requested only along the value path being consumed; unrelated expressions and
+unrelated type nodes do no generated-representation work.
+
 Applying one checker-authored function interface to another exact
 specialization is a distinct checked-mapping operation. Checking can record a
 named public view on one side and the definition-private structural view of the

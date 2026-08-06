@@ -3884,6 +3884,39 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Unknown" },
     },
     .{
+        .name = "inspect: ordinary procedure return preserves exact iterator",
+        .source_kind = .module,
+        .source =
+        \\make_iter = |values| values.iter()
+        \\
+        \\main = Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: ordinary procedure preserves nested exact iterator",
+        .source_kind = .module,
+        .source =
+        \\make_iter = |values| {
+        \\    iterator = values.iter()
+        \\    { iterator }
+        \\}
+        \\
+        \\main = Iter.fold(make_iter([1.I64, 2, 3]).iterator, [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: generic procedure passes through exact iterator",
+        .source_kind = .module,
+        .source =
+        \\identity = |value| value
+        \\
+        \\main = Iter.fold(identity([1.I64, 2, 3].iter()), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: Iter.append yields item after iterator",
         .source =
         \\{

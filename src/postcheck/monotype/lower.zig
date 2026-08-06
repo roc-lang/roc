@@ -1122,6 +1122,35 @@ fn specEvidenceContainsStructural(evidence: []const SpecEvidence) bool {
     return false;
 }
 
+fn methodTargetProducesExactGraph(target: static_dispatch.MethodTarget) bool {
+    return switch (target.kind) {
+        .procedure => |procedure| procedure.produces_exact_graph or
+            if (procedure.runtime_target.iteratorProcedure()) |iterator|
+                iterator.producesIteratorValue()
+            else
+                false,
+        .local_proc, .structural => false,
+    };
+}
+
+fn specEvidenceProducesExactGraph(evidence: []const SpecEvidence) bool {
+    for (evidence) |entry| switch (entry) {
+        .target => |target| {
+            if (methodTargetProducesExactGraph(target.target)) return true;
+            const depends_on_nested_evidence = switch (target.target.kind) {
+                .procedure => |procedure| procedure.exact_graph_from_evidence,
+                .local_proc, .structural => false,
+            };
+            if (depends_on_nested_evidence) switch (target.nested) {
+                .resolved => |nested| if (specEvidenceProducesExactGraph(nested)) return true,
+                .synthesize => {},
+            };
+        },
+        .structural, .unreachable_value, .checked_error => {},
+    };
+    return false;
+}
+
 fn optionalTypeDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
     if (left) |left_digest| {
         const right_digest = right orelse return false;
@@ -3359,7 +3388,7 @@ const Builder = struct {
         raw_request_fn_node: NodeId,
         partial_evidence: []const SpecEvidence,
         evidence_mode: DraftRequestEvidenceMode,
-        signature_relation: Ast.SignatureRelation,
+        raw_signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnSlot {
         self.count("template_requests");
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
@@ -3372,6 +3401,10 @@ const Builder = struct {
             partial_evidence
         else
             try self.completeRootTemplateEvidence(view, template_ref, template, partial_evidence);
+        var signature_relation = raw_signature_relation;
+        const evidence_produces_exact_graph = template.exact_graph_from_evidence and
+            specEvidenceProducesExactGraph(evidence);
+        if (evidence_produces_exact_graph) signature_relation = .exact_graph;
         const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
 
         // The globally reserved root is the active ancestor of recursive calls
@@ -3432,6 +3465,9 @@ const Builder = struct {
             null;
         const local_evidence_owner = specEvidenceLocalOwner(source_ctx.draft, evidence);
         const local_context_dependent = local_evidence_owner != null or structural_lexical_dependent;
+        const caller_owned_body = local_context_dependent or
+            template.produces_exact_graph or
+            evidence_produces_exact_graph;
         const lexical_owner = local_evidence_owner orelse if (structural_lexical_dependent)
             source_ctx.draft.current_owner
         else
@@ -3623,7 +3659,7 @@ const Builder = struct {
         if (local_context_dependent and template.target == .hosted) {
             Common.invariant("hosted template specialization depended on a local procedure context");
         }
-        if (local_context_dependent) {
+        if (caller_owned_body) {
             self.countBodyDiagnostic("caller_owned_template_bodies_lowered");
         } else {
             self.countBodyDiagnostic("deferred_template_requests");
@@ -3642,7 +3678,7 @@ const Builder = struct {
         };
         const demand_boundary: u32 = @intCast(source_ctx.draft.runtime_value_demands.items.len);
         try source_ctx.draft.template_specs.append(self.allocator, .{
-            .state = if (local_context_dependent) .lowering else .deferred,
+            .state = if (caller_owned_body) .lowering else .deferred,
             .template_ref = template_ref,
             .method_scope = source_ctx.method_scope.key,
             .source_fn_ty = source_fn_ty,
@@ -3656,6 +3692,7 @@ const Builder = struct {
             .demand_frame_floor = source_ctx.runtime_demand_guard_frames,
             .requires_local = local_context_dependent,
             .local_context_dependent = local_context_dependent,
+            .caller_owned_body = caller_owned_body,
             .lexical_owner = lexical_owner,
             .lexical = lexical,
             .lexical_context_key = lexical_context_key,
@@ -3721,7 +3758,7 @@ const Builder = struct {
         }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
         try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
-        if (!local_context_dependent) {
+        if (!caller_owned_body) {
             return .{ .local = .{ .draft = fn_id } };
         }
         if (template.target == .hosted) {
@@ -6718,7 +6755,7 @@ const Builder = struct {
         for (body_draft.template_specs.items) |spec| {
             switch (spec.state) {
                 .resolved => {},
-                .lowered => if (!spec.local_context_dependent)
+                .lowered => if (!spec.caller_owned_body)
                     Common.invariant("context-free procedure body was lowered into its caller's draft"),
                 .deferred => Common.invariant("deferred template specialization reached commit before resolution"),
                 .lowering => Common.invariant("caller-owned template specialization reached commit before its body lowered"),
@@ -9751,6 +9788,10 @@ const DraftTemplateSpec = struct {
     demand_frame_floor: RuntimeDemandGuardFrameStack = .{},
     requires_local: bool = false,
     local_context_dependent: bool = false,
+    /// The body must finish in the caller's live graph either because it owns
+    /// lexical state or because its checked return flow can mint an exact
+    /// generated representation.
+    caller_owned_body: bool = false,
     lexical_owner: ?DraftOwner = null,
     lexical: ?DraftCodecLexicalContext = null,
     lexical_context_key: ?names.TypeDigest = null,
@@ -18211,6 +18252,30 @@ const BodyContext = struct {
         };
     }
 
+    fn resolvedTargetMayProduceExactGraph(
+        self: *BodyContext,
+        target: checked.ResolvedValueId,
+    ) bool {
+        const raw = @intFromEnum(target);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target is outside resolved value table");
+        }
+        const procedure: checked.ProcedureUseTemplate = switch (self.view.resolved_refs.records[raw].ref) {
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .promoted_top_level_proc,
+            => |proc| proc,
+            .platform_required_proc => |required| required.procedure,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => return false,
+        };
+        if (procedure.produces_exact_graph or procedure.exact_graph_from_evidence) return true;
+        return if (procedure.iterator_procedure) |iterator|
+            iterator.producesIteratorValue()
+        else
+            false;
+    }
+
     fn iteratorProcedureForMethodTarget(
         _: *BodyContext,
         target: static_dispatch.MethodTarget,
@@ -18228,14 +18293,18 @@ const BodyContext = struct {
         if (procedure.iterator_procedure != null and !procedure.graph_participating) {
             Common.invariant("checked iterator procedure use did not preserve graph participation");
         }
-        return if (procedure.graph_participating) .exact_graph else .independent_roots;
+        return if (procedure.graph_participating or procedure.produces_exact_graph)
+            .exact_graph
+        else
+            .independent_roots;
     }
 
     fn procedureRuntimeSignatureRelation(
         _: *BodyContext,
-        target: static_dispatch.ProcedureRuntimeTarget,
+        procedure: static_dispatch.ProcedureMethodTarget,
     ) Ast.SignatureRelation {
-        return switch (target) {
+        if (procedure.produces_exact_graph) return .exact_graph;
+        return switch (procedure.runtime_target) {
             .graph_participating => .exact_graph,
             .procedure, .low_level, .intrinsic => .independent_roots,
         };
@@ -25315,7 +25384,7 @@ const BodyContext = struct {
                     );
                     const fn_nodes = try self.graph.functionNodes(fn_node);
                     if (self.isGeneratedIteratorEvidenceNode(fn_nodes.ret)) return fn_nodes.ret;
-                    if (self.isIteratorInterfaceNode(fn_nodes.ret)) {
+                    if (self.resolvedTargetMayProduceExactGraph(target)) {
                         try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
                         const callee = try self.fnTemplateForDirectCallAtNode(
                             target,
@@ -25334,11 +25403,38 @@ const BodyContext = struct {
             .interpolation => |interpolation| return try self.dispatchResultTypeNode(expr.ty, interpolation.plan, expected_ty),
             .type_dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
             .method_eq => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
-            .field_access => |field| return try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, expected_ty),
+            .field_access => |field| {
+                const receiver_node = (try self.callArgumentEvidenceNode(field.receiver, null)) orelse
+                    try self.lowerExprTypeNode(field.receiver);
+                const name = try self.builder.recordFieldName(self.view, field.field_name);
+                const field_node = switch (field.backing_access) {
+                    .inspectable => try self.graph.recordFieldNode(receiver_node, name),
+                    .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, name),
+                };
+                try self.constrainCheckedInterfaceToCell(expr.ty, DraftTypeCell.fromGraphNode(field_node));
+                if (expected_ty) |expected| {
+                    _ = try self.graph.applyProducedTypeToRequest(try self.graph.importMono(expected), field_node);
+                }
+                return field_node;
+            },
+            .tuple_access => |access| {
+                const tuple_node = (try self.callArgumentEvidenceNode(access.tuple, null)) orelse
+                    try self.lowerExprTypeNode(access.tuple);
+                const items = try self.graph.tupleItemNodes(tuple_node);
+                if (access.elem_index >= items.len) {
+                    Common.invariant("tuple argument evidence index exceeded its exact tuple arity");
+                }
+                const item_node = items[access.elem_index];
+                try self.constrainCheckedInterfaceToCell(expr.ty, DraftTypeCell.fromGraphNode(item_node));
+                if (expected_ty) |expected| {
+                    _ = try self.graph.applyProducedTypeToRequest(try self.graph.importMono(expected), item_node);
+                }
+                return item_node;
+            },
             .lookup_local => |lookup| return try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty),
             .lookup_external => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
             .lookup_required => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (expected_ty) |ty| {
             try self.constrainTypeToMono(expr.ty, ty);
@@ -28994,7 +29090,11 @@ const BodyContext = struct {
             .interpolation => |interpolation| try self.relateDispatchExprAtNode(expr.ty, interpolation.plan, expected_node),
             .type_dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
             .method_eq => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
-            .field_access => |field| try self.relateFieldAccessExprAtNode(field, expected_node),
+            // A field or tuple access gets its exact result from the receiver
+            // produced while lowering. The checked receiver node can only
+            // describe the public shape, so relating through it here would
+            // discard an exact field nested inside a procedure result.
+            .field_access, .tuple_access => {},
             .tag => |tag| try self.relateTagExprAtNode(tag, expected_node),
             .zero_argument_tag => _ = try self.graph.tagRowNodes(expected_node),
             .nominal => |nominal| try self.relateNominalExprAtNode(nominal, expected_node),
@@ -29009,7 +29109,7 @@ const BodyContext = struct {
             // distinct generated-private representations across branches.
             .block, .match_, .if_, .runtime_error => {},
             .lambda, .closure => _ = try self.graph.functionNodes(expected_node),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.graph.unify(expected_node, try self.lowerExprTypeNode(checked_expr)),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.graph.unify(expected_node, try self.lowerExprTypeNode(checked_expr)),
         }
     }
 
@@ -29125,20 +29225,6 @@ const BodyContext = struct {
         _ = try self.graph.applyProducedTypeToRequest(expected_ret_node, fn_nodes.ret);
         for (call.args, fn_nodes.args) |arg, arg_node| try self.relateExprAtNode(arg, arg_node);
         if (call.direct_target == null) try self.relateExprAtNode(call.func, fn_node);
-    }
-
-    fn relateFieldAccessExprAtNode(
-        self: *BodyContext,
-        field: anytype,
-        expected_field_node: NodeId,
-    ) Allocator.Error!void {
-        const receiver_node = try self.lowerExprTypeNode(field.receiver);
-        const field_name = try self.builder.recordFieldName(self.view, field.field_name);
-        const actual_field_node = switch (field.backing_access) {
-            .inspectable => try self.graph.recordFieldNode(receiver_node, field_name),
-            .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, field_name),
-        };
-        _ = try self.graph.applyProducedTypeToRequest(expected_field_node, actual_field_node);
     }
 
     fn prepareConstructorChildrenAtNodes(
@@ -29845,6 +29931,7 @@ const BodyContext = struct {
                         if (try self.checkedTypeContainsError(self.view.bodies.expr(access.tuple).ty)) {
                             break :blk try self.runtimeCrashExprAtCell(cell, "runtime error");
                         }
+                        break :blk try self.lowerTupleAccessExprAtNode(access, expected_node);
                     },
                     .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                 }
@@ -29854,18 +29941,6 @@ const BodyContext = struct {
                     try self.lowerExprTypeNode(checked_expr),
                 );
                 switch (expr.data) {
-                    .tuple_access => |access| {
-                        const tuple_node = try self.lowerExprTypeNode(access.tuple);
-                        const item_nodes = try self.graph.tupleItemNodes(tuple_node);
-                        if (access.elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
-                        const item_node = item_nodes[access.elem_index];
-                        _ = try self.graph.applyProducedTypeToRequest(expected_node, item_node);
-                        const result_cell = DraftTypeCell.fromGraphNode(item_node);
-                        break :blk try self.addExprWithTypeCell(result_cell, .{ .tuple_access = .{
-                            .tuple = try self.lowerExprAtTypeCell(access.tuple, DraftTypeCell.fromGraphNode(tuple_node)),
-                            .elem_index = access.elem_index,
-                        } });
-                    },
                     .run_low_level => |low_level| break :blk try self.addExprWithTypeCell(
                         cell,
                         .{ .low_level = .{
@@ -29873,7 +29948,7 @@ const BodyContext = struct {
                             .args = try self.lowerExprSpan(low_level.args),
                         } },
                     ),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
                 }
                 const lowered = try self.lowerExprInner(checked_expr);
                 _ = try self.graph.applyProducedTypeToRequest(
@@ -29932,7 +30007,12 @@ const BodyContext = struct {
         field: anytype,
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        const receiver_node = try self.lowerExprTypeNode(field.receiver);
+        const receiver_request_node = try self.lowerExprTypeNode(field.receiver);
+        const receiver = try self.lowerExprAtTypeCell(
+            field.receiver,
+            DraftTypeCell.fromGraphNode(receiver_request_node),
+        );
+        const receiver_node = try self.exprTypeCell(receiver).toGraphNode(self.graph);
         const field_name = try self.builder.recordFieldName(self.view, field.field_name);
         const field_node = switch (field.backing_access) {
             .inspectable => try self.graph.recordFieldNode(receiver_node, field_name),
@@ -29942,8 +30022,34 @@ const BodyContext = struct {
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(field_node),
             .{ .field_access = .{
-                .receiver = try self.lowerExprAtTypeCell(field.receiver, DraftTypeCell.fromGraphNode(receiver_node)),
+                .receiver = receiver,
                 .field = field_name,
+            } },
+        );
+    }
+
+    fn lowerTupleAccessExprAtNode(
+        self: *BodyContext,
+        access: anytype,
+        expected_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const tuple_request_node = try self.lowerExprTypeNode(access.tuple);
+        const tuple = try self.lowerExprAtTypeCell(
+            access.tuple,
+            DraftTypeCell.fromGraphNode(tuple_request_node),
+        );
+        const tuple_node = try self.exprTypeCell(tuple).toGraphNode(self.graph);
+        const item_nodes = try self.graph.tupleItemNodes(tuple_node);
+        if (access.elem_index >= item_nodes.len) {
+            Common.invariant("tuple access index was outside its exact graph tuple type");
+        }
+        const item_node = item_nodes[access.elem_index];
+        _ = try self.graph.applyProducedTypeToRequest(expected_node, item_node);
+        return try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(item_node),
+            .{ .tuple_access = .{
+                .tuple = tuple,
+                .elem_index = access.elem_index,
             } },
         );
     }
@@ -31326,7 +31432,7 @@ const BodyContext = struct {
                 callable_node,
                 evidence_vector,
                 .resolved,
-                self.procedureRuntimeSignatureRelation(procedure.runtime_target),
+                self.procedureRuntimeSignatureRelation(procedure),
             );
             const draft_spec: ?u32 = switch (created) {
                 .local => |local| switch (local) {
@@ -33620,7 +33726,7 @@ const BodyContext = struct {
                         .resolved => .resolved,
                         .synthesize => .synthesized,
                     },
-                    self.procedureRuntimeSignatureRelation(procedure.runtime_target),
+                    self.procedureRuntimeSignatureRelation(procedure),
                 );
                 break :blk slot;
             },
@@ -33712,7 +33818,7 @@ const BodyContext = struct {
                         .resolved => .resolved,
                         .synthesize => .synthesized,
                     },
-                    self.procedureRuntimeSignatureRelation(procedure.runtime_target),
+                    self.procedureRuntimeSignatureRelation(procedure),
                 );
             },
             .local_proc => |local| blk: {
