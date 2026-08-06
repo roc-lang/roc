@@ -40,7 +40,7 @@ TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 
     It has the type:
 
-        [Bool, ..]
+        [Bool]
 
     Since this expression is used as a statement, it must evaluate to `{}`.
     If you don't need the value, you can ignore it with `_ =`.
@@ -56,7 +56,7 @@ TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 
     It has the type:
 
-        [LaunchNukeErr, ..]
+        [LaunchNukeErr]
 
     Since this expression is used as a statement, it must evaluate to `{}`.
     If you don't need the value, you can ignore it with `_ =`.

@@ -18,7 +18,7 @@ test "issue 9704: unannotated platform render root lowers to LIR" {
         \\
         \\program = { init!, render! }
         \\
-        \\init! : {} => Try(Model, [Exit(I64), ..])
+        \\init! : {} => Try(Model, [Exit(I64)])
         \\init! = |_| Ok({ pins: [] })
         \\
         \\f! = |a, _b, c|
@@ -37,8 +37,8 @@ test "issue 9704: unannotated platform render root lowers to LIR" {
         \\platform ""
         \\    requires {
         \\        [Model : model] for program : {
-        \\            init! : {} => Try(model, [Exit(I64), ..]),
-        \\            render! : model, {} => Try(model, [Exit(I64), ..]),
+        \\            init! : {} => Try(model, [Exit(I64)]),
+        \\            render! : model, {} => Try(model, [Exit(I64)]),
         \\        }
         \\    }
         \\    exposes []

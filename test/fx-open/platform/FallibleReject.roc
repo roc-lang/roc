@@ -6,6 +6,6 @@ FallibleReject := [].{
 	# when every visible error in the hosted callee's row is included in the
 	# enclosing annotated return row. FallibleHost.str_ok! can fail with
 	# HostErr(Str), which this annotation omits, so this is a type error.
-	mismatched! : {} => Try(Str, [SomethingElse(Str), ..])
+	mismatched! : {} => Try(Str, [SomethingElse(Str)])
 	mismatched! = |{}| Ok(FallibleHost.str_ok!({})?)
 }

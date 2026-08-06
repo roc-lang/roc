@@ -9,7 +9,7 @@
 # signature (here via `?`, but a re-raising `match` crashed identically).
 # Fixed by #9617 (widen open-row Monotypes on late row evidence).
 Foo :: { x : U64 }.{
-    bar : Foo -> Try(I32, [Baz, ..])
+    bar : Foo -> Try(I32, [Baz])
     bar = |{ x: _ }| Ok(0)
 }
 

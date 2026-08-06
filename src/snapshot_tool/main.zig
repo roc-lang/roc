@@ -4665,6 +4665,7 @@ fn snapshotReplProblemIsError(problem: check.problem.Problem) bool {
     const tag = std.meta.activeTag(problem);
     return tag != .effectful_function_name and
         tag != .redundant_pattern and
+        tag != .redundant_open_tag_union and
         tag != .unmatchable_pattern and
         tag != .comptime_unused_branch and
         tag != .comptime_condition and
