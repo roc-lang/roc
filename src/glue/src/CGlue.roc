@@ -155,8 +155,8 @@ homogeneous_vector_member_count = |type_table, type_id|
 ## Whether a record with these committed fields is a memory-class vector
 ## aggregate: every member is (an aggregate of) 128-bit vectors and there are
 ## two to four of them in total. C classifies such an aggregate as homogeneous
-## and would pass it in registers, but the Roc host ABI passes it in memory —
-## the convention Zig and Rust hosts compile to — so C glue spells its members
+## and would pass it in registers, but the Roc host ABI passes it in memory—
+## the convention Zig and Rust hosts compile to—so C glue spells its members
 ## as vector/byte unions to pin the memory-class classification.
 c_needs_vector_union_spelling : TypeTable, List(AbiFieldLayout) -> Bool
 c_needs_vector_union_spelling = |type_table, fields| {

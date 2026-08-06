@@ -34,11 +34,11 @@
 //! before rebinding (`summarizeForJoin`): per name, an ownership mode drawn
 //! from `unbound`, `owned(units)`, `conditional_owned(cond, mask)`, or
 //! `borrowed(anchor)`, plus the must-alias partition of the names (`repr`).
-//! Rather than walking the body once per distinct summary — for a loop
+//! Rather than walking the body once per distinct summary—for a loop
 //! carrying K refcounted mutable locals whose body merges and re-splits
 //! their alias groups, the number of distinct partitions grows like the
 //! Bell number of K (B(6) = 203, B(12) = 4.2 million; issue 9658 was a
-//! valid program that outgrew the old per-summary enumeration cap) —
+//! valid program that outgrew the old per-summary enumeration cap)—
 //! summaries are *joined* and the body is walked once per joined state
 //! (`JoinGroup`, `absorbJoinSummary`):
 //!
@@ -51,8 +51,8 @@
 //!   refinement rule: the abstraction splits exactly on entry-state modes
 //!   real in-edges disagree about, so every group is witnessed by at least one real jump
 //!   and a group-walk finding always corresponds to a real entry state. In
-//!   the worst case this degenerates to one group per distinct summary —
-//!   the pre-fixpoint exact behavior — but with no cap and no skip path.
+//!   the worst case this degenerates to one group per distinct summary—
+//!   the pre-fixpoint exact behavior—but with no cap and no skip path.
 //!
 //! Why one walk under the group's meet partition covers every member
 //! (soundness of the join): a member's entry state is the group state with
@@ -71,7 +71,7 @@
 //!
 //! Termination and re-walk bound: a group's partition strictly refines at
 //! most (relevant locals - 1) times, and a group is only re-walked when its
-//! partition refined, so each group walks at most n times — the lattice
+//! partition refined, so each group walks at most n times—the lattice
 //! height replaces summary enumeration. Group *creation* is bounded by
 //! Dickson's lemma: mode vectors and partitions are finite, and among
 //! groups sharing both, balance vectors that keep growing pointwise are
@@ -80,11 +80,11 @@
 //! mode- and partition-identical entries with different balances cannot
 //! both certify against the one shared body: every terminal path consumes a
 //! fixed unit count, so divergent balances either fail a walk or are
-//! shunted through jumps forever, which is unbounded refcount growth — a
+//! shunted through jumps forever, which is unbounded refcount growth—a
 //! leak either way).
 //!
-//! The guaranteed property on a clean return: for every procedure — with no
-//! unverified residue and no capacity escape — every emitted schedule
+//! The guaranteed property on a clean return: for every procedure—with no
+//! unverified residue and no capacity escape—every emitted schedule
 //! balances ownership on all paths: each unit is released or transferred
 //! exactly once, nothing is used after its value dies, and no borrowed
 //! value is released.
@@ -113,7 +113,7 @@ const Allocator = std.mem.Allocator;
 /// Errors produced while certifying: allocation failure or a violation of
 /// the ownership rules (a compiler bug in ARC insertion).
 /// `Certification` is a positive finding: ARC insertion produced refcount-incorrect code
-/// (a leak, a use-after-free, or a balance mismatch) — a real bug, so it aborts the build.
+/// (a leak, a use-after-free, or a balance mismatch)—a real bug, so it aborts the build.
 /// The certifier has no incompleteness escape hatch: every procedure is
 /// verified to a fixpoint (see the join handling in `runSegment`), so a
 /// clean return means every emitted RC schedule was checked.
@@ -384,7 +384,7 @@ fn certifyRcAtomicity(
 
 /// Mirror of the born-unique analysis: every `assign_low_level` claiming a
 /// check-free unique argument must name a position the op may runtime-check
-/// and a local whose every definition is a unique birth — a fresh
+/// and a local whose every definition is a unique birth—a fresh
 /// allocation, a direct call whose callee's signature returns unique, a
 /// pure same-value alias whose source is born unique, or a parameter the
 /// containing proc's signature seeds born-unique. The balance and borrow
@@ -490,9 +490,9 @@ fn paramSeededUnique(sig: arc_sig.RcSig, params: anytype, local: LIR.LocalId) bo
     if (sig.unique_params == 0) return false;
     for (0..GuardedList.borrowLen(params)) |position| {
         const param = GuardedList.at(params, position);
-        if (position >= 64) break;
+        const bit = arc_sig.paramBit(position) orelse break;
         if (param != local) continue;
-        return (sig.unique_params >> @as(u6, @intCast(position))) & 1 != 0;
+        return (sig.unique_params & bit) != 0;
     }
     return false;
 }
@@ -834,7 +834,8 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
             break :blk false;
         },
         .ret => |r| r.value == needle,
-        .join, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
+        .crash => |s| if (s.msg.localId()) |message| message == needle else false,
+        .join, .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
     };
 }
 
@@ -1114,7 +1115,7 @@ const JoinRecord = struct {
 /// `lender_reprs`) is identical across all absorbed summaries, `repr` encodes
 /// the *meet* (common refinement) of their must-alias partitions, and
 /// `balance` carries the per-fine-class attributed units. Walking the body
-/// under this state certifies every absorbed summary at once — see the
+/// under this state certifies every absorbed summary at once—see the
 /// module doc comment for why a walk under the finer partition covers the
 /// coarser member states.
 const JoinGroup = struct {
@@ -1425,8 +1426,8 @@ const Certifier = struct {
     /// Attempts to spend the container's stored unit for the field this
     /// value was read from. The container must still hold its own unit
     /// unconditionally, and each field's stored unit can be claimed once.
-    /// The container's balance stays at one — later borrowed reads of its
-    /// remaining bytes are still legitimate — and a claim set covering every
+    /// The container's balance stays at one—later borrowed reads of its
+    /// remaining bytes are still legitimate—and a claim set covering every
     /// refcounted field marks the unit spent (`claimsSpendUnit`) rather than
     /// releasable.
     fn tryClaim(self: *Certifier, state: *State, value: ValueId) Allocator.Error!bool {
@@ -1813,12 +1814,12 @@ const Certifier = struct {
     /// accumulation evidence: two such entries can never both certify
     /// against the one shared body (every terminal path consumes a fixed
     /// unit count), so distinct balances either fail a walk or are shunted
-    /// through jumps forever — unbounded refcount growth, a leak. Valid
+    /// through jumps forever—unbounded refcount growth, a leak. Valid
     /// inserter output keeps balances at 0 or 1 outside transient aggregate
     /// windows, so a strictly-growing set this deep is reported as a
     /// finding. Any infinite set of distinct balance vectors contains an
     /// ascending subsequence (Dickson's lemma), so this bound also makes
-    /// group creation — and with it the whole fixpoint — structurally
+    /// group creation—and with it the whole fixpoint—structurally
     /// terminating.
     const balance_growth_finding_threshold = 8;
 
@@ -1829,7 +1830,7 @@ const Certifier = struct {
     /// the meet of the two partitions and per-fine-class balances are
     /// re-attributed (`meetGroupSummary`). A summary no group accepts
     /// starts a new group, so refinement splits exactly along the entry-state
-    /// modes real in-edges disagree about — every group is witnessed by at least
+    /// modes real in-edges disagree about—every group is witnessed by at least
     /// one real jump, and a group walk can never manufacture a false
     /// positive that no refinement traces back to a real entry state.
     fn absorbJoinSummary(
@@ -1930,7 +1931,7 @@ const Certifier = struct {
         // Meet partition: representative per dense position, keyed by the
         // (group repr, summary repr) pair; the representative is the first
         // member, so `repr[dense] <= dense` with equality exactly at class
-        // leaders — the shape `stateFromSummary` expects.
+        // leaders—the shape `stateFromSummary` expects.
         var meet_repr = try self.allocator.alloc(u32, n);
         defer self.allocator.free(meet_repr);
         var pair_repr = std.AutoHashMap(u64, u32).init(self.allocator);
@@ -2339,7 +2340,8 @@ const Certifier = struct {
                     try stack.append(self.allocator, join_stmt.remainder);
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
-                .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
+                .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
                 .comptime_branch_taken => |marker| try stack.append(self.allocator, marker.next),
             }
         }
@@ -2759,7 +2761,10 @@ const Certifier = struct {
                     }
                 },
                 .ret => |ret_stmt| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, ret_stmt.value),
-                .runtime_error, .comptime_exhaustiveness_failed, .crash, .loop_continue, .loop_break => {},
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, message);
+                },
+                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
                 .comptime_branch_taken => |marker| try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next),
             }
         }
@@ -3444,7 +3449,13 @@ const Certifier = struct {
                     try self.checkLeaks(&state);
                     return;
                 },
-                .crash => {
+                .crash => |crash_stmt| {
+                    if (crash_stmt.msg.localId()) |message| {
+                        if (self.isRc(message)) {
+                            const value = try self.requireLive(&state, message);
+                            try self.consumeUnit(&state, value, message);
+                        }
+                    }
                     try self.checkLeaks(&state);
                     return;
                 },
@@ -3533,7 +3544,7 @@ const Certifier = struct {
     ) CertifyError!void {
         const arg_locals = self.store.getLocalSpan(args);
 
-        var arg_values_buffer: [64]ValueId = undefined;
+        var arg_values_buffer: [arc_sig.tracked_param_count]ValueId = undefined;
         for (0..GuardedList.borrowLen(arg_locals)) |index| {
             const arg = GuardedList.at(arg_locals, index);
             const value = try self.requireLive(state, arg);
@@ -3559,12 +3570,11 @@ const Certifier = struct {
             switch (callee_sig.ret_mode) {
                 .owned => _ = try self.bindFresh(state, target, 1, &.{}),
                 .borrowed => {
-                    var lenders_buffer: [64]ValueId = undefined;
+                    var lenders_buffer: [arc_sig.tracked_param_count]ValueId = undefined;
                     var lender_count: usize = 0;
                     for (0..GuardedList.borrowLen(arg_locals)) |index| {
                         const arg = GuardedList.at(arg_locals, index);
-                        if (index >= 64) break;
-                        const bit = @as(u64, 1) << @as(u6, @intCast(index));
+                        const bit = arc_sig.paramBit(index) orelse break;
                         if ((callee_sig.ret_lenders & bit) == 0) continue;
                         if (!self.isRc(arg)) continue;
                         const value = arg_values_buffer[index];
@@ -5041,7 +5051,7 @@ test "certify preserves deep ABI lender when join body releases retained interme
 /// alias groups merge and re-split across nested loop iterations. Branch i
 /// of the loop body retains x[i], releases x[i+1]'s old binding, re-aliases
 /// x[i+1] onto x[i], and jumps back, so every name always carries one unit
-/// and every alias class's balance equals its size — valid on every path,
+/// and every alias class's balance equals its size—valid on every path,
 /// but the distinct must-alias partitions reaching the join grow like the
 /// Bell number of `k` when enumerated. The default branch releases every
 /// name once and returns.
@@ -5167,7 +5177,7 @@ test "certify flags a use after release inside a state-complex loop" {
 test "certify joins entries whose partitions differ but balances agree" {
     // Jump A reaches the join with x and y as separate values carrying one
     // unit each; jump B re-aliases y onto x with the shared value carrying
-    // two units. The shared body releases through each name once — valid on
+    // two units. The shared body releases through each name once—valid on
     // both edges. The lattice join must absorb both into one group (meet
     // partition = singletons, balances attributed 2 = 1 + 1) and certify
     // with a single body walk.

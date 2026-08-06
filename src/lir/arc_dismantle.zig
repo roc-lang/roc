@@ -12,7 +12,7 @@
 //! Like precise lifetimes, take solving is order-sensitive, so it runs in
 //! the ARC stage against the solved binding modes rather than inside the
 //! mode fixpoint. It is deliberately demand-driven: a local that cannot
-//! benefit — wrong layout shape, borrowed, escaping, or off-spine uses —
+//! benefit—wrong layout shape, borrowed, or non-operand whole uses—
 //! contributes nothing beyond its visit in one linear statement scan, and
 //! per-candidate tables exist only for locals that pass the layout gate.
 //! The rules are specified in design.md's "Field Takes From Dying
@@ -22,6 +22,7 @@ const std = @import("std");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
+const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 
 const LIR = core.LIR;
@@ -63,6 +64,9 @@ pub const Dismantles = struct {
     owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, LIR.LocalId),
     /// Containers behind `owned_only_takes`, keyed by the parameter local.
     owned_only_containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
+    /// Parameter positions whose owned variant activates an exact field take,
+    /// indexed directly by source procedure id.
+    owned_only_param_benefits: []arc_sig.ParamMask,
 
     pub fn deinit(self: *Dismantles) void {
         const gpa = self.arena.child_allocator;
@@ -88,7 +92,20 @@ pub const Dismantles = struct {
     pub fn ownedOnlyContainerOf(self: *const Dismantles, local: LIR.LocalId) ?Container {
         return self.owned_only_containers.get(local);
     }
+
+    pub fn ownedOnlyParamBenefits(self: *const Dismantles, proc: LIR.LirProcSpecId) arc_sig.ParamMask {
+        const index = @intFromEnum(proc);
+        if (index >= self.owned_only_param_benefits.len) {
+            dismantleInvariant("ARC owned-only benefit lookup exceeded the analyzed source-procedure table");
+        }
+        return self.owned_only_param_benefits[index];
+    }
 };
+
+fn dismantleInvariant(comptime message: []const u8) noreturn {
+    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    unreachable;
+}
 
 const State = enum(u8) {
     unknown,
@@ -111,6 +128,11 @@ const Candidate = struct {
     def_count: u32 = 0,
     disqualified: bool = false,
     reads: std.ArrayList(Read) = .empty,
+    /// Statements consuming or observing the container as one value—moved
+    /// into an aggregate, passed to a call, returned, or join-carried. Takes
+    /// stay valid as long as no whole use can run after a take, which the
+    /// dataflow checks exactly like a borrow of every field at once.
+    whole_uses: std.ArrayList(LIR.CFStmtId) = .empty,
 };
 
 const Analysis = struct {
@@ -125,22 +147,14 @@ const Analysis = struct {
     /// Proc parameters. A parameter solved borrowed may still qualify as an
     /// owned-only candidate: mode-specialized variants re-emit it owned.
     is_param: []const bool,
-    /// Locals whose value flows into join-carried state: `set_local`
-    /// operands and pure-alias feeders of join parameters, closed backward
-    /// over pure aliases. A take whose read target escapes this way would
-    /// carry its deferred claim across a join quotient, where the certifier's
-    /// per-local value model cannot follow it — such reads keep their retain
-    /// and the field stays residual.
-    escaped: []bool,
-    /// Every pure-alias edge as (target, source), for the backward closure.
-    alias_pairs: std.ArrayList([2]u32),
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
-        while (it.next()) |candidate| candidate.reads.deinit(self.gpa);
+        while (it.next()) |candidate| {
+            candidate.reads.deinit(self.gpa);
+            candidate.whole_uses.deinit(self.gpa);
+        }
         self.candidates.deinit(self.gpa);
-        self.alias_pairs.deinit(self.gpa);
-        self.gpa.free(self.escaped);
         self.gpa.free(self.alias_root);
         self.gpa.free(self.state);
     }
@@ -209,6 +223,15 @@ const Analysis = struct {
         self.disqualify(local);
     }
 
+    /// A whole-value use of the container as an operand—moved into an
+    /// aggregate or a call, returned, or join-carried. The container stays
+    /// eligible; the dataflow rejects takes that could run before it.
+    fn useWholeAt(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
+        const root = self.resolveRoot(local);
+        const candidate = (try self.entryOf(root)) orelse return;
+        try candidate.whole_uses.append(self.gpa, stmt);
+    }
+
     /// A definition of `local` by `stmt`. Candidates must be bound exactly
     /// once by a value-producing assignment.
     fn noteDef(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
@@ -270,170 +293,32 @@ const Analysis = struct {
     }
 };
 
-/// Whether every branch of a switch (including the default) is a plain
-/// statement chain that reaches the shared continuation without any control
-/// flow of its own. Only then is the continuation guaranteed to run exactly
-/// once on every path through the switch, which is what lets the take spine
-/// cross the diamond. Branches that return, crash, jump, or branch again are
-/// declined; reads past such a switch stay residual.
-fn switchFallsThrough(
-    store: *const LirStore,
-    branches: LIR.CFSwitchBranchSpan,
-    default_branch: LIR.CFStmtId,
-    continuation: LIR.CFStmtId,
-) bool {
-    const limit = store.cfStmtCount() + 1;
-    const heads = store.getCFSwitchBranches(branches);
-    const branch_count = GuardedList.borrowLen(heads);
-    for (0..branch_count + 1) |i| {
-        var cursor = if (i < branch_count) GuardedList.at(heads, i).body else default_branch;
-        var steps: usize = 0;
-        while (cursor != continuation) {
-            steps += 1;
-            if (steps > limit) return false;
-            switch (store.getCFStmt(cursor)) {
-                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .loop_continue,
-                .loop_break,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => return false,
-            }
-        }
-    }
-    return true;
-}
+/// Per-field take dataflow state at one point in a candidate's region:
+/// which fields may have been taken on some path reaching this point, and
+/// which must have been taken on every such path. A take is valid only where
+/// the field cannot have been taken yet, a borrow only where it cannot have
+/// been taken yet, and every exit must agree (`may == must`) so the residual
+/// release is the same on all paths.
+const FlowState = struct {
+    may: u64,
+    must: u64,
 
-/// Whether a join is a branch diamond rather than a loop: every path through
-/// its remainder ends by jumping to this join (a plain chain, optionally
-/// through one switch whose every branch is a plain chain ending in that
-/// jump), and nothing in its body jumps back to it. Such a join's body runs
-/// exactly once, immediately after the remainder, so the take spine may
-/// continue into it. Branch-result `if` and `match` expressions lower to
-/// exactly this shape; loops fail the body scan through their back-edge.
-fn joinIsDiamond(
-    gpa: Allocator,
-    store: *const LirStore,
-    join_id: LIR.JoinPointId,
-    remainder: LIR.CFStmtId,
-    body: LIR.CFStmtId,
-) Error!bool {
-    if (!remainderRejoins(store, remainder, join_id)) return false;
-    return bodyAvoidsJoin(gpa, store, body, join_id);
-}
-
-fn remainderRejoins(store: *const LirStore, first: LIR.CFStmtId, join_id: LIR.JoinPointId) bool {
-    const limit = store.cfStmtCount() + 1;
-    var cursor = first;
-    var steps: usize = 0;
-    while (true) {
-        steps += 1;
-        if (steps > limit) return false;
-        switch (store.getCFStmt(cursor)) {
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
-            .jump => |stmt| return stmt.target == join_id,
-            .switch_stmt => |stmt| {
-                const heads = store.getCFSwitchBranches(stmt.branches);
-                const branch_count = GuardedList.borrowLen(heads);
-                for (0..branch_count + 1) |i| {
-                    var branch_cursor = if (i < branch_count) GuardedList.at(heads, i).body else stmt.default_branch;
-                    var branch_steps: usize = 0;
-                    branch: while (true) {
-                        branch_steps += 1;
-                        if (branch_steps > limit) return false;
-                        switch (store.getCFStmt(branch_cursor)) {
-                            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |branch_stmt| branch_cursor = branch_stmt.next,
-                            .jump => |branch_stmt| {
-                                if (branch_stmt.target != join_id) return false;
-                                break :branch;
-                            },
-                            .expect_err,
-                            .runtime_error,
-                            .comptime_exhaustiveness_failed,
-                            .switch_stmt,
-                            .switch_initialized_payload,
-                            .str_match,
-                            .str_match_set,
-                            .loop_continue,
-                            .loop_break,
-                            .join,
-                            .ret,
-                            .crash,
-                            => return false,
-                        }
-                    }
-                }
-                return true;
-            },
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .loop_continue,
-            .loop_break,
-            .join,
-            .ret,
-            .crash,
-            => return false,
-        }
+    fn meet(a: FlowState, b: FlowState) FlowState {
+        return .{ .may = a.may | b.may, .must = a.must & b.must };
     }
-}
 
-fn bodyAvoidsJoin(gpa: Allocator, store: *const LirStore, body: LIR.CFStmtId, join_id: LIR.JoinPointId) Error!bool {
-    var visited = std.AutoHashMapUnmanaged(u32, void).empty;
-    defer visited.deinit(gpa);
-    var stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer stack.deinit(gpa);
-    try stack.append(gpa, body);
-    while (stack.pop()) |current| {
-        const slot = try visited.getOrPut(gpa, @intFromEnum(current));
-        if (slot.found_existing) continue;
-        switch (store.getCFStmt(current)) {
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| try stack.append(gpa, stmt.next),
-            .jump => |stmt| if (stmt.target == join_id) return false,
-            .join => |stmt| {
-                try stack.append(gpa, stmt.remainder);
-                try stack.append(gpa, stmt.body);
-            },
-            .switch_stmt => |stmt| {
-                const heads = store.getCFSwitchBranches(stmt.branches);
-                for (0..GuardedList.borrowLen(heads)) |i| {
-                    try stack.append(gpa, GuardedList.at(heads, i).body);
-                }
-                try stack.append(gpa, stmt.default_branch);
-                if (stmt.continuation) |continuation| try stack.append(gpa, continuation);
-            },
-            .switch_initialized_payload => |stmt| {
-                try stack.append(gpa, stmt.initialized_branch);
-                try stack.append(gpa, stmt.uninitialized_branch);
-            },
-            .str_match => |stmt| {
-                try stack.append(gpa, stmt.on_match);
-                try stack.append(gpa, stmt.on_miss);
-            },
-            .str_match_set => |stmt| {
-                const arms = store.getStrMatchArms(stmt.arms);
-                for (0..GuardedList.borrowLen(arms)) |i| {
-                    try stack.append(gpa, GuardedList.at(arms, i).on_match);
-                }
-                try stack.append(gpa, stmt.on_miss);
-            },
-            .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-        }
+    fn eql(a: FlowState, b: FlowState) bool {
+        return a.may == b.may and a.must == b.must;
     }
-    return true;
-}
+};
+
+/// How one statement reads the candidate under dataflow: which field's bit
+/// it touches and whether it consumes (owned result) or borrows.
+const ReadKind = struct {
+    bit: u64,
+    consuming: bool,
+    visited: bool = false,
+};
 
 /// Solve takes for every reachable statement in the store.
 pub fn compute(
@@ -475,13 +360,10 @@ pub fn compute(
         .alias_root = try gpa.alloc(u32, store.localCount()),
         .candidates = .empty,
         .is_param = is_param,
-        .escaped = try gpa.alloc(bool, store.localCount()),
-        .alias_pairs = .empty,
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
     @memset(analysis.alias_root, no_index);
-    @memset(analysis.escaped, false);
 
     // One linear scan over every reachable statement, classifying each
     // occurrence of each local. The switch is exhaustive so a new statement
@@ -515,10 +397,6 @@ pub fn compute(
                             analysis.useWhole(source);
                         } else {
                             try analysis.noteAliasDef(stmt.target, source);
-                            try analysis.alias_pairs.append(gpa, .{ @intFromEnum(stmt.target), @intFromEnum(source) });
-                            if (solution.isJoinParam(stmt.target)) {
-                                analysis.escaped[@intFromEnum(source)] = true;
-                            }
                         }
                     },
                     .discriminant => |op| {
@@ -550,7 +428,7 @@ pub fn compute(
             },
             .assign_call => |stmt| {
                 const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| analysis.useWhole(GuardedList.at(args, i));
+                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
@@ -558,7 +436,7 @@ pub fn compute(
                 analysis.useWhole(stmt.closure);
                 if (stmt.reuse_source) |reuse_source| analysis.useWhole(reuse_source);
                 const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| analysis.useWhole(GuardedList.at(args, i));
+                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
@@ -570,24 +448,24 @@ pub fn compute(
             },
             .assign_low_level => |stmt| {
                 const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| analysis.useWhole(GuardedList.at(args, i));
+                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
             .assign_list => |stmt| {
                 const elems = store.getLocalSpan(stmt.elems);
-                for (0..GuardedList.borrowLen(elems)) |i| analysis.useWhole(GuardedList.at(elems, i));
+                for (0..GuardedList.borrowLen(elems)) |i| try analysis.useWholeAt(GuardedList.at(elems, i), current);
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
             .assign_struct => |stmt| {
                 const fields = store.getLocalSpan(stmt.fields);
-                for (0..GuardedList.borrowLen(fields)) |i| analysis.useWhole(GuardedList.at(fields, i));
+                for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWholeAt(GuardedList.at(fields, i), current);
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
             .assign_tag => |stmt| {
-                if (stmt.payload) |payload| analysis.useWhole(payload);
+                if (stmt.payload) |payload| try analysis.useWholeAt(payload, current);
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
@@ -603,9 +481,8 @@ pub fn compute(
                 try stack.append(gpa, stmt.next);
             },
             .set_local => |stmt| {
-                analysis.useWhole(stmt.value);
+                try analysis.useWholeAt(stmt.value, current);
                 analysis.useWhole(stmt.target);
-                analysis.escaped[@intFromEnum(stmt.value)] = true;
                 try stack.append(gpa, stmt.next);
             },
             .debug => |stmt| {
@@ -690,21 +567,8 @@ pub fn compute(
                 try stack.append(gpa, stmt.remainder);
             },
             .jump => {},
-            .ret => |stmt| analysis.useWhole(stmt.value),
-            .crash => {},
-        }
-    }
-
-    // Close the escape set backward over pure aliases: if an alias target's
-    // value reaches join-carried state, so does its source's.
-    var escape_changed = true;
-    while (escape_changed) {
-        escape_changed = false;
-        for (analysis.alias_pairs.items) |pair| {
-            if (analysis.escaped[pair[0]] and !analysis.escaped[pair[1]]) {
-                analysis.escaped[pair[1]] = true;
-                escape_changed = true;
-            }
+            .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
+            .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
         }
     }
 
@@ -716,17 +580,23 @@ pub fn compute(
         .containers = .empty,
         .owned_only_takes = .empty,
         .owned_only_containers = .empty,
+        .owned_only_param_benefits = &.{},
     };
     errdefer result.deinit();
+    result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
+    @memset(result.owned_only_param_benefits, 0);
 
-    var spine_pending = std.AutoHashMapUnmanaged(LIR.CFStmtId, void).empty;
-    defer spine_pending.deinit(gpa);
-    var spine_starts = std.ArrayList(LIR.CFStmtId).empty;
-    defer spine_starts.deinit(gpa);
-    // Diamond verdicts are a property of the join alone; one scan serves
-    // every candidate whose spine crosses it.
-    var diamond_joins = std.AutoHashMapUnmanaged(u32, bool).empty;
-    defer diamond_joins.deinit(gpa);
+    var read_kinds = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
+    defer read_kinds.deinit(gpa);
+    var join_bodies = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    defer join_bodies.deinit(gpa);
+    var body_states = std.AutoHashMapUnmanaged(LIR.CFStmtId, FlowState).empty;
+    defer body_states.deinit(gpa);
+    const FlowFrame = struct { cursor: LIR.CFStmtId, state: FlowState };
+    var flow_frames = std.ArrayList(FlowFrame).empty;
+    defer flow_frames.deinit(gpa);
+    var exit_musts = std.ArrayList(u64).empty;
+    defer exit_musts.deinit(gpa);
 
     var it = analysis.candidates.iterator();
     candidates: while (it.next()) |entry| {
@@ -775,26 +645,11 @@ pub fn compute(
         else
             continue :candidates;
 
-        // A taken field must be read exactly once, by a consuming read whose
-        // target stays out of join-carried state. One read needs no order
-        // reasoning (a borrow after the take could observe stale bytes once
-        // the taker mutates), and a non-escaping target keeps the deferred
-        // claim inside one certifier walk segment. Fields failing either
-        // rule simply stay residual: their reads keep their retains and the
-        // dismantle releases their stored units at the death point.
-        var taken_mask: u64 = 0;
-        var repeat_mask: u64 = 0;
-        var seen_mask: u64 = 0;
+        // Reads keep their field indexes within a mask's reach or the
+        // container cannot dismantle at all.
         for (candidate.reads.items) |read| {
             if (read.field_idx >= 64) continue :candidates;
-            const bit = @as(u64, 1) << @intCast(read.field_idx);
-            if (seen_mask & bit != 0) repeat_mask |= bit;
-            seen_mask |= bit;
-            if (read.consuming and !analysis.escaped[@intFromEnum(read.target)]) {
-                taken_mask |= bit;
-            }
         }
-        taken_mask &= ~repeat_mask;
 
         // Only refcounted fields carry stored units worth taking; a
         // container with no refcounted take keeps its ordinary whole
@@ -808,58 +663,159 @@ pub fn compute(
                 rc_mask |= @as(u64, 1) << @intCast(field.index);
             }
         }
-        taken_mask &= rc_mask;
-        if (taken_mask == 0) continue;
 
-        // Every take must sit on the container's spine: the chain from its
-        // definition through `next` edges and join remainders. That is what
-        // makes each take run exactly once, in order, before the container
-        // dies — the death point follows the last use on every path, so
-        // residual reads may live in branches without reordering risk.
-        spine_pending.clearRetainingCapacity();
+        // Verify each field by a forward dataflow from the container's
+        // definition over the control-flow graph: a consuming read is a take
+        // only if the field cannot have been taken yet at that point, a
+        // borrow of a taken field must run before every take that could
+        // reach it, and every exit the flow reaches must agree on the taken
+        // set so the residual release is the same on all paths. Loops poison
+        // themselves: a take inside one reaches itself as possibly-taken.
+        read_kinds.clearRetainingCapacity();
         for (candidate.reads.items) |read| {
             const bit = @as(u64, 1) << @intCast(read.field_idx);
-            if (taken_mask & bit == 0) continue;
-            try spine_pending.put(gpa, read.stmt, {});
+            if (rc_mask & bit == 0) continue;
+            try read_kinds.put(gpa, read.stmt, .{
+                .bit = bit,
+                .consuming = read.consuming,
+            });
         }
-        var remaining = spine_pending.count();
-        spine_starts.clearRetainingCapacity();
-        try spine_starts.append(gpa, spine_start);
+        // A whole use behaves like a borrow of every field at once: no take
+        // may run before it on any path, so the value it moves or observes
+        // is the intact container.
+        for (candidate.whole_uses.items) |stmt| {
+            const slot = try read_kinds.getOrPut(gpa, stmt);
+            if (slot.found_existing) {
+                slot.value_ptr.bit = ~@as(u64, 0);
+                slot.value_ptr.consuming = false;
+            } else {
+                slot.value_ptr.* = .{ .bit = ~@as(u64, 0), .consuming = false };
+            }
+        }
+
+        var candidate_mask: u64 = 0;
+        for (candidate.reads.items) |read| {
+            if (read.consuming) candidate_mask |= @as(u64, 1) << @intCast(read.field_idx);
+        }
+        candidate_mask &= rc_mask;
+        if (candidate_mask == 0) continue;
+
+        var poison: u64 = 0;
+        exit_musts.clearRetainingCapacity();
+        join_bodies.clearRetainingCapacity();
+        body_states.clearRetainingCapacity();
+        flow_frames.clearRetainingCapacity();
+        try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0 } });
         var steps: usize = 0;
-        const step_limit = store.cfStmtCount() + 1;
-        walk: while (remaining > 0) {
-            var cursor = spine_starts.pop() orelse break;
-            chain: while (remaining > 0) {
+        // Each statement is re-walked at most once per lattice step of its
+        // reaching state; 2 bits per tracked field bound the lattice height.
+        const step_limit = (store.cfStmtCount() + 1) * (2 * 64 + 1);
+        flow: while (flow_frames.pop()) |frame| {
+            var cursor = frame.cursor;
+            var state = frame.state;
+            chain: while (true) {
                 steps += 1;
-                if (steps > step_limit) break :walk;
-                if (spine_pending.contains(cursor)) remaining -= 1;
+                if (steps > step_limit) {
+                    poison = ~@as(u64, 0);
+                    break :flow;
+                }
+                if (read_kinds.getPtr(cursor)) |kind| {
+                    kind.visited = true;
+                    if (kind.consuming) {
+                        // A take where the field may already be gone would
+                        // double-consume its unit on that path.
+                        poison |= state.may & kind.bit;
+                        state.may |= kind.bit;
+                        state.must |= kind.bit;
+                    } else {
+                        // A borrow after a possible take would observe the
+                        // taker's mutation instead of the original field.
+                        poison |= state.may & kind.bit;
+                    }
+                }
                 switch (store.getCFStmt(cursor)) {
                     inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
-                    // The remainder always runs exactly once. When the join
-                    // is a branch diamond — every remainder path rejoins it
-                    // and its body never loops back — the body runs exactly
-                    // once too, immediately after, so takes past the rejoin
-                    // are as good as takes before the branch.
                     .join => |stmt| {
-                        const cached = try diamond_joins.getOrPut(gpa, @intFromEnum(cursor));
-                        if (!cached.found_existing) {
-                            cached.value_ptr.* = try joinIsDiamond(gpa, store, stmt.id, stmt.remainder, stmt.body);
-                        }
-                        if (cached.value_ptr.*) try spine_starts.append(gpa, stmt.body);
+                        try join_bodies.put(gpa, @intFromEnum(stmt.id), stmt.body);
                         cursor = stmt.remainder;
                     },
-                    // Likewise for a switch whose every branch falls straight
-                    // through to its shared continuation.
                     .switch_stmt => |stmt| {
-                        const continuation = stmt.continuation orelse break :chain;
-                        if (!switchFallsThrough(store, stmt.branches, stmt.default_branch, continuation)) break :chain;
-                        cursor = continuation;
+                        const heads = store.getCFSwitchBranches(stmt.branches);
+                        for (0..GuardedList.borrowLen(heads)) |i| {
+                            try flow_frames.append(gpa, .{ .cursor = GuardedList.at(heads, i).body, .state = state });
+                        }
+                        cursor = stmt.default_branch;
                     },
-                    .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => break :chain,
+                    .jump => |stmt| {
+                        // Control continues at the join's body; meet this
+                        // path's state into it and re-walk on change. A jump
+                        // to a join declared before the definition leaves
+                        // the candidate's region—a loop back edge or an
+                        // enclosing early exit—so it ends this path like a
+                        // return would. Reads living past it are never
+                        // visited, which keeps their fields residual.
+                        const body = join_bodies.get(@intFromEnum(stmt.target)) orelse {
+                            poison |= state.may & ~state.must;
+                            try exit_musts.append(gpa, state.must);
+                            break :chain;
+                        };
+                        const slot = try body_states.getOrPut(gpa, body);
+                        if (slot.found_existing) {
+                            const merged = FlowState.meet(slot.value_ptr.*, state);
+                            if (FlowState.eql(merged, slot.value_ptr.*)) break :chain;
+                            slot.value_ptr.* = merged;
+                            try flow_frames.append(gpa, .{ .cursor = body, .state = merged });
+                        } else {
+                            slot.value_ptr.* = state;
+                            try flow_frames.append(gpa, .{ .cursor = body, .state = state });
+                        }
+                        break :chain;
+                    },
+                    .switch_initialized_payload => |stmt| {
+                        try flow_frames.append(gpa, .{ .cursor = stmt.initialized_branch, .state = state });
+                        cursor = stmt.uninitialized_branch;
+                    },
+                    .str_match => |stmt| {
+                        try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
+                        cursor = stmt.on_miss;
+                    },
+                    .str_match_set => |stmt| {
+                        const arms = store.getStrMatchArms(stmt.arms);
+                        for (0..GuardedList.borrowLen(arms)) |i| {
+                            try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
+                        }
+                        cursor = stmt.on_miss;
+                    },
+                    // Every exit the flow reaches must agree, so the death
+                    // point's residual is the same however it was reached.
+                    .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {
+                        poison |= state.may & ~state.must;
+                        try exit_musts.append(gpa, state.must);
+                        break :chain;
+                    },
                 }
             }
         }
-        if (remaining > 0) continue;
+
+        // A read the flow never reached sits outside the verified region;
+        // its field keeps ordinary retains and residual release.
+        var kinds_it = read_kinds.valueIterator();
+        while (kinds_it.next()) |kind| {
+            if (!kind.visited) poison |= kind.bit;
+        }
+
+        // One static residual serves every death point, so a field is taken
+        // only if every exit the flow reached agrees its take ran: an exit a
+        // taken field's take did not dominate would be under-released. Bits
+        // only ever leave the set, so this converges.
+        var taken_mask: u64 = candidate_mask & ~poison;
+        while (taken_mask != 0) {
+            var missing: u64 = 0;
+            for (exit_musts.items) |must| missing |= taken_mask & ~must;
+            if (missing == 0) break;
+            taken_mask &= ~missing;
+        }
+        if (taken_mask == 0) continue;
 
         // Accepted. Record the takes and the residual: every refcounted
         // field that was not taken is released at the death point.
@@ -881,6 +837,9 @@ pub fn compute(
         for (candidate.reads.items) |read| {
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (taken_mask & bit == 0) continue;
+            // Borrowing reads of a taken field stay plain borrows; only the
+            // consuming reads take the stored unit.
+            if (!read.consuming) continue;
             if (owned_only) {
                 try result.owned_only_takes.put(gpa, read.stmt, local);
             } else {
@@ -891,6 +850,20 @@ pub fn compute(
             try result.owned_only_containers.put(gpa, local, .{ .residual = stored_residual });
         } else {
             try result.containers.put(gpa, local, .{ .residual = stored_residual });
+        }
+    }
+
+    // Variant admission consumes the exact owned-only benefit without
+    // rescanning bodies or reconstructing parameter identity from statements.
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
+        for (0..GuardedList.borrowLen(params)) |position| {
+            const bit = arc_sig.paramBit(position) orelse break;
+            const param = GuardedList.at(params, position);
+            if (result.owned_only_containers.contains(param)) {
+                result.owned_only_param_benefits[proc_index] |= bit;
+            }
         }
     }
 

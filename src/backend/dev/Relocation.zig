@@ -143,7 +143,7 @@ pub fn applyRelocationsWithContext(
             },
             .local_data => |local_reloc| {
                 // The data's address is baked into the generated code, so the
-                // referenced bytes must outlive that code — the caller owns
+                // referenced bytes must outlive that code—the caller owns
                 // that lifetime.
                 const target_addr = @intFromPtr(local_reloc.data.ptr);
                 try patchLinkedDataRelocation(code, code_base_addr, local_reloc.offset, target_addr, .abs64);

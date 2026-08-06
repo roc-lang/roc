@@ -9,9 +9,9 @@ independent renderers of it: `renderElementToTerminal`
 (`:1396`), `renderElementToHtml` (`:1608`), and `renderElementToLsp`
 (`:1738`). Each is a full switch over the ~16 element variants, and
 the `.annotated` arm additionally switches over the ~22 annotation
-variants. The layout logic that should be target-independent —
+variants. The layout logic that should be target-independent—
 wrapping, indentation, and above all the source-region
-underline/caret drawing — is re-implemented per target, and has
+underline/caret drawing—is re-implemented per target, and has
 already diverged in small ways (the terminal path preserves tabs via
 `printLeadingWhitespace` in `src/reporting/source_region.zig:121`;
 the markdown path re-implements its own whitespace loop inline at
@@ -29,17 +29,17 @@ Satellite duplications orbit the same model:
 - Title uppercasing exists twice: `writeShouted`
   (`renderer.zig:331-335`) and the snapshot tool's `asciiUpperDupe`
   (`src/snapshot_tool/main.zig:376-380`), the latter commented
-  "matching the box renderer" — a manual-sync contract in place of a
+  "matching the box renderer"—a manual-sync contract in place of a
   shared function.
 - `ColorPalette.HTML` / `HtmlColors` (`style.zig:55-81, 193-218`)
-  define an HTML color scheme the HTML renderer never uses — it emits
+  define an HTML color scheme the HTML renderer never uses—it emits
   `class="<semanticName>"` and the real colors live in
   `src/snapshot_tool/snapshot.css` (a different palette). One side is
   dead code posing as a source of truth.
 
 Adding one document element or annotation today means editing four
 renderer switches, two color switches, `semanticName`, and possibly
-the CSS — with only Zig's switch exhaustiveness (where no `else` has
+the CSS—with only Zig's switch exhaustiveness (where no `else` has
 crept in) as the net, and nothing at all guarding behavioral
 agreement between targets.
 
@@ -51,8 +51,8 @@ from every phase are built into `Report`s once (`src/check/report.zig`,
 `RenderTarget` (`renderer.zig:37`) selects output. The four renderers
 differ in exactly three dimensions: how an annotation opens/closes
 (ANSI codes vs backticks vs tags vs nothing), how structure is
-escaped/indented, and how a source region is drawn. Everything else —
-element traversal order, wrapping decisions, region math — is logic
+escaped/indented, and how a source region is drawn. Everything else—
+element traversal order, wrapping decisions, region math—is logic
 that should exist once. `source_region.zig` already contains partial
 shared helpers; the markdown renderer just doesn't use all of them.
 
@@ -60,12 +60,12 @@ shared helpers; the markdown renderer just doesn't use all of them.
 
 - The four `renderElementTo*` functions and the triple dispatch
   switches at `renderer.zig:81, 92, 1066`.
-- `renderer.zig:1368` vs `style.zig:221` — identical arms, verifiable
+- `renderer.zig:1368` vs `style.zig:221`—identical arms, verifiable
   by diff.
-- `renderer.zig:1520-1532` — markdown's inline whitespace loop beside
+- `renderer.zig:1520-1532`—markdown's inline whitespace loop beside
   the terminal path's shared helper.
-- `style.zig:347-353` — tests pin only 4 of ~22 color arms.
-- `grep -n 'ColorPalette.HTML' src/` — no renderer consumer.
+- `style.zig:347-353`—tests pin only 4 of ~22 color arms.
+- `grep -n 'ColorPalette.HTML' src/`—no renderer consumer.
 
 ## Solution design
 
@@ -73,7 +73,7 @@ shared helpers; the markdown renderer just doesn't use all of them.
    `getAnnotationColor`; the terminal renderer calls
    `palette.colorForAnnotation`. Export one `shout` helper from
    `reporting` and delete `asciiUpperDupe`.
-2. **Style vtable.** Define a per-target style description — for each
+2. **Style vtable.** Define a per-target style description—for each
    annotation: open/close strings (or a fn for ANSI/palette lookup);
    plus escaping fn, indent unit, underline glyphs, and a
    source-region drawing hook. The four targets become four instances
@@ -83,7 +83,7 @@ shared helpers; the markdown renderer just doesn't use all of them.
    genuinely different (LSP's related-information shape, HTML's tag
    nesting) stays in per-target hooks, but the hooks receive
    already-computed layout (wrapped lines, underline spans) from
-   shared code — the region math exists once in `source_region.zig`.
+   shared code—the region math exists once in `source_region.zig`.
 4. **Resolve the HTML palette.** Either delete
    `ColorPalette.HTML`/`HtmlColors`, or make it the generator for
    `snapshot.css`'s annotation classes so the palette and the CSS
@@ -137,12 +137,12 @@ the corpus before/after (should be within noise).
 - Byte-identity pins for a small fixture set per target, regenerated
   intentionally when output is meant to change.
 - A test that `snapshot.css` contains a class for every
-  `semanticName` (or is generated — then this is free).
+  `semanticName` (or is generated—then this is free).
 
 ## Related projects
 
-- [../small/severity-and-report-collection.md](../small/severity-and-report-collection.md)
-  — the classification and orchestration seams around the same report
+- [../small/severity-and-report-collection.md](../small/severity-and-report-collection.md)—
+  the classification and orchestration seams around the same report
   pipeline; independent, but lands naturally before or after this.
-- [../small/silent-drift-guards.md](../small/silent-drift-guards.md)
-  — the parity-suite pattern this project applies to renderers.
+- [../small/silent-drift-guards.md](../small/silent-drift-guards.md)—
+  the parity-suite pattern this project applies to renderers.

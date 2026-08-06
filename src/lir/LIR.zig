@@ -450,6 +450,19 @@ pub fn layoutNeedsStackProbe(layouts: *const layout.Store, layout_idx: layout.Id
     return size >= stack_probe_page_size;
 }
 
+/// A compiler-generated static message or a source-level `Str` evaluated at runtime.
+pub const CrashMessage = union(enum) {
+    literal: StringLiteral.Idx,
+    local: LocalId,
+
+    pub fn localId(self: CrashMessage) ?LocalId {
+        return switch (self) {
+            .literal => null,
+            .local => |local| local,
+        };
+    }
+};
+
 /// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     init_uninitialized: struct {
@@ -526,7 +539,7 @@ pub const CFStmt = union(enum) {
         unique_args: u64 = 0,
         /// For `list_map_can_reuse`: whether the input and output element
         /// layouts are interchangeable in one allocation, computed per pointer
-        /// width. Resolved at codegen for the target being built — a `false`
+        /// width. Resolved at codegen for the target being built—a `false`
         /// width forces the op to a constant `0` (reuse statically impossible),
         /// so the in-place branch is never taken there. Target-independent
         /// because both widths are stored; ignored by every other op.
@@ -706,7 +719,7 @@ pub const CFStmt = union(enum) {
         value: LocalId,
     },
     crash: struct {
-        msg: StringLiteral.Idx,
+        msg: CrashMessage,
     },
 };
 

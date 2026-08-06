@@ -1,7 +1,7 @@
 //! Concrete runtime value representation for the interpreter.
 //!
 //! A `Value` is a raw pointer to bytes in memory. It carries no runtime type
-//! information — the layout is always tracked separately via `layout.Idx`.
+//! information—the layout is always tracked separately via `layout.Idx`.
 //!
 //! This module also provides layout-aware helpers for reading/writing
 //! scalars, accessing struct fields, tag union discriminants, and managing
@@ -152,7 +152,7 @@ pub const LayoutHelper = struct {
         const l = self.store.getLayout(union_layout);
         const tu_data = self.store.getTagUnionData(l.getTagUnion().idx);
         switch (tu_data.discriminant_size) {
-            0 => {}, // Single-variant — no discriminant to write
+            0 => {}, // Single-variant—no discriminant to write
             1 => at_disc.write(u8, @intCast(disc)),
             2 => at_disc.write(u16, disc),
             else => unreachable,

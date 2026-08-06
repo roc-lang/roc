@@ -28,6 +28,9 @@ pub const StrAppend = @import("str_append.zig");
 pub const BodyClone = @import("body_clone.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
+pub const LoopAppendPromote = @import("loop_append_promote.zig");
+/// Always-safe check elision from proven unsigned value-range facts.
+pub const RangeProve = @import("range_prove.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
 pub const TagReachability = @import("tag_reachability.zig");
 /// Demand-driven proc compaction before ARC and backend emission.
@@ -146,6 +149,7 @@ test "lir tests" {
     std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(BodyClone);
     std.testing.refAllDecls(ScalarizeJoins);
+    std.testing.refAllDecls(RangeProve);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(CheckedArithmetic);
     std.testing.refAllDecls(Arc);

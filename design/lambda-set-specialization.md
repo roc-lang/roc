@@ -54,7 +54,7 @@ When multiple closures flow to the same call site, their lambda sets **unify**.
 Unification of two lambda sets works as follows:
 
 1. Lambdas that appear in **only one** of the two sets are kept as-is (union)
-2. Lambdas that appear in **both** sets must have compatible captures — the same
+2. Lambdas that appear in **both** sets must have compatible captures—the same
    capture names, and the capture types are recursively unified
 3. The result is the union of all lambdas, with shared members having unified captures
 
@@ -95,7 +95,7 @@ Three transformations happen:
 
 #### A. Closure construction becomes tag construction
 
-When a closure value is created, it becomes a tagged union value — the tag
+When a closure value is created, it becomes a tagged union value—the tag
 identifies the closure, the payload carries the captures:
 
 ```roc
@@ -145,9 +145,9 @@ result = match f {
 
 Every call to a closure-typed value generates a dispatch switch, regardless of
 the lambda set size. Even singleton lambda sets produce a one-branch switch at
-this stage. (Optimizations may simplify these later — see Section 4.)
+this stage. (Optimizations may simplify these later—see Section 4.)
 
-#### C. Lambda lifting — specialized procedures with captures as a parameter
+#### C. Lambda lifting—specialized procedures with captures as a parameter
 
 Each closure's body is extracted to a top-level procedure. If the closure has
 captures, the procedure takes a captures record as an additional parameter
@@ -183,7 +183,7 @@ size and capture structure:
 | N               | any non-zero | `union_repr`         | Tag + max(payload sizes)     |
 
 These are all specializations of the general tagged union layout. In each case,
-the representation is isomorphic to the corresponding tag union representation —
+the representation is isomorphic to the corresponding tag union representation—
 single-variant unions can omit the tag, multi-variant unions store a discriminant
 followed by the largest payload, etc.
 
@@ -212,7 +212,7 @@ them using the same paths as any tag union:
 #### Constructing a closure
 
 Materializing a closure means writing tag + capture bytes to the stack (or a
-register for small values). The result is a regular value location — just bytes.
+register for small values). The result is a regular value location—just bytes.
 
 #### Calling a closure
 
@@ -224,8 +224,8 @@ When the codegen encounters a dispatch switch for a closure call:
    specialized procedure with `(args..., captures)`
 4. For branches with no captures: call the procedure with just `(args...)`
 
-The dispatch information — which procedures exist and what captures each
-expects — comes from the mono IR and layout metadata. It is **never** stored
+The dispatch information—which procedures exist and what captures each
+expects—comes from the mono IR and layout metadata. It is **never** stored
 in the runtime value.
 
 #### Returning a closure from a function
@@ -238,7 +238,7 @@ uses the same calling convention as returning any struct or union:
 
 #### Passing a closure as an argument
 
-Same as passing any tag union argument — by value in registers for small closures,
+Same as passing any tag union argument—by value in registers for small closures,
 by pointer for large ones.
 
 ---
@@ -253,7 +253,7 @@ following optimizations may be applied:
   can skip materializing the closure entirely and emit a direct call.
 
 - **Unwrapped capture**: When a lambda set has exactly one member with one
-  capture, the tag can be omitted and the payload stored unwrapped — just the
+  capture, the tag can be omitted and the payload stored unwrapped—just the
   capture value itself.
 
 - **Struct captures**: When a lambda set has exactly one member with multiple
@@ -262,22 +262,22 @@ following optimizations may be applied:
 - **Enum dispatch**: When a lambda set has multiple members but all have zero
   captures, the tag union is just a tag byte with no payload.
 
-These do not change semantics — only memory layout and dispatch code.
+These do not change semantics—only memory layout and dispatch code.
 
 ---
 
 ## 4. Worked Examples
 
-### Example 1: No captures — singleton
+### Example 1: No captures—singleton
 
 ```roc
 identity = |x| x
 identity(42)
 ```
 
-Lambda set for `identity`: `{identity {}}` — one function, zero captures.
+Lambda set for `identity`: `{identity {}}`—one function, zero captures.
 
-Lowered type: `[Identity]` — a tag union with one zero-payload variant.
+Lowered type: `[Identity]`—a tag union with one zero-payload variant.
 
 Lowered code:
 ```
@@ -300,10 +300,10 @@ add5 = make_adder(5)
 result = add5(10)    # 15
 ```
 
-The inner lambda `|x| x + n` has lambda set `{inner {n: I64}}` — one function,
+The inner lambda `|x| x + n` has lambda set `{inner {n: I64}}`—one function,
 one capture.
 
-Lowered type: `[Inner {n: I64}]` — a tag union with one variant carrying a record.
+Lowered type: `[Inner {n: I64}]`—a tag union with one variant carrying a record.
 
 Lowered code:
 ```
@@ -369,7 +369,7 @@ result = f(B(10))(12)    # 22
 The three inner lambdas flow to the same return position, producing lambda set:
 `{clos {}, clos1 {y: I64}, clos2 {y: I64, z: I64}}`.
 
-Lowered type: `[Clos, Clos1 {y: I64}, Clos2 {y: I64, z: I64}]` — a multi-variant
+Lowered type: `[Clos, Clos1 {y: I64}, Clos2 {y: I64, z: I64}]`—a multi-variant
 tagged union.
 
 Lowered code:
@@ -401,7 +401,7 @@ result = match closure {
 }
 ```
 
-### Example 5: Nested closures — closure returned from a function
+### Example 5: Nested closures—closure returned from a function
 
 ```roc
 result = (|a| |b| a * b)(5)(10)    # 50
@@ -411,7 +411,7 @@ Step by step:
 
 1. The outer lambda `|a| |b| a * b` takes `a` and returns a closure.
 
-2. The inner lambda `|b| a * b` has lambda set `{inner {a: I64}}` — one function,
+2. The inner lambda `|b| a * b` has lambda set `{inner {a: I64}}`—one function,
    one capture.
 
 3. The outer lambda's return type is the closure's tag union type: `[Inner {a: I64}]`.
@@ -446,7 +446,7 @@ result2 = apply_twice(|x| x * 2, 10)    # 40
 
 Lambda set for `f`: `{add1 {}, mul2 {}}`. Two functions, zero captures each.
 
-Lowered type: `[Add1, Mul2]` — a tag union with two zero-payload variants.
+Lowered type: `[Add1, Mul2]`—a tag union with two zero-payload variants.
 
 Lowered code:
 ```

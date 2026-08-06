@@ -6,13 +6,13 @@ Every CLI subcommand's flag set is encoded three times in
 `src/cli/cli_args.zig`: an args struct (e.g. `BuildArgs`,
 `:154-181`), a hand-rolled parser of `mem.eql`/`startsWith` chains
 (`parseBuild`, `:428-560`), and a hand-written help string listing
-the same flags (`:446-472`) — with the top-level command roster
+the same flags (`:446-472`)—with the top-level command roster
 spelled twice more (`main_help` at `:296-310` and the dispatch chain
 at `:271-284`). The same triple exists for `check`, `test`, `fmt`,
 `bundle`, `unbundle`, `repl`, `glue`, `version`, `docs`, `bump`, and
 `experimental-lsp`. Nothing checks that a parsed flag appears in
 help or vice versa; the divergence is already latent (internal flags
-like `--watch-inputs-file` are parsed but unlisted — acceptable, but
+like `--watch-inputs-file` are parsed but unlisted—acceptable, but
 proof the copies are free to disagree).
 
 Satellite restatements: the default opt levels exist as constants
@@ -22,7 +22,7 @@ inside help strings ("`speed (default LLVM optimized)`", `:456`;
 `OptLevel.from_str` chain (`:62-67`) and again as help prose; and
 the user-facing target rosters are string literals in help
 (`:318, 457`) and in `src/cli/targets_validator.zig:406-444` (with
-`roc.toml` example snippets at `:257-289, 670-819`) — all disjoint
+`roc.toml` example snippets at `:257-289, 670-819`)—all disjoint
 from the `RocTarget` enum (`src/target/mod.zig:77-101`) that actually
 defines the names, so a target added to the enum appears in no help
 text until someone remembers.
@@ -32,7 +32,7 @@ text until someone remembers.
 The repo already solved the analogous problem for targets themselves:
 `RocTarget` is one enum with `fromString`/`toTriple` that both the
 build system and CLI consume. The flag layer never got the same
-treatment because the parser is hand-rolled — but the parser's shape
+treatment because the parser is hand-rolled—but the parser's shape
 is uniform enough (boolean flags, `--key=value`, positional args)
 that a declarative table can generate both the matcher and the help
 text without changing behavior.
@@ -41,8 +41,8 @@ text without changing behavior.
 
 - The `build` triple cited above; the same pattern repeats per
   subcommand through `cli_args.zig`.
-- `:456` vs `:86` — the default restated in prose.
-- `targets_validator.zig:406-444` — a fuller, second user-facing
+- `:456` vs `:86`—the default restated in prose.
+- `targets_validator.zig:406-444`—a fuller, second user-facing
   target roster with descriptions, unlinked to `RocTarget`.
 
 ## Solution design
@@ -50,7 +50,7 @@ text without changing behavior.
 1. **Per-command flag table.** For each subcommand, a comptime array
    of `{ long: []const u8, field: []const u8, kind: enum { flag,
    value, path }, help: ?[]const u8 }` (help `null` = internal,
-   deliberately unlisted — the `--watch-inputs-file` case becomes an
+   deliberately unlisted—the `--watch-inputs-file` case becomes an
    explicit decision). A generic `parseArgsFor(T, table, args)` fills
    the struct via `@field`; a generic `helpFor(name, table)` renders
    the help text. A comptime check asserts every table `field` names
@@ -98,7 +98,7 @@ declaration; help cannot lie about flags, defaults, or targets.
 ### Performance ideal
 
 Comptime table expansion produces the same runtime comparisons as the
-hand chains — argument parsing cost unchanged (it runs once per
+hand chains—argument parsing cost unchanged (it runs once per
 invocation; verify no measurable startup delta).
 
 ## Tests to add
@@ -111,5 +111,5 @@ invocation; verify no measurable startup delta).
 
 ## Related projects
 
-- [build-and-ci-single-lists.md](build-and-ci-single-lists.md) — the
+- [build-and-ci-single-lists.md](build-and-ci-single-lists.md)—the
   build-side inventory getting the same treatment.

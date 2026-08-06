@@ -2,22 +2,22 @@
 
 ## Problem
 
-The physical contract of Roc's runtime values — RocStr/RocList field
+The physical contract of Roc's runtime values—RocStr/RocList field
 order and offsets, the small-string flag bit, the seamless-slice tag bit,
 the refcount word's position and its static-data sentinel, Dec's 10^18
-scale — is defined canonically by the Zig structs in `src/builtins/`
+scale—is defined canonically by the Zig structs in `src/builtins/`
 (`str.zig:52`, `list.zig:27`, `utils.zig:286`, `dec.zig:60`). But the
 backends do not consume those definitions; they re-encode the same facts
 as hand-written magic numbers:
 
 - The dev backend hardcodes RocStr/RocList field offsets as raw integer
-  literals — `+ 8` for length, `+ 16` for capacity — at
+  literals—`+ 8` for length, `+ 16` for capacity—at
   `src/backend/dev/LirCodeGen.zig:1379, 1397, 1534, 4889`, with
   comments like "length is at offset 8". It also recomputes
   `roc_str_size = 3 * target_ptr_size` and `small_str_max_len`
   (`LirCodeGen.zig:437-438`).
 - The LLVM backend comptime-asserts the header *word count*
-  (`src/backend/llvm/layout_types.zig:158-159` — good), but hardcodes
+  (`src/backend/llvm/layout_types.zig:158-159`—good), but hardcodes
   the field offsets (`rocListLenOffset`/`rocListCapacityOffset`/
   `rocStrCapacityOffset`, `MonoLlvmCodeGen.zig:7584-7592`), the slice
   tag as a literal `1` (`:4320-4321, 7345`), and the small-string bit
@@ -28,9 +28,9 @@ as hand-written magic numbers:
   slice bit decoded via `i32_and 1` / `i32_and -2`
   (`src/backend/wasm/WasmCodeGen.zig:2483-2498`), small-string detected
   by the sign bit of the length word (`:2506-2520`), and the refcount
-  contract re-implemented inline — data pointer minus 4 to reach the
+  contract re-implemented inline—data pointer minus 4 to reach the
   refcount word, `i32_eqz` as the "static data, never touch" check
-  (`emitDataPtrIncref` and friends, `:2658-2812`) — with no reference
+  (`emitDataPtrIncref` and friends, `:2658-2812`)—with no reference
   to `builtins.utils.REFCOUNT_STATIC_DATA`. `WasmLayout.wasmRepr`
   hardcodes `.str => 12` (`src/backend/wasm/WasmLayout.zig:45-47`)
   while the same file's header comment declares the layout store "the
@@ -50,7 +50,7 @@ as hand-written magic numbers:
   by-value rule) that `src/layout/abi/` already encodes as the shared
   classifier every backend uses for Roc/host calls.
 
-The interpreter is the one executor that does this right — it calls the
+The interpreter is the one executor that does this right—it calls the
 builtins structs' own methods (`isSeamlessSlice()`, `isSmallStr()`,
 imports `REFCOUNT_STATIC_DATA`). That is exactly what makes the drift
 dangerous: a representation change keeps the interpreter (and therefore
@@ -71,24 +71,24 @@ derives `dec_one_i64` from `RocDec.one_point_zero_i128`
 `word_count`; and the `roc_str_view` shape test
 (`str.zig:5026-5045`) shows how to lock a mirror that cannot share
 code. Grep confirms no backend imports `SEAMLESS_SLICE_TAG` or
-`small_str_flag` today — only the interpreter and the Python debuggers
+`small_str_flag` today—only the interpreter and the Python debuggers
 reference those names.
 
 ## Evidence
 
-- `src/backend/dev/LirCodeGen.zig:1379` — "List is a (ptr, len,
+- `src/backend/dev/LirCodeGen.zig:1379`—"List is a (ptr, len,
   capacity) triple - length is at offset 8", with the literal `8`.
-- `src/backend/wasm/WasmCodeGen.zig:2658-2812` — inline refcount
+- `src/backend/wasm/WasmCodeGen.zig:2658-2812`—inline refcount
   arithmetic with `-4` offsets and `i32_eqz` static checks, no
   `REFCOUNT_STATIC_DATA` reference.
-- `src/backend/llvm/layout_types.zig:288-307` — `ptr_size * 3`
+- `src/backend/llvm/layout_types.zig:288-307`—`ptr_size * 3`
   literals beside the comptime-checked header type at `:158`.
-- `src/backend/wasm/WasmLayout.zig:8-11` vs `:45-47` — the file's own
+- `src/backend/wasm/WasmLayout.zig:8-11` vs `:45-47`—the file's own
   stated invariant contradicted three lines of code later.
-- `src/default_platform/roc_str_view.zig:59-68` — hand-written decref
+- `src/default_platform/roc_str_view.zig:59-68`—hand-written decref
   with literal `0` sentinel; only the struct shape is test-locked.
 - `src/backend/dev/CallingConvention.zig:69-86, 143-164` vs
-  `src/layout/abi/x86_64.zig:73-155` — the same ABI thresholds twice.
+  `src/layout/abi/x86_64.zig:73-155`—the same ABI thresholds twice.
 
 ## Solution design
 
@@ -135,7 +135,7 @@ Every criterion below must hold; the project is not done until all do:
 - The debugger constants are generated or CI-locked.
 - Mutation test passes: flip `SEAMLESS_SLICE_TAG` (or reorder RocStr's
   fields) in a scratch build and confirm every backend either fails to
-  compile or fails the lock tests — nothing silently miscompiles.
+  compile or fails the lock tests—nothing silently miscompiles.
 
 ## How to evaluate the result
 
@@ -149,7 +149,7 @@ the builtins by construction.
 
 ### Performance ideal
 
-Zero runtime cost — `@offsetOf` and imported constants fold at
+Zero runtime cost—`@offsetOf` and imported constants fold at
 comptime to the same immediates the literals produce today. Verify by
 diffing generated code for a representative program per backend
 (dev object bytes, llvm IR, wasm module) before/after: byte-identical
@@ -168,9 +168,9 @@ output expected.
 ## Related projects
 
 - The landed single-source builtin registration
-  (`src/builtins/builtin_registry.zig`) — the symbol name/ABI half of
+  (`src/builtins/builtin_registry.zig`)—the symbol name/ABI half of
   the same backend-drift disease, now consolidated; this project is
   the data-layout half.
-- [../small/silent-drift-guards.md](../small/silent-drift-guards.md) —
+- [../small/silent-drift-guards.md](../small/silent-drift-guards.md)—
   the pattern language for mirrors that cannot share code (the Python
   debuggers are exactly that case).

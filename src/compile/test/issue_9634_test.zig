@@ -1,6 +1,6 @@
 //! Regression tests for issue #9634: a nested closure that transitively needs
-//! an outer capture — because it references a sibling/recursive closure that
-//! captures that value — must have the capture threaded into its own capture
+//! an outer capture—because it references a sibling/recursive closure that
+//! captures that value—must have the capture threaded into its own capture
 //! set. Lambda lifting now solves capture sets as a least fixed point over the
 //! function-reference graph (independent of lifting order and rewrite-collapsed
 //! nodes), so these programs lower to LIR without the ARC borrow certifier

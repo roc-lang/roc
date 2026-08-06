@@ -8,7 +8,7 @@ type=repl
 » "foo: bar".split_first(":")
 » "nomatch".split_first(":")
 » "a:b:c".split_first(":")
-» source = "key=value=tail — a long heap-allocated string that will not fit inline"
+» source = "key=value=tail—a long heap-allocated string that will not fit inline"
 » Str.split_first(source, "=")
 » source
 ~~~
@@ -21,8 +21,8 @@ Ok({ after: "b:c", before: "a" })
 ---
 assigned `source`
 ---
-Ok({ after: "value=tail — a long heap-allocated string that will not fit inline", before: "key" })
+Ok({ after: "value=tail—a long heap-allocated string that will not fit inline", before: "key" })
 ---
-"key=value=tail — a long heap-allocated string that will not fit inline"
+"key=value=tail—a long heap-allocated string that will not fit inline"
 # PROBLEMS
 NIL

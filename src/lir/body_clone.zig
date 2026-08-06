@@ -249,6 +249,7 @@ fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
         .str_match => |s| noteRead(counts, s.source),
         .str_match_set => |s| noteRead(counts, s.source),
         .ret => |s| noteRead(counts, s.value),
+        .crash => |s| if (s.msg.localId()) |message| noteRead(counts, message),
         .incref => |s| noteRead(counts, s.value),
         .decref => |s| noteRead(counts, s.value),
         .decref_if_initialized => |s| {
@@ -261,7 +262,6 @@ fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
         .comptime_branch_taken,
         .join,
         .jump,
-        .crash,
         .runtime_error,
         .comptime_exhaustiveness_failed,
         .loop_continue,
@@ -297,9 +297,9 @@ pub fn localIdLessThan(_: void, a: LocalId, b: LocalId) bool {
 /// `Rewriter` carries the pass-specific destination state and supplies the
 /// hooks that diverge between passes:
 ///
-///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId)` — required.
+///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId)`—required.
 ///     Produces the cloned tail for a source `ret value`.
-///   * `interceptStmt(self: *Rewriter, cloner: anytype, stmt: LIR.CFStmt)` —
+///   * `interceptStmt(self: *Rewriter, cloner: anytype, stmt: LIR.CFStmt)`—
 ///     optional. Returns a cloned statement id to short-circuit the default
 ///     clone, letting the pass fuse a direct constructor/concat return into
 ///     the tail, or `null` to fall through to the ordinary clone.
@@ -529,7 +529,10 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 } }),
                 .jump => |s| try self.store.addCFStmt(.{ .jump = .{ .target = s.target } }),
                 .ret => |s| try self.rewriter.cloneRet(self, s.value),
-                .crash => |s| try self.store.addCFStmt(.{ .crash = .{ .msg = s.msg } }),
+                .crash => |s| try self.store.addCFStmt(.{ .crash = .{ .msg = switch (s.msg) {
+                    .literal => |literal| .{ .literal = literal },
+                    .local => |local| .{ .local = try self.mapLocal(local) },
+                } } }),
             };
 
             try self.stmt_map.put(old_id, cloned);

@@ -7,7 +7,7 @@
 //!
 //! Item equality is byte-equality of canonical S-expressions (see
 //! `PackageApi`), so alpha-renaming of type variables is patch-level and any
-//! other signature difference — loosening or tightening alike — is major.
+//! other signature difference—loosening or tightening alike—is major.
 
 const std = @import("std");
 const base = @import("base");
@@ -56,7 +56,7 @@ pub fn nextVersion(old: base.url.Version, magnitude: Magnitude) base.url.Version
 /// The magnitude a declared old -> declared version bump carries, or null
 /// when declared does not move forward from old. Combined with the diffed
 /// magnitude via `Magnitude.combine`-style ordering, a declared bump is
-/// sufficient when its magnitude is at least the required one — bumping
+/// sufficient when its magnitude is at least the required one—bumping
 /// further than required is always allowed.
 ///
 /// Under 0.X.Y convention rules, bumping X (or crossing to 1.0.0 and beyond,

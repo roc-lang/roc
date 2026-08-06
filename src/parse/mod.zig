@@ -213,6 +213,44 @@ test "pipe question suffix precedence distinguishes empty call" {
     try std.testing.expectEqual(.arrow_call, std.meta.activeTag(target_with_arg_pipe));
 }
 
+test "whitespace-separated postfix after pipe applies to pipe result" {
+    // Repro for https://github.com/roc-lang/roc/issues/10517
+    const gpa = std.testing.allocator;
+    const source = "(a |> f().inside(), a |> f() .spaced(), a |> f()\t.tabbed(), a |> f()\n.line_broken(), a |> f() .field, a |> f()\t.0)";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+    try std.testing.expectEqual(.tuple, std.meta.activeTag(root));
+    const items = ast.store.exprSlice(root.tuple.items);
+    try std.testing.expectEqual(@as(usize, 6), items.len);
+
+    const adjacent = ast.store.getExpr(items[0]);
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(adjacent));
+    try std.testing.expectEqual(.method_call, std.meta.activeTag(ast.store.getExpr(adjacent.arrow_call.right)));
+
+    for (items[1..4]) |item| {
+        const whitespace_separated = ast.store.getExpr(item);
+        try std.testing.expectEqual(.method_call, std.meta.activeTag(whitespace_separated));
+        try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(whitespace_separated.method_call.receiver)));
+    }
+
+    const field_access = ast.store.getExpr(items[4]);
+    try std.testing.expectEqual(.field_access, std.meta.activeTag(field_access));
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(field_access.field_access.left)));
+
+    const tuple_access = ast.store.getExpr(items[5]);
+    try std.testing.expectEqual(.tuple_access, std.meta.activeTag(tuple_access));
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(tuple_access.tuple_access.expr)));
+}
+
 test "dollar-prefixed record field names are rejected with a single diagnostic" {
     const gpa = std.testing.allocator;
 

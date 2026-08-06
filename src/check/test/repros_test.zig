@@ -723,7 +723,7 @@ test "check - repro - issue 9670 - typed local binding of parametric fn result" 
     // result is assigned to a local binding with an explicit type annotation that
     // reuses the enclosing function's type parameters produces a spurious
     // `Parser(input, a)` != `Parser(input, a)` mismatch (the two sides print
-    // identically). NOTE: this currently FAILS — it documents the open bug.
+    // identically). NOTE: this currently FAILS—it documents the open bug.
     //
     // Root cause is NOT the local annotation (see the minimal case below): the
     // trigger is the multi-parameter alias `Parser(input, output)` used with one
@@ -754,7 +754,7 @@ test "check - repro - issue 9670 - minimal: multi-param alias, passthrough + wra
     // its first parameter (`input`) passed through unchanged and its second
     // parameter (`a`) wrapped in `List` in the return. Calling such a function
     // yields a spurious `Parser(input, a)` != `Parser(input, a)` mismatch on the
-    // argument. NOTE: this currently FAILS — it documents the open bug.
+    // argument. NOTE: this currently FAILS—it documents the open bug.
     //
     // Contrast (all pass today):
     //   * single-param alias wrapped in return:  `Wrap(a) -> Wrap(List(a))`
@@ -848,4 +848,23 @@ test "check - repro - issue 10184 - tag syntax for value-backed nominal reports 
     defer test_env.deinit();
 
     try test_env.assertOneTypeError("Invalid Nominal Tag");
+}
+
+test "check - repro - issue 10490 - standard library errors compose through open unions" {
+    // Repro for https://github.com/roc-lang/roc/issues/10490: standard library
+    // errors should compose through `?` without callers mapping their tags.
+    const src =
+        \\parse_name_and_year = |str| {
+        \\    { before: name, after: birth_year_str } = str.split_first(" was born in ")?
+        \\    birth_year = U16.from_str(birth_year_str)?
+        \\    Ok({ name, birth_year })
+        \\}
+        \\
+        \\_ = parse_name_and_year("Alice was born in 1990")
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
 }

@@ -133,8 +133,8 @@ test "check type - binop operands same type works - I64 plus I64" {
 // and can never adapt per call site. At the generalization boundary it is
 // defaulted (first-satisfier order), the deferred dispatches cascade into the
 // signature (pinning `x`, `y`, and the return to Dec), and a LITERAL DEFAULTED
-// warning fires per literal — the Haskell §4.3.4 / `-Wtype-defaults` analogue.
-// A signature-reachable literal (binop form `|x| 5 + x`) stays open instead —
+// warning fires per literal—the Haskell §4.3.4 / `-Wtype-defaults` analogue.
+// A signature-reachable literal (binop form `|x| 5 + x`) stays open instead—
 // see the guard test below. Full design:
 // CONTRIBUTING/design/open-literal-defaulting.md.
 test "check type - numeric literal through method-call dispatch resolves" {
@@ -169,7 +169,7 @@ test "check type - literal binop receiver stays polymorphic (no boundary default
     // Guard against over-eager boundary defaulting: the binop form collapses
     // literal, receiver, and result into the signature's return var
     // (`ret = lhs`), so the literal IS reachable from the def's type via its
-    // constraint chain and must stay open and polymorphic — no warning.
+    // constraint chain and must stay open and polymorphic—no warning.
     const source =
         \\five_plus_binop = |x| 5 + x
     ;
@@ -189,11 +189,11 @@ test "check type - literal binop receiver stays polymorphic (no boundary default
 // `numeral_default_candidates`) becomes the FIRST satisfier exactly once. `f`
 // stays polymorphic (its literal is signature-reachable, see the binop guard
 // test above), so `y = f(my_val)` probes the literal's candidates against the
-// concrete T pinned by `my_val` — only T survives. A wrong refutation
+// concrete T pinned by `my_val`—only T survives. A wrong refutation
 // (soundness drift in the pre-filter) flips `y`'s inferred type here;
 // safety-checked builds also crash on the witness probe in
 // `commitLiteralDefault`. Asserts `y` only; every shape type-checks with zero
-// problems (the literal resolves via the pinned argument — like the existing u8
+// problems (the literal resolves via the pinned argument—like the existing u8
 // shape, which produced no LITERAL DEFAULTED warning).
 test "check type - numeral defaulting survivor matrix - every candidate as first satisfier" {
     // Same order as `numeral_default_candidates` in src/check/Check.zig.
@@ -221,7 +221,7 @@ test "check type - numeral defaulting survivor matrix - every candidate as first
 // mismatch against the concrete U8 argument) and attempt exactly one probe (the
 // `u8` commit; `f64`/`f32` are never reached). The count is mechanical: 10 =
 // candidates before `u8` in `numeral_default_candidates` (src/check/Check.zig:
-// dec, i64, u64, i128, u128, i32, u32, i16, u16, i8 — then u8). Editing that
+// dec, i64, u64, i128, u128, i32, u32, i16, u16, i8—then u8). Editing that
 // list must update this count to u8's new index.
 // `bench_probe_attempts`/`bench_probe_refuted` are per-instance debug-only fields
 // on the Check struct, compiled out entirely in release builds. A fresh Check
@@ -235,7 +235,7 @@ test "check type - numeral defaulting pre-filter refutes provably-failing candid
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     // The pinned U8 argument admits exactly one candidate, so the literal
-    // receiver resolves to U8 with zero problems (no LITERAL DEFAULTED warning —
+    // receiver resolves to U8 with zero problems (no LITERAL DEFAULTED warning—
     // unlike the open `(5).plus(x)` shape above, nothing here falls back to the
     // canonical default).
     try test_env.assertDefType("h", "U8");
@@ -248,7 +248,7 @@ test "check type - numeral defaulting pre-filter refutes provably-failing candid
 
 // CANDIDATE-ORDER PIN for `numeral_default_candidates` (src/check/Check.zig):
 // `bitwise_and` exists on all 10 builtin integer types but NOT on Dec/F64/F32,
-// and neither argument pins a width — so the boundary-defaulted receiver
+// and neither argument pins a width—so the boundary-defaulted receiver
 // literal has MULTIPLE surviving candidates and must commit the FIRST integer
 // in canonical order, I64 (Dec is refuted by the method-lookup miss). Compare
 // the `(5).plus(x)` shape above, which commits Dec. Inferring some other integer
@@ -1719,7 +1719,7 @@ test "check type - if else - different branch types 3" {
 // Dual-kind literal var (flex/flex merge): both branches are OPEN literals, so
 // unification merges a numeral-origin and a quote-origin constraint onto one var.
 // No type satisfies both, so the program is always
-// rejected — but the diagnostic must not depend on which unify side each literal
+// rejected—but the diagnostic must not depend on which unify side each literal
 // arrived on. The defaulting oracle (src/types/literal_defaulting.zig)
 // tie-breaks dual-kind vars to `.numeral` for every stage that asks, so BOTH
 // orders default the var toward the numeral head (Dec) and report the quote
@@ -4155,8 +4155,8 @@ test "check type - structural tag - if True True else False is open tag union" {
 
 const ModuleExpectation = union(enum) {
     pass: DefExpectation,
-    /// Pass type checking, but expect warning-severity problems — and ONLY
-    /// warnings — whose titles must match exactly, in order. Plain `pass` fails
+    /// Pass type checking, but expect warning-severity problems—and ONLY
+    /// warnings—whose titles must match exactly, in order. Plain `pass` fails
     /// on ANY problem, warnings included, so warning-producing programs must
     /// declare their warnings explicitly here.
     pass_with_warnings: PassWithWarnings,
@@ -4400,7 +4400,7 @@ test "check type - try return with match and error propagation should type-check
     ;
     // Passes with a combined error type (open tag union). The scrutinee literal
     // `0` is unreachable from the annotated signature `{} -> Try(Str, _)` and is
-    // boundary-defaulted to Dec — but SILENTLY: its dispatch constraints touch
+    // boundary-defaulted to Dec—but SILENTLY: its dispatch constraints touch
     // nothing signature-reachable, so the def's interface is identical either
     // way and no LITERAL DEFAULTED warning is emitted.
     try checkTypesModule(source, .{ .pass_with_warnings = .{
@@ -4535,7 +4535,7 @@ test "check type - record ext - arg inferred as open" {
     // The `Str` annotation on `foo_val` pins `create_record`'s return to the
     // concrete `{ foo: Str }`, so the zero-arg thunk is no longer polymorphic
     // (thunks are allowed to generalize, but here nothing is left open). Only the
-    // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
+    // argument mismatch—`rec` lacks the `blah` field `use_record` needs—fires.
     try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
@@ -4930,7 +4930,7 @@ test "check type - nominal record destructure syntax works in every pattern posi
 // Two DIFFERENT operations, deliberately kept separate:
 //
 //  - STRUCTURAL values (records/tags) LIFT into a matching nominal by
-//    unification — the value structurally IS the backing. Single-level only;
+//    unification—the value structurally IS the backing. Single-level only;
 //    chain composition is unsupported (the "does not lift through a newtype
 //    chain" cases below stay rejected).
 //
@@ -4993,7 +4993,7 @@ test "record update still lifts to its nominal extension" {
 test "consolidated - record literal does not lift through a newtype chain" {
     // Structural lifting is single-level only: it does NOT compose through a
     // transparent newtype chain (`Outer := Inner := { … }`). Pinned as the
-    // current rejection. We may support chain composition in the future — or we
+    // current rejection. We may support chain composition in the future—or we
     // may decide not to.
     const source =
         \\main! = |_| {}
@@ -5388,11 +5388,11 @@ test "check type - mutually recursive functions - is_even and is_odd" {
 
 // A binop whose lhs is a literal and whose rhs is pinned to a concrete type only
 // LATER, through a builtin signature (`index : U64` from
-// `List.map_with_index`'s callback) — the real-world pattern speculative peer
+// `List.map_with_index`'s callback)—the real-world pattern speculative peer
 // resolution used to serve. First-satisfier defaulting keeps it passing: at
 // finalize, the literal's own `plus : (a, U64) -> a` constraint refutes `Dec`
 // and `U64` is the first candidate that satisfies it. (Unconditionally unifying
-// lhs == rhs was tried and refuted — it breaks heterogeneous methods like
+// lhs == rhs was tried and refuted—it breaks heterogeneous methods like
 // `times : Duration, I64 -> Duration`; see the custom Num type tests.)
 test "check type - binop literal lhs with signature-pinned rhs - U64 index" {
     const source =
@@ -6121,7 +6121,7 @@ test "check type - zulip repro" {
     // The `Str` annotation on `foo_val` pins `create_record`'s return to the
     // concrete `{ foo: Str }`, so the zero-arg thunk is no longer polymorphic
     // (thunks are allowed to generalize, but here nothing is left open). Only the
-    // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
+    // argument mismatch—`rec` lacks the `blah` field `use_record` needs—fires.
     try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
@@ -6227,7 +6227,7 @@ test "check type - annotation with named open ext prevents closing" {
 
 test "check type - annotation with open ext without wildcard is non-exhaustive" {
     // The annotation says [Red, ..a] so matching only Red without a wildcard
-    // is non-exhaustive — unknown tags could exist.
+    // is non-exhaustive—unknown tags could exist.
     const source =
         \\test : [Red, ..a] -> Try([Red, ..a], err)
         \\test = |x| {
@@ -6459,7 +6459,7 @@ test "check type - exhaustive match closes tag union inside record field" {
 }
 
 test "check type - wildcard in record field keeps nested tag union open" {
-    // Same structure as above but with a wildcard — the traversal through the
+    // Same structure as above but with a wildcard—the traversal through the
     // record finds the wildcard and correctly keeps the tag union open.
     const source =
         \\test = |x| {
@@ -6699,7 +6699,7 @@ test "check type - exhaustive match 4 levels deep all but top closed" {
 
 test "check type - exhaustive match same tag name at multiple nesting levels" {
     // "Ok" appears at both level 1 and level 2.
-    // The closure logic must not confuse the two — each level filters
+    // The closure logic must not confuse the two—each level filters
     // only the patterns passed to it by the parent.
     const source =
         \\test = |x| {
@@ -6987,7 +6987,7 @@ test "check type - annotated open arg not closed by exhaustive match in body" {
 
 test "check type - annotated open return type preserved after caller exhaustive match" {
     // Static dispatch method annotated with open return type.
-    // Caller matches exhaustively then reuses the value — the annotation
+    // Caller matches exhaustively then reuses the value—the annotation
     // prevents closing, so the second use at a broader type succeeds.
     const source =
         \\Maker := [Maker].{
@@ -7270,7 +7270,7 @@ test "check type - def order independence - cross-literal constraint group (pinn
 
 // Repro B: the annotation pins the dispatch return to U8, which must flow
 // through the receiver literal's first-satisfier probe into the ARGUMENT
-// literal — the argument must not be finalized to Dec while the dispatch that
+// literal—the argument must not be finalized to Dec while the dispatch that
 // would pin it is still in flight.
 test "check type - annotated method-call return pins both receiver and argument literals" {
     const source =
@@ -7310,9 +7310,9 @@ test "check type - def order independence - passive literal def after its constr
 
 // Heterogeneous multi-driver group: two open literals constrained through
 // DIFFERENT integer-only methods share a component (`a`'s `bitwise_and` mentions
-// `b`). The group policy must (1) pick one candidate for the whole group — Dec
+// `b`). The group policy must (1) pick one candidate for the whole group—Dec
 // is refuted by the method-lookup miss, so the first surviving integer, I64,
-// wins — and (2) exempt passives from the forced assignment: `shl_wrap : T,
+// wins—and (2) exempt passives from the forced assignment: `shl_wrap : T,
 // U8 -> T` pins the shift-amount literal `3` to U8 via the method signature;
 // force-assigning it the group candidate (I64) would fail every candidate and
 // head-default the drivers to Dec, erroring. Both def orders must accept with
@@ -7343,7 +7343,7 @@ test "check type - def order independence - heterogeneous multi-driver group (li
 // component. `"x"`'s `concat` signature mentions `b` (the still-flex result of
 // `(1).to_str()`), and `1`'s `to_str` signature mentions `b` too, so the two
 // drivers interfere. The group policy assigns the quote driver its single
-// candidate (Str) on every attempt while the numeral scan iterates — the head
+// candidate (Str) on every attempt while the numeral scan iterates—the head
 // candidate Dec already satisfies the group (`Str.concat` pins `b` to Str;
 // `Dec.to_str : Dec -> Str` agrees), so the group commits on the first attempt.
 // Both def orders must accept with identical types.
@@ -7372,11 +7372,11 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 // BOUNDARY GROUP DEFAULTING: the same interference-component machinery must run
 // at a def's generalization boundary, not just at module finalize.
 // `(5).plus((2).shl_wrap(3))` puts two DRIVER literals in one component
-// (`5`'s `plus` signature reaches the inner dispatch's return — `2`'s constraint
+// (`5`'s `plus` signature reaches the inner dispatch's return—`2`'s constraint
 // signature's return). At top level this resolves via `finalizeLiteralDefaults`'
 // group policy (Dec refuted by the `shl_wrap` lookup miss; first surviving
 // integer, I64, wins). Wrapped in a function, the literals are NOT
-// signature-reachable, so the BOUNDARY must default them — using the same group
+// signature-reachable, so the BOUNDARY must default them—using the same group
 // policy. Before the boundary shared this machinery, it committed literals
 // one-by-one in var-pool order: `5`'s Dec probe speculatively pinned the inner
 // dispatch's return before `2`'s integer-only constraint was consulted, so the
@@ -7389,7 +7389,7 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 //
 // (No within-def STATEMENT-order pair exists for this shape: block locals cannot
 // forward-reference, so "linking def first" is not expressible inside a body,
-// and each local def generalizes at its own per-statement boundary anyway — a
+// and each local def generalizes at its own per-statement boundary anyway—a
 // literal group never spans local statements.)
 test "check type - boundary defaulting - heterogeneous multi-driver group inside a function" {
     const source =

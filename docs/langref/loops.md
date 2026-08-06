@@ -14,7 +14,7 @@ for n in 1..<5 {
 }
 ```
 
-> `1..<5` is a [range](numbers#ranges): an `Iter` of the numbers from 1 up to (but not including) 5. Writing `1..=5` instead would include the 5. A range is an `Iter` of its bounds' type — for example, if the bounds are `I64` values, the range is an `Iter(I64)`, and so `n` in this example would be an `I64`.
+> `1..<5` is a [range](numbers#ranges): an `Iter` of the numbers from 1 up to (but not including) 5. Writing `1..=5` instead would include the 5. A range is an `Iter` of its bounds' type—for example, if the bounds are `I64` values, the range is an `Iter(I64)`, and so `n` in this example would be an `I64`.
 
 A loop body only includes statements; it does not have a final expression. The loop itself evaluates to `{}`.
 

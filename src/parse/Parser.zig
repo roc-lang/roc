@@ -1406,8 +1406,8 @@ const roc_version_key = "roc";
 
 /// Find the optional `roc: "<version>"` entry in a header's dependency record.
 ///
-/// The entry stays in the record alongside the real dependencies — the same way
-/// an app's platform entry does — so that comment attachment and formatting of
+/// The entry stays in the record alongside the real dependencies—the same way
+/// an app's platform entry does—so that comment attachment and formatting of
 /// the record need no special cases. What this returns is which of those fields
 /// pins the compiler version, so that later phases can tell it apart from a
 /// dependency without re-deriving the rule from field names.
@@ -3651,6 +3651,15 @@ fn runExprStatementKernel(
         .suffix => {
             const tok = self.peek();
             const tok_int = @intFromEnum(tok);
+
+            // Trivia-separated postfixes apply to the completed pipe; adjacent
+            // NoSpaceDot* postfixes remain part of the pipe target.
+            if (open_syntax.peekExpr() == .expr_pipe_rhs and
+                (tok == .DotInt or tok == .DotLowerIdent))
+            {
+                last_expr = expr_finish_state.expr;
+                continue :expr_kernel .complete;
+            }
 
             if (tok == .Dot and self.peekN(1) == .OpenCurly) {
                 const record_start = self.pos + 1;
@@ -6216,7 +6225,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .pattern_tag_args_next;
                     }
                     if (self.peek() == .Dot and self.peekN(1) == .NoSpaceOpenRound) {
-                        // `Type.(pattern)` — nominal-value destructure, the inverse
+                        // `Type.(pattern)`—nominal-value destructure, the inverse
                         // of `Type.(value)` construction. Parse the backing
                         // pattern(s) just like tag args, flagged as backing_value.
                         self.advance(); // `.`

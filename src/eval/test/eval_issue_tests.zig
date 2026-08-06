@@ -416,7 +416,7 @@ pub const tests = [_]TestCase{
     .{
         // An unnamed padding field whose type is refcounted (`Str`). Its bytes
         // are uninitialized garbage and must never be refcounted, compared, or
-        // inspected — only its size is reserved. If the padding spacer were
+        // inspected—only its size is reserved. If the padding spacer were
         // treated as a live Str, dropping the value would decref garbage and
         // crash, so this exercises the refcount/equality padding skip on every
         // backend.
@@ -801,5 +801,29 @@ pub const tests = [_]TestCase{
         \\main = use_hooks(hooks)
         ,
         .expected = .{ .inspect_str = "Text(\"hello\")" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9856
+        .name = "issue 9856: crash accepts multiline strings on every backend",
+        .source =
+        \\{
+        \\    crash
+        \\        \\This does not
+        \\        \\work.
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9856
+        .name = "issue 9856: crash evaluates interpolation on every backend",
+        .source =
+        \\{
+        \\    n : I64
+        \\    n = 42
+        \\    crash "runtime-built crash message long enough for heap storage: ${n.to_str()}"
+        \\}
+        ,
+        .expected = .{ .crash = {} },
     },
 };

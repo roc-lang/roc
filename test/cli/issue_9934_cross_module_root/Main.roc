@@ -1,4 +1,4 @@
-# Regression fixture for https://github.com/roc-lang/roc/issues/9934 — the
+# Regression fixture for https://github.com/roc-lang/roc/issues/9934—the
 # first expect's compile-time root (module-local id 0) requests Clock.create's
 # template, and Clock's hoisted `minutes_per_day` constant also has root id 0
 # in its own module. The traveling entry-root fact must stay module-qualified,

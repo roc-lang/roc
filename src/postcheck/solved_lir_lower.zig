@@ -2728,7 +2728,7 @@ const Lowerer = struct {
             .jump => |jump| try self.lowerJump(jump),
             .return_ => |ret| try self.lowerReturn(ret),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
+                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
             } }),
             .comptime_branch_taken => |taken| try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
                 .site = try self.lowerComptimeSite(taken.site),
@@ -4504,6 +4504,15 @@ const Lowerer = struct {
 
     fn lowerLowLevelInto(self: *Lowerer, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: Lifted.Span(Lifted.ExprId), next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const args = self.solved.lifted.exprSpan(span);
+        if (op == .crash) {
+            if (args.len != 1) Common.invariant("crash low-level operation received the wrong number of arguments");
+            const lowered = try self.lowerExprsToTemps(args);
+            defer lowered.deinit(self.allocator);
+            const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .local = lowered.ids[0] },
+            } });
+            return try self.prependExprs(lowered, crash_stmt);
+        }
         if (op == .dict_pseudo_seed and self.dict_seed_mode == .comptime_zero) {
             if (args.len != 0) Common.invariant("Dict seed low-level operation received arguments");
             return try self.result.store.addCFStmt(.{ .assign_literal = .{
@@ -4570,8 +4579,8 @@ const Lowerer = struct {
     /// Compile-time half of the `list_map_can_reuse` decision, computed for
     /// both pointer widths. A width's bit is true when the input and output
     /// element layouts of a `List.map` call are interchangeable in one
-    /// allocation on that width — same element stride, same allocation
-    /// alignment class, and same refcounted-elements header shape — in which
+    /// allocation on that width—same element stride, same allocation
+    /// alignment class, and same refcounted-elements header shape—in which
     /// case the runtime uniqueness check decides at that width. A false bit
     /// means reuse is statically impossible (or the optimization is disabled)
     /// on that width, so the op resolves to a constant 0 there. Both bits are
@@ -4781,9 +4790,9 @@ const Lowerer = struct {
         } });
     }
 
-    /// When the in-place `List.map` branch is statically impossible — the
+    /// When the in-place `List.map` branch is statically impossible—the
     /// optimization is disabled or the element layouts are not
-    /// interchangeable — lower only the branch a constant-0
+    /// interchangeable—lower only the branch a constant-0
     /// `list_map_can_reuse` selects, so the in-place machinery never reaches
     /// LIR. Each fold is recorded as explicit data; the debug Lambda Mono
     /// materializer replays the recorded resolutions instead of recomputing
@@ -5094,7 +5103,7 @@ const Lowerer = struct {
             },
             .return_ => |ret| try self.lowerReturn(ret),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
-                .msg = try self.result.store.insertString(self.stringLiteralText(msg)),
+                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
             } }),
         };
     }
@@ -5634,7 +5643,7 @@ const Lowerer = struct {
             // Executors disagree on how a narrow signed condition widens to
             // the u64 the switch compares (the interpreter zero-extends the
             // stored bytes; the dev backend loads sign-extended), so narrow
-            // signed layouts may only switch on sign-bit-clear values — for
+            // signed layouts may only switch on sign-bit-clear values—for
             // those the two widenings coincide. Everything else keeps the
             // equality-chain lowering.
             const width: u16 = switch (self.intPrimitive(ty) orelse return null) {
@@ -5649,7 +5658,7 @@ const Lowerer = struct {
                 // floats, bool, and str never take this path.
                 .u128, .i128, .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
             };
-            // Encode as the value's bits zero-extended at layout width — the
+            // Encode as the value's bits zero-extended at layout width—the
             // read every executor performs on an unsigned or sign-bit-clear
             // condition.
             const bits: u128 = @bitCast(value);
@@ -9548,7 +9557,7 @@ const NameStore = check.CheckedNames.NameStore;
 /// Re-intern every text of one source interner into `dest` in serial-id order,
 /// asserting each id round-trips to its original position. A name interner
 /// deduplicates, so this reproduces ids `0..count-1` exactly UNLESS the source
-/// held the same text under two ids — dedup would collapse those and shift every
+/// held the same text under two ids—dedup would collapse those and shift every
 /// later id, which the per-id check turns into a loud invariant break rather than
 /// a silently divergent clone.
 fn reinternNames(

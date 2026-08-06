@@ -104,7 +104,7 @@ fn listMatchApp(comptime branch_count: usize) []const u8 {
             \\f = |xs| match xs {
             \\
         ;
-        // Branches [1, ..] => 1, [1, 2, ..] => 2, ... — the PR 9707 family
+        // Branches [1, ..] => 1, [1, 2, ..] => 2, ...—the PR 9707 family
         // shape: each branch adds one more matched element.
         for (1..branch_count + 1) |n| {
             var pat: []const u8 = "    [";

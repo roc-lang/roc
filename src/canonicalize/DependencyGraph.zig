@@ -623,7 +623,7 @@ const DemandAnalyzer = struct {
                 }
             },
             .e_call => |call| {
-                // Operands first, then the target's summary applies —
+                // Operands first, then the target's summary applies—
                 // pushed in reverse so pops run func, args, apply.
                 try walk.push(self.allocator, .{ .apply_call_target = .{ .func = call.func, .args = call.args } });
                 try self.pushExprSpanReversed(walk, call.args);
@@ -990,7 +990,7 @@ pub fn getConstantsInDependencyOrder(
 }
 
 /// Collect every top-level def referenced anywhere in `root_expr`'s expression
-/// tree — including nested lambda bodies and blocks — into `out` (deduplicated).
+/// tree—including nested lambda bodies and blocks—into `out` (deduplicated).
 ///
 /// This is the *name-reference* relation used to order type checking, not the
 /// demand relation used to order compile-time constant evaluation: a reference

@@ -14,7 +14,7 @@ const base = @import("base");
 const layout = @import("layout");
 const builtins = @import("builtins");
 
-// EvalBackend was removed from here — it is defined in src/eval/mod.zig.
+// EvalBackend was removed from here—it is defined in src/eval/mod.zig.
 // Callers should import via @import("eval").EvalBackend.
 
 pub const x86_64 = @import("x86_64/mod.zig");

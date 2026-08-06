@@ -2,8 +2,8 @@
 //! programs must not depend on libc or on Zig's standard library, it's important that
 //! none of these operations depend on any Zig types like slices or Allocator.
 //!
-//! Roc calls the host using the platform C ABI. Every host operation — the memory and
-//! diagnostic callbacks in `RocOps`, and each platform-provided hosted function — takes a
+//! Roc calls the host using the platform C ABI. Every host operation—the memory and
+//! diagnostic callbacks in `RocOps`, and each platform-provided hosted function—takes a
 //! leading `*RocOps` argument (the host's operation table, through which the host can reach
 //! its own `env` context) and then its remaining arguments and return value in whatever
 //! registers/memory the target's C ABI prescribes for their types.
@@ -106,7 +106,7 @@ pub fn hostedFn(func: anytype) HostedFn {
 /// Array of hosted function pointers provided by the platform.
 ///
 /// Dispatch is positional: the interpreter calls `fns[i]`. For a
-/// typical platform — hosted functions in a single module — `i` is the
+/// typical platform—hosted functions in a single module—`i` is the
 /// function's alphabetical index by `Module.fn_name` (trailing `!`
 /// stripped). When hosted functions span multiple modules the ordering
 /// rule is more involved; see `src/compile/README.md` ("Host functions").
@@ -136,7 +136,7 @@ pub const RocOps = extern struct {
     /// allocator. May be null if the host has no context.
     env: *anyopaque,
     /// Allocate `length` bytes aligned to `alignment`, returning the allocation (or null on
-    /// OOM — see below). Similar to `_aligned_malloc`.
+    /// OOM—see below). Similar to `_aligned_malloc`.
     ///
     /// A host that cannot provide a non-null pointer (e.g. due to OOM) must not return a real
     /// pointer; a platform host aborts, while the compiler-internal host returns `null` so the
@@ -158,7 +158,7 @@ pub const RocOps = extern struct {
     /// Called when the Roc program crashes (e.g. integer overflow), with the UTF-8 message
     /// bytes and length. The host must stop execution of the Roc program and not return to it
     /// (a platform host aborts; the compiler-internal host longjmps out), so it never returns
-    /// to Roc — but the type stays `void` since a longjmp-based host is not statically noreturn.
+    /// to Roc—but the type stays `void` since a longjmp-based host is not statically noreturn.
     roc_crashed: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
     /// Hosted functions provided by the platform (sorted alphabetically by name).
     /// These are effectful operations like I/O that the platform provides to Type Modules.

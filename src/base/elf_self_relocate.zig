@@ -57,7 +57,7 @@ fn classifyReloc(r_type: u32) RelocKind {
 }
 
 /// Whether this build's `std.DynLib` is the relocation-free `ElfDynLib` (a
-/// static, no-libc — i.e. static-musl — linux binary). For every other
+/// static, no-libc—i.e. static-musl—linux binary). For every other
 /// configuration `std.DynLib` defers to the OS loader, which relocates for us.
 pub const loader_skips_relocations = builtin.os.tag == .linux and
     (!builtin.link_libc or (builtin.abi == .musl and builtin.link_mode == .static)) and

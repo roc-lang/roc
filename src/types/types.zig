@@ -387,7 +387,7 @@ pub const Alias = struct {
     origin_module: ModuleIdentity.Idx,
     /// CIR statement index of the source declaration in origin_module, when
     /// this alias came from a concrete source declaration. A decl LOCATOR for
-    /// resolving method tables in the owning env — never part of identity.
+    /// resolving method tables in the owning env—never part of identity.
     source_decl: SourceDecl = .none,
 };
 
@@ -661,7 +661,7 @@ pub const NominalDecl = struct {
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
     origin_module: ModuleIdentity.Idx,
-    /// Packed statement locator plus opacity and builtin-origin bits — the
+    /// Packed statement locator plus opacity and builtin-origin bits—the
     /// same bits nominal applications of this declaration carry. The
     /// statement must be present: a declaration entry without a source
     /// statement has no key and cannot be registered.
@@ -671,7 +671,7 @@ pub const NominalDecl = struct {
     /// the application's actual args for these, positionally.
     formals: Var.SafeList.Range,
     /// The declaration's backing template. It references `formals` and is
-    /// never unified against directly — backing access instantiates a copy
+    /// never unified against directly—backing access instantiates a copy
     /// with actual args substituted for formals.
     backing: Var,
     /// Declaration flags, padding-free so serialized bytes are deterministic.
@@ -825,7 +825,7 @@ pub const TwoTags = struct {
 /// constraint.
 ///
 /// Derived once from the parser's exact digit facts (the module env's numeral
-/// table) — never from a pre-baked concrete value — so every stage that asks
+/// table)—never from a pre-baked concrete value—so every stage that asks
 /// "does this literal fit type T?" reads the same precomputed answer from the
 /// same computation (src/types/numeral.zig). Conversions to concrete bits do
 /// not read this struct at all; they consume the exact digits directly at
@@ -838,7 +838,7 @@ pub const NumeralInfo = struct {
     magnitude: [16]u8,
 
     /// Whether `magnitude` holds the combined digits. False for literals
-    /// whose digits exceed u128 — their `fits` set is still exact.
+    /// whose digits exceed u128—their `fits` set is still exact.
     has_magnitude: bool,
 
     /// Count of decimal digits after the point (0 for integer literals).
@@ -852,7 +852,7 @@ pub const NumeralInfo = struct {
     /// Whether the literal had a leading minus sign.
     is_negative: bool,
 
-    /// Whether the literal was written fractionally — with a decimal point or
+    /// Whether the literal was written fractionally—with a decimal point or
     /// nonzero fractional digits. `1e5` is not fractional; `3.0` is.
     is_fractional: bool,
 
@@ -914,7 +914,7 @@ pub const NumeralInfo = struct {
     ///
     /// Identity is the recorded digits, NOT the normalized value: `1.50`
     /// records {magnitude 150, scale 2} and hashes differently from `1.5`'s
-    /// {15, 1}. This is deliberate — leading/trailing-zero spellings are
+    /// {15, 1}. This is deliberate—leading/trailing-zero spellings are
     /// vanishingly rare in practice, so normalizing every literal's digits
     /// at key time to deduplicate them would be a net perf loss. The only
     /// cost of a missed match is a canonical-key/digest cache miss between
@@ -996,7 +996,7 @@ pub const StaticDispatchConstraint = struct {
     /// Where this constraint was introduced, so ambiguity can be reported at the
     /// user's own expression without reconstructing var->expr maps after the
     /// fact. Copied verbatim by instantiation and cross-module import. This is
-    /// METADATA: it is deliberately excluded from type identity — canonical type
+    /// METADATA: it is deliberately excluded from type identity—canonical type
     /// keys (`writeConstraints`) and unification content-equality never read it,
     /// so two structurally identical constraints with different provenance stay
     /// equal.
@@ -1015,7 +1015,7 @@ pub const StaticDispatchConstraint = struct {
     /// raw `CIR.Expr.Idx` of the expression that created the constraint, stored
     /// as a plain index because `types` sits below `canonicalize` in the layering
     /// and cannot name `CIR.Expr.Idx`; the checker converts it back. It is
-    /// module-local — after cross-module import it refers to the ORIGINATING
+    /// module-local—after cross-module import it refers to the ORIGINATING
     /// module's CIR. `expect_region` is the where-clause "expect" region, set
     /// only when the constraint was created inside a where-clause annotation
     /// context (distinct from the intro expr's own region). Both use a `maxInt`
@@ -1080,7 +1080,7 @@ pub const StaticDispatchConstraint = struct {
 
     /// The kinds of literal that desugar to open literal-conversion constraints.
     /// Adding a variant makes every kind-keyed `switch` fail to compile until
-    /// handled — the exhaustiveness *is* the checklist.
+    /// handled—the exhaustiveness *is* the checklist.
     pub const LiteralKind = enum(u4) {
         numeral, // numeric literal, dispatches `from_numeral`
         quote, // string literal, dispatches `from_quote`
@@ -1115,7 +1115,7 @@ pub const StaticDispatchConstraint = struct {
         /// uses (which stays a valid polymorphic signature). The bit rides the
         /// constraint itself through instantiation and unification merges (see
         /// unify.zig), including across module boundaries where the originating
-        /// scheme's body is not otherwise visible — module-local provenance like
+        /// scheme's body is not otherwise visible—module-local provenance like
         /// `intro_expr` cannot substitute for it.
         where_clause: struct { body_required: bool = false },
         from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)

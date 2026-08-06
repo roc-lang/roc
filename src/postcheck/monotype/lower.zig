@@ -529,8 +529,8 @@ const MethodLookup = struct {
 /// One resolved dispatch requirement supplied to a specialization: either a
 /// concrete method target (with the target's own requirements resolved in
 /// `nested`) or a compiler-derived structural implementation. Fully
-/// materialized at the requesting call edge — checked `constraint(k)` refs are
-/// substituted from the requester's own evidence there — so a specialization's
+/// materialized at the requesting call edge—checked `constraint(k)` refs are
+/// substituted from the requester's own evidence there—so a specialization's
 /// vector is self-contained (dictionary passing evaluated at compile time).
 const SpecEvidence = union(enum) {
     target: *const SpecEvidenceTarget,
@@ -2139,7 +2139,7 @@ const Builder = struct {
     /// The comparison is the authoritative structural one, not a type digest. A
     /// digest encodes a cycle by the position it closes at, so a recursive
     /// nominal reached through differently shared nodes digests differently
-    /// while describing one runtime type — and a hosted argument is exactly
+    /// while describing one runtime type—and a hosted argument is exactly
     /// where that happens, since the declared lowering and the request build
     /// their graphs separately. test/fx/host_boxed_fn_boundary.roc passes a
     /// recursive nominal to a hosted function and covers that case.
@@ -2247,7 +2247,7 @@ const Builder = struct {
     ///
     /// The host was compiled against the declared signature. An extern emitted
     /// at any other type reads the host's return value at a layout the host
-    /// never wrote — the app sees `Err` where the host returned `Ok` — and
+    /// never wrote—the app sees `Err` where the host returned `Ok`—and
     /// nothing downstream can tell that apart from a genuine `Err`. So this is
     /// a producer-side stop, in release builds as well as debug ones: whatever
     /// upstream stage widened, narrowed, or re-represented the request, its
@@ -4606,7 +4606,7 @@ const Builder = struct {
         // unnamed field is encountered while walking the declared field rows.
         // Padding types come from the lookup, which for an instantiated nominal
         // (box-payload capability) carries the *instance's* substituted padding
-        // types — so a type-parameterized padding field (`_ : a`) reserves the
+        // types—so a type-parameterized padding field (`_ : a`) reserves the
         // instantiated size, exactly like a named field of the same type.
         const padding_types = lookup.padding_field_tys;
         const padding_view = lookup.view;
@@ -13020,7 +13020,7 @@ const BodyContext = struct {
     }
 
     /// A `.node` proof leaf, or null when the node provably can never finalize
-    /// as uninhabited — such a proof could never hold, so omitting it keeps
+    /// as uninhabited—such a proof could never hold, so omitting it keeps
     /// proofs and demand-guard frames down to the guards that can actually
     /// exempt something.
     fn maybeNodeImpossibilityProof(self: *BodyContext, node: NodeId) Allocator.Error!?RuntimeImpossibilityProofId {
@@ -25988,8 +25988,8 @@ const BodyContext = struct {
 
     /// The lexical-context bindings a local procedure captures at its
     /// declaration, deduplicated by CaptureId (first entry wins). Every
-    /// consumer of a declaration context — capture entry guards, fn-def
-    /// capture spans, and direct-call capture operands — derives from this one
+    /// consumer of a declaration context—capture entry guards, fn-def
+    /// capture spans, and direct-call capture operands—derives from this one
     /// walk so they agree on count and order. Caller owns the returned slice.
     fn localProcCaptureBindings(
         self: *BodyContext,
@@ -31272,7 +31272,7 @@ const BodyContext = struct {
         // `dispatchTarget` raises the "dispatch plan had no method owner" invariant
         // when the receiver never grounded to a concrete owner and the result mode
         // is not a structural dispatch. That is only reachable inside a bare
-        // polymorphic function value never called at a concrete type — e.g.
+        // polymorphic function value never called at a concrete type—e.g.
         // evaluating `run` itself for `run : a -> a where [a.go : a -> a]`.
         // Checking classified such dispatches (`unreachable_dispatch`, or a
         // `checked_error` for reported missing methods); both emit an ordinary
@@ -31729,7 +31729,7 @@ const BodyContext = struct {
         };
     }
 
-    /// Produce a numeric literal's constant — the ONE place in the compiler
+    /// Produce a numeric literal's constant—the ONE place in the compiler
     /// that turns a literal's exact digits into a bit pattern, always for
     /// the instantiated Monotype primitive. A custom numeric target keeps its
     /// real user-defined `from_numeral` dispatch call instead.
@@ -31781,7 +31781,7 @@ const BodyContext = struct {
         }
     }
 
-    /// A numeric literal's scalar constant at a builtin numeric primitive —
+    /// A numeric literal's scalar constant at a builtin numeric primitive—
     /// the payload both the expression and pattern lowerers map into their
     /// own IR node flavor.
     const NumeralScalarBits = union(enum) {
@@ -31792,7 +31792,7 @@ const BodyContext = struct {
     };
 
     /// The literal's bit pattern at a builtin primitive, from its exact
-    /// digits — the ONE place that turns digits into bits: integers by limb
+    /// digits—the ONE place that turns digits into bits: integers by limb
     /// assembly with a fit check, Dec by exact scale shift, floats by
     /// correctly-rounded decimal→binary conversion (total: out-of-range
     /// rounds toward ±inf). Null when an integer or Dec target cannot
@@ -43000,7 +43000,20 @@ const BodyContext = struct {
             },
             .tuple_access => |access| try self.lowerDivergentExprForEffectDataAtType(access.tuple, ty),
             .for_ => |for_| try self.lowerDivergentExprForEffectDataAtType(for_.expr, ty),
-            .run_low_level => |low_level| try self.lowerFirstDivergentExprForEffectDataAtType(low_level.args, ty),
+            .run_low_level => |low_level| blk: {
+                for (low_level.args) |arg| {
+                    if (self.checkedExprDivergesInLoweredRuntime(arg)) {
+                        break :blk try self.lowerDivergentExprForEffectDataAtType(arg, ty);
+                    }
+                }
+                if (low_level.op != .crash) {
+                    Common.invariant("checked low-level expression was marked divergent but no divergent argument was found");
+                }
+                break :blk .{ .low_level = .{
+                    .op = low_level.op,
+                    .args = try self.lowerExprSpan(low_level.args),
+                } };
+            },
             .dispatch_call => |plan| try self.lowerDivergentDispatchForEffectDataAtType(plan, ty),
             .interpolation => |interpolation| try self.lowerDivergentInterpolationForEffectDataAtType(interpolation, ty),
             .method_eq => |plan| try self.lowerDivergentDispatchForEffectDataAtType(plan, ty),

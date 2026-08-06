@@ -23,7 +23,7 @@
 //! only one machine can reproduce is not something a header should pin.
 //!
 //! This is the compiler's own version, which is unrelated to the package
-//! versions embedded in package URLs — see `base.url.Version` for those.
+//! versions embedded in package URLs—see `base.url.Version` for those.
 
 const std = @import("std");
 
@@ -96,7 +96,7 @@ pub fn parse(text: []const u8) ?Version {
 }
 
 /// Whether `roc fmt` should rewrite a header pinned to `pinned` so that it
-/// names `current` — the version of the compiler doing the formatting.
+/// names `current`—the version of the compiler doing the formatting.
 ///
 /// Only nightly-to-nightly upgrades happen automatically. A pin on a released
 /// version is a deliberate choice that a nightly compiler must not overwrite,

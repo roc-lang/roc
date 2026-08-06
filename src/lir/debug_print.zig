@@ -2,7 +2,7 @@
 //!
 //! Used by the TRMC golden tests (before/after transform diffs) and the
 //! `-Dprint-ir-after-trmc` debug build option. The format aims for stability
-//! and readability, not completeness — it is not a serialization format.
+//! and readability, not completeness—it is not a serialization format.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -53,7 +53,7 @@ pub fn writeProc(
 const Printer = struct {
     store: *const LirStore,
     layouts: *const layout_mod.Store,
-    // Lowered LIR statement graphs are DAGs — linear tails can be shared by
+    // Lowered LIR statement graphs are DAGs—linear tails can be shared by
     // multiple predecessors. This prints each shared tail once (later arrivals
     // get an <<already printed>> marker) and guards malformed (cyclic) input
     // from looping forever.
@@ -362,9 +362,12 @@ const Printer = struct {
                     try writer.print("ret l{d}\n", .{@intFromEnum(s.value)});
                     return;
                 },
-                .crash => {
+                .crash => |s| {
                     try writeIndent(indent, writer);
-                    try writer.writeAll("crash\n");
+                    switch (s.msg) {
+                        .literal => try writer.writeAll("crash\n"),
+                        .local => |local| try writer.print("crash l{d}\n", .{@intFromEnum(local)}),
+                    }
                     return;
                 },
                 .runtime_error => {

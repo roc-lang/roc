@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=repro for https://github.com/roc-lang/roc/issues/9635 — top-level value referenced multiple times on RHS of a nested binding is wrongly flagged as self-assignment
+description=repro for https://github.com/roc-lang/roc/issues/9635—top-level value referenced multiple times on RHS of a nested binding is wrongly flagged as self-assignment
 type=file
 ~~~
 # SOURCE
