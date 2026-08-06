@@ -455,7 +455,7 @@ const Skip = union(enum) {
     windows: []const u8,
 };
 
-/// A single CLI test operation — one matrix cell of work.
+/// A single CLI test operation—one matrix cell of work.
 const CliCase = struct {
     /// Unique id within this runner invocation. This keeps generated binary
     /// names distinct even on hosts that run all specs in the same process.
@@ -904,11 +904,6 @@ const non_exhaustive_destructure_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "[]" },
 };
 
-const crash_expression_needles = [_]OutputNeedle{
-    .{ .stream = .stderr, .text = "CRASH STATEMENT IN EXPRESSION" },
-    .{ .stream = .stderr, .text = "block expression" },
-};
-
 const warning_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "UNUSED VARIABLE" },
     .{ .stream = .stderr, .text = "warning" },
@@ -1140,7 +1135,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 9508: anonymous recursive tag type reports an error", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9508_anonymous_recursion.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "ANONYMOUS RECURSION" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9210: ambiguous tuple access in a lambda", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9210_tuple_access_lambda.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "AMBIGUOUS TUPLE ACCESS" }}, .not_contains = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 2686: bare List tag payload reports its missing type argument", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_2686_bare_list_payload.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "TOO FEW ARGS" }, .{ .stream = .stderr, .text = "expects 1 argument" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 9499: crash in match branch reports one targeted parse error", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue9499CrashMatchBranch.roc", .exit = .failure, .contains = &crash_expression_needles, .not_contains = &.{ .{ .stream = .stderr, .text = "UNEXPECTED EXPRESSION SYNTAX" }, .{ .stream = .stderr, .text = "match_branch_missing_arrow" }, .{ .stream = .stderr, .text = "expected_close_curly_at_end_of_match" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 9499: crash is valid in a match branch", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue9499CrashMatchBranch.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "CRASH STATEMENT IN EXPRESSION" }, .{ .stream = .stderr, .text = "UNEXPECTED EXPRESSION SYNTAX" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9544: list function parameter destructure must be exhaustive", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue9544NonExhaustiveParam.roc", .exit = .failure, .contains = &non_exhaustive_destructure_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 1 file and 1 symbol", .body = .{ .custom = .generated_graph_1_1 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 5 files and 5 symbols", .body = .{ .custom = .generated_graph_5_5 } },
@@ -5819,7 +5814,13 @@ fn customCachePassingResults(io: std.Io, allocator: Allocator, env: *const CaseE
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/AllPassTests.roc" })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/AllPassTests.roc", .contains = &.{.{ .stream = .stdout, .text = "(cached)" }} })) |failure| return failure;
+    // https://github.com/roc-lang/roc/issues/10624
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = "test/cli/AllPassTests.roc",
+        .contains = &.{.{ .stream = .stdout, .text = " ms. (cached)" }},
+        .not_contains = &.{.{ .stream = .stdout, .text = "tests passed (cached) in" }},
+    })) |failure| return failure;
     return null;
 }
 
@@ -5827,7 +5828,14 @@ fn customCacheFailingResults(io: std.Io, allocator: Allocator, env: *const CaseE
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 } })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "(cached)" }} })) |failure| return failure;
+    // https://github.com/roc-lang/roc/issues/10624
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = "test/cli/SomeFailTests.roc",
+        .exit = .{ .code = 1 },
+        .contains = &.{ .{ .stream = .stderr, .text = "Ran 3 tests in " }, .{ .stream = .stderr, .text = " ms. (cached):" } },
+        .not_contains = &.{.{ .stream = .stderr, .text = "tests (cached) in" }},
+    })) |failure| return failure;
     return null;
 }
 
@@ -7064,7 +7072,7 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
     })) |failure| return failure;
 
     // 3. Desert island: delete the package cache; the installed tool must
-    //    still run (and must not touch the network — the server is gone).
+    //    still run (and must not touch the network—the server is gone).
     std.Io.Dir.cwd().deleteTree(io, env.dirs.roc_cache_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to delete cache dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
@@ -7750,7 +7758,7 @@ fn compileGlueRuntimeCHost(
     // double` is 80-bit x87, so those f128 libcalls are never referenced.)
     //
     // So the merge is needed only on aarch64. On x86_64 the host object links
-    // cleanly on its own, so we archive it directly — which also matters
+    // cleanly on its own, so we archive it directly—which also matters
     // because the merge itself is broken there: `zig cc -r` (and the LLD `-r`
     // it drives) aborts when fed the `-fcompiler-rt` object on x86_64, so
     // merging would be both pointless and a hard crash.
@@ -7968,7 +7976,7 @@ fn fileHasWasmMagic(io: std.Io, path: []const u8) bool {
 /// some compiler_builtins intrinsics as host-arch (x86_64) ELF objects rather
 /// than wasm; `wasm-ld --whole-archive` force-includes every member and aborts
 /// on those ("Bitcode section not found in object file"). The dropped
-/// intrinsics are unreferenced by the glue contract apps — if a future app
+/// intrinsics are unreferenced by the glue contract apps—if a future app
 /// needed one, the final wasm link would report it undefined rather than
 /// miscompile.
 fn rebuildWasmOnlyArchive(
@@ -9721,7 +9729,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     // `--worker <idx>` (single test) or `--worker-stream` (persistent). The
     // worker rebuilt the same case list above, so indices stay aligned with
     // the parent's. Handling these before the parent path matters: a worker
-    // that fell through would reentrantly spawn its own pool of workers —
+    // that fell through would reentrantly spawn its own pool of workers—
     // fork-bombing the box.
     if (Pool.runWorkerMode(init.io, args, tests, timeout_ms)) return;
 

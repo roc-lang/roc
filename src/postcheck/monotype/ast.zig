@@ -200,7 +200,7 @@ pub const CallableIdentity = union(enum(u8)) {
 /// The identity is immutable: it is written once when the record is reserved
 /// and never rewritten. Body evidence that refines the requested type is data
 /// on the `SpecRecord` (`request_fn_ty`/`solved_fn_ty` views), reachable
-/// through additional lookup aliases — never a rekey of this identity.
+/// through additional lookup aliases—never a rekey of this identity.
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: names.CheckedModuleDigest,
@@ -221,7 +221,7 @@ pub const SpecStatus = enum(u8) {
 ///
 /// `identity` is the immutable creation-time key. The type views are data:
 /// `request_fn_ty` starts as the identity's requested type and may be refined
-/// while the record is still `.reserved` — once per deferring graph that
+/// while the record is still `.reserved`—once per deferring graph that
 /// seals its view of the request; `solved_fn_ty` mirrors the request view
 /// until `.ready` records the body's solved type. Both views only ever become
 /// more specific; a finished record is never widened (one-way snapshot rule).
@@ -477,7 +477,8 @@ pub const CallValue = struct {
 /// slot this operand fills; `value` is the expression that supplies it. Operand
 /// spans are stored sorted by `id`, parallel to the target's canonically-sorted
 /// capture slots, so every operand↔slot join is an exact keyed lookup with no
-/// load-bearing order.
+/// load-bearing order. At the lift boundary, the id's namespace explicitly
+/// distinguishes a provisional checked key from an already-lifted key.
 pub const CaptureOperand = struct {
     id: checked.CaptureId,
     value: ExprId,
@@ -496,7 +497,7 @@ pub const LiftedFunctionValue = struct {
 /// the expression that supplies it there. At the lift boundary, both this local
 /// and the target slot use their checked capture identity when present and their
 /// generated capture identity otherwise. Lifting joins only on that explicit
-/// provisional key, then publishes the operand with the target's lifted key.
+/// provisional key, then records the operand with the target's lifted key.
 pub const FnDefCapture = struct {
     local: LocalId,
     value: ExprId,

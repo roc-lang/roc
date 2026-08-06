@@ -3,7 +3,7 @@
 //!
 //! Plain TCE turns the proc's own argument locals into the loop join's
 //! parameters and enters the loop with a bare `jump` (no `initialize_join_param`
-//! writes — the argument values are already in place). When join-parameter
+//! writes—the argument values are already in place). When join-parameter
 //! scalarization later splits a captured struct parameter into per-field
 //! parameters, the field parameters must still be seeded on that entry path by
 //! reading the argument struct's fields; otherwise the ARC borrow certifier

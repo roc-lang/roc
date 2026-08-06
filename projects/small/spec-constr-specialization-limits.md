@@ -4,8 +4,8 @@
 
 The call-pattern specialization pass has no spec-count, shape-depth, or fuel
 limit of any kind (verified by search: no cap identifier exists in
-`src/postcheck/monotype_lifted/spec_constr.zig`). GHC's SpecConstr — the
-pass's cited ancestor — ships `-fspec-constr-count` and depth limits
+`src/postcheck/monotype_lifted/spec_constr.zig`). GHC's SpecConstr—the
+pass's cited ancestor—ships `-fspec-constr-count` and depth limits
 precisely because call-pattern specialization can manufacture ever-deeper
 patterns and diverge. This implementation can too, and the divergent path is
 concrete:
@@ -30,7 +30,7 @@ concrete:
   `Shape`, and a new distinct spec is recorded. The next round deepens
   again.
 
-Failure scenario, expressible in ordinary Roc — a function that matches a
+Failure scenario, expressible in ordinary Roc—a function that matches a
 recursive tag-union parameter and rebuilds it one constructor deeper on the
 recursive call:
 
@@ -42,7 +42,7 @@ deepen = |t, n| when t is
 ```
 
 `t` is deconstructed (so its argument position is specializable), and each
-recursive call passes `Node(<known t>, _)` — specs for `Node(Leaf)`,
+recursive call passes `Node(<known t>, _)`—specs for `Node(Leaf)`,
 `Node(Node(Leaf))`, … are generated without bound: a compile-time infinite
 loop. All shapes and values live in `pass.arena` and are freed only at pass
 end, so non-termination is also unbounded memory. Consumer-style recursion
@@ -55,7 +55,7 @@ every optimized build.
 A secondary quality defect in the same machinery: `rewriteCallProc` /
 `cloneCallProc` select the **first** matching spec in insertion order, so a
 more-general pattern recorded earlier shadows a more-specific one recorded
-later — correctness-neutral, but the call gets a less-specialized worker.
+later—correctness-neutral, but the call gets a less-specialized worker.
 
 This project comes out of the 2026-07 comparative review of postcheck
 against the cor `lss` prototype it was productionized from; spec_constr has
@@ -75,7 +75,7 @@ into per-pattern workers over a symbolic `Value` environment that folds
 field reads and known matches and inlines known calls. Specialization is an
 optimization: the sound fallback for "don't specialize this call" is to
 leave the original direct call in the output. A cap therefore never costs
-correctness — only optimization on pathological shapes that today do not
+correctness—only optimization on pathological shapes that today do not
 compile at all.
 
 ## Evidence
@@ -133,7 +133,7 @@ All symbols verified in the current tree.
 
 ### Correctness ideal
 
-- A cap can only leave a residual direct call — never fold, redirect, or
+- A cap can only leave a residual direct call—never fold, redirect, or
   specialize incorrectly. Cross-opt agreement (interpreter vs `--opt=dev`
   vs `--opt=speed`) on the repro and the corpus is the ground truth.
 - Termination is structural (budget arithmetic), not empirical.
@@ -141,7 +141,7 @@ All symbols verified in the current tree.
 ### Performance ideal
 
 - Compile time on the corpus unchanged within noise (the caps should not
-  bind on realistic programs — confirm via the item-4 counter).
+  bind on realistic programs—confirm via the item-4 counter).
 - Runtime of specialization-benefiting benchmarks (Stream/Iter pipelines)
   unchanged: the caps must be generous enough that the intended
   specializations all still fire. Use CI benchmarks.
@@ -157,7 +157,7 @@ timeout) on the unmodified tree:
   build and correct run output.
 - A consumer-recursion control (list/tree fold that only destructures):
   must still specialize (assert via the debug counter or emitted-spec
-  count) — pins that the caps don't lobotomize the pass.
+  count)—pins that the caps don't lobotomize the pass.
 - Most-specific selection: a function called with both `Cons(1, Nil)`-shaped
   and `Cons(x, xs)`-shaped patterns; assert the deeper-shaped call binds to
   the deeper spec (unit-level test over the pass, or output-shape
@@ -168,11 +168,11 @@ timeout) on the unmodified tree:
 
 ## Related projects
 
-- [spec-constr-static-match-soundness.md](./spec-constr-static-match-soundness.md)
-  — the same pass's match-verdict soundness; both projects touch
+- [spec-constr-static-match-soundness.md](./spec-constr-static-match-soundness.md)—
+  the same pass's match-verdict soundness; both projects touch
   `bindPatToValue`-adjacent code and can share test scaffolding. Land in
   either order.
-- [store-generation-counters.md](./store-generation-counters.md) — the
+- [store-generation-counters.md](./store-generation-counters.md)—the
   landed GuardedList work that already hardened this pass's
   iterate-while-mutate hazards; this project addresses its termination
   hazard.

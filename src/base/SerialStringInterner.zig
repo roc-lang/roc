@@ -2,7 +2,7 @@
 //!
 //! It backs `CanonicalNameStore`'s name kinds with relocatable storage. Like
 //! `base.SmallStringInterner` it stores all text in one flat byte buffer and an
-//! open-addressing hash table as a flat array of integers — both
+//! open-addressing hash table as a flat array of integers—both
 //! `SafeList`-backed, so the whole interner relocates with a **constant** number
 //! of base-pointer fixups (3), independent of how many names it holds.
 //!
@@ -242,7 +242,7 @@ test "SerialStringInterner: serial ids, dedup, lookup, getText" {
 
 test "SerialStringInterner: default-empty interner lazily initializes on first insert" {
     const gpa = testing.allocator;
-    var it: SerialStringInterner = .{}; // no initCapacity — mirrors CanonicalNameStore.init's `.empty`
+    var it: SerialStringInterner = .{}; // no initCapacity—mirrors CanonicalNameStore.init's `.empty`
     defer it.deinit(gpa);
 
     try testing.expectEqual(@as(u32, 0), it.count());

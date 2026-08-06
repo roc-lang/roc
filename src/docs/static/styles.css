@@ -38,7 +38,7 @@
   --violet-border-hover: rgb(from var(--violet) r g b / .60);
   --gray-border-subtle: rgb(from var(--gray) r g b / .30);
 
-  /* Search input border — distinct from --violet-bg so it's visible on a white background */
+  /* Search input border—distinct from --violet-bg so it's visible on a white background */
   --search-border-color: hsl(262 50% 72%);
 
   /* Type scale: 1.33x multiplier for clear hierarchy */
@@ -288,7 +288,7 @@ a:hover code {
 }
 
 /* Injected by the website build (see build_website.roc's builtins_tip_html)
-   ahead of #sidebar-nav on the roc-lang.org docs site only — not emitted by
+   ahead of #sidebar-nav on the roc-lang.org docs site only—not emitted by
    this repo's docs generator, so it has no default padding without this
    rule. */
 .builtins-tip {
@@ -345,7 +345,7 @@ main {
   /* A 4th row for .index-guide-links, which is hidden (display: none) on every
      page except the docs index. Every row is assigned explicitly below rather
      than relying on source-order auto-placement, so hiding that row doesn't
-     shift the others — auto-placement would skip a display:none item and pull
+     shift the others—auto-placement would skip a display:none item and pull
      everything up a row, breaking main-content's 1fr sizing. */
   grid-template-rows: auto auto 1fr auto;
   scrollbar-color: var(--violet) var(--body-bg-color);
@@ -398,13 +398,13 @@ footer,
 }
 
 /* Prose-guide links (Language Reference, Tutorial, FAQ), same links as the
-   sidebar. Emitted on every docs page — not just the index — because this is
+   sidebar. Emitted on every docs page—not just the index—because this is
    part of the persistent chrome carried across soft navigations (see
    search.js's createMainShell), so it already exists, correctly positioned,
    whenever body.docs-index makes it visible. Hidden by default (overridden
    above); a left-aligned single column of button-like links below the search
    bar reads as the landing page's primary call to action (centered instead on
-   mobile — see the max-width: 768px query below — where it sits under a
+   mobile—see the max-width: 768px query below—where it sits under a
    full-width search bar). */
 .index-guide-links {
     display: none;
@@ -613,7 +613,7 @@ footer p {
   margin-left: 20px;
   padding-left: 16px;
   /* Transparent by default so the indent is consistent; only values/methods
-     (`.sidebar-value`) get a visible bar — nested types, type-module entries,
+     (`.sidebar-value`) get a visible bar—nested types, type-module entries,
      and language-reference links do not. */
   border-left: 4px solid transparent;
   white-space: nowrap;
@@ -911,7 +911,7 @@ a:visited code {
 
 /* Language-reference sidebar links are prose, so inline `code` in a langref
    article title (e.g. the "`if` / `else`" heading) should read as part of the
-   link text rather than as a code link — inherit the link's own color instead
+   link text rather than as a code link—inherit the link's own color instead
    of the violet `--code-link-color`. Placed after the rules above so it wins
    the specificity tie with `a:visited code` on source order. */
 .langref-articles a code,
@@ -1149,7 +1149,7 @@ pre>code {
     /* box-sizing: border-box keeps the existing padding (8px 16px, set on
        .sidebar-module-summary > .entry-toggle above) inside this size
        instead of adding to it. Without it the rendered box balloons to
-       64x80px (48 + padding on each axis) — wider than
+       64x80px (48 + padding on each axis)—wider than
        .sidebar-module-summary's fixed 48px (causing horizontal overflow,
        which is what made some toggles vanish or appear detached from their
        row when the sidebar clips or wraps that overflow) and taller than
@@ -1176,10 +1176,10 @@ pre>code {
     /* Buttons are left-aligned on desktop but on mobile match the full width
        of the search bar above them and sit truly centered in the whole
        remaining space, like the pre-decoration version did. A flex spacer
-       (body.docs-index main::before — it's the first in-flow child of
+       (body.docs-index main::before—it's the first in-flow child of
        <main>, ahead of .index-guide-links, since ::before always renders
        before real children) and .main-content grow equally (both flex: 1),
-       with .index-guide-links sized to its own content in between — so its
+       with .index-guide-links sized to its own content in between—so its
        center sits at the true midpoint of the space between the search bar
        and the footer, regardless of how tall the button group itself is.
        align-items: stretch (rather than a width set directly on the <a>) is
@@ -1189,7 +1189,7 @@ pre>code {
        the <li> was content-sized. */
     /* Explicit order puts the logo (.main-content) above the buttons
        (.index-guide-links), with the empty flex spacer (main::before) now
-       below the buttons instead of above — the reverse of DOM order, which
+       below the buttons instead of above—the reverse of DOM order, which
        is form, .index-guide-links, .main-content, footer (::before always
        renders first, ahead of even that). Buttons still end up truly
        centered in the whole remaining space: .main-content and
@@ -1228,20 +1228,20 @@ pre>code {
     }
 
     /* Undo the desktop treatment (position: absolute spanning the whole
-       non-sidebar area, ignoring .index-guide-links) — on mobile the logo
+       non-sidebar area, ignoring .index-guide-links)—on mobile the logo
        is instead absolutely positioned within .main-content specifically
-       (now the space above the buttons, sized by the flex spacer below —
+       (now the space above the buttons, sized by the flex spacer below—
        see the order rules above), so it automatically scales to whatever
        that leftover space turns out to be instead of using a fixed max
        size.
        This has to be position: absolute (not a normal-flow flex: 1 +
        align-self: stretch box, which was tried first) because the <svg>'s
        width/height: 100% only resolves once .main-content already has a
-       definite size — while it's normal flow, the <svg>'s height: 100% can't
+       definite size—while it's normal flow, the <svg>'s height: 100% can't
        resolve yet, so it falls back to its intrinsic aspect-ratio size
        instead, which then floors .main-content's own size and breaks the
        1:1 split with the spacer (main::before), even with min-height: 0 set
-       on every ancestor in the chain — that min-height only suppresses each
+       on every ancestor in the chain—that min-height only suppresses each
        element's own automatic-minimum-size floor, not a child's actual
        preferred/auto size feeding upward. Taking the logo out of flow with
        position: absolute sidesteps this entirely: it can never contribute to
@@ -1267,7 +1267,7 @@ pre>code {
     /* #module-search-form's margin-bottom: 16px (below) sits between the
        search bar and wherever main's padding-top clearance ends, outside
        the flex-centered region entirely (main::before/.main-content only
-       start once that clearance is over) — so it read as extra, lopsided
+       start once that clearance is over)—so it read as extra, lopsided
        whitespace above the logo with nothing matching it below. Zeroing it
        out here (index page only) removes that dead gap so the logo's own
        centering within .main-content is what the eye actually sees, top
@@ -1284,7 +1284,7 @@ pre>code {
        16px top + 16px bottom padding) so in-flow content starts right below
        the fixed search bar everywhere. On the index page the form is now
        16px shorter (padding-bottom: 0, just above), so this needs to shrink
-       to match — otherwise the same dead-zone bug from before reappears,
+       to match—otherwise the same dead-zone bug from before reappears,
        just shifted: main's content would still start at the old (taller)
        offset, 16px below where the now-shorter form actually ends. */
     body.docs-index main {
@@ -1404,7 +1404,7 @@ pre>code {
         /* The fixed search bar's own inset from the viewport top is its
            padding (#module-search-form's padding: 16px), not this padding-top
            (which only reserves clearance so in-flow content starts below the
-           fixed bar) — so to make the space below the footer match the space
+           fixed bar)—so to make the space below the footer match the space
            above the search bar, this needs to match that 16px, not the 18px
            used for the other three sides. */
         padding-bottom: 16px;

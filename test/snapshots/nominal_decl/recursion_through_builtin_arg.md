@@ -27,7 +27,7 @@ INVALID RECURSIVE TYPE - recursion_through_builtin_arg.md:1:1:1:23
         List(MyList)
 
     Hint: Recursion in a nominal type is only allowed inside a tag union
-    payload or record field — for example `ConsList(a) := [Nil, Cons(a,
+    payload or record field—for example `ConsList(a) := [Nil, Cons(a,
     ConsList(a))]`.
 
 # TOKENS

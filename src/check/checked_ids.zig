@@ -40,7 +40,7 @@ pub const DispatchScopeId = enum(u32) { _ };
 ///    mapping is the identity function, the originating binder is always
 ///    recoverable via `binder()`.
 ///  - **generated** (high bit set, `[2^31, 2^32)`): the identity of a
-///    compiler-synthesized capturable local that has no checked binder —
+///    compiler-synthesized capturable local that has no checked binder—
 ///    allocated deterministically by the pass that synthesizes it. The
 ///    generated range is split again by the next bit into two disjoint
 ///    sub-ranges so ids minted by different synthesizing passes can never
@@ -97,6 +97,13 @@ pub const CaptureId = enum(u32) {
     /// Whether this id names a compiler-synthesized capturable local.
     pub fn isGenerated(self: CaptureId) bool {
         return !self.isCanonical();
+    }
+
+    /// Whether this id was minted by Monotype publication, closure lifting,
+    /// or a later post-check transform.
+    pub fn isLiftGenerated(self: CaptureId) bool {
+        const raw = @intFromEnum(self);
+        return (raw & generated_bit) != 0 and (raw & lift_bit) != 0;
     }
 
     /// Whether this id belongs to the lift-time generated sub-range.

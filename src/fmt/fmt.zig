@@ -40,7 +40,7 @@ const FormatFlags = enum {
 pub const Options = struct {
     /// Version string of the compiler that is running. When it is a nightly
     /// newer than the one a header pins with `roc: "..."`, formatting rewrites
-    /// that pin to name it — see `base.roc_version.shouldUpgrade`.
+    /// that pin to name it—see `base.roc_version.shouldUpgrade`.
     ///
     /// Null leaves every pin exactly as written, which is what tools that
     /// format for inspection want: the snapshot tool, the playground and the
@@ -1337,6 +1337,13 @@ const Formatter = struct {
         }
     }
 
+    fn continuePipeReceiverPostfix(fmt: *Formatter, token: Token.Idx, format_behavior: ExprFormatBehavior) error{WriteFailed}!void {
+        const already_broke = try fmt.flushCommentsBefore(token);
+        fmt.adjustMultilineAccessIndent(format_behavior);
+        if (!already_broke) try fmt.ensureNewline();
+        try fmt.pushIndent();
+    }
+
     fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!AST.TokenizedRegion {
         return (try fmt.formatExprWithInfo(ei)).region;
     }
@@ -1547,7 +1554,8 @@ const Formatter = struct {
             },
             .field_access => |fa| {
                 const left_expr = fmt.ast.store.getExpr(fa.left);
-                const parenthesize_receiver = left_expr == .arrow_call or fmt.exprIsNumericAccessReceiver(fa.left);
+                const flatten_pipe_receiver = left_expr == .arrow_call and multiline;
+                const parenthesize_receiver = (left_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(fa.left);
                 const expand_parenthesized_receiver = left_expr == .arrow_call and
                     fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.left);
                 const left = if (parenthesize_receiver)
@@ -1555,7 +1563,9 @@ const Formatter = struct {
                 else
                     try fmt.formatExprWithInfo(fa.left);
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
-                if (!parenthesize_receiver) {
+                if (flatten_pipe_receiver) {
+                    try fmt.continuePipeReceiverPostfix(right_region.start, format_behavior);
+                } else if (!parenthesize_receiver) {
                     const continued = try fmt.continueAfterMultilineStringLine(left);
                     if (!continued and multiline and try fmt.flushCommentsBefore(right_region.start)) {
                         fmt.adjustMultilineAccessIndent(format_behavior);
@@ -1567,14 +1577,17 @@ const Formatter = struct {
             },
             .method_call => |mc| {
                 const left_expr = fmt.ast.store.getExpr(mc.receiver);
-                const parenthesize_receiver = left_expr == .arrow_call or fmt.exprIsNumericAccessReceiver(mc.receiver);
+                const flatten_pipe_receiver = left_expr == .arrow_call and multiline;
+                const parenthesize_receiver = (left_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(mc.receiver);
                 const expand_parenthesized_receiver = left_expr == .arrow_call and
                     fmt.nodeWillBeMultiline(AST.Expr.Idx, mc.receiver);
                 const receiver = if (parenthesize_receiver)
                     try fmt.formatParenthesizedExpr(null, mc.receiver, expand_parenthesized_receiver)
                 else
                     try fmt.formatExprWithInfo(mc.receiver);
-                if (!parenthesize_receiver) {
+                if (flatten_pipe_receiver) {
+                    try fmt.continuePipeReceiverPostfix(mc.method_token, format_behavior);
+                } else if (!parenthesize_receiver) {
                     const continued = try fmt.continueAfterMultilineStringLine(receiver);
                     if (!continued and multiline and try fmt.flushCommentsBefore(mc.method_token)) {
                         fmt.adjustMultilineAccessIndent(format_behavior);
@@ -1732,12 +1745,16 @@ const Formatter = struct {
                 }
             },
             .tuple_access => |ta| {
-                // Format: expr.N (e.g., tuple.0, tuple.1)
-                const parenthesize_receiver = fmt.exprIsNumericAccessReceiver(ta.expr);
+                const receiver_expr = fmt.ast.store.getExpr(ta.expr);
+                const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline;
+                const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(ta.expr);
                 if (parenthesize_receiver) try fmt.push('(');
                 const target = try fmt.formatExprWithInfo(ta.expr);
                 _ = try fmt.continueAfterMultilineStringLine(target);
                 if (parenthesize_receiver) try fmt.push(')');
+                if (flatten_pipe_receiver) {
+                    try fmt.continuePipeReceiverPostfix(ta.elem_token, format_behavior);
+                }
                 // Get the element index from the token
                 const token_text = fmt.ast.resolve(ta.elem_token);
                 // Token includes leading dot (e.g., ".0")
@@ -4343,7 +4360,11 @@ test "issue 8851: multiline arrow call with field access is idempotent" {
         \\      .c()
     , false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = (0 |> b).c()\n", result);
+    try std.testing.expectEqualStrings(
+        "a = 0 |> b\n" ++
+            "\t.c()\n",
+        result,
+    );
 }
 
 test "multiline arrow receiver in tuple is idempotent" {
@@ -4354,11 +4375,40 @@ test "multiline arrow receiver in tuple is idempotent" {
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(
         "a = (\n" ++
-            "\t(\n" ++
-            "\t\t0(0 |> X)\n" ++
-            "\t\t\t|> X\n" ++
-            "\t).a\n" ++
+            "\t0(0 |> X)\n" ++
+            "\t\t|> X\n" ++
+            "\t\t.a\n" ++
             ")\n",
+        result,
+    );
+}
+
+test "multiline legacy arrow tuple access stays flat" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\x = value
+        \\    -> pair()
+        \\    .0
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "x = value\n" ++
+            "\t|> pair\n" ++
+            "\t.0\n",
+        result,
+    );
+}
+
+test "multiline pipe result postfix preserves boundary comments" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\x = value->pair() # keep with pipe
+        \\    .first()
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "x = value |> pair # keep with pipe\n" ++
+            "\t.first()\n",
         result,
     );
 }
@@ -4488,8 +4538,8 @@ test "multiline pipes start indented lines" {
     );
 }
 
-test "multiline pipe targets keep their postfix chains unparenthesized" {
-    const input = "main =\n" ++
+test "multiline pipe results keep their postfix chains unparenthesized" {
+    const source = "main =\n" ++
         "\t\"./input.txt\"\n" ++
         "\t\t|> Path.from_str()\n" ++
         "\t.read_bytes!()?\n" ++
@@ -4497,10 +4547,20 @@ test "multiline pipe targets keep their postfix chains unparenthesized" {
         "\t\t|> transform(2, Much)\n" ++
         "\t.to_bytes()?\n" ++
         "\t\t|> Path.write_bytes!(Path.from_str(\"./output.txt\"))\n";
-    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
     defer std.testing.allocator.free(result);
 
-    try std.testing.expectEqualStrings(input, result);
+    try std.testing.expectEqualStrings(
+        "main =\n" ++
+            "\t\"./input.txt\"\n" ++
+            "\t\t|> Path.from_str\n" ++
+            "\t\t.read_bytes!()?\n" ++
+            "\t\t|> Foo.from_bytes()?\n" ++
+            "\t\t|> transform(2, Much)\n" ++
+            "\t\t.to_bytes()?\n" ++
+            "\t\t|> Path.write_bytes!(Path.from_str(\"./output.txt\"))\n",
+        result,
+    );
 }
 
 test "pipe targets ending in question marks stay unparenthesized" {
@@ -4542,6 +4602,59 @@ test "issue 10510: empty call controls pipe question suffix precedence" {
     );
 }
 
+test "issue 10517: fallible pipe chain stays flat after formatting" {
+    // Repro for https://github.com/roc-lang/roc/issues/10517
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\expect {
+        \\    _result = CircularBuffer.create({ capacity: 3 })
+        \\        .write(1)?
+        \\        .write(2)?
+        \\        .write(3)?
+        \\        .read()?
+        \\        -> expect_value(1)
+        \\        .write(4)?
+        \\        .overwrite(5)
+        \\        .read()?
+        \\        -> expect_value(3)
+        \\        .read()?
+        \\        -> expect_value(4)
+        \\        .read()?
+        \\        -> expect_value(5)
+        \\
+        \\    Bool.True
+        \\}
+        \\
+        \\main! = |_| { Ok({}) }
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "expect {\n" ++
+            "\t_result = CircularBuffer.create({ capacity: 3 })\n" ++
+            "\t\t.write(1)?\n" ++
+            "\t\t.write(2)?\n" ++
+            "\t\t.write(3)?\n" ++
+            "\t\t.read()?\n" ++
+            "\t\t|> expect_value(1)\n" ++
+            "\t\t.write(4)?\n" ++
+            "\t\t.overwrite(5)\n" ++
+            "\t\t.read()?\n" ++
+            "\t\t|> expect_value(3)\n" ++
+            "\t\t.read()?\n" ++
+            "\t\t|> expect_value(4)\n" ++
+            "\t\t.read()?\n" ++
+            "\t\t|> expect_value(5)\n" ++
+            "\n" ++
+            "\tBool.True\n" ++
+            "}\n" ++
+            "\n" ++
+            "main! = |_| {\n" ++
+            "\tOk({})\n" ++
+            "}\n",
+        result,
+    );
+}
+
 test "parenthesized pipe receivers drop direct empty target arguments" {
     const input = "x = (foo |> bar()).baz()";
     const result = try moduleFmtsStable(std.testing.allocator, input, false);
@@ -4550,7 +4663,7 @@ test "parenthesized pipe receivers drop direct empty target arguments" {
     try std.testing.expectEqualStrings("x = (foo |> bar).baz()\n", result);
 }
 
-test "issue 10478: multiline legacy arrow receiver groups without tuple comma" {
+test "issue 10478: multiline legacy arrow receiver stays flat" {
     // Repro for https://github.com/roc-lang/roc/issues/10478
     const result = try moduleFmtsStable(std.testing.allocator,
         \\x = a
@@ -4561,11 +4674,10 @@ test "issue 10478: multiline legacy arrow receiver groups without tuple comma" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
-        "x = (\n" ++
-            "\ta\n" ++
-            "\t\t.b()\n" ++
-            "\t\t|> C.d\n" ++
-            ").e()\n",
+        "x = a\n" ++
+            "\t.b()\n" ++
+            "\t|> C.d\n" ++
+            "\t.e()\n",
         result,
     );
 }

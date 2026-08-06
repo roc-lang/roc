@@ -490,7 +490,7 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) TestEnvError!void
 }
 
 /// Like `assertLastDefType`, but the module must also produce warning-severity
-/// type problems — and ONLY warnings — whose report titles match
+/// type problems—and ONLY warnings—whose report titles match
 /// `expected_warning_titles` exactly, in order. (Plain pass-mode fails on ANY
 /// problem, warnings included, so warning-producing tests must declare their
 /// warnings here rather than silently tolerate them.)

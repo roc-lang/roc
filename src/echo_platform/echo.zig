@@ -34,7 +34,7 @@ fn logFn(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), 
     std.log.defaultLog(level, scope, format, args);
 }
 
-// Fixed-size heap in WASM linear memory (128 MiB — matches the runtime arena
+// Fixed-size heap in WASM linear memory (128 MiB—matches the runtime arena
 // size recommended in src/compile/README.md "Runtime arena"; smaller sizes
 // OOM during BuildEnv.init / lowering for non-trivial programs). align(16)
 // so the LIR image's base_ptr satisfies the alignment constraints
@@ -103,7 +103,7 @@ var extra_file_count: usize = 0;
 // Static buffer for copying source before FBA reset (avoids 64KB stack allocation in WASM).
 var source_copy_buf: [MAX_CONTENT_LEN]u8 = undefined;
 
-// WASM filesystem context — static so it survives FBA reset.
+// WASM filesystem context—static so it survives FBA reset.
 var wasm_ctx: WasmFilesystem.WasmContext = .{};
 
 // --- Exported WASM API ---
@@ -188,10 +188,10 @@ fn compileAndRunInner(source: []const u8) runner.RunEchoError!u8 {
     // the filename mapping; runner.runEcho generates it and passes it back
     // through the Io vtable for any internal reads it triggers.
     wasm_ctx.setFilename(allocator, "/app/main.roc");
-    // The runner writes the synthetic source itself via EchoCtx — the wasm
+    // The runner writes the synthetic source itself via EchoCtx—the wasm
     // fallback's setSource is only consulted for non-synthetic paths.
 
-    // On wasm32-freestanding there is no real `std.Io` — the host JS provides
+    // On wasm32-freestanding there is no real `std.Io`—the host JS provides
     // I/O through the WasmFilesystem vtable and direct `extern "env"` calls.
     // We pass `std.Io.failing` as a tripwire: if any code path on WASM ever
     // tries to actually use the std.Io (e.g. a `writeStreamingAll` outside

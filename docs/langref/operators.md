@@ -50,7 +50,7 @@ dispatch page.
 ### Range Operators
 
 `start..<end` and `start..=end` build an [`Iter`](../Iter) over the
-numbers from `start` up to `end` — excluding `end` with `..<`, including it
+numbers from `start` up to `end`—excluding `end` with `..<`, including it
 with `..=`. They dispatch to methods on the bound type: `..<` calls
 `range_exclusive` and `..=` calls `range_inclusive`. Both operands must have
 the same type, and the result is an `Iter` of that type. See

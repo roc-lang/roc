@@ -25,7 +25,7 @@ fn platformPath(allocator: std.mem.Allocator) integration_spec.SpecError![]u8 {
 // Test Harness
 
 /// Shared setup for syntax checker tests. Manages allocator, SyntaxChecker,
-/// temporary directory, platform path, and file URI — eliminating the
+/// temporary directory, platform path, and file URI—eliminating the
 /// boilerplate that every test otherwise repeats.
 const TestHarness = struct {
     allocator: std.mem.Allocator,
@@ -400,7 +400,7 @@ pub fn recordFieldCompletionWorksForModules() integration_spec.SpecError!void {
     );
     defer h.allocator.free(incomplete);
 
-    // Line 6: "get_foo = my_record." — character 20 is right after the dot
+    // Line 6: "get_foo = my_record."—character 20 is right after the dot
     const items = try h.getCompletions(incomplete, 6, 20);
     defer h.freeCompletions(items);
 
@@ -438,7 +438,7 @@ pub fn recordFieldCompletionInSubModule() integration_spec.SpecError!void {
     );
     defer h.allocator.free(incomplete);
 
-    // Line 6: "get_foo = my_record." — character 20 is right after the dot
+    // Line 6: "get_foo = my_record."—character 20 is right after the dot
     const items = try h.getCompletions(incomplete, 6, 17);
     defer h.freeCompletions(items);
 
@@ -485,7 +485,7 @@ pub fn recordFieldCompletionWorksForNestedNominalSubmodule() integration_spec.Sp
     );
     defer h.allocator.free(incomplete);
 
-    // Line 9: "test = MyType.Sub." — character 18 is right after the dot.
+    // Line 9: "test = MyType.Sub."—character 18 is right after the dot.
     const items = try h.getCompletions(incomplete, 9, 18);
     defer h.freeCompletions(items);
 
@@ -518,7 +518,7 @@ pub fn recordFieldCompletionWorks() integration_spec.SpecError!void {
     );
     defer h.allocator.free(incomplete);
 
-    // Line 4: "get_foo = my_record." — character 20 is right after the dot
+    // Line 4: "get_foo = my_record."—character 20 is right after the dot
     const items = try h.getCompletions(incomplete, 4, 20);
     defer h.freeCompletions(items);
 
@@ -553,7 +553,7 @@ pub fn tupleIndexCompletionWorks() integration_spec.SpecError!void {
     );
     defer h.allocator.free(incomplete);
 
-    // Line 4: "get_first = my_tuple." — character 21 is right after the dot
+    // Line 4: "get_first = my_tuple."—character 21 is right after the dot
     const items = try h.getCompletions(incomplete, 4, 21);
     defer h.freeCompletions(items);
 
@@ -593,7 +593,7 @@ pub fn recordFieldCompletionWithPartialFieldName() integration_spec.SpecError!vo
     );
     defer h.allocator.free(partial);
 
-    // Both fields returned — client-side filtering narrows to "of" prefix
+    // Both fields returned—client-side filtering narrows to "of" prefix
     const items = try h.getCompletions(partial, 5, 23);
     defer h.freeCompletions(items);
 
@@ -642,7 +642,7 @@ pub fn staticDispatchCompletionForNominalTypeMethods() integration_spec.SpecErro
     );
     defer h.allocator.free(incomplete);
 
-    // Line 12: "result = val." — character 14 is right after the dot
+    // Line 12: "result = val."—character 14 is right after the dot
     const items = try h.getCompletions(incomplete, 12, 14);
     defer h.freeCompletions(items);
 
@@ -691,7 +691,7 @@ pub fn staticDispatchCompletionForChainedCall() integration_spec.SpecError!void 
     );
     defer h.allocator.free(incomplete);
 
-    // Line 12: "result = val.step()." — character 21 is right after the dot
+    // Line 12: "result = val.step()."—character 21 is right after the dot
     const items = try h.getCompletions(incomplete, 12, 21);
     defer h.freeCompletions(items);
 
@@ -736,7 +736,7 @@ pub fn completionIncludesDocCommentsFromSource() integration_spec.SpecError!void
     );
     defer h.allocator.free(incomplete);
 
-    // Line 7: "main = a" — character 8 is at the end after 'a'
+    // Line 7: "main = a"—character 8 is at the end after 'a'
     const items = try h.getCompletions(incomplete, 7, 8);
     defer h.freeCompletions(items);
 

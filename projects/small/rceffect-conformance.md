@@ -3,8 +3,8 @@
 ## Problem
 
 Ownership behavior for every low-level builtin lives in one central
-table — `RcEffect`, returned per-op by `LowLevel.rcEffect()`
-(`src/base/LowLevel.zig:658`) — and consumed by borrow inference and ARC
+table—`RcEffect`, returned per-op by `LowLevel.rcEffect()`
+(`src/base/LowLevel.zig:658`)—and consumed by borrow inference and ARC
 insertion (`src/lir/arc_solve.zig`: `result_shares_args` links result to
 lender at `:1415`; `result_unique` births a fresh unique allocation at
 `:1770`). The architecture is right: ownership is decided once and
@@ -15,14 +15,14 @@ corresponding Zig builtin actually does, and nothing checks the claim.
 The flags are expressive enough to describe subtle regimes (a fresh
 outer value whose interior shares an argument's allocation; runtime
 uniqueness probes that are unique on both paths), which means they are
-also expressive enough to describe the builtin *wrongly* — and a wrong
+also expressive enough to describe the builtin *wrongly*—and a wrong
 row is not a compile error, not a panic, not a test failure. It is a
 silent refcount imbalance in generated code: a leak or a use-after-free.
 
 PR roc-lang/roc#10023 (issue #9953) is the proof: the
 `retainsSharingArgs` constructor family set `result_unique = true`
 alongside `result_shares_args`, so ARC both linked the result to its
-lender argument *and* counted a fresh birth — every successful
+lender argument *and* counted a fresh birth—every successful
 `Json.parse` leaked one reference to its input string. The bug lived in
 the table, shipped through all backends uniformly (the centralization
 worked), and was caught only because one hand-written host-effects test
@@ -41,10 +41,10 @@ interior sharing is irrelevant to the outermost count").
 
 Two kinds of wrongness are possible:
 
-1. **Structurally invalid rows** — combinations no builtin can truthfully
+1. **Structurally invalid rows**—combinations no builtin can truthfully
    have, or masks that reference argument positions the op does not have.
    These are checkable at comptime from the table alone.
-2. **Non-conforming rows** — structurally valid claims that simply do not
+2. **Non-conforming rows**—structurally valid claims that simply do not
    match what the implementation in `src/builtins/*.zig` does (the #10023
    case). These are only checkable by running the builtin and observing
    refcounts.
@@ -56,13 +56,13 @@ thought to assert it.
 ## Evidence
 
 - `src/base/LowLevel.zig:495-660`: the flag fields, constructor helpers,
-  and the per-op `rcEffect()` switch — hundreds of hand-written rows.
+  and the per-op `rcEffect()` switch—hundreds of hand-written rows.
 - `src/lir/arc_solve.zig:1415, 1770`: consumption sites whose correctness
   is exactly the table's correctness.
 - PR #10023: three constructor-family rows wrong in a way that type-checks,
   passes all functional tests, and leaks.
 - The catch that did work: a live-allocation assertion in
-  `src/builtins/host_effects_tests.zig` — ad-hoc, per-path, not per-op.
+  `src/builtins/host_effects_tests.zig`—ad-hoc, per-path, not per-op.
 
 ## Solution design
 
@@ -105,7 +105,7 @@ Every criterion below must hold; the project is not done until all do:
   demonstrably by the conformance harness regardless.
 - The conformance harness runs in `zig build test` (debug), covers every
   op whose `rcEffect()` is not `none()`, and fails loudly for any op
-  added without coverage — verified by adding a dummy op in a test build
+  added without coverage—verified by adding a dummy op in a test build
   and observing the failure.
 - The #9953 regression (Json.parse input refcount balance) remains as a
   pinned end-to-end test.
@@ -123,7 +123,7 @@ adds enforcement, not a second source.
 
 ### Performance ideal
 
-None at runtime — this is test/comptime machinery only. The harness
+None at runtime—this is test/comptime machinery only. The harness
 should keep total test-suite time reasonable by driving ops through the
 interpreter with small values.
 
@@ -138,6 +138,6 @@ interpreter with small values.
 
 ## Related projects
 
-- [../small/silent-drift-guards.md](../small/silent-drift-guards.md) —
+- [../small/silent-drift-guards.md](../small/silent-drift-guards.md)—
   the same enforcement philosophy for other mirrored facts; this doc is
   the ownership-table instance.

@@ -1,4 +1,4 @@
-# Regression fixture for https://github.com/roc-lang/roc/issues/9889 —
+# Regression fixture for https://github.com/roc-lang/roc/issues/9889—
 # roc-parser's examples/numbers.roc crashed in monotype_lifted after PR #9848.
 # Parser.roc/String.roc/CSV.roc are vendored from
 # https://github.com/lukewilliamboswell/roc-parser (UPL-1.0) at commit

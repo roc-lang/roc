@@ -2,7 +2,7 @@
 //!
 //! `RcEffect` is expressive enough to describe subtle ownership regimes, which
 //! makes it expressive enough to describe a builtin wrongly. A wrong row is
-//! not a type error and not a functional test failure — it is a silent
+//! not a type error and not a functional test failure—it is a silent
 //! refcount imbalance in generated code. Two layers close that gap; this file
 //! is the first one:
 //!
@@ -21,7 +21,7 @@
 //! arguments an op takes is not recorded next to the table, and a second
 //! hand-written arity table would be one more unchecked claim. Argument
 //! positions are certified against the arguments an op is actually given, at
-//! the seams where the two meet — `maskExceedsArgCount` is called by the ARC
+//! the seams where the two meet—`maskExceedsArgCount` is called by the ARC
 //! borrow certifier for every low-level statement in every debug build, and by
 //! the conformance observer for every op the interpreter executes.
 

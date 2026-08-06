@@ -87,8 +87,8 @@ fn stringLessThan(_: void, a: []const u8, b: []const u8) bool {
 ///     (the host's `.hidden` runtime glue is excluded).
 ///   - Mach-O: defined external symbols that are not private-external.
 ///   - COFF: names in `.drectve` `/export:` directives (the COFF symbol table
-///     carries no visibility, so the directive — what `__declspec(dllexport)`
-///     emits — is the only export signal).
+///     carries no visibility, so the directive—what `__declspec(dllexport)`
+///     emits—is the only export signal).
 /// wasm shared output is handled separately via the wasm export section.
 /// Names are duped into `arena`. Inputs in an unrecognized format are skipped;
 /// the linker keeps the final say, so a miss degrades to prior behavior rather

@@ -5,7 +5,7 @@
 //!
 //! This is a single-pass replacement for the three CLI helpers
 //! `extractPlatformSpecFromApp`, `extractPlatformQualifier`, and
-//! `extractNonPlatformPackages`. It performs no URL resolution — package
+//! `extractNonPlatformPackages`. It performs no URL resolution—package
 //! specs are returned exactly as written in source so callers can apply
 //! their own resolution policy (caching, fetching, virtualised paths).
 //!
@@ -24,7 +24,7 @@ const ModuleEnv = can.ModuleEnv;
 
 /// One non-platform package reference from an `app` header.
 pub const PackageEntry = struct {
-    /// Shorthand name (the key — e.g. `hlp` in `{ hlp: "./helper_pkg/main.roc" }`).
+    /// Shorthand name (the key—e.g. `hlp` in `{ hlp: "./helper_pkg/main.roc" }`).
     /// Arena-owned.
     shorthand: []const u8,
     /// Raw package spec as written in source (relative path, absolute path, or URL).
@@ -55,7 +55,7 @@ pub const AppHeaderInfo = struct {
     non_platform_packages: []const PackageEntry,
 };
 
-/// Errors `parseAppHeader` can return — either a header-shape problem
+/// Errors `parseAppHeader` can return—either a header-shape problem
 /// (`NotAnAppHeader`), an allocation failure, or an `Io.readFile` failure.
 pub const Error = error{
     NotAnAppHeader,
@@ -67,7 +67,7 @@ pub const Error = error{
 ///
 /// - `io`: filesystem to read the source through.
 /// - `gpa`: used for transient parsing state (freed before this returns).
-/// - `arena`: holds the returned strings — kept alive as long as the caller
+/// - `arena`: holds the returned strings—kept alive as long as the caller
 ///   needs `AppHeaderInfo`.
 pub fn parseAppHeader(
     io: Io,

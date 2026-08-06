@@ -76,9 +76,9 @@ about the **CLI Target**, not about the **CLI Runtime**: it cannot tell you
 whether the machine executing `roc` has AVX2. Only a runtime query can, which is
 what `host_cpu.zig` does.
 
-So anything generated to run on the CLI Runtime — compile-time execution,
+So anything generated to run on the CLI Runtime—compile-time execution,
 in-memory dev runs, and the Compilation Target chosen when the user passes no
-`--target` — takes its CPU level from `host_cpu.level()`. Anything generated for
+`--target`—takes its CPU level from `host_cpu.level()`. Anything generated for
 a Compilation Target the user named takes its level from that target, because
 the App Runtime is then someone else's machine.
 

@@ -1,4 +1,4 @@
-# reunify.md — Eliminating Logical Type Re-Derivation After Checking
+# reunify.md—Eliminating Logical Type Re-Derivation After Checking
 
 This document consolidates three independent drafts (reunify2/3/4) into the
 authoritative plan. Its current-state claims have been verified against the
@@ -13,8 +13,8 @@ facts are not re-litigated as disagreement.
 Roc stops reconstructing logical typing facts in postcheck.
 
 Checking already proves the program's logical type relationships. The checked
-artifact must publish those relationships explicitly — including polymorphic
-scheme binders and the substitution chosen at every scheme-use edge — and
+artifact must publish those relationships explicitly—including polymorphic
+scheme binders and the substitution chosen at every scheme-use edge—and
 Monotype must instantiate that data by directed substitution into an
 immutable, hash-consed type pool. Postcheck must not create fresh logical
 type variables, solve rows, infer defaults, rediscover static-dispatch
@@ -25,13 +25,13 @@ This project does **not** claim that every postcheck equality-closure problem
 is type inference. Two later responsibilities remain and must be named rather
 than hidden inside value-type unification:
 
-1. Monotype creates representation facts that do not exist during checking —
+1. Monotype creates representation facts that do not exist during checking—
    minted and forced-dynamic iterator representations, generated evidence
    backings. When distinct representations of one logical type meet,
    postcheck applies a small explicit **representation-join algebra** (§10).
 2. Lambda Solved computes callable flow for the first time. Its callable
    slots, finite lambda sets, erased-callable requirements, and recursive
-   equality closure remain a solver-owned responsibility (§12) — the sole
+   equality closure remain a solver-owned responsibility (§12)—the sole
    general postcheck unifier, kept exactly as it is.
 
 The ownership model:
@@ -71,7 +71,7 @@ Why this matters:
    solving, and repeated structural digests re-pay costs the checker already
    paid. Substitution over frozen schemes is a memoizable, allocation-light
    copy; interned monotypes give O(1) interning equality (the other
-   relations — logical, representation, specialization, cache — remain
+   relations—logical, representation, specialization, cache—remain
    separately defined, §8.2).
 3. **Simplicity.** The instantiation-graph machinery (evidence refill,
    cross-specialization snapshots, logical request refinement, broad
@@ -94,7 +94,7 @@ discipline to value-type structure itself.
 At completion:
 
 1. Every postcheck-visible specialization source has an explicit frozen
-   scheme with an owner and an ordered (possibly empty) binder list —
+   scheme with an owner and an ordered (possibly empty) binder list—
    monomorphic definitions, required values, and synthetic templates get
    zero-binder schemes, so no ownerless special paths exist.
 2. Every ordinary checked scheme use publishes an explicit substitution
@@ -159,7 +159,7 @@ measurements. Implementers should treat this ledger as authoritative.
   own comments and a comptime `assertNoNodeId` test already pin the intended
   end state ("Completed Monotype views must expose only `TypeId`s and
   durable AST ids, never these graph-local ids").
-- The Monotype stage reads **no mutable `src/types` solver state** — only
+- The Monotype stage reads **no mutable `src/types` solver state**—only
   the frozen artifact, the dispatch registries, and canonical `ModuleEnv`
   structure for numeral payloads. Function kind/effectfulness is fully
   resolved at the checked boundary (`finalizedFunctionKind`; Monotype
@@ -191,10 +191,10 @@ measurements. Implementers should treat this ledger as authoritative.
   a narrower persistence mechanism already exists (`ModuleEnv.
   SchemeUseRecord`, with slot kinds like `value_use` / `nested_function_use`
   / `shared_value_use`, whose fresh vars are resolved at publication).
-  Today it records only constrained variables for selected use kinds — the
+  Today it records only constrained variables for selected use kinds—the
   infrastructure is partial, not absent.
 
-**Failed verification — corrected in this document:**
+**Failed verification—corrected in this document:**
 
 - **"The scheme representation already exists."** Only structurally.
   `CheckedTypeScheme.gv_start`/`gv_len` (`src/check/checked_artifact.zig`)
@@ -244,7 +244,7 @@ measurements. Implementers should treat this ledger as authoritative.
 - **"A production matching walk is the right way to compute bindings."**
   Rejected in this consolidation. A matching walk must re-implement type
   equality (alias transparency, head canonicalization, nominal backing
-  rules, row closure) — exactly the drift-shaped surface this project
+  rules, row closure)—exactly the drift-shaped surface this project
   exists to remove, reproduced in miniature. The checker already had the
   binder assignments in `var_map`; this design publishes them (§7.2) and
   demotes the matcher to a Debug boundary verifier (§7.6).
@@ -259,7 +259,7 @@ measurements. Implementers should treat this ledger as authoritative.
   score-selected evidence backings (`unifyGeneratedOpaqueBacking` and its
   expression-side twin), and four distinct iterator joins
   (`unifyForcedDynamicIterator`, `unifyIteratorOwnerStampedPublic`,
-  `unifyGeneratedIteratorJoin`, `unifyPublicGeneratedIterator`) — all
+  `unifyGeneratedIteratorJoin`, `unifyPublicGeneratedIterator`)—all
   verified present in `lambda_solved/solve.zig`.
 - **The Lambda-Mono differential harness cannot detect mutations inside
   `lambda_solved`.** Both of its sides consume the same solved program, so
@@ -272,7 +272,7 @@ measurements. Implementers should treat this ledger as authoritative.
   therefore uses Debug-only shadow verification and a single authority flip
   by deletion, and `design.md` is amended at the start of the project, not
   the end (§13, Slice 0). Note: `design.md`'s Lambda Solving section still
-  claims the solver generalizes and instantiates — stale; the code does
+  claims the solver generalizes and instantiates—stale; the code does
   not (§12.3). Slice 0 corrects it.
 
 ---
@@ -308,7 +308,7 @@ source text
   │  src/lir              LIR passes (TRMC, reachability, ARC refcount
   │                       insertion, etc.)
   ▼
-  │  backends             interpreter (src/eval), dev/native, wasm, LLVM —
+  │  backends             interpreter (src/eval), dev/native, wasm, LLVM—
   │                       all four consume the same LIR and the test suite
   │                       requires byte-identical results across them.
 ```
@@ -323,7 +323,7 @@ Key vocabulary:
   checked module is a **template**; postcheck instantiates templates on
   demand as calls are lowered.
 - **Static dispatch**: method-style calls (including `where`-clause
-  obligations) resolve at compile time — no vtables. Checking records
+  obligations) resolve at compile time—no vtables. Checking records
   per-site resolutions ("dispatch evidence"); lowering consumes them.
 - **Lambda sets**: to compile first-class functions without universal
   boxing, the compiler computes, per function-typed value, the set of
@@ -370,9 +370,9 @@ use instantiates (`src/types/instantiate.zig`): copy the type, replacing
 generalized variables with fresh ones, memoized through `var_map` with
 insert-before-recurse so shared/recursive structure is preserved.
 
-A polymorphic type is a **scheme** — a body plus its generalized variables.
+A polymorphic type is a **scheme**—a body plus its generalized variables.
 During checking, instantiation substitutes fresh unknowns. During postcheck,
-it substitutes fully concrete types — which is why postcheck needs a copy
+it substitutes fully concrete types—which is why postcheck needs a copy
 under an explicit binding, not a solver. And critically: **at each
 checking-time instantiation, `var_map` momentarily holds the authoritative
 answer to "which actual type did each binder receive at this use?"** This
@@ -392,7 +392,7 @@ the effectful-naming warning and for unresolved dispatch that
 canonicalization already replaced with a runtime-error *node*; every
 type-error-class problem blocks lowering. Both Monotype consumers of the
 `.err` payload are hard invariants. Programs that "lower with user errors"
-do so through canonicalization-inserted runtime-error nodes — ordinary
+do so through canonicalization-inserted runtime-error nodes—ordinary
 ground code, not poisoned types.
 
 This design adds **no error monotype**. If a future project wants poisoned
@@ -408,14 +408,14 @@ downstream consumer deliberately.
 Checking finalization produces `CheckedModuleArtifact`
 (`src/check/checked_artifact.zig`): flat, relocatable plain-old-data
 (POD shapes comptime-asserted), cached and consumed by postcheck. Payloads
-are addressed by `CheckedTypeId = enum(u32)`. The payload inventory — listed
+are addressed by `CheckedTypeId = enum(u32)`. The payload inventory—listed
 exhaustively because translation totality depends on it:
 
 | payload | translation classification |
 |---|---|
-| `alias` (args + backing) | transparent — resolve through to backing |
+| `alias` (args + backing) | transparent—resolve through to backing |
 | `record`, `record_unbound`, `tuple`, `function`, `tag_union`, `empty_record`, `empty_tag_union`, `nominal` | head constructor |
-| `flex`, `rigid` (the `CheckedTypeVariable` forms) | variable — bound by a published substitution or explicitly disposed (§7.4) |
+| `flex`, `rigid` (the `CheckedTypeVariable` forms) | variable—bound by a published substitution or explicitly disposed (§7.4) |
 | `err` | blocked from postcheck by the §5.4 contract; invariant failure |
 | `pending` | build-transient reservation; must never survive finalization (§7.5) |
 
@@ -442,7 +442,7 @@ Notes:
 `generalizedVars()` accessor exist and round-trip through serialization.
 But per the ledger (§3): production leaves the ranges zero, nested schemes
 have no entries, and today's consumer reads only `.root` and re-derives
-generalization in its own graph — the project's disease in miniature.
+generalization in its own graph—the project's disease in miniature.
 `SchemeUseRecord` shows the checker can persist use-site instantiation data;
 it currently records only dispatch-constrained variables for selected use
 kinds. §7 turns both into complete, verified artifact data.
@@ -466,15 +466,15 @@ differently) is preserved, not collapsed (§8.2).
 ### 6.4 Per-node type coverage
 
 Every checked expression and pattern carries a frozen type root. The whole
-body of every definition is type-annotated at `CheckedTypeId` granularity —
+body of every definition is type-annotated at `CheckedTypeId` granularity—
 the property that makes substitution-based lowering possible once §7's
 binder and site gaps are closed.
 
 ### 6.5 Dispatch evidence, and its ownership rule
 
-Checking publishes per-site resolutions — `direct` (proved concrete
+Checking publishes per-site resolutions—`direct` (proved concrete
 target), `constraint(depth, index)` (supplied per specialization edge),
-`structural`, `checked_error`, `unreachable_dispatch` — and Monotype
+`structural`, `checked_error`, `unreachable_dispatch`—and Monotype
 lowering materializes and consumes each specialization's evidence vector.
 Exact registry lookups by `(owner, method)` happen only for
 compiler-generated edges with no checked instantiation record
@@ -508,7 +508,7 @@ The specialization registry (`monotype/specialize.zig`) models the request
 lifecycle explicitly: records are *reserved* (key registered) strictly
 before lowering, a still-reserved record's request can be *refined* after a
 requester's graph seals a deferred request, and completion records the
-solved type — when the solved digest differs from the requested one, the
+solved type—when the solved digest differs from the requested one, the
 solved shape becomes an alias lookup entry pointing at the same record
 (never a rekey). **The requested/solved distinction is not hypothetical;
 whether the difference ever carries information the frozen checked types
@@ -519,31 +519,31 @@ measures it rather than assuming the answer.**
 
 Every class of work the graph performs, mapped to its target home:
 
-1. **Template-variable binding from ground context** — the dominant case;
+1. **Template-variable binding from ground context**—the dominant case;
    replaced by published substitutions (§7.2). Includes the
    expected-return back-constraint (`instantiateCallTypeFromCallerAtType`
    unifies the callee's return against the call site's expected type, so a
-   variable appearing only in return position — `empty : List a` used where
-   `List U64` is expected — is bound by context today). Published actuals
+   variable appearing only in return position—`empty : List a` used where
+   `List U64` is expected—is bound by context today). Published actuals
    cover this by construction, because checking saw the whole relation.
-2. **Symmetric row solving** — `unifyTagRows`/`unifyRecordRows` mint fresh
+2. **Symmetric row solving**—`unifyTagRows`/`unifyRecordRows` mint fresh
    extensions and distribute disjoint remainders in both directions, and
    `importMono` keeps imported tag unions extensible so callee evidence can
    widen a requester's row. Target: rows are settled at the checked
    boundary. Whether today's two-sided flow ever adds information the
    frozen types lack is the Slice 0 groundness measurement; any
-   counterexample is fixed by recording fuller rows at finalization — never
+   counterexample is fixed by recording fuller rows at finalization—never
    by keeping a row solver.
-3. **Defaulting application** — `numeric_default_phase` → the shared
+3. **Defaulting application**—`numeric_default_phase` → the shared
    `literal_defaulting` oracle; `row_default` → empty record/tag-union; a
    plain unconstrained checked variable with no evidence currently
    materializes as an **empty tag union** (an uninhabited slot, not a unit
    placeholder), and a surviving compiler-owned placeholder origin is an
    invariant failure. Target: directed application under explicit residual
    dispositions (§7.4).
-4. **Dispatch-evidence consumption** — already lookup, not inference;
+4. **Dispatch-evidence consumption**—already lookup, not inference;
    carries over with its scoping unchanged (§9.7).
-5. **Representation decisions** — postcheck-minted facts joined by explicit
+5. **Representation decisions**—postcheck-minted facts joined by explicit
    policy: the iterator tier relation (shared with LambdaSolved),
    generated-evidence backing selection, and nominal-wraps-structural root
    selection (`unifyThroughBacking` keeps the nominal as the shared root).
@@ -551,11 +551,11 @@ Every class of work the graph performs, mapped to its target home:
    representation algebra (§10). The empty-tag-union-yields-to-concrete
    behavior is deliberately **not** in this category: an empty tag union
    acting as an unresolved slot is either checked bottom/residual data
-   (§7.4) or import bookkeeping that deletes with the graph — Slice 0's
+   (§7.4) or import bookkeeping that deletes with the graph—Slice 0's
    classification assigns each occurrence, and §10.5 bans it from the
    algebra. (Lambda Solved's own empty-tag-union tie-break stays where it
-   is, in that solver's census — §12.4.)
-6. **Snapshot/refill/logical-deferral bookkeeping** — consequence-management
+   is, in that solver's census—§12.4.)
+6. **Snapshot/refill/logical-deferral bookkeeping**—consequence-management
    of re-solving; deletes with the graph. The *semantic* need to wait for a
    call's representation inputs is real even when the call is not recursive:
    a representation slot can gain information later in its caller's draft.
@@ -566,8 +566,8 @@ Every class of work the graph performs, mapped to its target home:
 
 ### 6.8 Lambda Solved and after
 
-`lambda_solved/solve.zig` computes lambda sets — a fact that appears
-nowhere in `CheckedModuleArtifact` — over its own store whose only
+`lambda_solved/solve.zig` computes lambda sets—a fact that appears
+nowhere in `CheckedModuleArtifact`—over its own store whose only
 meaningful unknowns are the callable slots inside function types. It is the
 first derivation of its domain, not a re-derivation, and it stays (§12).
 Downstream, `solved_lir_lower.zig` and `lambda_mono/` contain **zero**
@@ -611,13 +611,13 @@ Concrete specialization request
 There is no production `matchSchemeAgainstGroundRequest` operation. A
 matching walk exists only as a boundary verifier and migration oracle
 (§7.6); using it to compute substitutions in production would reconstruct
-information the checker already had — through a re-implementation of type
+information the checker already had—through a re-implementation of type
 equality that can drift.
 
 ### 7.1 Published scheme ownership
 
 Every postcheck-visible specialization source receives a
-`CheckedTypeScheme` — generalized or not: monomorphic definitions,
+`CheckedTypeScheme`—generalized or not: monomorphic definitions,
 required values, and synthetic templates get schemes with zero local
 binders, so there are no ownerless special paths and every use-site
 record references the same kind of owner:
@@ -645,7 +645,7 @@ The concrete field layout may reuse existing side pools; the semantics are
 mandatory:
 
 - root and binders describe the pristine scheme as it existed at the
-  definition's generalization boundary — the checker records a **scheme
+  definition's generalization boundary—the checker records a **scheme
   snapshot when generalization completes**; publication serializes that
   snapshot and does not rebuild a supposedly pristine scheme from the final
   mutable solver root;
@@ -653,7 +653,7 @@ mandatory:
   scheme snapshot (`identityVarsFromVar`-style first-encounter order over
   the root): local binders and captured references interleave in that
   traversal, and the ordered `binders` and `captured` projections are
-  both derived from it — so the order is identical in the defining
+  both derived from it—so the order is identical in the defining
   artifact, imported projections, use-site substitutions,
   evidence-parameter enumeration, canonical scheme keys, and
   specialization bindings, and binding digests and canonical digests can
@@ -664,8 +664,8 @@ mandatory:
   enclosing-scheme binder exactly once, in first-encounter order, as an
   explicit `(outer scheme, binder index)` pair. Instantiating a nested
   scheme depends on both its own binding *and* the values of its captured
-  binders — an inner `∀b. b -> (a, b)` at identical local bindings under
-  `a ↦ I64` versus `a ↦ Str` yields different types — so every memo and
+  binders—an inner `∀b. b -> (a, b)` at identical local bindings under
+  `a ↦ I64` versus `a ↦ Str` yields different types—so every memo and
   cache key for it includes the exact captured-environment projection
   (§9.4). Imported schemes likewise carry an ordered imported-binder
   projection mapping local copies back to the defining artifact's binder
@@ -709,19 +709,19 @@ store without structural recovery. Two recording disciplines are part of
 the contract:
 
 - **Deterministic projection.** The actual vector is produced by walking
-  `scheme.binders` in binder order and looking each binder up in the map —
+  `scheme.binders` in binder order and looking each binder up in the map—
   never by iterating the `AutoHashMap`, whose iteration order is not
   deterministic. (This matters doubly because today's recorded pairs are
   named, while the published vector is positional.)
 - **Savepoint consistency and edge identity.** Checking instantiates
   schemes inside speculative attempts that can roll back (§5.2). Site
-  recording must be savepoint-consistent — a rolled-back speculative
+  recording must be savepoint-consistent—a rolled-back speculative
   instantiation leaves no record; the checker's `Probe` already snapshots
   and truncates the scheme-use records and their pair pool on rollback,
   and Slice 2 generalizes that mechanism. Re-checking is governed by
   identity, not ordering: writes are transactional against the stable
   `edge` id, and a duplicate write must be **exactly equivalent after
-  resolution** — anything else is an invariant failure. There is no
+  resolution**—anything else is an invariant failure. There is no
   first-write-wins or last-write-wins selection (today's publication
   keeps the first re-check record by iteration order; that incidental
   rule does not survive). The Slice 2 boundary verifier has a named test
@@ -733,7 +733,7 @@ the contract:
   case for choosing the first or last record.
 
 **Coverage rule:** a site is published **iff the CIR edge is classified
-as postcheck-visible by the checked-edge inventory** — a classification
+as postcheck-visible by the checked-edge inventory**—a classification
 publication can compute, unlike future demand (lowering is demand-driven,
 so a dead-but-lowerable definition's edges legitimately carry sites that
 are never reached). The contract splits in two checkable halves: the
@@ -741,7 +741,7 @@ boundary verifier proves exactly one record per eligible edge, and
 Monotype asserts that every edge it actually consumes cites such a
 record. Checker-internal instantiation kinds that lowering never consumes
 (annotation subsumption, constraint-discharge internals) are outside the
-inventory and publish nothing — "publish everything the checker
+inventory and publish nothing—"publish everything the checker
 instantiates" would silently inflate the artifact. Within that rule the
 table covers: direct calls; ordinary value uses; function values passed
 without being called; binders constrained
@@ -750,7 +750,7 @@ references; nested generalized function construction and use; pattern-side
 generalized uses; required/platform values; imported definitions; and
 static-dispatch targets selected through checked evidence. In-group
 recursive and mutually recursive uses publish a **dense explicit mapping**
-like any other site — typically callee binder → current group binder,
+like any other site—typically callee binder → current group binder,
 since a function can be generalized externally while its in-group
 references were monomorphic during checking; the `shared_definition_root`
 form marks the sharing but never replaces the vector (a marker without a
@@ -758,7 +758,7 @@ vector cannot express mutual recursion).
 
 **Cost checkpoint (Slice 2):** actuals are `gv_len` ids per site and the
 instantiated root is already published as the use node's type, so expected
-artifact growth is modest — but it is measured, not assumed. Slice 2
+artifact growth is modest—but it is measured, not assumed. Slice 2
 reports artifact-size, checking-time, and **checking-side peak-memory**
 deltas on the corpus (per-instantiation pairs are retained until
 publication) before downstream slices build on the table; if measurement
@@ -789,7 +789,7 @@ const BindingEnvironment = struct {
 A binder's value is a `BoundType`, not a bare `MonoTypeId`: a `MonoTypeId`
 carries representation identity (iterator tier/kind/depth, generated
 owner), so it cannot simultaneously be the fixed logical binding and an
-open representation-bearing occurrence — and an enclosing binder can
+open representation-bearing occurrence—and an enclosing binder can
 legitimately refer to a representation slot that has not sealed yet, which
 no immutable id can express. The logical half is fixed and keys
 substitution, logical recipes, and `LogicalSpecIdentity`; represented
@@ -816,14 +816,14 @@ explicit unreachable/bottom position
 
 There is no generic "plain unresolved variable" disposition at the checked
 boundary. The unreachable/bottom disposition is concrete artifact data
-with two distinct encodings — `contextual(CheckedTypeId)`, where the
+with two distinct encodings—`contextual(CheckedTypeId)`, where the
 checker publishes the exact contextual type the position adopts (typically
 the enclosing use edge's checked type), and `uninhabited`, an explicit
-uninhabited leaf where no value can return — and **checking chooses one**;
+uninhabited leaf where no value can return—and **checking chooses one**;
 postcheck never picks between them. The disposition is stored as scoped
-artifact data — keyed by `(scheme owner, CheckedTypeId)`, so one checked
+artifact data—keyed by `(scheme owner, CheckedTypeId)`, so one checked
 variable can carry different dispositions in different body contexts
-without cloning roots — and `contextual` chains are banned: a
+without cloning roots—and `contextual` chains are banned: a
 `contextual` target must itself be fully disposed, never another
 `contextual`. The target must be visible from the same lexical scheme
 environment, may not refer inward to an inner scheme, and is translated
@@ -831,12 +831,12 @@ under the current logical binding environment rather than copied as a raw
 id. The boundary verifier rejects out-of-scope targets, chains, and cycles.
 This lands in two phases: Slice 2
 records the explicit disposition for every residual **without changing
-materialization** — and Slice 0 first proves that every current
+materialization**—and Slice 0 first proves that every current
 plain-flex-to-empty-tag-union case really is semantically bottom, so the
 classification is measured rather than asserted; the direct instantiation
 path (Slices 5–6) then consumes the dispositions, at which point an
 undisposed residual is an invariant failure. Default application is
-directed — the numeric phase selects through the shared
+directed—the numeric phase selects through the shared
 literal-defaulting authority, `empty_record`/`empty_tag_union` produce
 closed empty rows, `contextual(id)` translates its published target under
 the same lexical environment, and
@@ -861,7 +861,7 @@ A checked-boundary verifier walks every published body and proves:
   published substitution;
 - every postcheck-visible edge (per the checked-edge inventory, §7.2) has
   exactly one site record, no record exists for an instantiation kind
-  outside the inventory, and speculative rollback left no orphans —
+  outside the inventory, and speculative rollback left no orphans—
   Monotype's half of the contract, that every consumed edge cites a
   record, is asserted at lowering;
 - every checked dispatch plan and evidence reference is total.
@@ -879,8 +879,8 @@ verifyInstantiation(scheme, published_actuals,
                     published_instantiated_root) !void
 ```
 
-It applies the published substitution and compares the complete root —
-function arguments **and** result — under §8.2's logical projection applied
+It applies the published substitution and compares the complete root—
+function arguments **and** result—under §8.2's logical projection applied
 identically to both sides. (Checked canonical keys preserve alias identity,
 and stored interning identity may retain a builtin-owned alias, so the
 matcher borrows neither normalization: it erases every backed source alias
@@ -898,7 +898,7 @@ resolves dispatch, or affects compiler output.
 ### 8.1 The production interner
 
 The existing tested `Interner` scaffold in `monotype/type.zig` becomes the
-only production construction API — promoted, not duplicated. Every Monotype
+only production construction API—promoted, not duplicated. Every Monotype
 payload is immutable after its id becomes visible. Construction is
 child-first for acyclic types; recursive groups reserve private slots, fill
 each exactly once, and publish roots only after the complete group has a
@@ -909,9 +909,9 @@ wrappers, tests, and deserialization all use the same public boundary.
 
 **Sequencing constraint (Slice 3):** an immutable interner cannot coexist
 with the graph's refill-in-place of already-published views (`fillMono` and
-friends). Mutation is first isolated into graph-local cells — a graph
+friends). Mutation is first isolated into graph-local cells—a graph
 result commits to Monotype only when sealed, and the committed result is
-immutable — and the mutable-view/refill API is deleted *before* interning
+immutable—and the mutable-view/refill API is deleted *before* interning
 is switched on. Interning while published ids can still be refilled would
 corrupt shared entries.
 
@@ -920,7 +920,7 @@ corrupt shared entries.
 Hash-consing does not collapse the compiler's equality relations into
 `id == id`. The code retains explicit notions:
 
-- **interning equality** — exact immutable content **after the pool's
+- **interning equality**—exact immutable content **after the pool's
   declared canonicalization**, including every identity and representation
   field that affects downstream meaning. The alias decision is made
   explicitly rather than inherited from today's inconsistent paths. A
@@ -938,10 +938,10 @@ Hash-consing does not collapse the compiler's equality relations into
   verifier proves that no storage-transparent alias node was published.
   Checked canonical keys are different on purpose:
   they *preserve* alias identity for cache/serialization/diagnostic use on
-  the checked side, and nothing may treat the two as interchangeable —
+  the checked side, and nothing may treat the two as interchangeable—
   consumers that need alias names for display read checked data, not the
   pool;
-- **logical equality** — source-level type equality after the declared
+- **logical equality**—source-level type equality after the declared
   alias and representation-erasure normalization rules. This relation is
   *computed*, not abstract. Translation eagerly walks the frozen checked
   type under the current logical binding environment and residual
@@ -959,18 +959,18 @@ Hash-consing does not collapse the compiler's equality relations into
   project to. The walk preserves nominal declaration identity, ties checked
   cycles with an active map, and interns the resulting
   representation-free **logical skeleton** through the same canonical pool
-  machinery. `LogicalTypeIdentity` is that skeleton's interned id — O(1)
+  machinery. `LogicalTypeIdentity` is that skeleton's interned id—O(1)
   exact logical equality, with no digest-plus-witness authority. It is
   available before any representation draft or slot seals, including for a
   recursive draft cycle. Erasing a sealed represented id to a skeleton is a
   validation operation and optional memoized acceleration, never the
   bootstrap mechanism; sealing asserts that this projection equals the
   eager identity carried by the draft/slot;
-- **representation compatibility** — equal logical types whose postcheck
+- **representation compatibility**—equal logical types whose postcheck
   representation descriptors may join (§10);
-- **specialization equality** — the existing callable/cache reuse
+- **specialization equality**—the existing callable/cache reuse
   authority;
-- **canonical cache identity** — deterministic digest bytes valid across
+- **canonical cache identity**—deterministic digest bytes valid across
   runs.
 
 `MonoTypeId` equality is an optimization for interning equality within one
@@ -990,16 +990,16 @@ accident.
 Recursive types are rooted graphs: **equivalent rooted graphs intern to the
 same id regardless of construction or allocation order.** Different nodes
 of one recursive component denote different rooted types and need not share
-an id. (The layout store's `interned_recursive_graphs` — Tarjan SCC
-discovery, visit-order back-references, per-entry-point keys — already
+an id. (The layout store's `interned_recursive_graphs`—Tarjan SCC
+discovery, visit-order back-references, per-entry-point keys—already
 implements exactly this contract; reuse the technique.) Stated as a build
 task, not an inherited property: the existing Monotype recursive-group
 builder registers **only the selected group root** in its interner bucket,
 so satisfying this contract requires registering every cyclic node's
-rooted key. (The alternative — weakening the acceptance criterion — is
+rooted key. (The alternative—weakening the acceptance criterion—is
 rejected; the registration is built.) Canonicalization
 uses explicit visited maps and iterative worklists; valid deeply-nested
-finite types are never rejected by an arbitrary depth cap — resource
+finite types are never rejected by an arbitrary depth cap—resource
 limits, where necessary, are explicit compiler limits, and cycle detection
 never depends on depth.
 
@@ -1050,7 +1050,7 @@ published `CheckedInstantiationSite.actuals` vector under the caller's
 `BindingEnvironment`; `captured` is the exact projection of the caller's
 environment onto the scheme's captured binders (§7.1). The `logical`
 halves key substitution and logical recipes; the `representation` halves
-feed drafts and the represented-template input key — a bare `MonoTypeId`
+feed drafts and the represented-template input key—a bare `MonoTypeId`
 cannot play both roles (§7.3).
 
 Logical translation runs first and independently (§8.2). Every draft and
@@ -1064,14 +1064,14 @@ arbitrary represented content to masquerade under a logical key.
 The draft layer exists because §10's representation slots can join *after*
 a compound type containing them is built: if `List public_iter` were
 interned immediately and its element later joined to a minted iterator,
-the immutable list id could not follow — a stale parent. So substitution
+the immutable list id could not follow—a stale parent. So substitution
 builds **drafts** for any compound whose transitive children include a
 representation slot; representation closure runs to fixpoint across a
 representation dependency component (§11); only then are drafts interned
 bottom-up into immutable ids and procedure bodies/cache records published
 (§10.6). Types with no representation-bearing positions intern
 immediately. Drafts contain no logical unknowns and perform no logical
-solving — the central invariant is untouched; drafts only defer *identity
+solving—the central invariant is untouched; drafts only defer *identity
 assignment* until representation sealing. Before that point body discovery
 may create only §11's representation-neutral draft and provisional call
 handles. Iterator/ABI-sensitive Monotype emission waits for the component
@@ -1085,7 +1085,7 @@ Walking the frozen scheme root under the already-computed logical skeleton:
   the parallel logical walk uses `BoundType.logical`;
 - a visible enclosing binder does the same through the lexical environment;
 - a concrete checked payload recursively translates its children, interning
-  the result — or drafting it, when a transitive child is a representation
+  the result—or drafting it, when a transitive child is a representation
   slot (§9.1);
 - an explicitly defaulted residual applies its recorded default (§7.4);
 - a `contextual(id)` disposition translates its published target under the
@@ -1098,7 +1098,7 @@ Walking the frozen scheme root under the already-computed logical skeleton:
   recursive-group builder directly, while one containing representation
   slots is built as a **draft cycle** (draft nodes referencing each
   other) and passes through the interner's recursive builder only at
-  sealing (§10.6) — the final builder cannot run while slots are
+  sealing (§10.6)—the final builder cannot run while slots are
   unsealed.
 
 Encountering an unowned residual, `pending`, `.err`, an arity mismatch, or
@@ -1121,7 +1121,7 @@ every structural cache in this pipeline:**
 > is representation-closed.
 
 Without it, two structurally equal but independent occurrences would
-share representation flow — forcing one occurrence dynamic would infect
+share representation flow—forcing one occurrence dynamic would infect
 another with no value-flow relation, the direct-path twin of the Lambda
 Solved cloning bug (§12.5). Direct tests mirror the Lambda ones:
 identical iterator-typed fields begin with distinct representation slots;
@@ -1130,7 +1130,7 @@ representation inputs do not collide; inserting one sealed template into
 two open occurrences creates distinct slots; changing one does not affect
 the other; an explicit value-flow relation joins them; genuine recursive
 back-references reuse only the intended slot. These caches remain
-optimizations only — removing them must not affect identity or behavior,
+optimizations only—removing them must not affect identity or behavior,
 because the interner remains the structural equality authority.
 
 ### 9.4 Instantiation memoization, and two kinds of recursion
@@ -1182,7 +1182,7 @@ publishes an unfinished immutable type to break a recursive procedure call.
 
 The production path never computes a binding from parameter/argument pairs.
 Doing so would miss result-only variables, non-function values, expected
-lambda types, captures, and contextual row information — and would
+lambda types, captures, and contextual row information—and would
 re-implement type equality. The checked substitution vector is complete
 because checking saw all those relations; the validation matcher (§7.6)
 compares complete instantiated roots in Debug.
@@ -1238,7 +1238,7 @@ containing slots stay drafts until sealing):
 const RepresentationSlot = struct {
     logical: LogicalTypeIdentity, // fixed at slot creation (§8.2)
     represented: TypeRef,         // never a logical unknown; may itself
-                                  // be a draft until sealing — recursive
+                                  // be a draft until sealing—recursive
                                   // backing joins nest
 };
 
@@ -1255,9 +1255,9 @@ never replaces a nominally typed value position with a bare backing: it
 updates the explicit backing representation inside a wrapper that retains
 the nominal logical identity.
 
-Relating two slots first proves their logical keys equal —
+Relating two slots first proves their logical keys equal—
 `LogicalTypeIdentity` is an interned skeleton id (§8.2), so this is exact
-id equality, not a digest match — then applies the algebra. Every call site
+id equality, not a digest match—then applies the algebra. Every call site
 cites its `RepresentationRule`; the rule enum and call-site inventory live
 in `design.md`. Slots also form a
 specialization's **representation interface**: argument and result slots
@@ -1290,7 +1290,7 @@ name producer/consumer roles in the API rather than depending on traversal
 order.
 
 **Iterator representations** (the relation is already shared between
-Monotype and LambdaSolved — keep it single-sourced):
+Monotype and LambdaSolved—keep it single-sourced):
 
 - `public + minted → minted` (both directions);
 - `forced_dynamic + public/minted → forced_dynamic` (both directions);
@@ -1306,7 +1306,7 @@ item type; generated identity, kind, depth, and tier are explicit inputs,
 never inferred from backing shape or names.
 
 **Generated opaque evidence** (`FieldNames`, `FieldName`,
-`ParseTagUnionSpec`, and kin): one declared backing policy — the higher
+`ParseTagUnionSpec`, and kin): one declared backing policy—the higher
 declared score wins; an equal score must either mean exactly equivalent
 backings or be covered by a separately declared deterministic semantic
 tie-break; traversal/operand order is never the tie-break (Slice 0 records
@@ -1316,7 +1316,7 @@ backings contain step-callable information that must join.
 
 **Nominal backings**: ordinary nominal equality compares identity and
 arguments; a backing is related only at an explicit construction,
-destruction, inspection, or runtime-layout authority edge — and that
+destruction, inspection, or runtime-layout authority edge—and that
 projection is a **distinct API**, not a peer-slot join, because
 `relateRepresentations` requires equal logical identity and a nominal is
 not logically equal to its backing. The nominal representation wrapper
@@ -1380,7 +1380,7 @@ component or enters a published procedure body or cache; members of that
 unpublished component may refer to one another through provisional handles
 and slots until they seal together. Sealing asserts every final
 representation's logical projection equals the eager identity on its slot
-or draft. It cannot choose a default — every slot
+or draft. It cannot choose a default—every slot
 already contains a complete represented type, and an unprocessed relation
 is an invariant failure, not permission to keep an earlier approximation.
 
@@ -1392,16 +1392,16 @@ is an invariant failure, not permission to keep an earlier approximation.
 
 Three deliberately separate identities:
 
-1. **`LogicalSpecIdentity`** — fixed at reservation: artifact-qualified
+1. **`LogicalSpecIdentity`**—fixed at reservation: artifact-qualified
    callable/scheme identity, dense **logical** binding (the `logical`
    halves of §7.3's `BoundType`s), method scope, checked evidence
    identity.
-2. **`ProvisionalSpecId` / `RepresentationInterfaceId`** — process-local
+2. **`ProvisionalSpecId` / `RepresentationInterfaceId`**—process-local
    occurrence identities for one unpublished request and its explicit
    argument/result slots. They permit discovery and recursive references
    while representation inputs are open; they are neither reuse nor cache
    keys.
-3. **`FinalSpecKey`** — the logical identity plus the canonical digests of
+3. **`FinalSpecKey`**—the logical identity plus the canonical digests of
    the declared **representation inputs** that can affect body or ABI. It
    exists only when those inputs seal. Body-produced output facts are not
    retroactive key inputs (§11.5).
@@ -1450,8 +1450,8 @@ phases:
    and input/output dependencies that outcome would activate. Emission may
    select one recorded alternative later; it may not discover an unrecorded
    dependency after closure. Discovering a call fixes and reserves its
-   logical identity immediately — checked substitution made that identity
-   final; any provisional reuse obeys §11.3 — and adds the exact input/output
+   logical identity immediately—checked substitution made that identity
+   final; any provisional reuse obeys §11.3—and adds the exact input/output
    representation dependencies with their provenance. Direct and mutual
    recursion terminate by citing the already-reserved handle.
 2. **Close representation dependencies.** Nodes are provisional
@@ -1573,9 +1573,9 @@ therefore reproduce every output fact body discovery would have produced;
 it cannot merely skip the body and return an input-key type.
 
 Serialized interfaces name occurrences by canonical paths through the
-logical skeleton and by canonical generated-rule site ids — argument index,
+logical skeleton and by canonical generated-rule site ids—argument index,
 result, field/tag/payload position, backing projection, and declared
-generated edge — never by process-local slot or draft ids. Loading validates
+generated edge—never by process-local slot or draft ids. Loading validates
 every path against the logical skeleton before allocating fresh slots.
 
 A mutually dependent sealing component is serialized atomically, or each
@@ -1596,9 +1596,9 @@ output is not.
 An earlier draft of this project proposed replacing `lambda_solved`'s
 unifier with a directed set-dataflow pass. That proposal was wrong, and
 wrong in a way that is easy to re-discover: Roc's lambda sets produced a
-long run of severe miscompiles before the current architecture — adopted
+long run of severe miscompiles before the current architecture—adopted
 from the cor research compiler's `lss` experiment (the `experiments/lss/`
-tree in the cor repository) — fixed them. Anyone working near this stage
+tree in the cor repository)—fixed them. Anyone working near this stage
 must understand what the architecture is and why each part is load-bearing,
 so this section records it in full. The rule: **the Lambda Solved solver's
 architecture does not change.** The only permitted changes are the cloning
@@ -1624,21 +1624,21 @@ monotype_lifted → lambdasolved → lambdamono → ir.
 
 **lambdasolved** (`lss/lambdasolved/`): the lifted, fully monomorphic
 program is re-typed into a fresh mutable store (`inst.ml`) in which every
-function type gets a *third slot* — `TFn (arg, lambda_set, ret)` in
-`type.ml` — instantiated as a fresh unknown while all value structure stays
+function type gets a *third slot*—`TFn (arg, lambda_set, ret)` in
+`type.ml`—instantiated as a fresh unknown while all value structure stays
 ground. `solve.ml` then runs genuine Hindley–Milner inference whose only
 real unknowns are those slots:
 
 - **Let-polymorphism over lambda sets.** Definitions are processed in SCC
   order (`defs_graph.ml`), generalized after solving (`gen` marks
-  unconstrained set variables `ForA`), and — critically — **every use of a
+  unconstrained set variables `ForA`), and—critically—**every use of a
   definition instantiates fresh copies of its generalized set variables**
   (`inst` at each `Var`). Two call sites of one function never pollute each
   other's sets.
 - **Union merge with capture agreement.** Unifying two lambda sets unions
   their members, keyed by lambda symbol. The same lambda arriving from two
-  paths must have identical capture keys — "incompatible captures" is a
-  hard failure — and capture types unify pointwise.
+  paths must have identical capture keys—"incompatible captures" is a
+  hard failure—and capture types unify pointwise.
 - **Sets live structurally inside types.** Because the slot is part of the
   function type, a function buried in a record field, tag payload, or list
   element gets its set propagated by ordinary structural traversal;
@@ -1647,7 +1647,7 @@ real unknowns are those slots:
   propagate to every function type they reach (`erased.ml`).
 
 **lambdamono** (`lss/lambdamono/`): demand-driven re-specialization *keyed
-on the solved lambda-set types* — (function name, lowered argument type,
+on the solved lambda-set types*—(function name, lowered argument type,
 lowered return type, captures-spec: toplevel / set captures / erased
 captures) in `specializations.ml`. Lowering defunctionalizes: a lambda set
 becomes a tag union with one tag per member lambda (payload = its capture
@@ -1658,7 +1658,7 @@ indirectly.
 The fixture `lss/test/generic-higher-order-call.roc` shows why per-use
 polymorphism matters. `id = \x -> x` gets **one** monotype specialization
 at `(Int -> Int) -> Int -> Int`, but lambdasolved gives it
-`Int -<'1092>-> Int -[id1]-> Int -<'1092>-> Int` — the set `'1092` is a
+`Int -<'1092>-> Int -[id1]-> Int -<'1092>-> Int`—the set `'1092` is a
 *generalized variable*. One call site passes a capturing closure, another a
 non-capturing one; because each use instantiates `'1092` fresh, the sets
 stay separate, and lambdamono emits **two** specializations of `id` with
@@ -1679,8 +1679,8 @@ monotype, multiple final types, distinguished only by lambda sets.
   erased × erased checks source-digest agreement).
 - Erasure is applied by *unifying* a minted erased node into callable slots
   reachable as data (`markErasedCallablesReachedByType`), with a deliberate
-  exemption for iterator-backing step closures; still-unbound slots —
-  never called, never stored — seal to the empty set (`closeCallableSlot`).
+  exemption for iterator-backing step closures; still-unbound slots—
+  never called, never stored—seal to the empty set (`closeCallableSlot`).
 - Recursion: every lifted function's type is registered before any body is
   solved; the `active_unifications` in-flight-pair guard and
   insert-before-recurse cloning handle cyclic structures.
@@ -1689,13 +1689,13 @@ Downstream, `solved_lir_lower.zig` plays lambdamono's role: procedures are
 keyed by `FnSpec = (source FnId, rooted solved function type var, capture
 ABI finite/erased, capture type)`; each set member becomes an `FnVariant`
 of a generated callable tag union; the Lambda Mono type store has **no
-function type at all** — finite function values *are* their callable tag
+function type at all**—finite function values *are* their callable tag
 unions, erased ones use the erased callable layout.
 (`src/postcheck/lambda_mono/` is the Debug-only differential oracle, not
 the production consumer.)
 
 The one deliberate divergence from cor: **roc does not generalize or
-instantiate per use.** `Content.forall` is never constructed — it exists
+instantiate per use.** `Content.forall` is never constructed—it exists
 only as an invariant trap ("generalized Lambda Solved type reached local
 unification without instantiation"). Each lifted function gets exactly one
 type (`fn_tys`, built in a first pass), and every use site unifies against
@@ -1706,7 +1706,7 @@ shares one equivalence class and one layout. Do not "fix" this in either
 direction as part of this project; lambda-set polymorphism is a separate
 design project if ever wanted.
 
-### 12.4 Why the rejected alternatives break it — and the real decision inventory
+### 12.4 Why the rejected alternatives break it—and the real decision inventory
 
 Invariants, each the negation of a plausible "simplification":
 
@@ -1721,15 +1721,15 @@ Invariants, each the negation of a plausible "simplification":
    of one runtime value must agree on the *same* set. One-way ⊆ propagation
    permits two layouts for one value; making it sound would require
    re-tagging coercions on every edge. Equality closure over merging slots
-   is union-find — i.e., unification.
+   is union-find—i.e., unification.
 3. **Erasure infects in both directions.** Consumers erase producers'
    construction sites; bidirectional merge expresses this trivially,
    monotone forward dataflow does not.
 4. **Downstream identity depends on merged roots.** `FnSpec` deduplicates
-   on the rooted solved var — the equivalence class is literally the
+   on the rooted solved var—the equivalence class is literally the
    specialization identity.
 5. **The structural walk makes real decisions beyond the callable slots.**
-   The verified census in `lambda_solved/solve.zig` — load-bearing for
+   The verified census in `lambda_solved/solve.zig`—load-bearing for
    §12.6, maintained next to the solver and in `design.md`; a Debug
    assertion may claim "all other structures are equal" only after this
    inventory is complete and tested:
@@ -1758,14 +1758,14 @@ Invariants, each the negation of a plausible "simplification":
 
 How monotypes enter the lambda store today: each program position is
 lowered through its own `lowerTypeFresh` call, which creates a fresh
-`TypeCloner` whose memo — keyed on monotype `TypeId`,
-insert-before-recurse — lives for that one call. Within one cloned type,
+`TypeCloner` whose memo—keyed on monotype `TypeId`,
+insert-before-recurse—lives for that one call. Within one cloned type,
 two occurrences of the same `TypeId` share one solved var, hence one
 callable slot, hence one lambda set. Because the production store is not
 hash-consed, structurally equal function types inside one cloned type
 usually have distinct ids today and get distinct slots. **Interning changes
 that silently**: `{ f : I64 -> I64, g : I64 -> I64 }` would share one slot
-and merge sets with no value-flow edge — coarser-but-consistent (a
+and merge sets with no value-flow edge—coarser-but-consistent (a
 superset layout, not a miscompile), but a representation change smuggled
 inside a "no behavior change" refactor, invisible to digest-stability
 checks, leaving set granularity a side effect of allocation patterns
@@ -1779,14 +1779,14 @@ The required invariant:
 > back-reference or an explicit Lambda Solved value-flow relation.
 
 Implementation shape: an active-recursion map instead of a completed-DAG
-memo — reserve on first entry along the current path, reuse only for
+memo—reserve on first entry along the current path, reuse only for
 back-edges to active nodes, clone fresh on later non-recursive
 occurrences; callable-free immutable subgraphs may be shared as an
 optimization only behind a `containsCallableOccurrence` proof. This lands
 as its own slice with its own snapshot review (finer sets where today's
 within-clone sharing was incidental are this slice's diffs, and only
 this slice's), **before** production interning. It touches the cloning
-boundary only — solver architecture, merge semantics, and `FnSpec`
+boundary only—solver architecture, merge semantics, and `FnSpec`
 identity are untouched.
 
 ### 12.6 Hardening: what is actually effective, and when it lands
@@ -1796,7 +1796,7 @@ identity are untouched.
   assert they see structurally equal content, with the exemption list
   being exactly the §12.4 item-5 census (re-verified against the code as
   the first task). These exist to catch Monotype-side drift at the seam
-  *while the Monotype migration is in flight* — so they land in Slice 1,
+  *while the Monotype migration is in flight*—so they land in Slice 1,
   before the rewrite.
 - **Direct set tests, not harness mutations.** The differential runner
   compares two consumers of the same solved program, so it structurally
@@ -1835,16 +1835,16 @@ Ordering principles:
 The per-slice verification battery: snapshot suite
 (`zig build run-snapshot-tool`, `TYPES`/`MONO` diffs reviewed to zero or
 explained); postcheck module tests; multi-backend eval differential
-(`zig build run-test-eval`, plus LLVM on a supported platform —
+(`zig build run-test-eval`, plus LLVM on a supported platform—
 byte-identical output); Lambda-Mono differential runner and its mutation
 check; the direct lambda-set tests once Slice 1 lands; specialization-cache
 cold/warm tests when keyed data changes; `zig build minici` locally; full
 CI (including the `check-once` job) before merge; `CACHE_VERSION` bump on
 any serialized-shape change; performance judged on CI benchmarks only. No
-snapshot update is accepted merely to make a new implementation green —
+snapshot update is accepted merely to make a new implementation green—
 every semantic difference is classified against the ownership model.
 
-**Slice 0 — Declare and measure the current semantics.**
+**Slice 0—Declare and measure the current semantics.**
 Amend `design.md`: state the ownership decomposition (§1), mark the
 instantiation-graph sections as scheduled for replacement, declare §11's
 discovery/representation-closure/sealing lifecycle (including the narrow
@@ -1853,7 +1853,7 @@ lambda-generalization claim (§12.3). Add a mechanically checked
 inventory of every Monotype graph creation, logical unification call,
 request refinement, deferred request, mutable refill, compiler-generated
 instantiation edge, exact registry-lookup site, and Lambda Solved special
-relation — checked into the repository as an exact manifest that fails CI on
+relation—checked into the repository as an exact manifest that fails CI on
 unclassified additions and can only shrink or move into a declared
 replacement category (enforcing from its first landing; no warning mode).
 Instrument Debug runs across the snapshot/eval/fuzz corpora to classify:
@@ -1875,7 +1875,7 @@ canonicalization totality, nominal construction/destruction rule totality,
 census. A non-equivalent re-check record is fixed in checking/publication;
 it never becomes a first/last-write policy.
 
-**Slice 1 — Make Lambda callable identity occurrence-based, and guard the
+**Slice 1—Make Lambda callable identity occurrence-based, and guard the
 seam.**
 Implement §12.5 (occurrence-based cloning; its own snapshot review) and
 §12.6 (census-based seam assertions; direct set-invariant and expected-set
@@ -1883,7 +1883,7 @@ tests; mutation coverage against those tests). Record the §12 invariants
 in the module docs. Only after this slice may structurally equal Monotype
 function types be interned in production.
 
-**Slice 2 — Publish real schemes and use-site substitutions
+**Slice 2—Publish real schemes and use-site substitutions
 (checking-side).**
 Capture pristine scheme snapshots at generalization boundaries; populate
 binder ranges for every production scheme; add nested-scheme ownership,
@@ -1894,7 +1894,7 @@ migrate semantic references off content-key lookup (§7.1); publish
 `var_map` in binder order, under the coverage rule and savepoint
 discipline (§7.2, with the named rolled-back-branch and re-checked-node
 verifier tests, informed by Slice 0's equivalence measurement); classify
-every residual variable (§7.4 phase one —
+every residual variable (§7.4 phase one—
 dispositions recorded as `contextual`/`uninhabited`, materialization
 unchanged); land the full boundary verifier (§7.5) and the validation
 matcher (§7.6); round-trip everything through serialization and cache
@@ -1902,7 +1902,7 @@ loading. Report the §7.2 cost checkpoint (artifact size, checking time,
 peak memory). `CACHE_VERSION` bump. Monotype still lowers through its
 current path; the new data is verified, not yet authoritative.
 
-**Slice 3 — Isolate graph mutation, then promote the interner.**
+**Slice 3—Isolate graph mutation, then promote the interner.**
 First establish the hard boundary: mutable evidence lives exclusively in
 graph-local cells; a graph result commits to Monotype only when sealed and
 is immutable thereafter; delete the mutable-view/refill API while
@@ -1914,12 +1914,12 @@ separately (§8.2), implement the declared split between stored alias
 identity, logical alias projection, and dispatch-head ownership across
 storage, digest, exact equality, validation, deserialization, and lookup,
 and add the verifier that no storage-transparent alias is published. Assert
-specialization/cache digest stability —
+specialization/cache digest stability—
 explaining and versioning every intentional difference. Audit
 `TypeId`-keyed maps per §8.5. Safe for lambda sets because Slice 1 already
 made callable identity occurrence-based.
 
-**Slice 4 — Extract representation policy and build the closure engine.**
+**Slice 4—Extract representation policy and build the closure engine.**
 Introduce the rule/call-site inventory and the finite convergence contract
 (§10). Extract iterator tiers, generated-evidence selection, and authorized
 nominal-backing decisions into a pure descriptor-policy module. Production
@@ -1935,19 +1935,19 @@ instantiation and temporary representation storage, but no longer owns
 representation *policy*. This adapter boundary is not a pool-to-graph
 bridge; it passes immutable descriptors and explicit decisions only.
 
-**Slice 5 — Direct instantiation for closed checked data, as Debug
+**Slice 5—Direct instantiation for closed checked data, as Debug
 shadow.**
 Implement eager `logicalIdentity`, `BindingEnvironment`, checked-node
 translation, the draft layer, both §9.4 memo classes, fresh occurrence
 instantiation, and `instantiateScheme` (§9), exercised over concrete
-non-template roots and schemes with fully concrete published bindings —
+non-template roots and schemes with fully concrete published bindings—
 **shadow-only**: in
 Debug builds the direct result is computed and digest-compared against the
 graph's, and production output never routes through it. Because nothing
 new feeds production, no pool-to-graph bridge exists at any point in the
 migration; the graph remains the sole authority for everything until
 Slice 7's single flip. Mismatches on this closed subset are the cheapest
-early warnings the migration gets. The shadow is **state-isolated** —
+early warnings the migration gets. The shadow is **state-isolated**—
 "cannot select output" is necessary but not sufficient, since a shadow
 sharing the production interner or symbol allocator would perturb
 allocation order in the authoritative path. It runs against an immutable
@@ -1958,7 +1958,7 @@ compares only deterministic digests, and is destroyable with no
 observable change except Debug time and memory. The same isolation
 contract governs the Slice 6 expansion.
 
-**Slice 6 — Expand the shadow to complete specialization.**
+**Slice 6—Expand the shadow to complete specialization.**
 Extend the Slice 5 shadow to the full §11 lifecycle: translate each site's
 actual vector under the caller binding (captured projection included),
 reserve provisional handles, discover representation-neutral drafts and
@@ -1976,12 +1976,12 @@ authoritative cache yet.
 The shadow verifier compares final logical and represented digests with
 the graph; the old path remains sole output authority until every
 difference is classified and burned to zero. The shadow never gains a
-known-divergence suppression list — that would be the drift this project
+known-divergence suppression list—that would be the drift this project
 exists to end, wearing a new name.
 
-**Slice 7 — Delete logical Monotype solving.**
+**Slice 7—Delete logical Monotype solving.**
 With the manifest at zero for logical solving, authority changes hands
-here — once. Delete `InstGraph` logical variables, row nodes, logical
+here—once. Delete `InstGraph` logical variables, row nodes, logical
 `unify`, logical graph sealing, `unsolved_monos`, `DeferredTemplate` and its
 logical-key stabilization/refinement, request refinement, and solved-shape
 logical aliases (the refill API died in Slice 3). Retain only §11's new
@@ -1993,13 +1993,13 @@ path; activate only the new §11.5 cache reader/writer proven by the shadow
 from manifest enforcement into simple permanent prohibition.
 `CACHE_VERSION` bump.
 
-**Slice 8 — Cache, performance, and documentation closure.**
+**Slice 8—Cache, performance, and documentation closure.**
 Run the full cold/warm cache identity and caller-visible output-replay
 matrix over §11.5's now-authoritative atomic/relocatable component records;
 compare CI benchmarks and investigate regressions; write `src/postcheck/`
 module docs and the final `design.md` sections describing substitution +
 representation closure as *the* architecture (new documents where none
-exist — avoid `plan.md` as a tracked filename per CI rules); verify the
+exist—avoid `plan.md` as a tracked filename per CI rules); verify the
 permanent gates carry no migration allowlist. This file is then superseded
 by `design.md`.
 
@@ -2054,14 +2054,14 @@ CI enforces this structurally, not only with a regex over function names:
 - deleted graph/refill/`DeferredTemplate`/logical-request-refinement types
   stay forbidden; §11's representation scheduler has distinct types whose
   APIs cannot carry logical graph nodes
-  (the existing `ci/check_postcheck_architecture.pl` pattern — "deleted
-  APIs stay gone" — is the template, wired into `minici` and the
+  (the existing `ci/check_postcheck_architecture.pl` pattern—"deleted
+  APIs stay gone"—is the template, wired into `minici` and the
   `check-once` CI job);
 - during migration, the Slice 0 manifest uses exact call-site/file
   ownership and fails on both additions and stale zero-count entries;
   after deletion there is no migration allowlist.
 
-Stated honestly: a symbol gate is a ratchet and a tripwire, not a proof —
+Stated honestly: a symbol gate is a ratchet and a tripwire, not a proof—
 the real enforcement is Slice 7's deletion of the solver implementation,
 after which absence is the strongest gate. The `lambda_solved` carve-out is
 a permanent, commented exemption pointing at §12, never an allowlist entry
@@ -2074,13 +2074,13 @@ that looks like migration debt someone should finish deleting.
 **15.1 Checked publication may be missing more than binders.** Expected
 result constraints, row widening, nested ownership, and defaults may
 expose additional unpublished logical facts. Each finding is fixed at
-checking or publication — never reconstructed downstream. The Slice 0
+checking or publication—never reconstructed downstream. The Slice 0
 census sizes this tail before Slice 6 meets it.
 
 **15.2 The groundness verdict could be worse than expected.** If callee-row
 widening routinely carries information the frozen types lack, the fix is a
 finalization change (fuller rows), which may grow the artifact and shift
-digests — budget the `CACHE_VERSION` bump and snapshot churn in whichever
+digests—budget the `CACHE_VERSION` bump and snapshot churn in whichever
 slice absorbs it. Under no measured outcome does the answer become "keep a
 row solver."
 
@@ -2088,8 +2088,8 @@ row solver."
 checkpoint measures artifact growth, checking-time, and checking-side
 peak-memory cost on the corpus.
 Expected modest (actuals are `gv_len` ids per generalized use; roots are
-already published); if measurement disagrees, the design returns to review
-— coverage is never silently thinned.
+already published); if measurement disagrees, the design returns to review—
+coverage is never silently thinned.
 
 **15.4 Representation closure may be larger than the initial inventory.**
 Instrumentation may find more postcheck-created relations. A new relation
@@ -2113,7 +2113,7 @@ invalid (§9.4).
 
 **15.7 The cutover is deliberately wholesale.** Because Slices 5–6 are
 shadow-only, no pool-to-graph bridge ever exists and production behavior
-is frozen until Slice 7's single flip — but that concentrates risk at the
+is frozen until Slice 7's single flip—but that concentrates risk at the
 flip: the new path gets no production soak beforehand. The mitigations are
 the breadth requirement on the shadow (full snapshot/eval/fuzz corpora at
 zero unexplained mismatches) and the fact that the flip is one reviewable
@@ -2129,9 +2129,9 @@ direct lambda-set tests, and backend agreement remain necessary (§12.6).
 the solver, so the residual risk is indirect: Monotype-side changes
 altering the ground types the cloner consumes, or granularity shifting
 through the cloning boundary. Slice 1's normalization, seam assertions,
-and direct set tests are the countermeasures — live before Monotype work
-begins. The secondary risk — a future "cleanup" re-attempting the dataflow
-rewrite — is countered by §12's invariants living in the module docs and
+and direct set tests are the countermeasures—live before Monotype work
+begins. The secondary risk—a future "cleanup" re-attempting the dataflow
+rewrite—is countered by §12's invariants living in the module docs and
 the gate carve-out being explicitly permanent.
 
 **15.10 Deep and recursive types.** Every recursive walk has explicit
@@ -2217,98 +2217,98 @@ The project is complete only when all of the following hold:
 
 ## 17. Glossary
 
-- **Logical type** — the source-level checked type relation (primitives,
+- **Logical type**—the source-level checked type relation (primitives,
   functions, rows, aliases, nominals and their arguments), independent of
   postcheck-created representation tiers.
-- **Scheme** — an artifact-qualified checked root plus an ordered list of
+- **Scheme**—an artifact-qualified checked root plus an ordered list of
   generalized binders and evidence parameters, with an owner.
-- **Use-site substitution / `CheckedInstantiationSite`** — the
+- **Use-site substitution / `CheckedInstantiationSite`**—the
   checker-published ordered actual type per binder at one instantiation
   edge, with its evidence vector and instantiated root.
-- **Binding environment** — the `BoundType` values for an active
+- **Binding environment**—the `BoundType` values for an active
   specialization's binders, linked lexically for nested schemes.
-- **`BoundType` / `LogicalTypeIdentity`** — a binder's value splits into
+- **`BoundType` / `LogicalTypeIdentity`**—a binder's value splits into
   a fixed logical half and a representation half. `LogicalTypeIdentity`
   is the interned id of the representation-free logical skeleton, computed
   eagerly from checked data and the logical environment before drafts seal
   (§8.2); it keys substitution, logical recipes, and
   `LogicalSpecIdentity`. The representation half is a `TypeRef` and may be
   unsealed until §10.6.
-- **Instantiation** — directed replacement of a scheme's binders by an
+- **Instantiation**—directed replacement of a scheme's binders by an
   explicit binding vector. Not matching, not unification.
-- **Validation matcher** — the Debug-only directed walk that verifies a
+- **Validation matcher**—the Debug-only directed walk that verifies a
   published substitution against the complete instantiated root; never a
   production mechanism.
 - **Interning equality / logical equality / representation compatibility /
-  specialization equality / canonical cache identity** — the five distinct
+  specialization equality / canonical cache identity**—the five distinct
   equality relations (§8.2); hash-consing accelerates the first and
   replaces none of the others.
-- **Representation slot / relation** — a temporary postcheck occurrence
+- **Representation slot / relation**—a temporary postcheck occurrence
   with fixed eager logical identity and a complete or draft represented
   value, created and joined only by private constructors and declared
   representation rules. Sealing proves its final logical projection equals
   that identity (§10).
-- **Representation policy** — the pure descriptor join/classification rules
+- **Representation policy**—the pure descriptor join/classification rules
   shared by Monotype and Lambda Solved. It owns neither Monotype's
   `RepresentationSlotId` closure nor Lambda Solved's `TypeVarId` solver.
-- **Draft type / `TypeRef`** — a compound type under construction whose
+- **Draft type / `TypeRef`**—a compound type under construction whose
   transitive children include a representation slot; it contains no
   logical unknowns and is interned bottom-up into an immutable
   `MonoTypeId` only after representation sealing (§9.1, §10.6).
-- **Occurrence identity** — identity of a position in a value/type-flow
+- **Occurrence identity**—identity of a position in a value/type-flow
   graph; unlike structural `MonoTypeId`, it may own a distinct Monotype
   representation slot or Lambda Solved callable slot.
-- **Logical instantiation recipe / sealed represented template** — the two
+- **Logical instantiation recipe / sealed represented template**—the two
   memo classes in §9.4. The former is keyed only by logical bindings and
   contains no represented state; the latter is additionally keyed by
   finalized representation inputs and creates fresh slots when entering an
   open occurrence.
-- **Representation dependency component** — the unpublished set of
+- **Representation dependency component**—the unpublished set of
   specialization drafts, interfaces, slots, and rule obligations that must
   be discovered and closed together before any member receives final ids or
   emits represented IR (§11.2). It may connect non-recursive calls.
-- **Representation emission plan** — the neutral-draft record of every
+- **Representation emission plan**—the neutral-draft record of every
   representation-sensitive emission alternative and its exact generated
   edges/input-output dependencies. Sealed descriptors select an already
   declared alternative; emission cannot discover a new dependency.
-- **Provisional specialization handle / final specialization key** — a
+- **Provisional specialization handle / final specialization key**—a
   provisional handle names one open request occurrence; the final key is
   computed only after declared representation inputs seal. Logical identity
   is fixed throughout; resolving the former to the latter is not logical
   request refinement.
-- **Lambda set** — the exact lifted function members that may flow through
+- **Lambda set**—the exact lifted function members that may flow through
   one callable occurrence, including capture types; first derived by
   LambdaSolved, stored in the function type's callable slot; determines
   closure layout, so all connected positions must agree on one set.
-- **Callable slot** — the extra variable inside every LambdaSolved
+- **Callable slot**—the extra variable inside every LambdaSolved
   function type (`func.callable`); the only kind of variable that solver
   solves for.
-- **Cloning boundary** — where ground monotypes enter the lambda store
+- **Cloning boundary**—where ground monotypes enter the lambda store
   (`TypeCloner` under `lowerTypeFresh`); its sharing granularity is a
   deliberate occurrence-based contract (§12.5), independent of interning.
-- **Defunctionalization** — compiling a lambda set as a tag union with one
+- **Defunctionalization**—compiling a lambda set as a tag union with one
   tag per member (payload = captures record) and calls as dispatch over
   those tags.
-- **Checked evidence** — the checker-published direct / constrained /
+- **Checked evidence**—the checker-published direct / constrained /
   structural / unreachable / checked-error resolution for static dispatch.
-- **Compiler-generated edge** — a postcheck-created call edge with no
+- **Compiler-generated edge**—a postcheck-created call edge with no
   checked instantiation record, governed by a declared
   `GeneratedInstantiationRule` and exact component lookup.
-- **Bottom/unreachable position** — a checked position no value can reach;
+- **Bottom/unreachable position**—a checked position no value can reach;
   explicit data, never an unresolved variable postcheck may
   opportunistically replace.
-- **Shadow oracle** — a Debug-only computation asserted equal to the
+- **Shadow oracle**—a Debug-only computation asserted equal to the
   authoritative path's result, never able to select compiler output; the
   migration's only permitted form of coexistence.
-- **Finalized representation interface** — the complete sealed input/output
+- **Finalized representation interface**—the complete sealed input/output
   representation summary stored with a specialization. It retains separate
   input provenance, effective joined slots, and body-produced output
   provenance. Persistent-cache lookup keys use the declared inputs; cache
   values replay the outputs into fresh caller occurrences (§11.5).
-- **Poison / `.err`** — the error content checking substitutes at type
+- **Poison / `.err`**—the error content checking substitutes at type
   errors so diagnostics don't cascade; blocked from postcheck by the
   lowering contract (§5.4).
-- **`TypeDigest` / canonical key** — deterministic content hash of a
+- **`TypeDigest` / canonical key**—deterministic content hash of a
   checked type; the cross-module, cache, and serialization identity.
 
 ---

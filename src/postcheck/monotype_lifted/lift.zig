@@ -238,7 +238,7 @@ fn verifyActiveCaptureInvariants(program: *const Ast.Program, graph: *const Capt
 /// stores and can leave replaced expressions behind; `recomputeCaptures` checks
 /// the active capture graph instead. Both checks fail at the mutation boundary
 /// instead of surfacing as a confusing crash five stages later. Compiled out
-/// entirely in release builds — release cost is zero.
+/// entirely in release builds—release cost is zero.
 ///
 /// It checks, per function and per `fn_ref`/`call_proc` site:
 ///   - every capture slot's local carries a CaptureId, and the slot's type
@@ -945,18 +945,24 @@ fn allocateCaptureTable(allocator: Allocator, count: usize) Allocator.Error![]st
 
 /// Find the lift-boundary operand explicitly keyed to capture `slot`.
 ///
-/// Monotype operands use a checked CaptureId when the slot has one and otherwise
-/// use its generated CaptureId. This is the single normalization point from that
-/// provisional key to the post-lift key. The operand value is opaque here: its
-/// own CaptureId never changes which target slot the operand fills.
+/// Source-authored/check-generated operand keys are provisional and join to the
+/// slot's checked identity. Lift-generated keys already name the lifted slot
+/// and join directly to its runtime identity. The key's namespace makes this
+/// distinction explicit; the operand value remains opaque.
 fn operandValueForSlot(program: *const Ast.Program, existing: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
     const slot_local = program.getLocal(slot.local);
-    const source_id = slot_local.checked_capture_id orelse slotCaptureId(program, slot);
+    const lifted_id = slotCaptureId(program, slot);
     var value: ?Ast.ExprId = null;
     for (0..existing.len) |index| {
         const operand = GuardedList.at(existing, index);
-        if (operand.id == source_id) {
-            if (value != null) Common.invariant("lift-boundary capture operands declared one provisional key more than once");
+        const matches = if (operand.id.isLiftGenerated())
+            operand.id == lifted_id
+        else if (slot_local.checked_capture_id) |checked_id|
+            operand.id == checked_id
+        else
+            operand.id == lifted_id;
+        if (matches) {
+            if (value != null) Common.invariant("capture operands declared one key more than once");
             value = operand.value;
         }
     }
@@ -966,8 +972,8 @@ fn operandValueForSlot(program: *const Ast.Program, existing: anytype, slot: Ast
 /// Recompute a function reference / direct call's keyed capture operand span so it
 /// matches `slots` (the target's canonically-sorted capture slots) exactly, in
 /// the same order. Each operand's value is preserved from the node's existing
-/// operands (keyed by CaptureId) when present — this keeps explicit non-local
-/// values supplied at checked closure creation and const-fn restore — otherwise
+/// operands (keyed by CaptureId) when present—this keeps explicit non-local
+/// values supplied at checked closure creation and const-fn restore—otherwise
 /// it is an implicit read of the slot's local at the reference site.
 fn rebuildCaptureOperandSpan(
     program: *Ast.Program,
@@ -2703,6 +2709,38 @@ test "lift boundary normalizes checked capture identity" {
     try std.testing.expectEqual(@as(usize, 1), operands.len);
     const operand = GuardedList.at(operands, 0);
     try std.testing.expectEqual(rewritten_id, operand.id);
+    try std.testing.expectEqual(supplied_value, operand.value);
+}
+
+test "lift boundary preserves an already-lifted capture identity" {
+    const allocator = std.testing.allocator;
+    var program = initCaptureTestProgram(allocator);
+    defer program.deinit();
+
+    const ty = try program.types.add(.zst);
+    const binder: checked.PatternBinderId = @enumFromInt(1);
+    const checked_id = checked.CaptureId.fromBinder(binder);
+    const lifted_id = program.nextLiftCaptureId();
+    const capture = try program.addLocalWithCaptureIdentity(
+        @enumFromInt(1),
+        ty,
+        binder,
+        lifted_id,
+        checked_id,
+    );
+
+    const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const supplied_span = try program.addCaptureOperandSpan(&.{.{ .id = lifted_id, .value = supplied_value }});
+    const reference = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const slots = [_]Ast.TypedLocal{.{ .local = capture, .ty = ty }};
+    var bound = BoundSet.init(allocator);
+    defer bound.deinit();
+    const finalized = try rebuildCaptureOperandSpan(&program, supplied_span, &slots, reference, &bound);
+
+    const operands = program.captureOperandSpan(finalized);
+    try std.testing.expectEqual(@as(usize, 1), operands.len);
+    const operand = GuardedList.at(operands, 0);
+    try std.testing.expectEqual(lifted_id, operand.id);
     try std.testing.expectEqual(supplied_value, operand.value);
 }
 

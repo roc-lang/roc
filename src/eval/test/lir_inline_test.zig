@@ -90,6 +90,7 @@ const LowerModuleOptions = struct {
     inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
     proc_debug_names: bool = false,
     tag_reachability: bool = false,
+    promote_loop_appends: bool = true,
     imports: []const helpers.ModuleSource = &.{},
 };
 
@@ -129,6 +130,7 @@ fn lowerModuleWithOptions(
             .inline_mode = inline_mode,
             .inline_expects = options.inline_expects,
             .proc_debug_names = options.proc_debug_names,
+            .promote_loop_appends = options.promote_loop_appends,
             .tag_reachability = options.tag_reachability,
         },
     );
@@ -4117,7 +4119,9 @@ fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_u
 
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
+    // Promoted appends compare the length against the carried fill limit at
+    // each site, and the limit seeds on entry and regrowth read it once each.
+    try std.testing.expectEqual(@as(usize, 4), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
@@ -4464,8 +4468,8 @@ test "boundary field access projects private leaf branch" {
     // sparse private product, and an if branch whose value is an opaque call
     // result is carried whole as a private leaf. A boundary argument that
     // projects a field from such an if value must project through every
-    // branch — including the leaf branch, whose field is an ordinary field
-    // access on the carried public value — rather than materialize the
+    // branch—including the leaf branch, whose field is an ordinary field
+    // access on the carried public value—rather than materialize the
     // sparse receiver whole.
     const allocator = std.testing.allocator;
     var optimized = try lowerModule(allocator,
@@ -5854,9 +5858,13 @@ test "iterdiff: tier-one map collect matches hand-written loop shape" {
         \\}
     ;
 
-    var iter_lowered = try lowerModule(allocator, iter_source, .wrappers);
+    // Append promotion rewrites qualifying checked appends into slack
+    // diamonds, and qualification legitimately differs between these two
+    // lowerings; this test compares the fused loop skeletons themselves, so
+    // it runs with promotion off.
+    var iter_lowered = try lowerModuleWithOptions(allocator, iter_source, .wrappers, .{ .promote_loop_appends = false });
     defer iter_lowered.deinit(allocator);
-    var loop_lowered = try lowerModule(allocator, loop_source, .wrappers);
+    var loop_lowered = try lowerModuleWithOptions(allocator, loop_source, .wrappers, .{ .promote_loop_appends = false });
     defer loop_lowered.deinit(allocator);
 
     const iter = &iter_lowered.lowered;
@@ -7129,6 +7137,174 @@ test "field takes cross a fall-through branch diamond" {
     try std.testing.expectEqual(@as(usize, 0), root_retained.?);
 }
 
+// A field consumed on every arm of a branch—here List.set's success arm and
+// the `??` fallback arm—takes on each path: the paths are exclusive, each
+// takes exactly once, and the residual is the same wherever the record dies.
+test "field takes split across the arms of a branch" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : I64
+        \\main = {
+        \\    m = { rows: List.repeat(2.I64, 8), n: 3.I64 }
+        \\    r = List.set(m.rows, 9, 7) ?? m.rows
+        \\    (List.get(r, 0) ?? 0) + m.n
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var root_retained: ?usize = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+        if (GuardedList.borrowLen(args) != 0) continue;
+        if (proc.body == null) continue;
+        const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
+        root_retained = (root_retained orelse 0) + retained;
+    }
+    try std.testing.expect(root_retained != null);
+    try std.testing.expectEqual(@as(usize, 0), root_retained.?);
+}
+
+// A record of lists updated through a helper function stays in place: the
+// call site demands a mode-specialized variant whose owned parameter lets the
+// field reads take, so no emitted variant both mutates a list and retains a
+// field read. This is the record-state-through-a-call shape hash-table
+// updates lower to.
+test "owned variants take a helper parameter's fields at the call" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\step : { a : List(I64), b : List(I64) }, U64, I64 -> { s : { a : List(I64), b : List(I64) }, prev : I64 }
+        \\step = |st, i, v| {
+        \\    prev = List.get(st.a, i) ?? 0
+        \\    s1 = { a: List.set(st.a, i, v) ?? st.a, b: st.b }
+        \\    s2 = { ..s1, b: List.set(s1.b, i, prev) ?? s1.b }
+        \\    { s: s2, prev }
+        \\}
+        \\
+        \\main : I64
+        \\main = {
+        \\    var $st = { a: List.repeat(0.I64, 8), b: List.repeat(0.I64, 8) }
+        \\    var $i = 0.U64
+        \\    var $v = 5.I64
+        \\    var $acc = 0.I64
+        \\    while $i < 8 {
+        \\        r = step($st, $i, $v)
+        \\        $st = r.s
+        \\        $acc = $acc + r.prev
+        \\        $v = $v + 1
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc + (List.get($st.a, 3) ?? 0) + (List.get($st.b, 2) ?? 0)
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    const store = &optimized.lowered.lir_result.store;
+    var mutating_retain_free: usize = 0;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        if (proc.body == null) continue;
+        if (!procContainsListSet(store, proc_id)) continue;
+        const retained = try fieldReadRetainCount(allocator, &optimized.lowered, proc_id);
+        if (retained == 0) mutating_retain_free += 1;
+    }
+    // At least the specialized variant of `step` mutates without retaining.
+    try std.testing.expect(mutating_retain_free >= 1);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(i64, 8), value.read(i64)),
+    }
+}
+
+fn procContainsListSet(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) bool {
+    const proc = store.getProcSpec(proc_id);
+    const body = proc.body orelse return false;
+    var cursor_stack: [256]LIR.CFStmtId = undefined;
+    var top: usize = 0;
+    cursor_stack[top] = body;
+    top += 1;
+    var seen = std.bit_set.ArrayBitSet(usize, 1 << 20).initEmpty();
+    while (top > 0) {
+        top -= 1;
+        const cursor = cursor_stack[top];
+        if (seen.isSet(@intFromEnum(cursor))) continue;
+        seen.set(@intFromEnum(cursor));
+        switch (store.getCFStmt(cursor)) {
+            .assign_low_level => |stmt| {
+                if (stmt.op == .list_set) return true;
+                if (top < cursor_stack.len) {
+                    cursor_stack[top] = stmt.next;
+                    top += 1;
+                }
+            },
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                if (top < cursor_stack.len) {
+                    cursor_stack[top] = stmt.next;
+                    top += 1;
+                }
+            },
+            .join => |stmt| {
+                if (top + 1 < cursor_stack.len) {
+                    cursor_stack[top] = stmt.body;
+                    cursor_stack[top + 1] = stmt.remainder;
+                    top += 2;
+                }
+            },
+            .switch_stmt => |stmt| {
+                const heads = store.getCFSwitchBranches(stmt.branches);
+                for (0..GuardedList.borrowLen(heads)) |i| {
+                    if (top < cursor_stack.len) {
+                        cursor_stack[top] = GuardedList.at(heads, i).body;
+                        top += 1;
+                    }
+                }
+                if (top < cursor_stack.len) {
+                    cursor_stack[top] = stmt.default_branch;
+                    top += 1;
+                }
+                if (stmt.continuation) |continuation| {
+                    if (top < cursor_stack.len) {
+                        cursor_stack[top] = continuation;
+                        top += 1;
+                    }
+                }
+            },
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .jump,
+            .ret,
+            .crash,
+            => {},
+        }
+    }
+    return false;
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/10435: SpecConstr must
 // preserve the two observed loop results without mutating frozen Monotype type
 // data while removing the unused third result.
@@ -7177,8 +7353,8 @@ test "issue 10435 SpecConstr preserves frozen types for partially used while sta
 // https://github.com/roc-lang/roc/issues/10461: ScalarizeJoins treated a
 // neighboring join's parameter as a splattable wrapper temporary because its
 // only initialization was a struct literal and its only use was a
-// `set_local initialize_join_param` copy. Splatting deleted the literal —
-// that join's edge initialization — leaving the parameter uninitialized, so
+// `set_local initialize_join_param` copy. Splatting deleted the literal—
+// that join's edge initialization—leaving the parameter uninitialized, so
 // ARC's release of the (unused, refcounted) parameter had nothing to
 // release. The parameter must instead be seeded by field reads and dissolve
 // on a later fixpoint round.

@@ -268,7 +268,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         }
 
         /// Exact byte count of the inline stack-probe loop emitted by
-        /// `emitStackProbeX86_64`. Must stay in sync with that emitter —
+        /// `emitStackProbeX86_64`. Must stay in sync with that emitter—
         /// `calculatePrologueSize` reports it to deferred-prologue patching.
         const stack_probe_loop_size_x86_64: u32 =
             // mov rax, imm32 (always REX.W + C7 + ModRM + imm32 = 7 bytes)
@@ -336,15 +336,15 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// later access reaches an uncommitted page.
         ///
         /// Layout (must remain byte-exact with `stack_probe_loop_size_x86_64`):
-        ///   mov   rax, alloc_size       ; counter — caller-saved on Windows ABI
+        ///   mov   rax, alloc_size       ; counter—caller-saved on Windows ABI
         /// .loop:
         ///   sub   rsp, 0x1000           ; lower one page
         ///   mov   [rsp], eax            ; touch the new top to commit it
         ///   sub   eax, 0x1000
         ///   cmp   eax, 0x1000
-        ///   ja    .loop                 ; rel32 — sized in calculatePrologueSize
+        ///   ja    .loop                 ; rel32—sized in calculatePrologueSize
         ///   sub   rsp, rax              ; allocate remaining bytes
-        ///   mov   [rsp], eax            ; probe the final page — MSVC's
+        ///   mov   [rsp], eax            ; probe the final page—MSVC's
         ///                                ; __chkstk probes every page including
         ///                                ; the partial one; without this probe
         ///                                ; the remainder slips past the guard.
@@ -487,7 +487,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             // 1. Allocate frame and save FP/LR
             if (aligned_frame <= 504) {
                 // Small frame: stp pre-index (scaled offset fits in i7).
-                // No probe needed — frame is smaller than one page.
+                // No probe needed—frame is smaller than one page.
                 const scaled_offset: i7 = @intCast(@divExact(-@as(i32, @intCast(aligned_frame)), 8));
                 try emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
             } else if (self.needsStackProbe(aligned_frame)) {

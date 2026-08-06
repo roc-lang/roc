@@ -6909,6 +6909,19 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "8" },
     },
     .{
+        // The destination is uniquely owned and full, so the append reserves
+        // (moving the allocation) while the source argument still names it.
+        .name = "low_level - List.append_sublist with the list as its own source",
+        .source =
+        \\{
+        \\base : List(U8)
+        \\base = List.concat([1, 2, 3, 4, 5, 6, 7, 8], [9, 10, 11, 12])
+        \\base.append_sublist(base, { start: 0, len: 12 })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]" },
+    },
+    .{
         .name = "low_level - Dec.to_attos reads the stored i128",
         .source =
         \\{
