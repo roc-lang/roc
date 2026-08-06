@@ -10589,6 +10589,86 @@ const CliTestRunSummary = struct {
     cached_modules: u32 = 0,
 };
 
+fn writeCliTestRunSummary(
+    writer: *std.Io.Writer,
+    summary: CliTestRunSummary,
+    elapsed_ns: u64,
+    fully_cached: bool,
+    use_color: bool,
+) std.Io.Writer.Error!void {
+    const all_passed = summary.failed == 0 and summary.compiler_errors == 0;
+    if (all_passed) {
+        try writer.print("All ({}) tests passed", .{summary.passed});
+    } else {
+        const total_tests = summary.passed + summary.failed + summary.compiler_errors;
+        try writer.print("Ran {} tests", .{total_tests});
+    }
+
+    try writer.writeAll(" in ");
+    try formatElapsedTime(writer, elapsed_ns);
+    try writer.writeByte('.');
+    if (fully_cached) try writer.writeAll(" (cached)");
+
+    if (all_passed) {
+        try writer.writeByte('\n');
+        return;
+    }
+
+    const green = if (use_color) ansi_term.green else "";
+    const red = if (use_color) ansi_term.red else "";
+    const yellow = if (use_color) ansi_term.yellow else "";
+    const reset = if (use_color) ansi_term.reset else "";
+    try writer.print(":\n    {s}{}{s} passed\n    {s}{}{s} failed\n    {s}{}{s} compiler errors\n", .{
+        green,
+        summary.passed,
+        reset,
+        red,
+        summary.failed,
+        reset,
+        yellow,
+        summary.compiler_errors,
+        reset,
+    });
+}
+
+test "issue 10624: roc test summaries share duration and cache formatting" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    const cases = [_]struct {
+        summary: CliTestRunSummary,
+        fully_cached: bool,
+        expected: []const u8,
+    }{
+        .{
+            .summary = .{ .passed = 3 },
+            .fully_cached = false,
+            .expected = "All (3) tests passed in 1.2 ms.\n",
+        },
+        .{
+            .summary = .{ .passed = 3 },
+            .fully_cached = true,
+            .expected = "All (3) tests passed in 1.2 ms. (cached)\n",
+        },
+        .{
+            .summary = .{ .passed = 1, .failed = 1, .compiler_errors = 1 },
+            .fully_cached = false,
+            .expected = "Ran 3 tests in 1.2 ms.:\n    1 passed\n    1 failed\n    1 compiler errors\n",
+        },
+        .{
+            .summary = .{ .passed = 1, .failed = 1, .compiler_errors = 1 },
+            .fully_cached = true,
+            .expected = "Ran 3 tests in 1.2 ms. (cached):\n    1 passed\n    1 failed\n    1 compiler errors\n",
+        },
+    };
+
+    for (cases) |case| {
+        output.clearRetainingCapacity();
+        try writeCliTestRunSummary(&output.writer, case.summary, 1_200_000, case.fully_cached, false);
+        try std.testing.expectEqualStrings(case.expected, output.written());
+    }
+}
+
 const CliTestPlanEntry = struct {
     module_index: u32,
     root_index: u32,
@@ -13937,11 +14017,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
-    const cached_suffix = if (total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests)
-        " (cached)"
-    else
-        "";
+    const fully_cached = total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests;
 
     // Render the per-module bodies once into in-memory buffers so we can
     // print them after the summary line.
@@ -13961,11 +14037,12 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         );
     }
 
+    try stdout.writeAll(stdout_body.written());
+    try stderr.writeAll(stderr_body.written());
+
     // Report results
     if (total.failed == 0 and total.compiler_errors == 0) {
-        try stdout.writeAll(stdout_body.written());
-        try stderr.writeAll(stderr_body.written());
-        try stdout.print("All ({}) tests passed in {d:.1} ms.{s}\n", .{ total.passed, elapsed_ms, cached_suffix });
+        try writeCliTestRunSummary(stdout, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
         // Diagnostics determine the command status only after every independent
         // test root has run; they never gate checked-artifact execution.
         if (diag.errors > 0) return error.CompilationFailed;
@@ -13975,27 +14052,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         return;
     }
 
-    const total_tests = total.passed + total.failed + total.compiler_errors;
-    try stdout.writeAll(stdout_body.written());
-    try stderr.writeAll(stderr_body.written());
-    const green = if (report_config.shouldUseColors()) ansi_term.green else "";
-    const red = if (report_config.shouldUseColors()) ansi_term.red else "";
-    const yellow = if (report_config.shouldUseColors()) ansi_term.yellow else "";
-    const reset = if (report_config.shouldUseColors()) ansi_term.reset else "";
-    try stderr.print("Ran {} tests{s} in {d:.1}ms:\n    {s}{}{s} passed\n    {s}{}{s} failed\n    {s}{}{s} compiler errors\n", .{
-        total_tests,
-        cached_suffix,
-        elapsed_ms,
-        green,
-        total.passed,
-        reset,
-        red,
-        total.failed,
-        reset,
-        yellow,
-        total.compiler_errors,
-        reset,
-    });
+    try writeCliTestRunSummary(stderr, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
 
     return error.TestsFailed;
 }

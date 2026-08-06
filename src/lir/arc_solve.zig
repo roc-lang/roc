@@ -101,7 +101,7 @@ pub const Solution = struct {
     sigs: []arc_sig.RcSig,
     /// Parameter positions whose values can reach a consuming low-level
     /// runtime uniqueness check in this proc's ownership-neutral body.
-    unique_seed_masks: []u64,
+    unique_seed_masks: []arc_sig.ParamMask,
     /// Flat join-body facts per source proc, indexed through the adjacent
     /// offsets and lengths.
     join_body_offsets: []u32,
@@ -261,7 +261,7 @@ pub const Solution = struct {
         return self.sigTable().get(proc);
     }
 
-    pub fn uniqueSeedMaskOf(self: *const Solution, proc: LIR.LirProcSpecId) u64 {
+    pub fn uniqueSeedMaskOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.ParamMask {
         const index = @intFromEnum(proc);
         if (index >= self.unique_seed_masks.len) solveInvariant("ARC uniqueness-seed lookup exceeded the solved proc table");
         return self.unique_seed_masks[index];
@@ -517,7 +517,7 @@ const Solver = struct {
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
     domain: *const ArcLocalDomain,
     sigs: []arc_sig.RcSig,
-    unique_seed_masks: []u64,
+    unique_seed_masks: []arc_sig.ParamMask,
     pinned: std.bit_set.DynamicBitSetUnmanaged,
     /// Call-graph SCC id per proc, for the tail-call rule.
     scc: []u32,
@@ -532,7 +532,7 @@ const Solver = struct {
     /// through instead of paying a retain/release pair.
     alias_source: []u32,
     /// Parameter position per local when the local is a proc parameter
-    /// (positions >= 64 are recorded as owned-only).
+    /// (positions beyond the signature mask are recorded as owned-only).
     param_position: []u32,
     /// Proc owning each parameter local.
     param_proc: []u32,
@@ -594,7 +594,7 @@ pub fn solve(
         .boxy_rc_descs = boxy_rc_descs,
         .domain = &domain,
         .sigs = try allocator.alloc(arc_sig.RcSig, proc_count),
-        .unique_seed_masks = try allocator.alloc(u64, proc_count),
+        .unique_seed_masks = try allocator.alloc(arc_sig.ParamMask, proc_count),
         .pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count),
         .scc = try allocator.alloc(u32, proc_count),
         .defs = try allocator.alloc(DefKind, arc_local_count),
@@ -702,7 +702,7 @@ pub fn solve(
                 const param_index = domain.indexOf(param) orelse continue;
                 solver.param_position[param_index] = @intCast(position);
                 solver.param_proc[param_index] = @intCast(proc_index);
-                if (position < 64) {
+                if (position < arc_sig.tracked_param_count) {
                     sig = sig.withBorrowedParam(position);
                 }
             }
@@ -989,7 +989,7 @@ fn paramIsBorrowed(solver: *const Solver, local_index: u32) bool {
     const proc_index = solver.param_proc[local_index];
     if (proc_index == no_local) return false;
     const position = solver.param_position[local_index];
-    if (position >= 64) return false;
+    if (position >= arc_sig.tracked_param_count) return false;
     return solver.sigs[proc_index].paramMode(position) == .borrowed;
 }
 
@@ -1021,8 +1021,8 @@ fn retLenders(
     solver: *const Solver,
     binding: *const BindingResult,
     proc_index: usize,
-) ?u64 {
-    var lenders: u64 = 0;
+) ?arc_sig.ParamMask {
+    var lenders: arc_sig.ParamMask = 0;
     const returns = solver.proc_returns[proc_index].items;
     if (returns.len == 0) return null;
     for (returns) |value_local| {
@@ -1037,8 +1037,8 @@ fn retLenders(
         if (solver.param_proc[leader] != proc_index) return null;
         if (solver.demand[value_index]) return null;
         const position = solver.param_position[leader];
-        if (position >= 64) return null;
-        lenders |= @as(u64, 1) << @as(u6, @intCast(position));
+        const bit = arc_sig.paramBit(position) orelse return null;
+        lenders |= bit;
     }
 
     if (lenders == 0) return null;
@@ -1429,20 +1429,20 @@ fn lowLevelUniqueSeedMask(
     params_span: LIR.LocalSpan,
     args_span: LIR.LocalSpan,
     rc_effect: LIR.LowLevel.RcEffect,
-) u64 {
+) arc_sig.ParamMask {
     const check_mask = rc_effect.may_runtime_uniqueness_check_args & rc_effect.consume_args;
     if (check_mask == 0) return 0;
 
     const params = store.getLocalSpan(params_span);
     const args = store.getLocalSpan(args_span);
-    var mask: u64 = 0;
+    var mask: arc_sig.ParamMask = 0;
     for (0..GuardedList.borrowLen(args)) |arg_position| {
         if (arg_position >= 64) break;
         if ((check_mask & (@as(u64, 1) << @as(u6, @intCast(arg_position)))) == 0) continue;
         const arg = GuardedList.at(args, arg_position);
-        for (0..@min(GuardedList.borrowLen(params), 64)) |param_position| {
+        for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |param_position| {
             if (arg != GuardedList.at(params, param_position)) continue;
-            mask |= @as(u64, 1) << @as(u6, @intCast(param_position));
+            mask |= arc_sig.paramBit(param_position).?;
             break;
         }
     }
@@ -1635,8 +1635,8 @@ fn collectAll(solver: *Solver) SolveError!void {
         for (0..GuardedList.borrowLen(args)) |position| {
             const arg = GuardedList.at(args, position);
             const argument = solver.domain.indexOf(arg) orelse continue;
-            if (!tail_call and position < 64) {
-                const key = @intFromEnum(call.callee) * 64 + position;
+            if (!tail_call and position < arc_sig.tracked_param_count) {
+                const key = @intFromEnum(call.callee) * arc_sig.tracked_param_count + position;
                 try solver.param_uses.append(solver.allocator, .{
                     .key = @intCast(key),
                     .argument = argument,
@@ -1658,7 +1658,7 @@ fn solveParameterModes(solver: *Solver) SolveError!void {
     // Compact the collected edge facts into dense offsets. This preserves
     // exact dependency lookup without one allocation-capable list object for
     // every possible proc/parameter pair.
-    const key_count = solver.sigs.len * 64;
+    const key_count = solver.sigs.len * arc_sig.tracked_param_count;
     const offsets = try solver.allocator.alloc(u32, key_count + 1);
     defer solver.allocator.free(offsets);
     @memset(offsets, 0);
@@ -1694,13 +1694,13 @@ fn flipParamIfRequired(solver: *Solver, local_index: u32, work: *std.ArrayList(u
     const proc_index = solver.param_proc[local_index];
     if (proc_index == no_local) return;
     const position = solver.param_position[local_index];
-    if (position >= 64) return;
+    if (position >= arc_sig.tracked_param_count) return;
     var sig = &solver.sigs[proc_index];
     if (sig.paramMode(position) == .owned) return;
     const required = solver.demand[local_index] or solver.defs[local_index] == .multi;
     if (!required) return;
-    sig.borrowed_params &= ~(@as(u64, 1) << @as(u6, @intCast(position)));
-    try work.append(solver.allocator, proc_index * 64 + position);
+    sig.borrowed_params &= ~arc_sig.paramBit(position).?;
+    try work.append(solver.allocator, proc_index * arc_sig.tracked_param_count + position);
 }
 
 /// Adds one ownership demand and propagates it through the exact pure-alias
@@ -2496,8 +2496,7 @@ fn callRetBorrowSource(solver: *const Solver, callee_sig: arc_sig.RcSig, args: a
     var source: u32 = no_local;
     for (0..GuardedList.borrowLen(args)) |position| {
         const arg = GuardedList.at(args, position);
-        if (position >= 64) break;
-        const bit = @as(u64, 1) << @as(u6, @intCast(position));
+        const bit = arc_sig.paramBit(position) orelse break;
         if ((callee_sig.ret_lenders & bit) == 0) continue;
         const arg_index = solver.domain.indexOf(arg) orelse continue;
         if (source != no_local and source != arg_index) return no_local;

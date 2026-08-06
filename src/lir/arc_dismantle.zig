@@ -22,6 +22,7 @@ const std = @import("std");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
+const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 
 const LIR = core.LIR;
@@ -63,6 +64,9 @@ pub const Dismantles = struct {
     owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, LIR.LocalId),
     /// Containers behind `owned_only_takes`, keyed by the parameter local.
     owned_only_containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
+    /// Parameter positions whose owned variant activates an exact field take,
+    /// indexed directly by source procedure id.
+    owned_only_param_benefits: []arc_sig.ParamMask,
 
     pub fn deinit(self: *Dismantles) void {
         const gpa = self.arena.child_allocator;
@@ -88,7 +92,20 @@ pub const Dismantles = struct {
     pub fn ownedOnlyContainerOf(self: *const Dismantles, local: LIR.LocalId) ?Container {
         return self.owned_only_containers.get(local);
     }
+
+    pub fn ownedOnlyParamBenefits(self: *const Dismantles, proc: LIR.LirProcSpecId) arc_sig.ParamMask {
+        const index = @intFromEnum(proc);
+        if (index >= self.owned_only_param_benefits.len) {
+            dismantleInvariant("ARC owned-only benefit lookup exceeded the analyzed source-procedure table");
+        }
+        return self.owned_only_param_benefits[index];
+    }
 };
+
+fn dismantleInvariant(comptime message: []const u8) noreturn {
+    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    unreachable;
+}
 
 const State = enum(u8) {
     unknown,
@@ -808,8 +825,11 @@ pub fn compute(
         .containers = .empty,
         .owned_only_takes = .empty,
         .owned_only_containers = .empty,
+        .owned_only_param_benefits = &.{},
     };
     errdefer result.deinit();
+    result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
+    @memset(result.owned_only_param_benefits, 0);
 
     var spine_pending = std.AutoHashMapUnmanaged(LIR.CFStmtId, void).empty;
     defer spine_pending.deinit(gpa);
@@ -995,6 +1015,20 @@ pub fn compute(
             try result.owned_only_containers.put(gpa, local, .{ .residual = stored_residual });
         } else {
             try result.containers.put(gpa, local, .{ .residual = stored_residual });
+        }
+    }
+
+    // Variant admission consumes the exact owned-only benefit without
+    // rescanning bodies or reconstructing parameter identity from statements.
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
+        for (0..GuardedList.borrowLen(params)) |position| {
+            const bit = arc_sig.paramBit(position) orelse break;
+            const param = GuardedList.at(params, position);
+            if (result.owned_only_containers.contains(param)) {
+                result.owned_only_param_benefits[proc_index] |= bit;
+            }
         }
     }
 

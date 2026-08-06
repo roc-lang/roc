@@ -38380,7 +38380,11 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const crash = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).crash;
-    try std.testing.expectEqualStrings("boom", out.lir_result.store.getString(crash.msg));
+    const msg = switch (crash.msg) {
+        .literal => |literal| literal,
+        .local => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("boom", out.lir_result.store.getString(msg));
 }
 
 test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
@@ -38452,7 +38456,11 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const crash = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).crash;
-    try std.testing.expectEqualStrings("not implemented", out.lir_result.store.getString(crash.msg));
+    const msg = switch (crash.msg) {
+        .literal => |literal| literal,
+        .local => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("not implemented", out.lir_result.store.getString(msg));
 }
 
 test "boxy lowerer emits checked return expressions as terminal ret" {

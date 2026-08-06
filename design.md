@@ -7521,16 +7521,26 @@ The proc call graph is derived from the lifted `assign_call` statements. The
 parameter/return solver projects local definitions and static demands,
 pure-alias edges, direct-call argument dependencies, reachable return locals,
 and join bodies from the same lift. No signature round rescans a proc body.
+`RcSig` represents procedure argument positions zero through fifteen in one
+`u16`; every refcounted parameter at position sixteen or later has the exact
+all-owned signature. Functions retain arbitrary arity. The all-owned tail is a
+declared ARC capability boundary: it consumes and releases every unit exactly,
+but does not participate in borrow inference, borrowed-return lender masks,
+unique-parameter seeding, or mode specialization. A return whose only possible
+lender is in that tail therefore remains owned. Low-level `RcEffect` argument
+masks are a separate `u64` domain and do not inherit this boundary.
+
 Signatures solve in two phases:
 
 1. Parameter modes reach a fixpoint with returns treated as owned: non-pinned
-   refcounted parameter positions start borrowed and flip to owned when any
-   occurrence demands a unit under the current signatures. One work item is
-   one exact `(callee, parameter position)` bit that just flipped. Its reverse
-   adjacency contains precisely the caller argument locals newly demanded by
-   that flip; those demands propagate through explicit pure-alias edges and
-   may enqueue their owning parameter bits. Every bit flips at most once, so
-   the borrowed set only shrinks and the worklist terminates.
+   refcounted parameter positions within the represented prefix start borrowed
+   and flip to owned when any occurrence demands a unit under the current
+   signatures. One work item is one exact `(callee, parameter position)` bit
+   that just flipped. Its reverse adjacency contains precisely the caller
+   argument locals newly demanded by that flip; those demands propagate through
+   explicit pure-alias edges and may enqueue their owning parameter bits. Every
+   bit flips at most once, so the borrowed set only shrinks and the worklist
+   terminates.
 2. With parameter modes final, a return becomes borrowed when every `ret`
    in the proc returns a borrow anchored on a borrowed parameter of that
    proc, with the parameter positions recorded as the return's lenders. A
@@ -7717,24 +7727,28 @@ This section describes ARC mode specialization, not the user-facing
 `--specialize=yes|no` selects `.lss` versus `.boxy` before LIR, while ARC mode
 specialization decides how many ownership-signature variants to emit after LIR.
 
-A proc's solved `RcSig` is the most-borrowed signature its body admits.
-Callers can always adapt to it, but adaptation has a cost: passing an owned
-value to a borrowed param keeps a caller-side drop that a move would have
-deleted, and an owned use of a borrowed return pays an `incref`. Mode
-specialization removes that adaptation cost by emitting one proc variant per
-demanded mode vector.
+Within its represented prefix, a proc's solved `RcSig` is the most-borrowed
+signature its body admits; its tail is all-owned by the declared boundary
+above. Callers can always adapt to the inferred prefix, but adaptation has a
+cost: passing an owned value to a borrowed param keeps a caller-side drop that
+a move would have deleted, and an owned use of a borrowed return pays an
+`incref`. Mode specialization removes that adaptation cost by emitting one proc
+variant per demanded mode vector.
 
-A demand vector assigns each refcounted param position a mode at or above
-the solved signature (pointwise more owned). Return positions are never
+A demand vector assigns each represented refcounted param position a mode at
+or above the solved signature (pointwise more owned); tail positions remain
+owned. Return positions are never
 demanded: a borrowed return that the caller needs owned pays one retain, and
 that retain costs the same whether it is emitted in the caller or inside an
 owned-returning variant, so no variant exists to save it. Specialization is
 a worklist keyed by `(proc, demand vector)`:
 
 1. Every proc is emitted once at its solved signature (the base variant).
-2. While emitting any proc, each `assign_call` site upgrades a borrowed
-   position to an owned demand exactly when the argument is an owned final
-   occurrence there: the upgrade turns a borrow-plus-later-drop into a move.
+2. While emitting any proc, an `assign_call` site with an owned final argument
+   upgrades a borrowed position exactly when ownership changes runtime work in
+   the callee: it owns a borrowed return, seeds a reachable uniqueness check,
+   or activates an exact owned-only field take. A release-only relocation does
+   not create a variant.
 3. The call site targets the `(callee, vector)` variant, creating it if new
    and re-emitting it from the callee's ownership-neutral body under the
    demanded vector. Inside the variant, demanded positions override the
@@ -7797,7 +7811,10 @@ A proc parameter solved borrowed qualifies conditionally: its takes are
 solved once against the shared ownership-neutral body but recorded as
 owned-only, applying exactly in emissions whose demand vector overrides that
 parameter to owned — the mode-specialized variants callers with dying
-arguments select. The base emission keeps the borrowed schedule untouched.
+arguments select. Dismantle analysis outputs the exact per-procedure `u16`
+parameter-benefit mask consumed by variant admission; the caller does not
+rediscover the benefit from field reads or uniqueness checks. The base emission
+keeps the borrowed schedule untouched.
 
 A field read of a qualifying container becomes a take when its result binding
 is owned, its result never flows into join-carried state, and the read lies
