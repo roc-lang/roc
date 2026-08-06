@@ -300,7 +300,7 @@ fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Alloca
     if (token_tag == .UpperIdent or token_tag == .DotUpperIdent or token_tag == .NoSpaceDotUpperIdent) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("Names that start with uppercase letters are used for tags, type names, and module names in Roc.");
-    } else if (token_tag == .LowerIdent or token_tag == .DotLowerIdent or token_tag == .NoSpaceDotLowerIdent) {
+    } else if (token_tag == .LowerIdent or token_tag == .DotLowerIdent or token_tag == .NewlineDotLowerIdent or token_tag == .NoSpaceDotLowerIdent) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.");
     } else if (token_tag == .KwApp or
@@ -2839,7 +2839,7 @@ pub const Expr = union(enum) {
     tuple_access: struct {
         /// The tuple expression being accessed
         expr: Expr.Idx,
-        /// The token containing the element index (NoSpaceDotInt or DotInt)
+        /// The token containing the element index (NoSpaceDotInt, DotInt, or NewlineDotInt)
         elem_token: Token.Idx,
         region: TokenizedRegion,
     },

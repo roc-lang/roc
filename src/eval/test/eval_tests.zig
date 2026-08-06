@@ -64,6 +64,23 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
+        .name = "line-broken postfix applies to completed pipe",
+        .source_kind = .module,
+        .source =
+        \\Holder := { n : I64 }.{
+        \\    blah : Holder -> (I64 -> I64)
+        \\    blah = |holder| |value| value + holder.n
+        \\}
+        \\
+        \\bar : I64 -> Holder
+        \\bar = |n| Holder.{ n: n }
+        \\
+        \\main = 2 |> bar()
+        \\    .blah()(3)
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
         .name = "problem: annotation-only top-level value is not a runtime value",
         .source_kind = .module,
         .source =

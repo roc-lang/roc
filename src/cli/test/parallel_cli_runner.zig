@@ -5816,7 +5816,13 @@ fn customCachePassingResults(io: std.Io, allocator: Allocator, env: *const CaseE
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/AllPassTests.roc" })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/AllPassTests.roc", .contains = &.{.{ .stream = .stdout, .text = "(cached)" }} })) |failure| return failure;
+    // https://github.com/roc-lang/roc/issues/10624
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = "test/cli/AllPassTests.roc",
+        .contains = &.{.{ .stream = .stdout, .text = " ms. (cached)" }},
+        .not_contains = &.{.{ .stream = .stdout, .text = "tests passed (cached) in" }},
+    })) |failure| return failure;
     return null;
 }
 
@@ -5824,7 +5830,14 @@ fn customCacheFailingResults(io: std.Io, allocator: Allocator, env: *const CaseE
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 } })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "(cached)" }} })) |failure| return failure;
+    // https://github.com/roc-lang/roc/issues/10624
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = "test/cli/SomeFailTests.roc",
+        .exit = .{ .code = 1 },
+        .contains = &.{ .{ .stream = .stderr, .text = "Ran 3 tests in " }, .{ .stream = .stderr, .text = " ms. (cached):" } },
+        .not_contains = &.{.{ .stream = .stderr, .text = "tests (cached) in" }},
+    })) |failure| return failure;
     return null;
 }
 

@@ -382,11 +382,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         const emit_params_for_overrides = store.getLocalSpan(emit_args);
         for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
             const param = GuardedList.at(emit_params_for_overrides, position);
-            if (position >= 64) break;
+            const bit = arc_sig.paramBit(position) orelse break;
             if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
                 owned_param_override.set(param);
             }
-            if ((emit_sig.unique_params >> @as(u6, @intCast(position))) & 1 != 0) {
+            if ((emit_sig.unique_params & bit) != 0) {
                 unique_param_override.set(param);
             }
         }
@@ -456,10 +456,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
 
 const VariantSelector = struct {
     source: LIR.LirProcSpecId,
-    borrowed_params: u64,
+    borrowed_params: arc_sig.ParamMask,
     ret_mode: arc_sig.Mode,
     /// Parameter positions the demand vector seeds born-unique.
-    unique_params: u64,
+    unique_params: arc_sig.ParamMask,
 };
 
 const QueuedVariant = struct {
@@ -3527,21 +3527,8 @@ const Inserter = struct {
         proc_id: LIR.LirProcSpecId,
         position: usize,
     ) bool {
-        if (position >= 64) return false;
-        return (self.solution.uniqueSeedMaskOf(proc_id) & argMaskBit(position)) != 0;
-    }
-
-    /// Whether the callee's dismantle plan has owned-only takes keyed by this
-    /// parameter, so an owned variant would consume the dying container's
-    /// stored units at its field reads.
-    fn paramHasOwnedOnlyTakes(
-        self: *const Inserter,
-        proc_id: LIR.LirProcSpecId,
-        position: usize,
-    ) bool {
-        const params = self.store.getLocalSpan(self.store.getProcSpec(proc_id).args);
-        if (position >= GuardedList.borrowLen(params)) return false;
-        return self.dismantles.ownedOnlyContainerOf(GuardedList.at(params, position)) != null;
+        const bit = arc_sig.paramBit(position) orelse return false;
+        return (self.solution.uniqueSeedMaskOf(proc_id) & bit) != 0;
     }
 
     fn callArgOwnership(
@@ -3569,23 +3556,20 @@ const Inserter = struct {
                 // post-call release into a clone preserves the same RC work
                 // while growing live code.
                 if (!self.variants.enabled) continue;
-                if (position >= 64) continue;
+                const bit = arc_sig.paramBit(position) orelse continue;
                 const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
                 const owner = self.solution.unitLocalOf(local);
                 const can_transfer = owned.contains(owner) and !used_after_call;
                 if (!can_transfer) continue;
-                const bit = @as(u64, 1) << @as(u6, @intCast(position));
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
                 const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local);
-                // Ownership also changes runtime work when the callee has
-                // owned-only takes for this parameter: the owned variant's
-                // field reads consume the dying container's stored units
-                // instead of retaining, which is what lets mutations of the
-                // fields stay in place.
-                const takes_with_ownership = if (callee) |direct| self.paramHasOwnedOnlyTakes(direct, position) else false;
-                if (!return_borrows_param and !seeds_unique_param and !takes_with_ownership) continue;
+                const enables_field_take = if (callee) |direct|
+                    (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
+                else
+                    false;
+                if (!return_borrows_param and !seeds_unique_param and !enables_field_take) continue;
                 demanded.borrowed_params &= ~bit;
                 if (return_borrows_param) {
                     demanded.ret_mode = .owned;
@@ -3607,14 +3591,14 @@ const Inserter = struct {
                 // statically unique with no borrow live at the call demands
                 // a variant whose parameter is seeded born-unique, so
                 // checked ops it reaches in the body go check-free.
-                const seed_can_reach_check = if (position < 64) blk: {
+                const seed_can_reach_check = if (position < arc_sig.tracked_param_count) blk: {
                     const direct = callee orelse break :blk false;
                     break :blk self.procParamCanUseUniqueSeed(direct, position);
                 } else false;
                 if (unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local))
                 {
-                    demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
+                    demanded.unique_params |= arc_sig.paramBit(position).?;
                 }
                 owned.unset(owner);
             } else {
@@ -8732,6 +8716,71 @@ test "RC specialization: borrowed final argument does not clone for release-only
     try testing.expectEqual(base_proc_count, f.store.procSpecCount());
     try f.expectRc(value, 0, 1, 0);
     try f.expectRc(param, 0, 0, 0);
+}
+
+test "RC signature: position 16 uses the all-owned tail" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    var params: [17]LIR.LocalId = undefined;
+    for (&params) |*param| param.* = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const body = try f.assignI64(result, 1, ret);
+    _ = try f.addProc(&params, body, .i64);
+
+    try f.run();
+
+    // Position 15 participates in inference and remains borrowed. Position
+    // 16 is outside RcSig's represented prefix and follows all-owned ARC.
+    try f.expectRc(params[15], 0, 0, 0);
+    try f.expectRc(params[16], 0, 1, 0);
+}
+
+test "RC specialization: owned-only field take demands an owned variant" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/10635: the callee's
+    // aggregate parameter solves borrowed, but an owned variant can take its
+    // nested list field instead of retaining it before the uniqueness check.
+    const param = try f.local(f.pair_list);
+    const field = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const result_assign = try f.assignI64(callee_result, 1, callee_ret);
+    const append = try f.assignLowLevel(appended, &.{ field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const field_read = try f.assignRefField(field, param, 0, elem_assign);
+    const callee = try f.addProc(&.{param}, field_read, .i64);
+
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const caller_result = try f.local(.i64);
+    const caller_ret = try f.ret(caller_result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = callee,
+        .args = try f.span(&.{pair}),
+        .next = caller_ret,
+    } });
+    const pair_assign = try f.assignStruct(pair, &.{ first, second }, call);
+    const second_assign = try f.assignList(second, &.{}, pair_assign);
+    const caller_body = try f.assignList(first, &.{}, second_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    // The caller moves the dying pair into an owned variant. The base proc
+    // retains the borrowed field once; the variant takes it without another
+    // retain, and dismantles only the pair's residual field.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 1), f.countRc(field, .incref));
 }
 
 test "RC specialization: caller body survives variant proc append" {
