@@ -1135,12 +1135,22 @@ pub const InstGraph = struct {
         };
     }
 
+    fn generatedIteratorIdentityInputDigest(self: *InstGraph, node: NodeId) Allocator.Error!names.TypeDigest {
+        var writer = OpenFunctionInterfaceShapeWriter.initGeneratedIdentity(self);
+        defer writer.deinit();
+        writer.writeBytes("roc.monotype.generated_iterator.identity_input.v1");
+        try writer.writeNode(node);
+        return .{ .bytes = writer.hasher.finalResult() };
+    }
+
     /// Seal producer identities for graph-owned iterator representations only
     /// after all type relations and representation decisions have been
-    /// applied. Immutable Type-shaped snapshots of resolved nodes are used
-    /// here; they remain graph-owned and never enter completed Monotype output.
-    /// All digests are computed before any node is stamped, so dependency
-    /// order cannot affect identity.
+    /// applied. The input writer follows graph-local generated provenance, so
+    /// an adapter identity includes the complete identities of generated
+    /// adapters nested in its item and component types even though those
+    /// implementation inputs are not durable nominal arguments. All digests
+    /// are computed before any node is stamped, so dependency order cannot
+    /// affect identity.
     pub fn finalizeGeneratedIteratorIdentities(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
         const Pending = struct { node: NodeId, digest: names.TypeDigest };
@@ -1163,8 +1173,7 @@ pub const InstGraph = struct {
                 if (named.args.len != 1) {
                     Common.invariant("forced-dynamic iterator identity did not have exactly one item argument");
                 }
-                const item = try self.provisionalTypeViewForNode(named.args[0]);
-                const item_digest = self.types.typeDigest(self.name_store, item);
+                const item_digest = try self.generatedIteratorIdentityInputDigest(named.args[0]);
                 hasher.update("roc.generated_iterator.forced_dynamic_identity");
                 hasher.update(&item_digest.bytes);
             } else {
@@ -1176,13 +1185,11 @@ pub const InstGraph = struct {
                 updateGeneratedIteratorInternU32(&hasher, @intFromEnum(provenance.public_source.def.type_name));
                 updateGeneratedIteratorInternU32(&hasher, provenance.public_source.def.source_decl orelse std.math.maxInt(u32));
                 hasher.update(&.{@intFromEnum(named.def.iterator_kind)});
-                const item = try self.provisionalTypeViewForNode(named.args[0]);
-                const item_digest = self.types.typeDigest(self.name_store, item);
+                const item_digest = try self.generatedIteratorIdentityInputDigest(named.args[0]);
                 hasher.update(&item_digest.bytes);
                 updateGeneratedIteratorInternU32(&hasher, @intCast(provenance.components.len));
                 for (provenance.components) |component| {
-                    const component_ty = try self.provisionalTypeViewForNode(component);
-                    const component_digest = self.types.typeDigest(self.name_store, component_ty);
+                    const component_digest = try self.generatedIteratorIdentityInputDigest(component);
                     hasher.update(&component_digest.bytes);
                 }
                 if (provenance.callable_evidence) |evidence| {
@@ -4142,10 +4149,16 @@ fn updateGeneratedIteratorInternU32(hasher: *std.crypto.hash.sha2.Sha256, value:
 }
 
 const OpenFunctionInterfaceShapeWriter = struct {
+    const Mode = enum {
+        open_interface,
+        generated_identity,
+    };
+
     graph: *InstGraph,
     hasher: std.crypto.hash.sha2.Sha256,
     unresolved_ids: collections.DenseMap(NodeId, u32),
     visiting: std.ArrayList(NodeId),
+    mode: Mode,
     next_unresolved: u32 = 0,
     output: ?[]u8 = null,
     output_len: usize = 0,
@@ -4156,7 +4169,14 @@ const OpenFunctionInterfaceShapeWriter = struct {
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
             .unresolved_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
             .visiting = .empty,
+            .mode = .open_interface,
         };
+    }
+
+    fn initGeneratedIdentity(graph: *InstGraph) OpenFunctionInterfaceShapeWriter {
+        var writer = init(graph);
+        writer.mode = .generated_identity;
+        return writer;
     }
 
     fn initWithOutput(graph: *InstGraph, output: []u8) OpenFunctionInterfaceShapeWriter {
@@ -4190,10 +4210,16 @@ const OpenFunctionInterfaceShapeWriter = struct {
     fn writeNode(self: *OpenFunctionInterfaceShapeWriter, raw_node: NodeId) Allocator.Error!void {
         const node = self.graph.find(raw_node);
         const content = self.graph.nodes.items[@intFromEnum(node)];
-        self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
-        self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
+        if (self.mode == .open_interface) {
+            self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
+            self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
+        }
         if (content == .redirect) unreachable;
         if (content == .unresolved) {
+            if (self.mode == .generated_identity) {
+                self.writeMaterializedVariable(content.unresolved);
+                return;
+            }
             const entry = try self.unresolved_ids.getOrPut(node);
             if (!entry.found_existing) {
                 entry.value_ptr.* = self.next_unresolved;
@@ -4315,6 +4341,31 @@ const OpenFunctionInterfaceShapeWriter = struct {
         self.writeOptionalRowDefault(variable.row_default);
     }
 
+    fn writeMaterializedVariable(self: *OpenFunctionInterfaceShapeWriter, variable: InstVariable) void {
+        if (variable.numeric_default_phase) |phase| {
+            const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                Common.invariant("checking-finalized numeric variable reached generated iterator identity");
+            self.writeBytes("primitive");
+            self.writeBytes(switch (target) {
+                .dec => @tagName(Type.Primitive.dec),
+                .str => @tagName(Type.Primitive.str),
+            });
+            return;
+        }
+        if (variable.row_default) |row_default| {
+            self.writeBytes(switch (row_default) {
+                .empty_record => "empty_record",
+                .empty_tag_union => "empty_tag_union",
+            });
+            return;
+        }
+        switch (variable.origin) {
+            .checked_variable => self.writeBytes("empty_tag_union"),
+            .row_extension => Common.invariant("row extension reached generated iterator identity without row default"),
+            .placeholder => Common.invariant("instantiation placeholder reached generated iterator identity"),
+        }
+    }
+
     fn writeTypeDef(self: *OpenFunctionInterfaceShapeWriter, def: Type.TypeDef) void {
         self.writeBytes(self.graph.name_store.moduleIdentityBytes(def.module));
         self.writeOptionalU32(def.source_decl);
@@ -4372,6 +4423,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
         };
         self.writeU8(1);
         self.writeOptionalDigest(generated.callable_evidence);
+        try self.writeNodeSpan(generated.components);
         self.writeBytes(&generated.public_source.named_type.module.bytes);
         self.writeTypeDef(generated.public_source.def);
         self.writeBytes(@tagName(generated.public_source.kind));
@@ -6047,6 +6099,96 @@ test "generated iterator interning happens before backing work and survives late
         generated,
         graph.findGeneratedIterator(public_at_lookup, .map, &.{component_at_lookup}, null).?,
     );
+}
+
+test "generated iterator identity includes nested graph-local producer evidence" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x66} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(14) };
+    const public_def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const public_source: InstIteratorPublicSource = .{
+        .named_type = named_type,
+        .def = public_def,
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+        },
+        .declared_order = &.{},
+    };
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    const source = try graph.newNode(.{ .list = item });
+
+    const Factory = struct {
+        fn add(
+            active_graph: *InstGraph,
+            source_contract: InstIteratorPublicSource,
+            item_node: NodeId,
+            components: []const NodeId,
+            evidence_byte: u8,
+        ) Allocator.Error!NodeId {
+            var def = source_contract.def;
+            def.iterator_kind = .map;
+            var evidence: names.TypeDigest = undefined;
+            @memset(&evidence.bytes, evidence_byte);
+            return try active_graph.newNode(.{ .named = .{
+                .named_type = source_contract.named_type,
+                .def = def,
+                .kind = source_contract.kind,
+                .builtin_owner = source_contract.builtin_owner,
+                .args = try active_graph.arena().dupe(NodeId, &.{item_node}),
+                .backing = .{
+                    .node = try active_graph.newNode(.empty_record),
+                    .use = .runtime_layout_only,
+                    .authority = .generated_private,
+                },
+                .generated_iterator = .{
+                    .callable_evidence = evidence,
+                    .components = try active_graph.arena().dupe(NodeId, components),
+                    .public_source = source_contract,
+                },
+            } });
+        }
+    };
+
+    const equivalent_item = try graph.newNode(.{ .primitive = .u64 });
+    const equivalent_source = try graph.newNode(.{ .list = equivalent_item });
+    const inner_a = try Factory.add(graph, public_source, item, &.{source}, 0xA1);
+    const inner_b = try Factory.add(graph, public_source, item, &.{source}, 0xB2);
+    const inner_equivalent = try Factory.add(graph, public_source, equivalent_item, &.{equivalent_source}, 0xA1);
+    const outer_a = try Factory.add(graph, public_source, item, &.{inner_a}, 0xC3);
+    const outer_b = try Factory.add(graph, public_source, item, &.{inner_b}, 0xC3);
+    const outer_equivalent = try Factory.add(graph, public_source, equivalent_item, &.{inner_equivalent}, 0xC3);
+    for ([_]NodeId{ inner_a, inner_b, inner_equivalent, outer_a, outer_b, outer_equivalent }) |node| {
+        try graph.registerGeneratedIterator(node);
+    }
+
+    try graph.finalizeGeneratedIteratorRepresentations();
+    try graph.finalizeGeneratedIteratorIdentities();
+
+    const inner_a_named = graph.content(inner_a).named;
+    const inner_b_named = graph.content(inner_b).named;
+    const inner_equivalent_named = graph.content(inner_equivalent).named;
+    const outer_a_named = graph.content(outer_a).named;
+    const outer_b_named = graph.content(outer_b).named;
+    const outer_equivalent_named = graph.content(outer_equivalent).named;
+    try std.testing.expect(!optionalInstDigestEql(inner_a_named.def.generated, inner_b_named.def.generated));
+    try std.testing.expect(optionalInstDigestEql(inner_a_named.def.generated, inner_equivalent_named.def.generated));
+    try std.testing.expect(!optionalInstDigestEql(outer_a_named.def.generated, outer_b_named.def.generated));
+    try std.testing.expect(optionalInstDigestEql(outer_a_named.def.generated, outer_equivalent_named.def.generated));
+    try std.testing.expectEqual(@as(usize, 1), outer_a_named.args.len);
+    try std.testing.expectEqual(@as(usize, 1), outer_b_named.args.len);
 }
 
 test "generated iterator depth visits wide graphs without a size cutoff" {
