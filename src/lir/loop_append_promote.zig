@@ -683,7 +683,8 @@ const Pass = struct {
             defer combined.deinit(allocator);
             for (0..GuardedList.borrowLen(frame)) |i| try combined.append(allocator, GuardedList.at(frame, i));
             try combined.appendSlice(allocator, new_locals.items);
-            self.store.getProcSpecPtr(proc_id).frame_locals = try self.store.addLocalSpan(combined.items);
+            const frame_span = try self.store.addLocalSpan(combined.items);
+            self.store.getProcSpecPtr(proc_id).frame_locals = frame_span;
         }
     }
 

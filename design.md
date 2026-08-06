@@ -5947,7 +5947,7 @@ is the same however the death point was reached. Merges meet pointwise, and
 a loop poisons its own takes: a take inside one reaches itself as
 possibly-taken. Consuming reads on exclusive branches thereby take exactly
 when every path through the branching takes the field exactly once—the
-success and fallback arms of a checked mutation are the canonical case—and
+success and fallback arms of a checked mutation are the archetype—and
 a read the flow never reaches keeps its field residual. A field that fails
 any rule simply stays residual—its reads keep their retains and its stored
 unit is released at the death point—and a container whose take set comes

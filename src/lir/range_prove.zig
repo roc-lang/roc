@@ -1081,8 +1081,9 @@ const Pass = struct {
                         }
                     }
                     meet.len_bounds = kept_len;
-                    // The any-edge union instead strengthens: keep the
-                    // smallest c seen for a root on any edge.
+                    // The any-edge union keeps the smallest c seen for a
+                    // root on any edge: the tightest bound any single edge
+                    // proves.
                     for (mine_len.slice()) |candidate| {
                         var merged = false;
                         for (meet.len_bounds_any.items[0..meet.len_bounds_any.len]) |*have| {
