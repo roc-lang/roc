@@ -25,7 +25,7 @@ NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment1.md:1:6:1:7
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpArrow,LowerIdent,
-NewlineDotLowerIdent,NoSpaceOpenRound,CloseRound,
+DotLowerIdent,NoSpaceOpenRound,CloseRound,
 EndOfFile,
 ~~~
 # PARSE

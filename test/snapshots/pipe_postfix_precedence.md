@@ -15,7 +15,7 @@ NIL
 # TOKENS
 ~~~zig
 OpenRound,LowerIdent,OpPizza,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,Comma,LowerIdent,OpPizza,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
-NewlineDotLowerIdent,NoSpaceOpenRound,CloseRound,Comma,LowerIdent,OpArrow,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,Comma,LowerIdent,OpPizza,OpenRound,OpBar,LowerIdent,OpBar,LowerIdent,CloseRound,CloseRound,
+DotLowerIdent,NoSpaceOpenRound,CloseRound,Comma,LowerIdent,OpArrow,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,Comma,LowerIdent,OpPizza,OpenRound,OpBar,LowerIdent,OpBar,LowerIdent,CloseRound,CloseRound,
 EndOfFile,
 ~~~
 # PARSE

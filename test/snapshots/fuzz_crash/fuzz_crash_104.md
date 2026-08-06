@@ -26,7 +26,7 @@ UNRECOGNIZED SYNTAX - fuzz_crash_104.md:1:4:2:6
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,Int,
-NewlineDotInt,Dot,OpenCurly,CloseCurly,CloseCurly,
+DotInt,Dot,OpenCurly,CloseCurly,CloseCurly,
 EndOfFile,
 ~~~
 # PARSE
