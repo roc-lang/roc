@@ -5066,6 +5066,21 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("stack_overflow_test_options", stack_overflow_test_options_module);
         }
 
+        if (std.mem.eql(u8, module_test.test_step.name, "glue")) {
+            const has_llvm = try addLlvmLinkSupportToStep(
+                b,
+                module_test.test_step,
+                target,
+                use_system_llvm,
+                user_llvm_path,
+                llvm_codegen_module,
+                zstd,
+            );
+            if (has_llvm) {
+                module_test.test_step.root_module.addImport("llvm_compile", llvm_compile_module);
+            }
+        }
+
         // Add bytebox and wasm32 builtins to eval tests for wasm backend testing
         if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
@@ -7237,11 +7252,16 @@ fn addLlvmSupportToStep(
     llvm_embedded_module: *std.Build.Module,
     zstd: *Dependency,
 ) !void {
-    const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-    step.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-    step.root_module.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-    try addStaticLlvmOptionsToModule(step.root_module);
-    step.root_module.addImport("llvm_codegen", llvm_codegen_module);
+    const has_llvm = try addLlvmLinkSupportToStep(
+        b,
+        step,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        llvm_codegen_module,
+        zstd,
+    );
+    if (!has_llvm) return;
     step.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
@@ -7258,7 +7278,24 @@ fn addLlvmSupportToStep(
             .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
     });
+}
+
+fn addLlvmLinkSupportToStep(
+    b: *std.Build,
+    step: *Step.Compile,
+    target: ResolvedTarget,
+    use_system_llvm: bool,
+    user_llvm_path: ?[]const u8,
+    llvm_codegen_module: *std.Build.Module,
+    zstd: *Dependency,
+) !bool {
+    const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return false;
+    step.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+    step.root_module.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+    try addStaticLlvmOptionsToModule(step.root_module);
+    step.root_module.addImport("llvm_codegen", llvm_codegen_module);
     step.root_module.linkLibrary(zstd.artifact("zstd"));
+    return true;
 }
 
 const ParsedBuildArgs = struct {

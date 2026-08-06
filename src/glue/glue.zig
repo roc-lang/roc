@@ -985,7 +985,7 @@ fn gluePluginStamp(
         .size = @sizeOf(GluePluginStampV1),
         .kind = @intFromEnum(GluePluginKind.glue),
         .abi_version = glue_plugin_abi_version,
-        .specialization_strategy_tag = @intFromEnum(specialization_strategy) + 1,
+        .specialization_strategy_tag = @as(u32, @intFromEnum(specialization_strategy)) + 1,
         .target_hash = hashTarget(),
         .compiler_hash = hashCompiler(),
         .glue_platform_hash = compile.compiler_platforms.sourceHash(.glue),

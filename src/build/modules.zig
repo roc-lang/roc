@@ -40,6 +40,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .ipc => &.{"ipc tests"},
         .fmt => &.{"fmt tests"},
         .lsp_unit => &.{"lsp unit tests"},
+        .glue => &.{"glue tests"},
         .roc_src,
         .types,
         .reporting,
@@ -62,7 +63,6 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .echo_platform,
         .docs,
         .bump,
-        .glue,
         .host_alloc,
         => &.{},
     };
