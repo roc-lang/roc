@@ -34,8 +34,9 @@ pub const Mode = enum(u1) {
 /// Solved ownership signature of one proc.
 ///
 /// Argument positions are indexed by position in the proc's `args` span.
-/// Positions at or beyond `tracked_param_count` are always owned. Non-refcounted positions are
-/// reported as owned; their mode is never consulted.
+/// Positions at or beyond `tracked_param_count` are always owned.
+/// Non-refcounted positions are reported as owned; their mode is never
+/// consulted.
 pub const RcSig = struct {
     /// Bit i set means argument position i is borrowed.
     borrowed_params: ParamMask = 0,

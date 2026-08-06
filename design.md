@@ -5854,12 +5854,13 @@ certifier, never by weakening what it checks.
 
 ### Mode Specialization
 
-A proc's solved `RcSig` is the most-borrowed signature its body admits.
-Callers can always adapt to it, but adaptation has a cost: passing an owned
-value to a borrowed param keeps a caller-side drop that a move would have
-deleted, and an owned use of a borrowed return pays an `incref`. Mode
-specialization removes that adaptation cost by emitting one proc variant per
-demanded mode vector.
+Within its represented prefix, a proc's solved `RcSig` is the most-borrowed
+signature its body admits; its tail is all-owned by the declared boundary
+above. Callers can always adapt to the inferred prefix, but adaptation has a
+cost: passing an owned value to a borrowed param keeps a caller-side drop that
+a move would have deleted, and an owned use of a borrowed return pays an
+`incref`. Mode specialization removes that adaptation cost by emitting one proc
+variant per demanded mode vector.
 
 A demand vector assigns each represented refcounted param position a mode at
 or above the solved signature (pointwise more owned); tail positions remain
