@@ -2461,11 +2461,7 @@ fn hostListCopyRangeWithin(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, pa
         const src = new_data + src_index * elem_width;
         const dest = new_data + dest_index * elem_width;
         const total = count * elem_width;
-        if (dest < src) {
-            std.mem.copyForwards(u8, buffer[dest..][0..total], buffer[src..][0..total]);
-        } else {
-            std.mem.copyBackwards(u8, buffer[dest..][0..total], buffer[src..][0..total]);
-        }
+        @memmove(buffer[dest..][0..total], buffer[src..][0..total]);
     }
 
     writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
