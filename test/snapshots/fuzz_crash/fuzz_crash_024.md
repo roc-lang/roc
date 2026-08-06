@@ -90,9 +90,8 @@ The name `t` is being redeclared here:
 var t= 0
     ^
 
--- ℹ️ DETAILS ------------------------------------------- fuzz_crash_024.md:2:5
 
-In this scope, `t` was already defined here:
+In this scope, `t` was already defined here (fuzz_crash_024.md:2:5):
 
 var t= ]
     ^

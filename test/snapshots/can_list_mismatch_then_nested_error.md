@@ -20,9 +20,8 @@ This number is being used where a non-number type is needed.
 [1, "hello", [3, "world"]]
  ^
 
--- ℹ️ DETAILS --------------------- can_list_mismatch_then_nested_error.md:1:14
 
-The type was determined to be non-numeric here:
+The type was determined to be non-numeric here (can_list_mismatch_then_nested_error.md:1:14):
 
 [1, "hello", [3, "world"]]
              ^^^^^^^^^^^^

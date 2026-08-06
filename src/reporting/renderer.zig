@@ -749,13 +749,50 @@ fn renderEmbeddedBox(
     gpa: Allocator,
 ) error{WriteFailed}!void {
     _ = annotation;
-    try renderHeaderLine(writer, palette, config, "ℹ️", "DETAILS", filename, start_line, start_column, false);
+    _ = config;
 
-    const trimmed = std.mem.trim(u8, preceding_text, " \n\r\t");
-    if (trimmed.len > 0) {
+    var body = std.mem.trim(u8, preceding_text, " \n\r\t");
+    var ends_with_colon = false;
+    var suffix: []const u8 = "";
+
+    if (body.len > 0) {
+        if (palette.reset.len > 0 and std.mem.endsWith(u8, body, palette.reset)) {
+            const before_reset = body[0 .. body.len - palette.reset.len];
+            if (before_reset.len > 0 and before_reset[before_reset.len - 1] == ':') {
+                ends_with_colon = true;
+                body = before_reset[0 .. before_reset.len - 1];
+                suffix = palette.reset;
+            }
+        } else if (body[body.len - 1] == ':') {
+            ends_with_colon = true;
+            body = body[0 .. body.len - 1];
+        }
+    }
+
+    if (body.len > 0 or filename != null) {
         try writer.writeByte('\n');
         try writer.writeAll(palette.secondary);
-        try writer.writeAll(trimmed);
+        try writer.writeAll(body);
+        try writer.writeAll(suffix);
+
+        if (filename) |f| {
+            const dim_gray = if (palette.reset.len > 0) AnsiCodes.BRIGHT_BLACK else "";
+            if (body.len > 0) {
+                try writer.writeAll(" ");
+            }
+            try writer.writeAll(dim_gray);
+            try writer.writeAll("(");
+            try writeLocation(writer, palette, sanitisePathForSnapshots(f), start_line, start_column);
+            try writer.writeAll(dim_gray);
+            try writer.writeAll(")");
+        }
+
+        if (ends_with_colon) {
+            const dim_gray = if (palette.reset.len > 0) AnsiCodes.BRIGHT_BLACK else "";
+            try writer.writeAll(dim_gray);
+            try writer.writeAll(":");
+        }
+
         try writer.writeAll(palette.reset);
         try writer.writeByte('\n');
     }

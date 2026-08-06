@@ -25,9 +25,8 @@ The name `MyMod` is being redeclared here:
 import http.Client as MyMod
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS ----------------------------- can_import_aliased_conflicts.md:1:1
 
-In this scope, `MyMod` was already defined here:
+In this scope, `MyMod` was already defined here (can_import_aliased_conflicts.md:1:1):
 
 import json.Json as MyMod
 ^

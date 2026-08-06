@@ -32,9 +32,8 @@ The name `Json` is being redeclared here:
 import Json
 ^^^^^^^^^^^
 
--- ℹ️ DETAILS ------------------------------------- inline_ingested_file.md:1:1
 
-In this scope, `Json` was already defined here:
+In this scope, `Json` was already defined here (inline_ingested_file.md:1:1):
 
 import "users.json" as data : Str
 ^

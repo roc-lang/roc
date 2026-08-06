@@ -27,9 +27,8 @@ The name `Json` is being redeclared here:
 import json.Json exposing [decode, to_str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS ------------------------------------ import_exposing_basic.md:1:1
 
-In this scope, `Json` was already defined here:
+In this scope, `Json` was already defined here (import_exposing_basic.md:1:1):
 
 import json.Json exposing [decode, to_str]
 ^

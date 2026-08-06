@@ -32,13 +32,12 @@ The type parameter `b` in type `C` conflicts with another declaration.
 C(b, b) : (a, b)
      ^
 
--- ℹ️ DETAILS ------------------------------------------- fuzz_crash_083.md:2:3
 
 Type parameters must have unique names within their scope.
 
 The conflicting parameter is here:
 
-But `b` was already declared here:
+But `b` was already declared here (fuzz_crash_083.md:2:3):
 
 C(b, b) : (a, b)
   ^

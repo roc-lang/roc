@@ -25,11 +25,10 @@ The record field `a` appears more than once in this record.
 fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                        ^
 
--- ℹ️ DETAILS ------------------------------------------ fuzz_crash_099.md:3:22
 
 This field is duplicated here:
 
-The field `a` was first defined here:
+The field `a` was first defined here (fuzz_crash_099.md:3:22):
 
 fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                  ^

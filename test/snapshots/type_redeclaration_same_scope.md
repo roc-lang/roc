@@ -20,11 +20,10 @@ The type `Maybe` is being redeclared.
 Maybe(a) : [Ok(a), Err]
 ^^^^^^^^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS ---------------------------- type_redeclaration_same_scope.md:1:1
 
 The redeclaration is here:
 
-But Maybe was already declared here:
+But Maybe was already declared here (type_redeclaration_same_scope.md:1:1):
 
 Maybe(a) : [Some(a), None]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^

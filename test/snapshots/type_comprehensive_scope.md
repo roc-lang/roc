@@ -68,13 +68,12 @@ The type alias `Tree` and `Node` form a recursive cycle.
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS -------------------------------- type_comprehensive_scope.md:16:1
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
 This type is declared here:
 
-And it references Node declared here:
+And it references Node declared here (type_comprehensive_scope.md:16:1):
 
 Node(a) : { value: a, children: List(Tree(a)) }
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -86,13 +85,12 @@ The type alias `Node` and `Tree` form a recursive cycle.
 Node(a) : { value: a, children: List(Tree(a)) }
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
--- ℹ️ DETAILS -------------------------------- type_comprehensive_scope.md:13:1
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
 This type is declared here:
 
-And it references Tree declared here:
+And it references Tree declared here (type_comprehensive_scope.md:13:1):
 
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -104,11 +102,10 @@ The type `Person` is being redeclared.
 Person : U64
 ^^^^^^^^^^^^
 
--- ℹ️ DETAILS --------------------------------- type_comprehensive_scope.md:7:1
 
 The redeclaration is here:
 
-But Person was already declared here:
+But Person was already declared here (type_comprehensive_scope.md:7:1):
 
 Person : { name: Str, age: U64 }
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

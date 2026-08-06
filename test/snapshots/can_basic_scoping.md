@@ -31,9 +31,8 @@ The name `x` is being redeclared here:
 x = 20  # Should shadow top-level x
 ^
 
--- ℹ️ DETAILS ---------------------------------------- can_basic_scoping.md:2:1
 
-In this scope, `x` was already defined here:
+In this scope, `x` was already defined here (can_basic_scoping.md:2:1):
 
 x = 5
 ^
