@@ -473,7 +473,9 @@ const BuiltinsObjects = struct {
 
     /// Cross-compilation target builtins (Windows targets)
     const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_builtins.obj");
+    const x64mingw = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mingw/roc_builtins.obj");
     const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins.obj");
+    const arm64mingw = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mingw/roc_builtins.obj");
 
     /// Cross-compilation target builtins (macOS targets)
     const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins.o");
@@ -499,7 +501,9 @@ const BuiltinsObjects = struct {
     const arm64glibc_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_builtins_extern.o");
     const wasm32_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_builtins_extern.o");
     const x64win_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_builtins_extern.obj");
+    const x64mingw_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mingw/roc_builtins_extern.obj");
     const arm64win_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins_extern.obj");
+    const arm64mingw_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mingw/roc_builtins_extern.obj");
     const x64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins_extern.o");
     const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins_extern.o");
     const x64freebsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_builtins_extern.o");
@@ -521,7 +525,9 @@ const BuiltinsObjects = struct {
             .arm64glibc => arm64glibc,
             .wasm32 => wasm32,
             .x64win => x64win,
+            .x64mingw => x64mingw,
             .arm64win => arm64win,
+            .arm64mingw => arm64mingw,
             .x64mac => x64mac,
             .arm64mac => arm64mac,
             .x64freebsd => x64freebsd,
@@ -531,6 +537,7 @@ const BuiltinsObjects = struct {
             .x64elf,
             .x64v1mac,
             .x64v1win,
+            .x64v1mingw,
             .x64v1freebsd,
             .x64v1openbsd,
             .x64v1netbsd,
@@ -540,6 +547,7 @@ const BuiltinsObjects = struct {
             .x64v1elf,
             .arm64linux,
             .arm64v1win,
+            .arm64v1mingw,
             .arm64v1linux,
             .arm64v1musl,
             .arm64v1glibc,
@@ -561,7 +569,9 @@ const BuiltinsObjects = struct {
             .arm64glibc => arm64glibc_extern,
             .wasm32 => wasm32_extern,
             .x64win => x64win_extern,
+            .x64mingw => x64mingw_extern,
             .arm64win => arm64win_extern,
+            .arm64mingw => arm64mingw_extern,
             .x64mac => x64mac_extern,
             .arm64mac => arm64mac_extern,
             .x64freebsd => x64freebsd_extern,
@@ -571,6 +581,7 @@ const BuiltinsObjects = struct {
             .x64elf,
             .x64v1mac,
             .x64v1win,
+            .x64v1mingw,
             .x64v1freebsd,
             .x64v1openbsd,
             .x64v1netbsd,
@@ -580,6 +591,7 @@ const BuiltinsObjects = struct {
             .x64v1elf,
             .arm64linux,
             .arm64v1win,
+            .arm64v1mingw,
             .arm64v1linux,
             .arm64v1musl,
             .arm64v1glibc,
@@ -616,7 +628,9 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
         const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/" ++ base_name ++ ".o");
         const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/" ++ base_name ++ ".o");
         const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/" ++ base_name ++ ".obj");
+        const x64mingw = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mingw/" ++ base_name ++ ".obj");
         const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/" ++ base_name ++ ".obj");
+        const arm64mingw = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mingw/" ++ base_name ++ ".obj");
         const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/" ++ base_name ++ ".o");
         const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/" ++ base_name ++ ".o");
         const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/" ++ base_name ++ ".o");
@@ -631,13 +645,16 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
                 .x64mac => x64mac,
                 .arm64mac => arm64mac,
                 .x64win => x64win,
+                .x64mingw => x64mingw,
                 .arm64win => arm64win,
+                .arm64mingw => arm64mingw,
                 .x64freebsd => x64freebsd,
                 .x64openbsd => x64openbsd,
                 .x64netbsd => x64netbsd,
                 .x64elf,
                 .x64v1mac,
                 .x64v1win,
+                .x64v1mingw,
                 .x64v1freebsd,
                 .x64v1openbsd,
                 .x64v1netbsd,
@@ -646,6 +663,7 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
                 .x64v1linux,
                 .x64v1elf,
                 .arm64v1win,
+                .arm64v1mingw,
                 .arm64v1linux,
                 .arm64v1musl,
                 .arm64v1glibc,
@@ -3095,8 +3113,9 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             }
         }
 
-        // Determine ABI from target (for musl detection)
-        const target_abi: linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else .gnu;
+        // Carry the target's runtime ABI into the linker without reconstructing
+        // it from the object format or platform inputs.
+        const target_abi = linker.TargetAbi.fromRocTarget(validated_link_spec.target);
         std.log.debug("Target ABI: {?}", .{target_abi});
 
         // No pre/post files needed - everything comes from link spec in order
@@ -5647,19 +5666,23 @@ fn defaultRunShimTarget(native: RocTarget) RocTarget {
         .arm64v1musl, .arm64v1glibc, .arm64v1linux => .arm64v1musl,
         .x64mac,
         .x64win,
+        .x64mingw,
         .x64freebsd,
         .x64openbsd,
         .x64netbsd,
         .x64elf,
         .x64v1mac,
         .x64v1win,
+        .x64v1mingw,
         .x64v1freebsd,
         .x64v1openbsd,
         .x64v1netbsd,
         .x64v1elf,
         .arm64mac,
         .arm64win,
+        .arm64mingw,
         .arm64v1win,
+        .arm64v1mingw,
         .arm32linux,
         .arm32musl,
         .wasm32,
@@ -7953,7 +7976,9 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
                 .x64mac,
                 .arm64mac,
                 .x64win,
+                .x64mingw,
                 .arm64win,
+                .arm64mingw,
                 .x64openbsd,
                 => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
@@ -7965,6 +7990,7 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
                 .x64netbsd,
                 .x64v1mac,
                 .x64v1win,
+                .x64v1mingw,
                 .x64v1freebsd,
                 .x64v1openbsd,
                 .x64v1netbsd,
@@ -7976,6 +8002,7 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
                 .arm64musl,
                 .arm64glibc,
                 .arm64v1win,
+                .arm64v1mingw,
                 .arm64v1linux,
                 .arm64v1musl,
                 .arm64v1glibc,
