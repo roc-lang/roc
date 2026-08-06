@@ -30,7 +30,7 @@ The value's type, which does not have a method named `from_numeral`, is:
     { e: _field, .. }
 # TOKENS
 ~~~zig
-LowerIdent,OpAssign,NoSpaceOpenRound,Int,DotLowerIdent,CloseRound,
+LowerIdent,OpAssign,NoSpaceOpenRound,Int,NewlineDotLowerIdent,CloseRound,
 EndOfFile,
 ~~~
 # PARSE

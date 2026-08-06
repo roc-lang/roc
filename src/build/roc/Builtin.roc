@@ -99,70 +99,70 @@ Builtin :: [].{
 		JsonContainerEncodeState :: { output : List(U8), needs_comma : Bool }
 
 		Json :: {}.{
-			parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str)])
+			parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_str = |encoding, state| JsonEncoding.parse_str(encoding, state)
 
-			parse_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str)])
+			parse_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_bool = |encoding, state| JsonEncoding.parse_bool(encoding, state)
 
-			parse_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str)])
+			parse_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u8 = |encoding, state| JsonEncoding.parse_u8(encoding, state)
 
-			parse_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str)])
+			parse_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i8 = |encoding, state| JsonEncoding.parse_i8(encoding, state)
 
-			parse_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str)])
+			parse_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u16 = |encoding, state| JsonEncoding.parse_u16(encoding, state)
 
-			parse_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str)])
+			parse_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i16 = |encoding, state| JsonEncoding.parse_i16(encoding, state)
 
-			parse_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str)])
+			parse_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u32 = |encoding, state| JsonEncoding.parse_u32(encoding, state)
 
-			parse_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str)])
+			parse_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i32 = |encoding, state| JsonEncoding.parse_i32(encoding, state)
 
-			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str)])
+			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u64 = |encoding, state| JsonEncoding.parse_u64(encoding, state)
 
-			parse_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str)])
+			parse_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i64 = |encoding, state| JsonEncoding.parse_i64(encoding, state)
 
-			parse_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str)])
+			parse_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u128 = |encoding, state| JsonEncoding.parse_u128(encoding, state)
 
-			parse_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str)])
+			parse_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i128 = |encoding, state| JsonEncoding.parse_i128(encoding, state)
 
-			parse_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str)])
+			parse_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_dec = |encoding, state| JsonEncoding.parse_dec(encoding, state)
 
-			parse_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str)])
+			parse_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_f32 = |encoding, state| JsonEncoding.parse_f32(encoding, state)
 
-			parse_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str)])
+			parse_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_f64 = |encoding, state| JsonEncoding.parse_f64(encoding, state)
 
-			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
+			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
 			parse_null = |encoding, state| JsonEncoding.parse_null(encoding, state)
 
-			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
+			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
 			parse_list_start = |encoding, state| JsonEncoding.parse_list_start(encoding, state)
 
-			parse_list_next : JsonEncoding, JsonState -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_next : JsonEncoding, JsonState -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
 			parse_list_next = |encoding, state| JsonEncoding.parse_list_next(encoding, state)
 
-			parse_list_after_item : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_after_item : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
 			parse_list_after_item = |encoding, state| JsonEncoding.parse_list_after_item(encoding, state)
 
-			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			parse_tuple_start = |encoding, state, len| JsonEncoding.parse_tuple_start(encoding, state, len)
 
-			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			parse_tuple_next = |encoding, state, index, len| JsonEncoding.parse_tuple_next(encoding, state, index, len)
 
-			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			parse_tuple_end = |encoding, state, len| JsonEncoding.parse_tuple_end(encoding, state, len)
 
 			encode_str : JsonEncoding, Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
@@ -204,10 +204,10 @@ Builtin :: [].{
 			encode_dec : JsonEncoding, Dec, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_dec = |_, value, state| JsonEncoding.encode_dec(value, state)
 
-			encode_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_f32 = |_, value, state| JsonEncoding.encode_f32(value, state)
 
-			encode_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_f64 = |_, value, state| JsonEncoding.encode_f64(value, state)
 
 			encode_null : JsonEncoding, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
@@ -498,14 +498,14 @@ Builtin :: [].{
 				}
 			}
 
-			dec_from_json_number : Str -> Try(Dec, [BadNumStr])
+			dec_from_json_number : Str -> Try(Dec, [BadNumStr, ..])
 			dec_from_json_number = |value|
 				match Json.split_json_number_exponent(value) {
 					Ok(split) => Json.dec_from_json_exponent_parts(split.mantissa, split.exponent)
 					Err(NotFound) => dec_from_str(value)
 				}
 
-			split_json_number_exponent : Str -> Try({ mantissa : Str, exponent : Str }, [NotFound])
+			split_json_number_exponent : Str -> Try({ mantissa : Str, exponent : Str }, [NotFound, ..])
 			split_json_number_exponent = |value|
 				match Str.split_first(value, "e") {
 					Ok(split) => Ok({ mantissa: split.before, exponent: split.after })
@@ -516,7 +516,7 @@ Builtin :: [].{
 						}
 					}
 
-			dec_from_json_exponent_parts : Str, Str -> Try(Dec, [BadNumStr])
+			dec_from_json_exponent_parts : Str, Str -> Try(Dec, [BadNumStr, ..])
 			dec_from_json_exponent_parts = |mantissa, exponent_text| {
 				exponent_digits = if Str.starts_with(exponent_text, "+") {
 					Str.drop_prefix(exponent_text, "+")
@@ -586,7 +586,7 @@ Builtin :: [].{
 				}
 			}
 
-			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr])
+			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr, ..])
 			normalize_json_dec_digits = |negative, digits, point| {
 				sign = if negative "-" else ""
 
@@ -1828,7 +1828,7 @@ Builtin :: [].{
 			encode_dec : Dec, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_dec = |value, state| Json.encode_json_number(json_dec_to_str(value), state)
 
-			encode_f32 : F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_f32 : F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_f32 = |value, state| {
 				if json_f32_is_nan(value) {
 					Err(NaN)
@@ -1843,7 +1843,7 @@ Builtin :: [].{
 				}
 			}
 
-			encode_f64 : F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_f64 : F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_f64 = |value, state| {
 				if json_f64_is_nan(value) {
 					Err(NaN)
@@ -2009,7 +2009,7 @@ Builtin :: [].{
 			encode_key_dec : JsonEncoding, Dec, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_key_dec = |_, key, state| JsonEncoding.encode_str(json_dec_to_str(key), state)
 
-			encode_key_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_key_f32 = |_, key, state| {
 				if json_f32_is_nan(key) {
 					Err(NaN)
@@ -2024,7 +2024,7 @@ Builtin :: [].{
 				}
 			}
 
-			encode_key_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_key_f64 = |_, key, state| {
 				if json_f64_is_nan(key) {
 					Err(NaN)
@@ -2391,7 +2391,7 @@ Builtin :: [].{
 		## expect "Cache-Control: max-age=0".drop_prefix_caseless_ascii("cache-control") == Ok(": max-age=0")
 		## expect "X-Api-Key".drop_prefix_caseless_ascii("x_api_key") == Err(NotFound)
 		## ```
-		drop_prefix_caseless_ascii : Str, Str -> Try(Str, [NotFound])
+		drop_prefix_caseless_ascii : Str, Str -> Try(Str, [NotFound, ..])
 		drop_prefix_caseless_ascii = |source, prefix| {
 			split = str_drop_prefix_caseless_ascii_raw(source, prefix)
 
@@ -2420,7 +2420,7 @@ Builtin :: [].{
 		## expect "foo: bar".split_first(":") == Ok({ before: "foo", after: " bar" })
 		## expect "foo".split_first(":") == Err(NotFound)
 		## ```
-		split_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		split_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound, ..])
 		split_first = |source, delimiter| {
 			split = str_split_first_raw(source, delimiter)
 
@@ -2440,7 +2440,7 @@ Builtin :: [].{
 		## expect "a.b.c".split_last(".") == Ok({ before: "a.b", after: "c" })
 		## expect "foo".split_last(":") == Err(NotFound)
 		## ```
-		split_last : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		split_last : Str, Str -> Try({ before : Str, after : Str }, [NotFound, ..])
 		split_last = |source, delimiter| {
 			split = str_split_last_raw(source, delimiter)
 
@@ -2714,7 +2714,7 @@ Builtin :: [].{
 		## ```roc
 		## expect Str.from_quote("Roc") == Ok("Roc")
 		## ```
-		from_quote : Str -> Try(Str, [BadQuotedBytes(Str)])
+		from_quote : Str -> Try(Str, [BadQuotedBytes(Str), ..])
 		from_quote = |str| Ok(str)
 
 		## Assembles an interpolated string literal.
@@ -3364,7 +3364,7 @@ Builtin :: [].{
 		##
 		## expect [7.I64].iter().drop_first(1).product() == Err(IterWasEmpty)
 		## ```
-		product : Iter(item) -> Try(item, [IterWasEmpty])
+		product : Iter(item) -> Try(item, [IterWasEmpty, ..])
 			where [item.times : item, item -> item]
 		product = |iterator|
 			match Iter.next(iterator) {
@@ -3380,7 +3380,7 @@ Builtin :: [].{
 		##
 		## expect [7.I64].iter().drop_first(1).min() == Err(IterWasEmpty)
 		## ```
-		min : Iter(item) -> Try(item, [IterWasEmpty])
+		min : Iter(item) -> Try(item, [IterWasEmpty, ..])
 			where [item.min : item, item -> item]
 		min = |iterator|
 			match Iter.next(iterator) {
@@ -3396,7 +3396,7 @@ Builtin :: [].{
 		##
 		## expect [7.I64].iter().drop_first(1).max() == Err(IterWasEmpty)
 		## ```
-		max : Iter(item) -> Try(item, [IterWasEmpty])
+		max : Iter(item) -> Try(item, [IterWasEmpty, ..])
 			where [item.max : item, item -> item]
 		max = |iterator|
 			match Iter.next(iterator) {
@@ -4844,7 +4844,7 @@ Builtin :: [].{
 		## ```
 		## expect [1, 2, 3, 4].find_first(|x| x % 2 == 0) == Ok(2)
 		## ```
-		find_first : List(a), (a -> Bool) -> Try(a, [NotFound])
+		find_first : List(a), (a -> Bool) -> Try(a, [NotFound, ..])
 		find_first = |list, predicate| {
 			for item in list if predicate(item) {
 				return Ok(item)
@@ -4856,7 +4856,7 @@ Builtin :: [].{
 		## ```
 		## expect [1, 2, 3, 4].find_last(|x| x % 2 == 0) == Ok(4)
 		## ```
-		find_last : List(a), (a -> Bool) -> Try(a, [NotFound])
+		find_last : List(a), (a -> Bool) -> Try(a, [NotFound, ..])
 		find_last = |list, predicate| {
 			for item in list.rev() if predicate(item) {
 				return Ok(item)
@@ -4868,7 +4868,7 @@ Builtin :: [].{
 		## ```
 		## expect [1, 2, 3, 4].find_first_index(|x| x > 1) == Ok(1)
 		## ```
-		find_first_index : List(a), (a -> Bool) -> Try(U64, [NotFound])
+		find_first_index : List(a), (a -> Bool) -> Try(U64, [NotFound, ..])
 		find_first_index = |list, predicate| {
 			var $idx = 0
 			for item in list {
@@ -4884,7 +4884,7 @@ Builtin :: [].{
 		## ```
 		## expect [1, 2, 3, 4].find_last_index(|x| x < 4) == Ok(2)
 		## ```
-		find_last_index : List(a), (a -> Bool) -> Try(U64, [NotFound])
+		find_last_index : List(a), (a -> Bool) -> Try(U64, [NotFound, ..])
 		find_last_index = |list, predicate| {
 			var $idx = list.len()
 
@@ -4986,7 +4986,7 @@ Builtin :: [].{
 		## ```
 		## expect [0, 1, 2, 1, 2].split_first(2) == Ok({ before: [0, 1], after: [1, 2] })
 		## ```
-		split_first : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
+		split_first : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound, ..])
 			where [a.is_eq : a, a -> Bool]
 		split_first = |list, delim|
 			match list |> find_first_index(|x| x == delim) {
@@ -5001,7 +5001,7 @@ Builtin :: [].{
 		## ```
 		## expect [0, 1, 2, 1, 2].split_last(1) == Ok({ before: [0, 1, 2], after: [2] })
 		## ```
-		split_last : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
+		split_last : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound, ..])
 			where [a.is_eq : a, a -> Bool]
 		split_last = |list, delim|
 			match list |> find_last_index(|x| x == delim) {
@@ -5049,7 +5049,7 @@ Builtin :: [].{
 
 		## Find the minimum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `min`.
-		min : List(a) -> Try(a, [ListWasEmpty])
+		min : List(a) -> Try(a, [ListWasEmpty, ..])
 			where [a.min : a, a -> a]
 		min = |list|
 			match List.first(list) {
@@ -5068,7 +5068,7 @@ Builtin :: [].{
 
 		## Find the maximum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `max`.
-		max : List(a) -> Try(a, [ListWasEmpty])
+		max : List(a) -> Try(a, [ListWasEmpty, ..])
 			where [a.max : a, a -> a]
 		max = |list|
 			match List.first(list) {
@@ -6791,13 +6791,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U8.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..])
 			from_int_digits = |digits| u8_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U8]. This is the hook the
 			## compiler uses when a literal is given type [U8]; most code should
 			## parse user text with [U8.from_str] instead.
-			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u8_from_str(str))
 
 			## Parse a [U8] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -7588,13 +7588,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I8.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..])
 			from_int_digits = |digits| i8_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I8]. This is the hook the
 			## compiler uses when a literal is given type [I8]; most code should
 			## parse user text with [I8.from_str] instead.
-			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i8_from_str(str))
 
 			## Parse an [I8] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -8323,13 +8323,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U16.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..])
 			from_int_digits = |digits| u16_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U16]. This is the hook the
 			## compiler uses when a literal is given type [U16]; most code should
 			## parse user text with [U16.from_str] instead.
-			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u16_from_str(str))
 
 			## Parse a [U16] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -9113,13 +9113,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I16.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..])
 			from_int_digits = |digits| i16_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I16]. This is the hook the
 			## compiler uses when a literal is given type [I16]; most code should
 			## parse user text with [I16.from_str] instead.
-			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i16_from_str(str))
 
 			## Parse an [I16] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -9863,13 +9863,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U32.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..])
 			from_int_digits = |digits| u32_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U32]. This is the hook the
 			## compiler uses when a literal is given type [U32]; most code should
 			## parse user text with [U32.from_str] instead.
-			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u32_from_str(str))
 
 			## Parse a [U32] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -10685,13 +10685,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I32.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..])
 			from_int_digits = |digits| i32_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I32]. This is the hook the
 			## compiler uses when a literal is given type [I32]; most code should
 			## parse user text with [I32.from_str] instead.
-			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i32_from_str(str))
 
 			## Parse an [I32] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -11458,13 +11458,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U64.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..])
 			from_int_digits = |digits| u64_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U64]. This is the hook the
 			## compiler uses when a literal is given type [U64]; most code should
 			## parse user text with [U64.from_str] instead.
-			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u64_from_str(str))
 
 			## Parse a [U64] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -12328,13 +12328,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I64.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..])
 			from_int_digits = |digits| i64_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I64]. This is the hook the
 			## compiler uses when a literal is given type [I64]; most code should
 			## parse user text with [I64.from_str] instead.
-			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i64_from_str(str))
 
 			## Parse an [I64] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -13127,13 +13127,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U128.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..])
 			from_int_digits = |digits| u128_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U128]. This is the hook the
 			## compiler uses when a literal is given type [U128]; most code should
 			## parse user text with [U128.from_str] instead.
-			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u128_from_str(str))
 
 			## Parse a [U128] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -13352,7 +13352,7 @@ Builtin :: [].{
 			# Conversion to Dec (can overflow)
 			## Convert a [U128] to a [Dec], returning `Err(OutOfRange)` if the
 			## integer value does not fit in [Dec]'s fixed-point range.
-			to_dec_try : U128 -> Try(Dec, [OutOfRange])
+			to_dec_try : U128 -> Try(Dec, [OutOfRange, ..])
 			to_dec_try = |num| out_of_range_try(u128_to_dec_try_unsafe(num))
 
 			# Encode a U128 using a format that provides encode_u128
@@ -14042,13 +14042,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I128.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..])
 			from_int_digits = |digits| i128_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I128]. This is the hook the
 			## compiler uses when a literal is given type [I128]; most code should
 			## parse user text with [I128.from_str] instead.
-			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i128_from_str(str))
 
 			## Parse an [I128] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -14270,7 +14270,7 @@ Builtin :: [].{
 			## integer value does not fit in [Dec]'s fixed-point range. See
 			## [Dec.from_attos] to read an [I128] already scaled by 10^18, matching
 			## [Dec]'s internal representation.
-			to_dec_try : I128 -> Try(Dec, [OutOfRange])
+			to_dec_try : I128 -> Try(Dec, [OutOfRange, ..])
 			to_dec_try = |num| out_of_range_try(i128_to_dec_try_unsafe(num))
 
 			## Encode an I128 using a format that provides encode_i128
@@ -14689,210 +14689,210 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			round_to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
 			round_to_i8_try = |self| I128.to_i8_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			round_to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
 			round_to_i16_try = |self| I128.to_i16_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			round_to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
 			round_to_i32_try = |self| I128.to_i32_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			round_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			round_to_i64_try = |self| I128.to_i64_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			round_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
 			round_to_i128_try = |self| Ok(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			round_to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
 			round_to_u8_try = |self| I128.to_u8_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			round_to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
 			round_to_u16_try = |self| I128.to_u16_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			round_to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
 			round_to_u32_try = |self| I128.to_u32_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			round_to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
 			round_to_u64_try = |self| I128.to_u64_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			round_to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
 			round_to_u128_try = |self| I128.to_u128_try(dec_round_to_i128(self))
 
 			## Round a [Dec] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			floor_to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
 			floor_to_i8_try = |self| I128.to_i8_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			floor_to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
 			floor_to_i16_try = |self| I128.to_i16_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			floor_to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
 			floor_to_i32_try = |self| I128.to_i32_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			floor_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			floor_to_i64_try = |self| I128.to_i64_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			floor_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
 			floor_to_i128_try = |self| Ok(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			floor_to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
 			floor_to_u8_try = |self| I128.to_u8_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			floor_to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
 			floor_to_u16_try = |self| I128.to_u16_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			floor_to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
 			floor_to_u32_try = |self| I128.to_u32_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			floor_to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
 			floor_to_u64_try = |self| I128.to_u64_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			floor_to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
 			floor_to_u128_try = |self| I128.to_u128_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
 			ceiling_to_i8_try = |self| I128.to_i8_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
 			ceiling_to_i16_try = |self| I128.to_i16_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
 			ceiling_to_i32_try = |self| I128.to_i32_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			ceiling_to_i64_try = |self| I128.to_i64_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
 			ceiling_to_i128_try = |self| Ok(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
 			ceiling_to_u8_try = |self| I128.to_u8_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
 			ceiling_to_u16_try = |self| I128.to_u16_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
 			ceiling_to_u32_try = |self| I128.to_u32_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
 			ceiling_to_u64_try = |self| I128.to_u64_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
 			ceiling_to_u128_try = |self| I128.to_u128_try(dec_ceiling_to_i128(self))
 
 			## Build a [Dec] from a list of base-10 digits, most significant
@@ -14903,7 +14903,7 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.from_int_digits([1, 2, 3]) == Ok(123.0)
 			## ```
-			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
+			from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..])
 			from_int_digits = |digits| dec_from_int_digits(digits)
 
 			## Build a [Dec] from a tuple of (integer digits, fractional digits),
@@ -14916,13 +14916,13 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.from_dec_digits(([1, 2], [5])) == Ok(12.5)
 			## ```
-			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
+			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..])
 			from_dec_digits = |digits| dec_from_dec_digits(digits)
 
 			## Convert a numeric literal into a [Dec]. This is the hook the
 			## compiler uses when a literal is given type [Dec]; most code should
 			## parse user text with [Dec.from_str] instead.
-			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| dec_from_str(str))
 
 			## Parse a [Dec] from a [Str]. Returns `Err(BadNumStr)` if the
@@ -14960,7 +14960,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_i8_try(200.0) == Err(OutOfRange)
 			## ```
-			to_i8_try : Dec -> Try(I8, [OutOfRange])
+			to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
 			to_i8_try = |num| out_of_range_try(dec_to_i8_try_unsafe(num))
 
 			## Convert a [Dec] to an [I16]. The fractional part is truncated
@@ -14984,7 +14984,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_i16_try(40000.0) == Err(OutOfRange)
 			## ```
-			to_i16_try : Dec -> Try(I16, [OutOfRange])
+			to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
 			to_i16_try = |num| out_of_range_try(dec_to_i16_try_unsafe(num))
 
 			## Convert a [Dec] to an [I32]. The fractional part is truncated
@@ -15008,7 +15008,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_i32_try(3000000000.0) == Err(OutOfRange)
 			## ```
-			to_i32_try : Dec -> Try(I32, [OutOfRange])
+			to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
 			to_i32_try = |num| out_of_range_try(dec_to_i32_try_unsafe(num))
 
 			## Convert a [Dec] to an [I64]. The fractional part is truncated
@@ -15027,7 +15027,7 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.to_i64_try(42.5) == Ok(42)
 			## ```
-			to_i64_try : Dec -> Try(I64, [OutOfRange])
+			to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			to_i64_try = |num| out_of_range_try(dec_to_i64_try_unsafe(num))
 
 			## Convert a [Dec] to an [I128]. The fractional part is truncated
@@ -15046,7 +15046,7 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.to_i128_try(42.5) == Ok(42)
 			## ```
-			to_i128_try : Dec -> Try(I128, [OutOfRange])
+			to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
 			to_i128_try = |num| out_of_range_try(dec_to_i128_try_unsafe(num))
 
 			# Conversions to unsigned integers (all lossy - truncates fractional part)
@@ -15072,7 +15072,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u8_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u8_try : Dec -> Try(U8, [OutOfRange])
+			to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
 			to_u8_try = |num| out_of_range_try(dec_to_u8_try_unsafe(num))
 
 			## Convert a [Dec] to a [U16]. The fractional part is truncated
@@ -15096,7 +15096,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u16_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u16_try : Dec -> Try(U16, [OutOfRange])
+			to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
 			to_u16_try = |num| out_of_range_try(dec_to_u16_try_unsafe(num))
 
 			## Convert a [Dec] to a [U32]. The fractional part is truncated
@@ -15120,7 +15120,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u32_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u32_try : Dec -> Try(U32, [OutOfRange])
+			to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
 			to_u32_try = |num| out_of_range_try(dec_to_u32_try_unsafe(num))
 
 			## Convert a [Dec] to a [U64]. The fractional part is truncated
@@ -15143,7 +15143,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u64_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u64_try : Dec -> Try(U64, [OutOfRange])
+			to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
 			to_u64_try = |num| out_of_range_try(dec_to_u64_try_unsafe(num))
 
 			## Convert a [Dec] to a [U128]. The fractional part is truncated
@@ -15162,7 +15162,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u128_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u128_try : Dec -> Try(U128, [OutOfRange])
+			to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
 			to_u128_try = |num| out_of_range_try(dec_to_u128_try_unsafe(num))
 
 			# Conversions to floating point (lossy - Dec has more precision)
@@ -15174,7 +15174,7 @@ Builtin :: [].{
 			## Convert a [Dec] to an [F32], returning `Err(OutOfRange)` if the
 			## value does not fit in the finite [F32] range. All current [Dec]
 			## values fit in that range, though precision may still be lost.
-			to_f32_try : Dec -> Try(F32, [OutOfRange])
+			to_f32_try : Dec -> Try(F32, [OutOfRange, ..])
 			to_f32_try = |num| out_of_range_try(dec_to_f32_try_unsafe(num))
 
 			## Convert a [Dec] to an [F64]. This conversion is lossy because
@@ -15692,210 +15692,210 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			round_to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			round_to_i8_try = |self| F32.to_i8_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			round_to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			round_to_i16_try = |self| F32.to_i16_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			round_to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			round_to_i32_try = |self| F32.to_i32_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			round_to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			round_to_i64_try = |self| F32.to_i64_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			round_to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 			round_to_i128_try = |self| F32.to_i128_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			round_to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			round_to_u8_try = |self| F32.to_u8_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			round_to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			round_to_u16_try = |self| F32.to_u16_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			round_to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			round_to_u32_try = |self| F32.to_u32_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			round_to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			round_to_u64_try = |self| F32.to_u64_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			round_to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 			round_to_u128_try = |self| F32.to_u128_try(f32_round_to_whole(self))
 
 			## Round an [F32] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			floor_to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			floor_to_i8_try = |self| F32.to_i8_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			floor_to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			floor_to_i16_try = |self| F32.to_i16_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			floor_to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			floor_to_i32_try = |self| F32.to_i32_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			floor_to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			floor_to_i64_try = |self| F32.to_i64_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			floor_to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 			floor_to_i128_try = |self| F32.to_i128_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			floor_to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			floor_to_u8_try = |self| F32.to_u8_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			floor_to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			floor_to_u16_try = |self| F32.to_u16_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			floor_to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			floor_to_u32_try = |self| F32.to_u32_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			floor_to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			floor_to_u64_try = |self| F32.to_u64_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			floor_to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 			floor_to_u128_try = |self| F32.to_u128_try(f32_floor_unsafe(self))
 
 			## Round an [F32] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			ceiling_to_i8_try = |self| F32.to_i8_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			ceiling_to_i16_try = |self| F32.to_i16_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			ceiling_to_i32_try = |self| F32.to_i32_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			ceiling_to_i64_try = |self| F32.to_i64_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 			ceiling_to_i128_try = |self| F32.to_i128_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			ceiling_to_u8_try = |self| F32.to_u8_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			ceiling_to_u16_try = |self| F32.to_u16_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			ceiling_to_u32_try = |self| F32.to_u32_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			ceiling_to_u64_try = |self| F32.to_u64_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 			ceiling_to_u128_try = |self| F32.to_u128_try(f32_ceiling_unsafe(self))
 
 			## Build an [F32] from a list of base-10 digits, most significant
@@ -15907,7 +15907,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_str(F32.from_int_digits([1, 2, 3]).ok_or(0.0)) == "123"
 			## ```
-			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
+			from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..])
 			from_int_digits = |digits| f32_from_int_digits(digits)
 
 			## Build an [F32] from a tuple of (integer digits, fractional digits),
@@ -15920,13 +15920,13 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_str(F32.from_dec_digits(([1, 2], [5])).ok_or(0.0)) == "12.5"
 			## ```
-			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..])
 			from_dec_digits = |digits| f32_from_dec_digits(digits)
 
 			## Convert a numeric literal into an [F32]. This is the hook the
 			## compiler uses when a literal is given type [F32]; most code should
 			## parse user text with [F32.from_str] instead.
-			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f32_from_str(str))
 
 			## Iterator over [F32] values from `start` up to but not including `end`,
@@ -16007,7 +16007,7 @@ Builtin :: [].{
 			##
 			## expect F32.to_i8_try(200.0) == Err(OutOfRange)
 			## ```
-			to_i8_try : F32 -> Try(I8, [OutOfRange])
+			to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			to_i8_try = |num| out_of_range_try(f32_to_i8_try_unsafe(num))
 
 			## Convert an [F32] to an [I16]. The fractional part is truncated
@@ -16030,7 +16030,7 @@ Builtin :: [].{
 			##
 			## expect F32.to_i16_try(40000.0) == Err(OutOfRange)
 			## ```
-			to_i16_try : F32 -> Try(I16, [OutOfRange])
+			to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			to_i16_try = |num| out_of_range_try(f32_to_i16_try_unsafe(num))
 
 			## Convert an [F32] to an [I32]. The fractional part is truncated
@@ -16047,7 +16047,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_i32_try(42.5) == Ok(42)
 			## ```
-			to_i32_try : F32 -> Try(I32, [OutOfRange])
+			to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			to_i32_try = |num| out_of_range_try(f32_to_i32_try_unsafe(num))
 
 			## Convert an [F32] to an [I64]. The fractional part is truncated
@@ -16064,7 +16064,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_i64_try(42.5) == Ok(42)
 			## ```
-			to_i64_try : F32 -> Try(I64, [OutOfRange])
+			to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			to_i64_try = |num| out_of_range_try(f32_to_i64_try_unsafe(num))
 
 			## Convert an [F32] to an [I128]. The fractional part is truncated
@@ -16081,7 +16081,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_i128_try(42.5) == Ok(42)
 			## ```
-			to_i128_try : F32 -> Try(I128, [OutOfRange])
+			to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 			to_i128_try = |num| out_of_range_try(f32_to_i128_try_unsafe(num))
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
@@ -16103,7 +16103,7 @@ Builtin :: [].{
 			##
 			## expect F32.to_u8_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u8_try : F32 -> Try(U8, [OutOfRange])
+			to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			to_u8_try = |num| out_of_range_try(f32_to_u8_try_unsafe(num))
 
 			## Convert an [F32] to a [U16]. The fractional part is truncated
@@ -16121,7 +16121,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u16_try(42.5) == Ok(42)
 			## ```
-			to_u16_try : F32 -> Try(U16, [OutOfRange])
+			to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			to_u16_try = |num| out_of_range_try(f32_to_u16_try_unsafe(num))
 
 			## Convert an [F32] to a [U32]. The fractional part is truncated
@@ -16139,7 +16139,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u32_try(42.5) == Ok(42)
 			## ```
-			to_u32_try : F32 -> Try(U32, [OutOfRange])
+			to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			to_u32_try = |num| out_of_range_try(f32_to_u32_try_unsafe(num))
 
 			## Convert an [F32] to a [U64]. The fractional part is truncated
@@ -16157,7 +16157,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u64_try(42.5) == Ok(42)
 			## ```
-			to_u64_try : F32 -> Try(U64, [OutOfRange])
+			to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			to_u64_try = |num| out_of_range_try(f32_to_u64_try_unsafe(num))
 
 			## Convert an [F32] to a [U128]. The fractional part is truncated
@@ -16175,7 +16175,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u128_try(42.5) == Ok(42)
 			## ```
-			to_u128_try : F32 -> Try(U128, [OutOfRange])
+			to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 			to_u128_try = |num| out_of_range_try(f32_to_u128_try_unsafe(num))
 
 			## No-op: leave an [F32] unchanged as an [F32].
@@ -16639,210 +16639,210 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			round_to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			round_to_i8_try = |self| F64.to_i8_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			round_to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			round_to_i16_try = |self| F64.to_i16_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			round_to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			round_to_i32_try = |self| F64.to_i32_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			round_to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			round_to_i64_try = |self| F64.to_i64_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			round_to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 			round_to_i128_try = |self| F64.to_i128_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			round_to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			round_to_u8_try = |self| F64.to_u8_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			round_to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			round_to_u16_try = |self| F64.to_u16_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			round_to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			round_to_u32_try = |self| F64.to_u32_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			round_to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			round_to_u64_try = |self| F64.to_u64_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			round_to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 			round_to_u128_try = |self| F64.to_u128_try(f64_round_to_whole(self))
 
 			## Round an [F64] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			floor_to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			floor_to_i8_try = |self| F64.to_i8_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			floor_to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			floor_to_i16_try = |self| F64.to_i16_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			floor_to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			floor_to_i32_try = |self| F64.to_i32_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			floor_to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			floor_to_i64_try = |self| F64.to_i64_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			floor_to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 			floor_to_i128_try = |self| F64.to_i128_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			floor_to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			floor_to_u8_try = |self| F64.to_u8_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			floor_to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			floor_to_u16_try = |self| F64.to_u16_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			floor_to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			floor_to_u32_try = |self| F64.to_u32_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			floor_to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			floor_to_u64_try = |self| F64.to_u64_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			floor_to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 			floor_to_u128_try = |self| F64.to_u128_try(f64_floor_unsafe(self))
 
 			## Round an [F64] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			ceiling_to_i8_try = |self| F64.to_i8_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			ceiling_to_i16_try = |self| F64.to_i16_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			ceiling_to_i32_try = |self| F64.to_i32_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			ceiling_to_i64_try = |self| F64.to_i64_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 			ceiling_to_i128_try = |self| F64.to_i128_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			ceiling_to_u8_try = |self| F64.to_u8_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			ceiling_to_u16_try = |self| F64.to_u16_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			ceiling_to_u32_try = |self| F64.to_u32_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			ceiling_to_u64_try = |self| F64.to_u64_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 			ceiling_to_u128_try = |self| F64.to_u128_try(f64_ceiling_unsafe(self))
 
 			## Build an [F64] from a list of base-10 digits, most significant
@@ -16854,7 +16854,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_str(F64.from_int_digits([1, 2, 3]).ok_or(0.0)) == "123"
 			## ```
-			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
+			from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..])
 			from_int_digits = |digits| f64_from_int_digits(digits)
 
 			## Build an [F64] from a tuple of (integer digits, fractional digits),
@@ -16867,13 +16867,13 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_str(F64.from_dec_digits(([1, 2], [5])).ok_or(0.0)) == "12.5"
 			## ```
-			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..])
 			from_dec_digits = |digits| f64_from_dec_digits(digits)
 
 			## Convert a numeric literal into an [F64]. This is the hook the
 			## compiler uses when a literal is given type [F64]; most code should
 			## parse user text with [F64.from_str] instead.
-			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f64_from_str(str))
 
 			## Iterator over [F64] values from `start` up to but not including `end`,
@@ -16954,7 +16954,7 @@ Builtin :: [].{
 			##
 			## expect F64.to_i8_try(200.0) == Err(OutOfRange)
 			## ```
-			to_i8_try : F64 -> Try(I8, [OutOfRange])
+			to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			to_i8_try = |num| out_of_range_try(f64_to_i8_try_unsafe(num))
 
 			## Convert an [F64] to an [I16]. The fractional part is truncated
@@ -16977,7 +16977,7 @@ Builtin :: [].{
 			##
 			## expect F64.to_i16_try(40000.0) == Err(OutOfRange)
 			## ```
-			to_i16_try : F64 -> Try(I16, [OutOfRange])
+			to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			to_i16_try = |num| out_of_range_try(f64_to_i16_try_unsafe(num))
 
 			## Convert an [F64] to an [I32]. The fractional part is truncated
@@ -16994,7 +16994,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_i32_try(42.5) == Ok(42)
 			## ```
-			to_i32_try : F64 -> Try(I32, [OutOfRange])
+			to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			to_i32_try = |num| out_of_range_try(f64_to_i32_try_unsafe(num))
 
 			## Convert an [F64] to an [I64]. The fractional part is truncated
@@ -17011,7 +17011,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_i64_try(42.5) == Ok(42)
 			## ```
-			to_i64_try : F64 -> Try(I64, [OutOfRange])
+			to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			to_i64_try = |num| out_of_range_try(f64_to_i64_try_unsafe(num))
 
 			## Convert an [F64] to an [I128]. The fractional part is truncated
@@ -17028,7 +17028,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_i128_try(42.5) == Ok(42)
 			## ```
-			to_i128_try : F64 -> Try(I128, [OutOfRange])
+			to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 			to_i128_try = |num| out_of_range_try(f64_to_i128_try_unsafe(num))
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
@@ -17050,7 +17050,7 @@ Builtin :: [].{
 			##
 			## expect F64.to_u8_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u8_try : F64 -> Try(U8, [OutOfRange])
+			to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			to_u8_try = |num| out_of_range_try(f64_to_u8_try_unsafe(num))
 
 			## Convert an [F64] to a [U16]. The fractional part is truncated
@@ -17068,7 +17068,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u16_try(42.5) == Ok(42)
 			## ```
-			to_u16_try : F64 -> Try(U16, [OutOfRange])
+			to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			to_u16_try = |num| out_of_range_try(f64_to_u16_try_unsafe(num))
 
 			## Convert an [F64] to a [U32]. The fractional part is truncated
@@ -17086,7 +17086,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u32_try(42.5) == Ok(42)
 			## ```
-			to_u32_try : F64 -> Try(U32, [OutOfRange])
+			to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			to_u32_try = |num| out_of_range_try(f64_to_u32_try_unsafe(num))
 
 			## Convert an [F64] to a [U64]. The fractional part is truncated
@@ -17104,7 +17104,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u64_try(42.5) == Ok(42)
 			## ```
-			to_u64_try : F64 -> Try(U64, [OutOfRange])
+			to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			to_u64_try = |num| out_of_range_try(f64_to_u64_try_unsafe(num))
 
 			## Convert an [F64] to a [U128]. The fractional part is truncated
@@ -17122,7 +17122,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u128_try(42.5) == Ok(42)
 			## ```
-			to_u128_try : F64 -> Try(U128, [OutOfRange])
+			to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 			to_u128_try = |num| out_of_range_try(f64_to_u128_try_unsafe(num))
 
 			## Convert an [F64] to an [F32], narrowing the value. [F64] has more
@@ -17142,7 +17142,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_str(F64.to_f32_try(1.5).ok_or(0.0)) == "1.5"
 			## ```
-			to_f32_try : F64 -> Try(F32, [OutOfRange])
+			to_f32_try : F64 -> Try(F32, [OutOfRange, ..])
 			to_f32_try = |num| out_of_range_try(f64_to_f32_try_unsafe(num))
 
 			## No-op: leave an [F64] unchanged as an [F64].
@@ -21266,78 +21266,78 @@ dict_place_and_shift_up = |buckets, bucket, bucket_index| {
 	}
 }
 
-u8_from_str : Str -> Try(U8, [BadNumStr])
+u8_from_str : Str -> Try(U8, [BadNumStr, ..])
 
-i8_from_str : Str -> Try(I8, [BadNumStr])
+i8_from_str : Str -> Try(I8, [BadNumStr, ..])
 
-u16_from_str : Str -> Try(U16, [BadNumStr])
+u16_from_str : Str -> Try(U16, [BadNumStr, ..])
 
-i16_from_str : Str -> Try(I16, [BadNumStr])
+i16_from_str : Str -> Try(I16, [BadNumStr, ..])
 
-u32_from_str : Str -> Try(U32, [BadNumStr])
+u32_from_str : Str -> Try(U32, [BadNumStr, ..])
 
-i32_from_str : Str -> Try(I32, [BadNumStr])
+i32_from_str : Str -> Try(I32, [BadNumStr, ..])
 
-u64_from_str : Str -> Try(U64, [BadNumStr])
+u64_from_str : Str -> Try(U64, [BadNumStr, ..])
 
-i64_from_str : Str -> Try(I64, [BadNumStr])
+i64_from_str : Str -> Try(I64, [BadNumStr, ..])
 
-u128_from_str : Str -> Try(U128, [BadNumStr])
+u128_from_str : Str -> Try(U128, [BadNumStr, ..])
 
-i128_from_str : Str -> Try(I128, [BadNumStr])
+i128_from_str : Str -> Try(I128, [BadNumStr, ..])
 
-dec_from_str : Str -> Try(Dec, [BadNumStr])
+dec_from_str : Str -> Try(Dec, [BadNumStr, ..])
 
-f32_from_str : Str -> Try(F32, [BadNumStr])
+f32_from_str : Str -> Try(F32, [BadNumStr, ..])
 
-f64_from_str : Str -> Try(F64, [BadNumStr])
+f64_from_str : Str -> Try(F64, [BadNumStr, ..])
 
-u8_from_int_digits : List(U8) -> Try(U8, [OutOfRange])
+u8_from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..])
 u8_from_int_digits = |digits| int_from_digits(digits, |str| u8_from_str(str))
 
-i8_from_int_digits : List(U8) -> Try(I8, [OutOfRange])
+i8_from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..])
 i8_from_int_digits = |digits| int_from_digits(digits, |str| i8_from_str(str))
 
-u16_from_int_digits : List(U8) -> Try(U16, [OutOfRange])
+u16_from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..])
 u16_from_int_digits = |digits| int_from_digits(digits, |str| u16_from_str(str))
 
-i16_from_int_digits : List(U8) -> Try(I16, [OutOfRange])
+i16_from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..])
 i16_from_int_digits = |digits| int_from_digits(digits, |str| i16_from_str(str))
 
-u32_from_int_digits : List(U8) -> Try(U32, [OutOfRange])
+u32_from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..])
 u32_from_int_digits = |digits| int_from_digits(digits, |str| u32_from_str(str))
 
-i32_from_int_digits : List(U8) -> Try(I32, [OutOfRange])
+i32_from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..])
 i32_from_int_digits = |digits| int_from_digits(digits, |str| i32_from_str(str))
 
-u64_from_int_digits : List(U8) -> Try(U64, [OutOfRange])
+u64_from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..])
 u64_from_int_digits = |digits| int_from_digits(digits, |str| u64_from_str(str))
 
-i64_from_int_digits : List(U8) -> Try(I64, [OutOfRange])
+i64_from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..])
 i64_from_int_digits = |digits| int_from_digits(digits, |str| i64_from_str(str))
 
-u128_from_int_digits : List(U8) -> Try(U128, [OutOfRange])
+u128_from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..])
 u128_from_int_digits = |digits| int_from_digits(digits, |str| u128_from_str(str))
 
-i128_from_int_digits : List(U8) -> Try(I128, [OutOfRange])
+i128_from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..])
 i128_from_int_digits = |digits| int_from_digits(digits, |str| i128_from_str(str))
 
-dec_from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
+dec_from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..])
 dec_from_int_digits = |digits| int_from_digits(digits, |str| dec_from_str(str))
 
-dec_from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
+dec_from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..])
 dec_from_dec_digits = |digits| dec_from_digits(digits, |str| dec_from_str(str))
 
-f32_from_int_digits : List(U8) -> Try(F32, [OutOfRange])
+f32_from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..])
 f32_from_int_digits = |digits| int_from_digits(digits, |str| f32_from_str(str))
 
-f32_from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
+f32_from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..])
 f32_from_dec_digits = |digits| dec_from_digits(digits, |str| f32_from_str(str))
 
-f64_from_int_digits : List(U8) -> Try(F64, [OutOfRange])
+f64_from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..])
 f64_from_int_digits = |digits| int_from_digits(digits, |str| f64_from_str(str))
 
-f64_from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
+f64_from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..])
 f64_from_dec_digits = |digits| dec_from_digits(digits, |str| f64_from_str(str))
 
 json_u8_to_str : U8 -> Str
@@ -21397,7 +21397,7 @@ json_f64_is_infinite = |value| F64.is_infinite(value)
 json_f64_is_negative : F64 -> Bool
 json_f64_is_negative = |value| F64.is_negative(value)
 
-from_numeral_with : Num.Numeral, (Str -> Try(item, err)) -> Try(item, [InvalidNumeral(Str)])
+from_numeral_with : Num.Numeral, (Str -> Try(item, err)) -> Try(item, [InvalidNumeral(Str), ..])
 from_numeral_with = |numeral, parse|
 	match numeral_to_str(numeral) {
 		Err(err) => Err(err)
@@ -21408,7 +21408,7 @@ from_numeral_with = |numeral, parse|
 			}
 		}
 
-numeral_to_str : Num.Numeral -> Try(Str, [InvalidNumeral(Str)])
+numeral_to_str : Num.Numeral -> Try(Str, [InvalidNumeral(Str), ..])
 numeral_to_str = |numeral|
 	match numeral {
 		Literal({ is_negative, digits_before_pt, digits_after_pt, digits_after_pt_count }) => {
@@ -21623,7 +21623,7 @@ crypto_digest_to_hex = |bytes|
 	}
 
 ## The numeric value of an ASCII hex digit (either case).
-hex_digit_value : U8 -> Try(U8, [NotHex])
+hex_digit_value : U8 -> Try(U8, [NotHex, ..])
 hex_digit_value = |byte|
 	if byte >= '0' and byte <= '9' {
 		Ok(byte - '0')
@@ -21705,7 +21705,7 @@ dec_acos_unsafe : Dec -> Dec
 
 dec_atan_unsafe : Dec -> Dec
 
-out_of_range_try : { success : U8, val_or_memory_garbage : item } -> Try(item, [OutOfRange])
+out_of_range_try : { success : U8, val_or_memory_garbage : item } -> Try(item, [OutOfRange, ..])
 out_of_range_try = |answer|
 	if answer.success != 0 {
 		Ok(answer.val_or_memory_garbage)
@@ -21764,24 +21764,19 @@ f64_round_to_whole = |self| {
 	}
 }
 
-digits_to_bytes : List(U8) -> Try(List(U8), [OutOfRange])
-digits_to_bytes = |digits|
-	List.fold(
-		digits,
-		Ok([]),
-		|state, digit|
-			match state {
-				Err(OutOfRange) => Err(OutOfRange)
-				Ok(bytes) =>
-					if digit > 9 {
-						Err(OutOfRange)
-					} else {
-						Ok(List.append(bytes, digit + 48))
-					}
-				},
-	)
+digits_to_bytes : List(U8) -> Try(List(U8), [OutOfRange, ..])
+digits_to_bytes = |digits| {
+	var $bytes = []
+	for digit in digits {
+		if digit > 9 {
+			return Err(OutOfRange)
+		}
+		$bytes = List.append($bytes, digit + 48)
+	}
+	Ok($bytes)
+}
 
-int_from_digits : List(U8), (Str -> Try(item, err)) -> Try(item, [OutOfRange])
+int_from_digits : List(U8), (Str -> Try(item, err)) -> Try(item, [OutOfRange, ..])
 int_from_digits = |digits, parse|
 	match digits_to_str(digits) {
 		Ok(str) =>
@@ -21792,7 +21787,7 @@ int_from_digits = |digits, parse|
 		Err(OutOfRange) => Err(OutOfRange)
 	}
 
-dec_from_digits : (List(U8), List(U8)), (Str -> Try(item, err)) -> Try(item, [OutOfRange])
+dec_from_digits : (List(U8), List(U8)), (Str -> Try(item, err)) -> Try(item, [OutOfRange, ..])
 dec_from_digits = |digits, parse| {
 	(int_digits, frac_digits) = digits
 
@@ -21816,14 +21811,14 @@ dec_from_digits = |digits, parse| {
 		}
 }
 
-digits_to_str : List(U8) -> Try(Str, [OutOfRange])
+digits_to_str : List(U8) -> Try(Str, [OutOfRange, ..])
 digits_to_str = |digits|
 	match digits_to_bytes(digits) {
 		Err(OutOfRange) => Err(OutOfRange)
 		Ok(bytes) => bytes_to_str(bytes)
 	}
 
-bytes_to_str : List(U8) -> Try(Str, [OutOfRange])
+bytes_to_str : List(U8) -> Try(Str, [OutOfRange, ..])
 bytes_to_str = |bytes|
 	match Str.from_utf8(bytes) {
 		Ok(str) => Ok(str)

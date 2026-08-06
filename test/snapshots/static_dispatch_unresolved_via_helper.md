@@ -97,7 +97,7 @@ ok = conv(5.U8)
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 212)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 214)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -107,13 +107,16 @@ ok = conv(5.U8)
 		(e-lambda
 			(args)
 			(e-block
-				(e-crash (msg "x")))))
+				(e-run-low-level (op "crash")
+					(args
+						(e-string
+							(e-literal (string "x"))))))))
 	(d-let
 		(p-assign (ident "ambiguous"))
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 233)
+		(e-call (constraint-fn-var 244)
 			(e-lookup-local
 				(p-assign (ident "conv")))
 			(e-typed-int (value "5") (type "U8")))))

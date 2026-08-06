@@ -23,7 +23,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,Int,
-DotInt,Dot,OpenCurly,CloseCurly,CloseCurly,
+NewlineDotInt,Dot,OpenCurly,CloseCurly,CloseCurly,
 EndOfFile,
 ~~~
 # PARSE

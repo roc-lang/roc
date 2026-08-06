@@ -23,7 +23,7 @@ Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpArrow,LowerIdent,
-DotLowerIdent,NoSpaceOpenRound,CloseRound,
+NewlineDotLowerIdent,NoSpaceOpenRound,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
@@ -42,7 +42,8 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a = (0 |> b).c()
+a = 0 |> b
+	.c()
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -68,14 +68,17 @@ result = poly() == poly()
 		(e-lambda
 			(args)
 			(e-block
-				(e-crash (msg "x")))))
+				(e-run-low-level (op "crash")
+					(args
+						(e-string
+							(e-literal (string "x"))))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-method-eq (negated "false")
 			(lhs
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(rhs
-				(e-call (constraint-fn-var 207)
+				(e-call (constraint-fn-var 218)
 					(e-lookup-local
 						(p-assign (ident "poly"))))))))
 ~~~

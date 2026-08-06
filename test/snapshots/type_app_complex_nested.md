@@ -255,7 +255,10 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(args
 				(p-underscore))
 			(e-block
-				(e-crash (msg "not implemented"))))
+				(e-run-low-level (op "crash")
+					(args
+						(e-string
+							(e-literal (string "not implemented")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -265,7 +268,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 350)
+			(e-call (constraint-fn-var 361)
 				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-tag (name "Ok")
 					(args

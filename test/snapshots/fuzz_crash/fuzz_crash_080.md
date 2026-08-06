@@ -55,7 +55,7 @@ they are published through the host boundary.
 LowerIdent,OpColon,UpperIdent,
 KwWhere,OpenSquare,
 LowerIdent,
-DotLowerIdent,OpColon,LowerIdent,Comma,
+NewlineDotLowerIdent,OpColon,LowerIdent,Comma,
 CloseSquare,
 EndOfFile,
 ~~~

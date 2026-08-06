@@ -65,10 +65,9 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 a = (
-	(
-		0(0 |> X)
-			|> X
-	).a
+	0(0 |> X)
+		|> X
+		.a
 )
 ~~~
 # CANONICALIZE

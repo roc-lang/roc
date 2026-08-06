@@ -160,7 +160,7 @@ NAME NOT IN SCOPE - fuzz_crash_020.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
 NAME NOT IN SCOPE - fuzz_crash_020.md:78:9:78:14
 UNRECOGNIZED SYNTAX - fuzz_crash_020.md:83:2:83:5
-CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
+NAME NOT IN SCOPE - fuzz_crash_020.md:86:9:86:11
 NAME NOT IN SCOPE - fuzz_crash_020.md:87:11:87:12
 NAME NOT IN SCOPE - fuzz_crash_020.md:92:11:92:15
 NAME NOT IN SCOPE - fuzz_crash_020.md:93:2:93:7

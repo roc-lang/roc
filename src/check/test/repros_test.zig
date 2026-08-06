@@ -849,3 +849,22 @@ test "check - repro - issue 10184 - tag syntax for value-backed nominal reports 
 
     try test_env.assertOneTypeError("Invalid Nominal Tag");
 }
+
+test "check - repro - issue 10490 - standard library errors compose through open unions" {
+    // Repro for https://github.com/roc-lang/roc/issues/10490: standard library
+    // errors should compose through `?` without callers mapping their tags.
+    const src =
+        \\parse_name_and_year = |str| {
+        \\    { before: name, after: birth_year_str } = str.split_first(" was born in ")?
+        \\    birth_year = U16.from_str(birth_year_str)?
+        \\    Ok({ name, birth_year })
+        \\}
+        \\
+        \\_ = parse_name_and_year("Alice was born in 1990")
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}

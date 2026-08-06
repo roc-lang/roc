@@ -10,7 +10,7 @@ f = || {
 }
 ~~~
 # EXPECTED
-CRASH EXPECTS STRING - fuzz_crash_067.md:1:8:3:2
+TYPE MISMATCH - fuzz_crash_067.md:2:11:2:12
 # PROBLEMS
 
 -- ❌ CRASH EXPECTS STRING ------------------------------ fuzz_crash_067.md:1:8
@@ -54,13 +54,18 @@ f = || {
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args)
+			(e-block
+				(e-run-low-level (op "crash")
+					(args
+						(e-runtime-error (tag "erroneous_value_expr"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> Error")))
+		(patt (type "({}) -> _ret")))
 	(expressions
-		(expr (type "({}) -> Error"))))
+		(expr (type "({}) -> _ret"))))
 ~~~

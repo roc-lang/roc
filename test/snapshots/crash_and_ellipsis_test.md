@@ -209,7 +209,10 @@ main! = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-crash (msg "This is a crash message"))))
+				(e-run-low-level (op "crash")
+					(args
+						(e-string
+							(e-literal (string "This is a crash message")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -220,7 +223,10 @@ main! = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-crash (msg "oops"))))
+				(e-run-low-level (op "crash")
+					(args
+						(e-string
+							(e-literal (string "oops")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -233,19 +239,19 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 271)
+					(e-call (constraint-fn-var 293)
 						(e-lookup-local
 							(p-assign (ident "testEllipsis")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 279)
+					(e-call (constraint-fn-var 301)
 						(e-lookup-local
 							(p-assign (ident "testCrash")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 287)
+					(e-call (constraint-fn-var 309)
 						(e-lookup-local
 							(p-assign (ident "testCrashSimple")))
 						(e-num (value "42"))))

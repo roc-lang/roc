@@ -593,6 +593,11 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
     }
 }
 
+/// Wrapper: project a runtime RocStr to the host crash ABI using the actual RocStr storage.
+pub fn roc_builtins_crash_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.c) void {
+    roc_ops.crash(str_ptr.asSlice());
+}
+
 /// Wrapper: project a runtime RocStr to the host dbg ABI using the actual RocStr storage.
 pub fn roc_builtins_dbg_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.c) void {
     roc_ops.dbg(str_ptr.asSlice());
