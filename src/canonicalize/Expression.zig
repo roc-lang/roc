@@ -165,6 +165,30 @@ pub const Expr = union(enum) {
         ident_idx: Ident.Idx,
         region: Region,
     },
+    /// An associated value selected through a local type alias declaration.
+    /// Checking resolves transparent aliases and replaces this with
+    /// `e_lookup_associated_resolved`.
+    e_lookup_associated_local: struct {
+        type_node_idx: u32,
+        type_ident: Ident.Idx,
+        item_ident: Ident.Idx,
+    },
+    /// An associated value selected through an imported type declaration.
+    /// Checking resolves transparent aliases and replaces this with
+    /// `e_lookup_associated_resolved`.
+    e_lookup_associated: struct {
+        module_idx: CIR.Import.Idx,
+        type_node_idx: u32,
+        type_ident: Ident.Idx,
+        item_ident: Ident.Idx,
+    },
+    /// Exact associated-value target selected by checking.
+    e_lookup_associated_resolved: struct {
+        module_identity: base.ModuleIdentity.Idx,
+        target_node_idx: u32,
+        target_def_idx: CIR.Def.Idx,
+        source_ident: Ident.Idx,
+    },
     /// Lookup of a required identifier from the platform's `requires` clause.
     /// This represents a value that the app provides to the platform.
     /// ```roc
@@ -971,6 +995,41 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .e_lookup_associated_local => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-associated-local");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("type", ir.getIdent(e.type_ident));
+                try tree.pushStringPair("item", ir.getIdent(e.item_ident));
+                try tree.pushStringPairFmt("type-node", "{d}", .{e.type_node_idx});
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_associated => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-associated");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("type", ir.getIdent(e.type_ident));
+                try tree.pushStringPair("item", ir.getIdent(e.item_ident));
+                try tree.pushStringPairFmt("import", "{d}", .{@intFromEnum(e.module_idx)});
+                try tree.pushStringPairFmt("type-node", "{d}", .{e.type_node_idx});
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_associated_resolved => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-associated-resolved");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("source", ir.getIdent(e.source_ident));
+                try tree.pushStringPair("target-module", ir.moduleIdentityDisplayText(e.module_identity));
+                try tree.pushStringPairFmt("target-node", "{d}", .{e.target_node_idx});
+                try tree.pushStringPairFmt("target-def", "{d}", .{@intFromEnum(e.target_def_idx)});
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
             .e_lookup_required => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-lookup-required");
@@ -1130,15 +1189,12 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const stmt = ir.store.getStatement(nominal_expr.nominal_type_decl);
-                switch (stmt) {
-                    .s_nominal_decl => |decl| {
-                        const header = ir.store.getTypeHeader(decl.header);
-                        try tree.pushStringPair("nominal", ir.getIdent(header.name));
-                    },
-                    else => {
-                        // Handle malformed nominal type declaration by pushing error info
-                        try tree.pushStringPair("nominal", "<malformed>");
-                    },
+                if (stmt == .s_nominal_decl) {
+                    const header = ir.store.getTypeHeader(stmt.s_nominal_decl.header);
+                    try tree.pushStringPair("nominal", ir.getIdent(header.name));
+                } else {
+                    // Handle malformed nominal type declaration by pushing error info
+                    try tree.pushStringPair("nominal", "<malformed>");
                 }
 
                 const attrs = tree.beginNode();

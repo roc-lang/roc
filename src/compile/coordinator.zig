@@ -1357,11 +1357,12 @@ pub const Coordinator = struct {
 
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
-        const exposes = switch (header) {
-            .package => |package_header| package_header.exposes,
-            .platform => |platform_header| platform_header.exposes,
-            else => return error.InvalidPackageHeader,
-        };
+        const exposes = if (header == .package)
+            header.package.exposes
+        else if (header == .platform)
+            header.platform.exposes
+        else
+            return error.InvalidPackageHeader;
         const public_modules = module_discovery.extractPublicModules(ast, exposes, self.gpa) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ImportEscapesPackageRoot => return error.InvalidPackageHeader,
@@ -1433,7 +1434,10 @@ pub const Coordinator = struct {
             .compiler_owned => |platform| {
                 const materialized = compiler_platforms.materialize(self.gpa, self.roc_ctx, null, platform) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    else => return error.UnsupportedPlatformSpec,
+                    error.AccessDenied,
+                    error.IoError,
+                    error.NoHomeDirectory,
+                    => return error.UnsupportedPlatformSpec,
                 };
                 defer self.gpa.free(materialized.root_file);
                 defer self.gpa.free(materialized.root_dir);
@@ -3786,10 +3790,8 @@ pub const Coordinator = struct {
 
     fn platformRequirementSurfaceForApp(self: *Coordinator, mod: *ModuleState) ?*PlatformRequirementSurface {
         const env = mod.moduleEnv() orelse return null;
-        switch (moduleKindTag(env.module_kind)) {
-            .app, .default_app => {},
-            else => return null,
-        }
+        const kind = moduleKindTag(env.module_kind);
+        if (kind != .app and kind != .default_app) return null;
         const platform_root = self.platformRootCandidate() orelse return null;
         if (platform_root.mod.platform_requirement_surface) |*surface| return surface;
         return null;
@@ -3803,10 +3805,8 @@ pub const Coordinator = struct {
     /// and package names are never consulted.
     fn appShouldWaitForPlatformRequirements(self: *Coordinator, mod: *ModuleState) bool {
         const env = mod.moduleEnv() orelse return false;
-        switch (moduleKindTag(env.module_kind)) {
-            .app, .default_app => {},
-            else => return false,
-        }
+        const kind = moduleKindTag(env.module_kind);
+        if (kind != .app and kind != .default_app) return false;
         const platform_root = self.platformRootCandidate() orelse return false;
         return switch (platform_root.mod.completion) {
             .pending => true,
@@ -3937,11 +3937,10 @@ pub const Coordinator = struct {
     }
 
     fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?base.Ident.Idx {
-        return switch (store.getPattern(pattern_idx)) {
-            .assign => |assign| assign.ident,
-            .as => |as_pattern| as_pattern.ident,
-            else => null,
-        };
+        const pattern = store.getPattern(pattern_idx);
+        if (pattern == .assign) return pattern.assign.ident;
+        if (pattern == .as) return pattern.as.ident;
+        return null;
     }
 
     /// Handle a successful type-check result
@@ -4275,7 +4274,7 @@ pub const Coordinator = struct {
         const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(allocator, expected_capacity);
         errdefer imported_envs.deinit(allocator);
-        var local_module_indices = std.AutoHashMap(ModuleId, u32).init(allocator);
+        var local_module_indices = collections.DenseMap(ModuleId, u32).init(allocator);
         defer local_module_indices.deinit();
 
         try imported_envs.append(allocator, self.builtin_modules.builtin_module.env);
@@ -4681,10 +4680,17 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
             } },
-            else => |e| blk: {
+            error.AccessDenied,
+            error.FileNotFound,
+            error.IoError,
+            error.StreamTooLong,
+            => |e| blk: {
                 const title = switch (e) {
                     error.FileNotFound => "File Not Found",
-                    else => "Parsing Failed",
+                    error.AccessDenied,
+                    error.IoError,
+                    error.StreamTooLong,
+                    => "Parsing Failed",
                 };
                 const source_file_state = if (self.track_watch_inputs)
                     sourceFileStateForParseReadError(e)
@@ -4920,7 +4926,19 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
             } },
-            else => |e| WorkerResult{ .compile_failed = .{
+            error.EmptyCode,
+            error.Internal,
+            error.LockedMemoryLimitExceeded,
+            error.MmapFailed,
+            error.MprotectFailed,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.UnsupportedPlatform,
+            error.UnwindRegistrationFailed,
+            error.VirtualAllocFailed,
+            error.VirtualProtectFailed,
+            => |e| WorkerResult{ .compile_failed = .{
                 .package_name = task.package_name,
                 .module_id = task.module_id,
                 .module_name = task.module_name,

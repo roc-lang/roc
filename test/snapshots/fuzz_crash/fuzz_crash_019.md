@@ -159,7 +159,7 @@ NAME NOT IN SCOPE - fuzz_crash_019.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_019.md:74:9:74:15
 NAME NOT IN SCOPE - fuzz_crash_019.md:78:9:78:14
 UNRECOGNIZED SYNTAX - fuzz_crash_019.md:83:2:83:5
-CRASH EXPECTS STRING - fuzz_crash_019.md:86:3:86:11
+NAME NOT IN SCOPE - fuzz_crash_019.md:86:9:86:11
 NAME NOT IN SCOPE - fuzz_crash_019.md:87:11:87:12
 NAME NOT IN SCOPE - fuzz_crash_019.md:92:11:92:15
 NAME NOT IN SCOPE - fuzz_crash_019.md:93:2:93:7
@@ -595,15 +595,15 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
     This might be a syntax error, an unsupported language feature, or a typo.
 
 
-┌──────────────────────┐
-│ CRASH EXPECTS STRING ├─ The `crash` keyword expects a string literal as ────┐
-└┬─────────────────────┘  its argument.                                       │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ke` in this scope. ──────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  )crash ke"Unr!" #)                                                        │
- │   ‾‾‾‾‾‾‾‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_019.md:86:3 ┘
+ │         ‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_019.md:86:9 ┘
 
-    For example: `crash "Something went wrong"`
+    Is it misspelled, or is there an import missing?
 
 
 ┌───────────────────┐
@@ -1927,11 +1927,7 @@ expect {
 	(s-expect
 		(e-block
 			(s-expr
-				(e-method-eq (negated "false")
-					(lhs
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(rhs
-						(e-num (value "1")))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(e-method-eq (negated "false")
 				(lhs
 					(e-runtime-error (tag "ident_not_in_scope")))

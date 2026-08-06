@@ -111,10 +111,10 @@ fn transformProc(
     var construct_count: usize = 0;
     var tail_count: usize = 0;
     for (scratch.candidates.items) |candidate| {
-        switch (candidate.state) {
-            .confirmed_construct => construct_count += 1,
-            .confirmed_tail => tail_count += 1,
-            else => {},
+        if (candidate.state == .confirmed_construct) {
+            construct_count += 1;
+        } else if (candidate.state == .confirmed_tail) {
+            tail_count += 1;
         }
     }
 
@@ -302,7 +302,7 @@ const Detection = struct {
     eligible_trmc: bool = false,
     /// Set when the proc exceeds a pass limit; the proc is left untouched.
     bail: bool = false,
-    joins: std.AutoHashMap(JoinPointId, JoinInfo),
+    joins: collections.DenseMap(JoinPointId, JoinInfo),
     max_join_id: u32 = 0,
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) Detection {
@@ -312,7 +312,7 @@ const Detection = struct {
             .layouts = layouts,
             .proc_id = proc_id,
             .scratch = scratch,
-            .joins = std.AutoHashMap(JoinPointId, JoinInfo).init(scratch.gpa),
+            .joins = collections.DenseMap(JoinPointId, JoinInfo).init(scratch.gpa),
         };
     }
 
@@ -341,11 +341,10 @@ const Detection = struct {
         while (steps < limit) : (steps += 1) {
             const params = self.store.getLocalSpan(join.params);
             if (params.len != 1 or GuardedList.at(params, 0) != local) return false;
-            switch (self.store.getCFStmt(join.body)) {
-                .ret => |s| return s.value == local,
-                .jump => |s| join = self.joins.get(s.target) orelse return false,
-                else => return false,
-            }
+            const stmt = self.store.getCFStmt(join.body);
+            if (stmt == .ret) return stmt.ret.value == local;
+            if (stmt != .jump) return false;
+            join = self.joins.get(stmt.jump.target) orelse return false;
         }
         return false;
     }
@@ -394,13 +393,12 @@ const Detection = struct {
             stamp.* = gen;
 
             const stmt = self.store.getCFStmt(item.stmt);
-            switch (stmt) {
-                .join => |s| {
-                    try self.joins.put(s.id, .{ .params = s.params, .body = s.body });
-                    self.max_join_id = @max(self.max_join_id, @intFromEnum(s.id));
-                },
-                .ret => try self.scratch.rets.append(gpa, item.stmt),
-                else => {},
+            if (stmt == .join) {
+                const s = stmt.join;
+                try self.joins.put(s.id, .{ .params = s.params, .body = s.body });
+                self.max_join_id = @max(self.max_join_id, @intFromEnum(s.id));
+            } else if (stmt == .ret) {
+                try self.scratch.rets.append(gpa, item.stmt);
             }
 
             try self.processStmt(item.stmt, item.edge, stmt);
@@ -618,12 +616,14 @@ const Detection = struct {
             },
             .assign_ref => |s| {
                 if (candidate.state != .tagged) return false;
-                const source = switch (s.op) {
-                    .local => |src| src,
-                    .nominal => |n| n.backing_ref,
-                    .list_reinterpret => |l| l.backing_ref,
-                    else => return false,
-                };
+                const source = if (s.op == .local)
+                    s.op.local
+                else if (s.op == .nominal)
+                    s.op.nominal.backing_ref
+                else if (s.op == .list_reinterpret)
+                    s.op.list_reinterpret.backing_ref
+                else
+                    return false;
                 if (source != candidate.current()) return false;
                 if (candidate.alias_len == max_alias_stmts or !candidate.push(s.target)) {
                     candidate.state = .invalid;
@@ -642,7 +642,34 @@ const Detection = struct {
                 if (!self.returnsLocal(s.target, candidate.current())) return false;
                 return confirmAtTerminal(candidate, stmt_id);
             },
-            else => return false,
+            .init_uninitialized,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_list,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .crash,
+            => return false,
         }
     }
 
@@ -664,7 +691,7 @@ const Detection = struct {
                 candidate.state = .invalid;
                 return true;
             },
-            else => return false,
+            .confirmed_construct, .confirmed_tail, .invalid => return false,
         }
     }
 
@@ -721,7 +748,8 @@ const Detection = struct {
             .str_match_set => true,
             .ret => |s| c.chainContains(s.value),
             .expect_err => |s| c.chainContains(s.message),
-            .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
+            .crash => |s| if (s.msg.localId()) |message| c.chainContains(message) else false,
+            .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
         };
     }
 
@@ -735,7 +763,7 @@ const Detection = struct {
         for (self.scratch.candidates.items) |*candidate| {
             switch (candidate.state) {
                 .confirmed_construct, .confirmed_tail => {},
-                else => continue,
+                .active, .boxed, .in_struct, .tagged, .invalid => continue,
             }
             if (self.candidateTouchesSharedRewritePath(candidate)) {
                 candidate.state = .invalid;
@@ -787,7 +815,7 @@ const Detection = struct {
         for (self.scratch.candidates.items) |candidate| {
             switch (candidate.state) {
                 .confirmed_construct, .confirmed_tail => {},
-                else => continue,
+                .active, .boxed, .in_struct, .tagged, .invalid => continue,
             }
             if (self.candidateTouchesSharedRewritePath(&candidate)) {
                 std.debug.panic(
@@ -864,7 +892,7 @@ const Transform = struct {
             switch (candidate.state) {
                 .confirmed_construct => try self.rewriteConstructSite(candidate, ptr_ret),
                 .confirmed_tail => try self.rewriteTailSite(candidate),
-                else => {},
+                .active, .boxed, .in_struct, .tagged, .invalid => {},
             }
         }
 
@@ -889,7 +917,7 @@ const Transform = struct {
                 .confirmed_construct, .confirmed_tail => {
                     if (candidate.terminal_stmt == stmt_id) return true;
                 },
-                else => {},
+                .active, .boxed, .in_struct, .tagged, .invalid => {},
             }
         }
         return false;
@@ -1165,7 +1193,23 @@ const Transform = struct {
     fn nextOf(self: *const Transform, stmt_id: CFStmtId) CFStmtId {
         return switch (self.store.getCFStmt(stmt_id)) {
             inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
-            else => unreachable,
+            .store_struct,
+            .store_tag,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => unreachable,
         };
     }
 
@@ -1173,7 +1217,23 @@ const Transform = struct {
         const ptr = self.store.getCFStmtPtr(stmt_id);
         switch (ptr.*) {
             inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |*s| s.next = next,
-            else => unreachable,
+            .store_struct,
+            .store_tag,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => unreachable,
         }
     }
 

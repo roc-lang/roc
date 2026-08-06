@@ -63,7 +63,9 @@ const ComptimeCondition = problem_mod.ComptimeCondition;
 // Type declaration errors
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
 const RecursiveAlias = problem_mod.RecursiveAlias;
-const UnsupportedAliasWhereClause = problem_mod.UnsupportedAliasWhereClause;
+const NotAWhereAlias = problem_mod.NotAWhereAlias;
+const WhereAliasInTypePosition = problem_mod.WhereAliasInTypePosition;
+const RecursiveWhereAlias = problem_mod.RecursiveWhereAlias;
 const WhereClauseReceiverNotIntroduced = problem_mod.WhereClauseReceiverNotIntroduced;
 const InvalidNominalDeclRecursion = problem_mod.InvalidNominalDeclRecursion;
 
@@ -78,6 +80,7 @@ const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
+const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulExpect = problem_mod.EffectfulExpect;
@@ -891,8 +894,14 @@ pub const ReportBuilder = struct {
             .recursive_alias => |data| {
                 return self.buildRecursiveAliasReport(data);
             },
-            .unsupported_alias_where_clause => |data| {
-                return self.buildUnsupportedAliasWhereClauseReport(data);
+            .not_a_where_alias => |data| {
+                return self.buildNotAWhereAliasReport(data);
+            },
+            .where_alias_in_type_position => |data| {
+                return self.buildWhereAliasInTypePositionReport(data);
+            },
+            .recursive_where_alias => |data| {
+                return self.buildRecursiveWhereAliasReport(data);
             },
             .where_clause_receiver_not_introduced => |data| {
                 return self.buildWhereClauseReceiverNotIntroducedReport(data);
@@ -923,6 +932,9 @@ pub const ReportBuilder = struct {
             },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
+            },
+            .associated_item_not_found => |data| {
+                return self.buildAssociatedItemNotFoundReport(data);
             },
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
@@ -1019,7 +1031,7 @@ pub const ReportBuilder = struct {
             };
         const value_range = switch (try self.snapshots.gatherRecordFields(value_snapshot, self.gpa, &self.diff_fields)) {
             .record => |r| r,
-            else => return false,
+            .empty_record, .not_a_record => return false,
         };
 
         // Slice only after both gathers, since the second append may reallocate.
@@ -1671,13 +1683,10 @@ pub const ReportBuilder = struct {
         // shape of the nominal's declared backing. In particular, tag syntax
         // can mismatch a value-, record-, tuple-, or empty-tag-backed nominal.
         const expected_content = self.snapshots.getContentUnwrapAlias(types.expected_snapshot);
-        const expected_tag_union = switch (expected_content) {
-            .structure => |structure| switch (structure) {
-                .tag_union => |tag_union| tag_union,
-                else => null,
-            },
-            else => null,
-        };
+        const expected_tag_union = if (expected_content == .structure and expected_content.structure == .tag_union)
+            expected_content.structure.tag_union
+        else
+            null;
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
@@ -2025,16 +2034,16 @@ pub const ReportBuilder = struct {
 
     /// Build a report for when alias syntax is used in a where clause
     /// This syntax was used for abilities which have been removed
-    fn buildUnsupportedAliasWhereClauseReport(
+    fn buildNotAWhereAliasReport(
         self: *Self,
-        data: UnsupportedAliasWhereClause,
+        data: NotAWhereAlias,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Unsupported Where Clause", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Not a Where Alias", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
-            D.bytes("The where clause syntax"),
-            D.ident(data.alias_name).withAnnotation(.type_variable),
-            D.bytes("is not supported."),
+            D.bytes("A where clause can only name a where alias, but"),
+            D.ident(data.name).withAnnotation(.type_variable),
+            D.bytes("is a type."),
         }, self, &report, &report.headline);
 
         // Add source region highlighting
@@ -2049,9 +2058,71 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
-            D.bytes("This syntax was used for abilities, which have been removed from Roc. Use method constraints like"),
-            D.bytes("where [a.methodName(args) -> ret]").withAnnotation(.inline_code),
-            D.bytes("instead."),
+            D.bytes("A where alias names a set of method constraints, declared like"),
+            D.bytes("a.Sortable : where [a.compare : a -> [LT, EQ, GT]]").withAnnotation(.inline_code),
+            D.bytes("and written in a where clause as"),
+            D.bytes("where [a.Sortable]").withAnnotation(.inline_code),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildWhereAliasInTypePositionReport(
+        self: *Self,
+        data: WhereAliasInTypePosition,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Where Alias Used as a Type", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.ident(data.name).withAnnotation(.type_variable),
+            D.bytes("is a where alias, not a type."),
+        }, self, &report, &report.headline);
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("A where alias names a set of method constraints, so it constrains a type variable in a"),
+            D.bytes("where").withAnnotation(.inline_code),
+            D.bytes("clause rather than standing in for a type of its own."),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildRecursiveWhereAliasReport(
+        self: *Self,
+        data: RecursiveWhereAlias,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Recursive Where Alias", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("The where alias"),
+            D.ident(data.name).withAnnotation(.type_variable),
+            D.bytes("names itself."),
+        }, self, &report, &report.headline);
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("A where alias is expanded where it is used, so it cannot reach itself, directly or through other where aliases."),
         }, self, &report);
 
         return report;
@@ -2699,7 +2770,12 @@ pub const ReportBuilder = struct {
                     }, self, &report);
                     try report.document.addLineBreak();
                 },
-                else => {},
+                .box,
+                .record_unbound,
+                .empty_record,
+                .nominal_type,
+                .empty_tag_union,
+                => {},
             }
         }
 
@@ -2991,7 +3067,7 @@ pub const ReportBuilder = struct {
                         std.debug.assert(false);
                         return try self.buildGenericMismatch(types);
                     },
-                    else => {
+                    .empty_record, .not_a_record => {
                         // Should be impossible for the thing we're updating to
                         // not be a record, but if so show a generic message.
                         std.debug.assert(false);
@@ -3378,12 +3454,12 @@ pub const ReportBuilder = struct {
                     return true;
                 },
                 // Other types (box, etc.) assumed to support equality
-                else => true,
+                .box, .record_unbound => true,
             },
             // Aliases: check the underlying type
             .alias => |alias| self.snapshotSupportsEquality(alias.backing),
             // Other types (flex, rigid, recursive, err) assumed to support equality
-            else => true,
+            .flex, .rigid, .recursive, .err => true,
         };
     }
 
@@ -3487,7 +3563,7 @@ pub const ReportBuilder = struct {
                     }
                     return false;
                 },
-                else => return false,
+                .box, .record_unbound, .empty_record, .empty_tag_union => return false,
             },
             .alias => |alias| {
                 if (!self.snapshotSupportsEquality(alias.backing)) {
@@ -3495,7 +3571,7 @@ pub const ReportBuilder = struct {
                 }
                 return false;
             },
-            else => return false,
+            .flex, .rigid, .recursive, .err => return false,
         }
     }
 
@@ -3903,6 +3979,21 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
         }, self, &report);
+        return report;
+    }
+
+    fn buildAssociatedItemNotFoundReport(self: *Self, data: AssociatedItemNotFound) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Associated Item Not Found", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The type"),
+            D.ident(data.type_name).withAnnotation(.inline_code),
+            D.bytes("does not have an associated item named"),
+            D.ident(data.item_name).withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report, &report.headline);
+        try self.addSourceHighlightRegion(&report, data.region);
         return report;
     }
 

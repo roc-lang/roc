@@ -521,9 +521,9 @@ const RootCompletionState = struct {
                     dependent_def,
                     dependency_def,
                 ),
-                else => true,
+                .expr, .statement, .required_binding, .hoisted => true,
             },
-            else => true,
+            .expr, .statement, .required_binding, .hoisted => true,
         };
         if (!is_strict) return true;
 
@@ -825,7 +825,7 @@ fn lowerEvalAndFinishRoots(
             .numeral_conversion, .quote_conversion => {
                 payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
             },
-            else => {},
+            .constant, .hoisted_constant, .callable_binding, .expect => {},
         }
 
         module.compile_time_roots.fillPayload(root_id, payload);
@@ -1185,13 +1185,15 @@ fn lowerDevEvalAndFinishRoots(
     if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
     const code_generation_started_ns = if (options.timing) |timing| timing.start() else 0;
+    // Compile-time code runs in this process, so it is generated for the CPU
+    // of the machine compiling, not for the CPU the program is compiled for.
     var codegen = try backend.HostLirCodeGen.init(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         static_strings.entries,
         .normalize,
-        .default,
+        roc_target.host_cpu.level(),
     );
     defer codegen.deinit();
     codegen.setNativeStaticData(native_static_data);
@@ -1412,7 +1414,7 @@ fn lowerDevEvalAndFinishRoots(
                 payload = conversion.payload;
                 if (conversion.had_problem) had_problem = true;
             },
-            else => {},
+            .constant, .hoisted_constant, .callable_binding, .expect => {},
         }
 
         module.compile_time_roots.fillPayload(job.root_id, payload);
@@ -1660,13 +1662,24 @@ fn finishLiteralConversionRootDetailed(
 ) FinalizeError!LiteralConversionFinish {
     const try_node = switch (payload) {
         .const_node => |node| node,
-        else => finalizationInvariant("numeral conversion root did not store a constant"),
+        .pending, .fn_value, .expect => finalizationInvariant("numeral conversion root did not store a constant"),
     };
     switch (module.const_store.get(try_node)) {
         // The from_numeral implementation itself crashed; that crash was
         // already stored (and reported when a problem store exists).
         .crash => return .{ .payload = payload, .had_problem = false },
-        else => {},
+        .pending,
+        .zst,
+        .scalar,
+        .str,
+        .list,
+        .box,
+        .tuple,
+        .record,
+        .tag,
+        .nominal,
+        .fn_value,
+        => {},
     }
     const try_tag = constTagValue(module, try_node);
     if (constTagNameIs(try_tag.tag_name, "Ok")) {
@@ -1681,7 +1694,18 @@ fn finishLiteralConversionRootDetailed(
     if (err_tag.payloads.len != 1) finalizationInvariant("numeral conversion error tag did not carry one payload");
     const message_str = switch (module.const_store.get(err_tag.payloads[0])) {
         .str => |str| str,
-        else => finalizationInvariant("numeral conversion error payload was not a string"),
+        .pending,
+        .zst,
+        .scalar,
+        .list,
+        .box,
+        .tuple,
+        .record,
+        .crash,
+        .tag,
+        .nominal,
+        .fn_value,
+        => finalizationInvariant("numeral conversion error payload was not a string"),
     };
     const message = module.const_store.strBytes(message_str);
     if (problem_store) |store| {
@@ -1696,7 +1720,11 @@ fn finishLiteralConversionRootDetailed(
                 .message = message_idx,
                 .region = region,
             } }),
-            else => finalizationInvariant("non literal-conversion root reported a conversion problem"),
+            .constant,
+            .hoisted_constant,
+            .callable_binding,
+            .expect,
+            => finalizationInvariant("non literal-conversion root reported a conversion problem"),
         }
         return .{
             .payload = .{ .const_node = try appendCrashConst(module, message) },
@@ -1715,7 +1743,17 @@ fn constTagValue(
         switch (module.const_store.get(current)) {
             .nominal => |nominal| current = nominal.backing,
             .tag => |tag| return tag,
-            else => finalizationInvariant("numeral conversion constant was not a tag value"),
+            .pending,
+            .zst,
+            .scalar,
+            .str,
+            .list,
+            .box,
+            .tuple,
+            .record,
+            .crash,
+            .fn_value,
+            => finalizationInvariant("numeral conversion constant was not a tag value"),
         }
     }
 }

@@ -75,6 +75,7 @@ pub const BuiltinFn = enum {
     str_from_utf8_result,
     str_from_utf8_parts,
     str_escape_and_quote,
+    crash_str,
     dbg_str,
     expect_err_str,
     roc_expect_failed,
@@ -92,6 +93,7 @@ pub const BuiltinFn = enum {
     list_owned_unique,
     list_prepend,
     list_sublist,
+    list_sublist_borrowed,
     list_drop_at,
     list_replace,
     list_swap,
@@ -212,11 +214,17 @@ pub const BuiltinFn = enum {
     i64_mod_by,
     u64_mod_by,
 
+    const symbol_names = blk: {
+        var result: [std.meta.fields(BuiltinFn).len][:0]const u8 = undefined;
+        for (std.meta.tags(BuiltinFn)) |builtin| {
+            result[@intFromEnum(builtin)] = symbol_prefix ++ @tagName(builtin);
+        }
+        break :blk result;
+    };
+
     /// The linker symbol this builtin is exported and resolved under.
     pub fn symbolName(self: BuiltinFn) [:0]const u8 {
-        switch (self) {
-            inline else => |f| return symbol_prefix ++ @tagName(f),
-        }
+        return symbol_names[@intFromEnum(self)];
     }
 
     /// The wrapper function backing this builtin, typed per member.
@@ -224,11 +232,17 @@ pub const BuiltinFn = enum {
         return &@field(dev_wrappers, symbol_prefix ++ @tagName(self));
     }
 
+    const wrapper_addresses = blk: {
+        var result: [std.meta.fields(BuiltinFn).len]*const anyopaque = undefined;
+        for (std.meta.tags(BuiltinFn)) |builtin| {
+            result[@intFromEnum(builtin)] = @ptrCast(wrapper(builtin));
+        }
+        break :blk result;
+    };
+
     /// Address of the wrapper function (dev-JIT native calls and symbol resolution).
     pub fn wrapperAddress(self: BuiltinFn) usize {
-        switch (self) {
-            inline else => |f| return @intFromPtr(wrapper(f)),
-        }
+        return @intFromPtr(wrapper_addresses[@intFromEnum(self)]);
     }
 
     /// Which linkable builtins payloads carry a builtin's wrapper.
@@ -241,16 +255,16 @@ pub const BuiltinFn = enum {
         core,
     };
 
-    /// Payload membership for this builtin. Members not listed here are
-    /// `.full`: exported by the full payload and absent from the core one,
-    /// the right default for a newly added builtin.
-    pub fn payload(self: BuiltinFn) Payload {
-        return switch (self) {
+    const payload_by_builtin = blk: {
+        @setEvalBranchQuota(10_000);
+        var result = [_]Payload{.full} ** std.meta.fields(BuiltinFn).len;
+        for ([_]BuiltinFn{
             .allocate_with_refcount,
             .box_decref_with,
             .box_decref_with_single_thread,
             .box_free_with,
             .box_prepare_update,
+            .crash_str,
             .dbg_str,
             .decref_data_ptr,
             .decref_data_ptr_single_thread,
@@ -296,6 +310,7 @@ pub const BuiltinFn = enum {
             .list_owned_unique,
             .list_str_eq,
             .list_sublist,
+            .list_sublist_borrowed,
             .list_swap,
             .list_with_capacity,
             .num_mul_with_overflow_i128,
@@ -341,16 +356,23 @@ pub const BuiltinFn = enum {
             .u32_mod_by,
             .u64_mod_by,
             .u8_mod_by,
-            => .core,
+        }) |builtin| result[@intFromEnum(builtin)] = .core;
 
+        for ([_]BuiltinFn{
             .hot_reload_enter,
             .hot_reload_erased_callable_drop,
             .hot_reload_leave,
             .hot_reload_retain_current,
-            => .jit_only,
+        }) |builtin| result[@intFromEnum(builtin)] = .jit_only;
 
-            else => .full,
-        };
+        break :blk result;
+    };
+
+    /// Payload membership for this builtin. Members not listed here are
+    /// `.full`: exported by the full payload and absent from the core one,
+    /// the right default for a newly added builtin.
+    pub fn payload(self: BuiltinFn) Payload {
+        return payload_by_builtin[@intFromEnum(self)];
     }
 };
 

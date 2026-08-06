@@ -445,7 +445,21 @@ pub const Report = struct {
                         .end_col_idx = underlines_data.display_region.end_column,
                     };
                 },
-                else => {},
+                .text,
+                .annotated,
+                .line_break,
+                .indent,
+                .space,
+                .horizontal_rule,
+                .annotation_start,
+                .annotation_end,
+                .raw,
+                .reflowing_text,
+                .link,
+                .vertical_stack,
+                .horizontal_concat,
+                .source_code_multi_region,
+                => {},
             }
         }
         return null;
@@ -460,10 +474,7 @@ pub const Report = struct {
     pub fn getLineCount(self: *const Report) usize {
         var count: usize = 2; // Title + blank line
         for (self.document.elements.items) |element| {
-            switch (element) {
-                .line_break => count += 1,
-                else => {},
-            }
+            if (element == .line_break) count += 1;
         }
         return count;
     }

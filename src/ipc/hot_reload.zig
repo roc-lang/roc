@@ -406,20 +406,16 @@ pub fn acknowledgement(control: *const Control) ?Acknowledgement {
 }
 
 fn statusFromRaw(raw: u32) Status {
-    return switch (raw) {
-        @intFromEnum(Status.accepted) => .accepted,
-        @intFromEnum(Status.rejected) => .rejected,
-        else => .none,
-    };
+    if (raw == @intFromEnum(Status.accepted)) return .accepted;
+    if (raw == @intFromEnum(Status.rejected)) return .rejected;
+    return .none;
 }
 
 fn descriptorStateFromRaw(raw: u32) DescriptorState {
-    return switch (raw) {
-        @intFromEnum(DescriptorState.writing) => .writing,
-        @intFromEnum(DescriptorState.published) => .published,
-        @intFromEnum(DescriptorState.retired) => .retired,
-        else => .reclaimed,
-    };
+    if (raw == @intFromEnum(DescriptorState.writing)) return .writing;
+    if (raw == @intFromEnum(DescriptorState.published)) return .published;
+    if (raw == @intFromEnum(DescriptorState.retired)) return .retired;
+    return .reclaimed;
 }
 
 /// Acquire-load the latest generation acknowledged by the host shim.

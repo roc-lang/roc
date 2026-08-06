@@ -794,7 +794,7 @@ pub const Store = struct {
 
                 var key = std.ArrayList(u8).empty;
                 defer key.deinit(allocator);
-                var visited = std.AutoHashMap(GraphNodeId, u32).init(allocator);
+                var visited = collections.DenseMap(GraphNodeId, u32).init(allocator);
                 defer visited.deinit();
 
                 try key.append(allocator, 1); // Recursive graph key format version.
@@ -841,7 +841,7 @@ pub const Store = struct {
             graph: *const LayoutGraph,
             allocator: Allocator,
             key: *std.ArrayList(u8),
-            visited: *std.AutoHashMap(GraphNodeId, u32),
+            visited: *collections.DenseMap(GraphNodeId, u32),
             unresolved_ref: GraphRef,
         ) Allocator.Error!void {
             const ref = resolveNominalRef(graph, unresolved_ref);
@@ -870,7 +870,7 @@ pub const Store = struct {
             graph: *const LayoutGraph,
             allocator: Allocator,
             key: *std.ArrayList(u8),
-            visited: *std.AutoHashMap(GraphNodeId, u32),
+            visited: *collections.DenseMap(GraphNodeId, u32),
             node_id: GraphNodeId,
         ) Allocator.Error!void {
             switch (graph.getNode(node_id)) {
@@ -1983,11 +1983,7 @@ pub const Store = struct {
     /// Get bundled information about a list layout's element
     pub fn getListInfo(self: *const Self, layout: Layout) ListInfo {
         std.debug.assert(layout.tag == .list or layout.tag == .list_of_zst);
-        const elem_layout_idx: Idx = switch (layout.tag) {
-            .list => layout.getIdx(),
-            .list_of_zst => .zst,
-            else => unreachable,
-        };
+        const elem_layout_idx: Idx = if (layout.tag == .list) layout.getIdx() else .zst;
         const elem_layout = self.getLayout(elem_layout_idx);
         return ListInfo{
             .elem_layout_idx = elem_layout_idx,
@@ -2000,21 +1996,18 @@ pub const Store = struct {
 
     pub fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: Idx) Idx {
         const layout_val = self.getLayout(layout_idx);
-        return switch (layout_val.tag) {
-            .closure => self.runtimeRepresentationLayoutIdx(layout_val.getClosure().captures_layout_idx),
-            else => layout_idx,
-        };
+        if (layout_val.tag == .closure) return self.runtimeRepresentationLayoutIdx(layout_val.getClosure().captures_layout_idx);
+        return layout_idx;
     }
 
     pub fn builtinListAbi(self: *const Self, list_layout_idx: Idx) BuiltinListAbi {
         const list_layout = self.getLayout(list_layout_idx);
         std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
         const info = self.getListInfo(list_layout);
-        const runtime_elem_layout_idx = switch (list_layout.tag) {
-            .list => self.runtimeRepresentationLayoutIdx(info.elem_layout_idx),
-            .list_of_zst => null,
-            else => unreachable,
-        };
+        const runtime_elem_layout_idx = if (list_layout.tag == .list)
+            self.runtimeRepresentationLayoutIdx(info.elem_layout_idx)
+        else
+            null;
         const runtime_elem_layout = if (runtime_elem_layout_idx) |idx| self.getLayout(idx) else info.elem_layout;
 
         return .{
@@ -2033,11 +2026,10 @@ pub const Store = struct {
         const box_layout = self.getLayout(box_layout_idx);
         std.debug.assert(box_layout.tag == .box or box_layout.tag == .box_of_zst);
         const info = self.getBoxInfo(box_layout);
-        const runtime_elem_layout_idx = switch (box_layout.tag) {
-            .box => self.runtimeRepresentationLayoutIdx(info.elem_layout_idx),
-            .box_of_zst => null,
-            else => unreachable,
-        };
+        const runtime_elem_layout_idx = if (box_layout.tag == .box)
+            self.runtimeRepresentationLayoutIdx(info.elem_layout_idx)
+        else
+            null;
         const runtime_elem_layout = if (runtime_elem_layout_idx) |idx| self.getLayout(idx) else info.elem_layout;
 
         return .{
@@ -2055,11 +2047,7 @@ pub const Store = struct {
     /// Get bundled information about a box layout's element
     pub fn getBoxInfo(self: *const Self, layout: Layout) BoxInfo {
         std.debug.assert(layout.tag == .box or layout.tag == .box_of_zst);
-        const elem_layout_idx: Idx = switch (layout.tag) {
-            .box => layout.getIdx(),
-            .box_of_zst => .zst,
-            else => unreachable,
-        };
+        const elem_layout_idx: Idx = if (layout.tag == .box) layout.getIdx() else .zst;
         const elem_layout = self.getLayout(elem_layout_idx);
         return BoxInfo{
             .elem_layout_idx = elem_layout_idx,
@@ -2609,11 +2597,8 @@ pub const Store = struct {
         const trace = tracy.traceNamed(@src(), "layoutStore.insertLayout");
         defer trace.end();
 
-        switch (layout.tag) {
-            .scalar => return idxFromScalar(layout.getScalar()),
-            .zst => return .zst,
-            else => {},
-        }
+        if (layout.tag == .scalar) return idxFromScalar(layout.getScalar());
+        if (layout.tag == .zst) return .zst;
 
         try self.buildExistingLayoutInternKey(layout);
         if (self.lookupInternedScratchKey()) |existing| return existing;
@@ -2636,12 +2621,12 @@ pub const Store = struct {
         var steps: usize = 0;
         while (steps < self.layouts.len()) : (steps += 1) {
             const layout = self.getLayout(current);
-            switch (layout.tag) {
-                .list, .list_of_zst => return current,
-                .box => current = layout.getIdx(),
-                .box_of_zst => return null,
-                else => return null,
+            if (layout.tag == .list or layout.tag == .list_of_zst) return current;
+            if (layout.tag == .box) {
+                current = layout.getIdx();
+                continue;
             }
+            return null;
         }
         std.debug.panic(
             "layout.Store invariant violated: list-layout resolution encountered a cycle starting at layout {d}",

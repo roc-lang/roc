@@ -540,13 +540,13 @@ is written for, using the reserved `roc` entry in its packages record:
 ```roc
 app [main!] {
     pf: platform "../basic-cli/main.roc",
-    roc: "nightly-2026-July-31-123c5d7"
+    roc: "nightly-2026-08-05-24f0b47"
 }
 ```
 
 This is optional. When present, the value must be a version string of the kind
 `roc version` prints: either a nightly tag such as
-`nightly-2026-July-31-123c5d7` or a release version such as `0.1.0`. Because
+`nightly-2026-08-05-24f0b47` or a release version such as `0.1.0`. Because
 `roc` names the compiler version, it cannot also be used as the shorthand for a
 platform or package.
 

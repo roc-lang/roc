@@ -123,14 +123,28 @@ pub const TypeScope = struct {
     }
 };
 
-/// A type descriptor
-pub const Descriptor = struct {
-    content: Content,
-    rank: Rank,
+/// Checker decisions a descriptor carries alongside its content. Descriptors
+/// live in a struct-of-arrays keyed by every union-find resolve, so these share
+/// one byte-wide column instead of one column each.
+pub const DescriptorFlags = packed struct(u8) {
     /// The checker closed this otherwise-unresolved variable to `[]` after
     /// proving that no runtime constructor can inhabit it. The checked output
     /// preserves the variable identity and carries `[]` only as its row default.
     empty_tag_union_is_default: bool = false,
+    /// Checking rejected a static-dispatch obligation whose constraint function
+    /// type is this equivalence class. The marker rides the class rather than a
+    /// raw variable index, so every site whose constraint callable unified into
+    /// the same class reports the same rejection. See design.md's "Static
+    /// Dispatch In Monotype" section.
+    static_dispatch_rejected: bool = false,
+    _unused: u6 = 0,
+};
+
+/// A type descriptor
+pub const Descriptor = struct {
+    content: Content,
+    rank: Rank,
+    flags: DescriptorFlags = .{},
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -202,10 +216,19 @@ pub const Content = union(enum(u8)) {
                     .record => |record| {
                         return record;
                     },
-                    else => return null,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -217,10 +240,19 @@ pub const Content = union(enum(u8)) {
                     .tag_union => |tag_union| {
                         return tag_union;
                     },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -232,10 +264,19 @@ pub const Content = union(enum(u8)) {
                     .nominal_type => |nominal_type| {
                         return nominal_type;
                     },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -247,10 +288,17 @@ pub const Content = union(enum(u8)) {
                     .fn_pure => |func| return func,
                     .fn_effectful => |func| return func,
                     .fn_unbound => |func| return func,
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -262,10 +310,17 @@ pub const Content = union(enum(u8)) {
                     .fn_pure => |func| return .{ .func = func, .ext = .pure },
                     .fn_effectful => |func| return .{ .func = func, .ext = .effectful },
                     .fn_unbound => |func| return .{ .func = func, .ext = .unbound },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 };
@@ -1074,7 +1129,7 @@ pub const StaticDispatchConstraint = struct {
                     .quote => null,
                     .interpolation => null,
                 },
-                else => null,
+                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
             };
         }
 
@@ -1082,7 +1137,7 @@ pub const StaticDispatchConstraint = struct {
         pub fn literalKind(self: Origin) ?LiteralKind {
             return switch (self) {
                 .from_literal => |lit| lit,
-                else => null,
+                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
             };
         }
 
@@ -1091,7 +1146,7 @@ pub const StaticDispatchConstraint = struct {
         pub fn binopNegated(self: Origin) bool {
             return switch (self) {
                 .desugared_binop => |binop| binop.negated,
-                else => false,
+                .desugared_unaryop, .method_call, .where_clause, .from_literal => false,
             };
         }
     };

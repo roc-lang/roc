@@ -608,7 +608,19 @@ fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffe
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        else => {
+        .LOAD_SOURCE,
+        .QUERY_TOKENS,
+        .QUERY_AST,
+        .QUERY_CIR,
+        .QUERY_TYPES,
+        .QUERY_FORMATTED,
+        .GET_HOVER_INFO,
+        .EVALUATE_TESTS,
+        .RESET,
+        .INIT_REPL,
+        .REPL_STEP,
+        .CLEAR_REPL,
+        => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -676,7 +688,17 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        else => {
+        .INIT,
+        .QUERY_TOKENS,
+        .QUERY_AST,
+        .QUERY_CIR,
+        .QUERY_TYPES,
+        .QUERY_FORMATTED,
+        .GET_HOVER_INFO,
+        .EVALUATE_TESTS,
+        .REPL_STEP,
+        .CLEAR_REPL,
+        => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -719,7 +741,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        else => {
+        .INIT, .LOAD_SOURCE, .INIT_REPL, .REPL_STEP, .CLEAR_REPL => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -803,7 +825,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             };
             try writeFormattedResponse(response_buffer, data);
         },
-        else => {
+        .INIT, .LOAD_SOURCE, .EVALUATE_TESTS, .INIT_REPL => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -868,7 +890,22 @@ fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinit
             break :blk switch (pattern) {
                 .ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
                 .var_ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
-                else => null,
+                .tag,
+                .int,
+                .frac,
+                .typed_int,
+                .typed_frac,
+                .string,
+                .single_quote,
+                .record,
+                .list,
+                .list_rest,
+                .tuple,
+                .underscore,
+                .alternatives,
+                .as,
+                .malformed,
+                => null,
             };
         },
         .@"var" => |var_decl| .{ .kind = .value, .name = ast.resolve(var_decl.name) },
@@ -882,7 +919,7 @@ fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinit
             .name = ast.resolveImportTarget(import.target),
         },
         .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
-        else => null,
+        .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .malformed => null,
     };
 }
 
@@ -948,7 +985,23 @@ fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Id
         const ident = switch (pattern) {
             .assign => |assign| assign.ident,
             .as => |as_pattern| as_pattern.ident,
-            else => continue,
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .record_destructure,
+            .list,
+            .tuple,
+            .num_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .num_from_numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            .underscore,
+            .runtime_error,
+            => continue,
         };
         if (std.mem.eql(u8, module_env.getIdent(ident), name)) return def_idx;
     }
@@ -1787,7 +1840,9 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) (Allocato
     try ModuleEnv.pushToSExprTree(mutable_cir, null, &tree);
     tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.WriteFailed,
+        error.ErrFinalizingHTMLWriter,
+        error.WriteFailed,
+        => return error.WriteFailed,
     };
     try sexpr_writer_allocating.writer.flush();
 
@@ -1976,27 +2031,21 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
         return;
     };
 
-    const line_num = switch (line_val) {
-        .integer => |i| @as(u32, @intCast(i)) - 1, // Convert from 1-based to 0-based index
-        else => {
-            try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid line parameter");
-            return;
-        },
-    };
-    const ch_num = switch (ch_val) {
-        .integer => |i| @as(u32, @intCast(i)) - 1, // Convert from 1-based to 0-based
-        else => {
-            try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid ch parameter");
-            return;
-        },
-    };
-    const ident_str = switch (identifier_val) {
-        .string => |s| s,
-        else => {
-            try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid identifier parameter");
-            return;
-        },
-    };
+    if (std.meta.activeTag(line_val) != .integer) {
+        try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid line parameter");
+        return;
+    }
+    const line_num = @as(u32, @intCast(line_val.integer)) - 1; // Convert from 1-based to 0-based index
+    if (std.meta.activeTag(ch_val) != .integer) {
+        try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid ch parameter");
+        return;
+    }
+    const ch_num = @as(u32, @intCast(ch_val.integer)) - 1; // Convert from 1-based to 0-based
+    if (std.meta.activeTag(identifier_val) != .string) {
+        try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid identifier parameter");
+        return;
+    }
+    const ident_str = identifier_val.string;
 
     if (data.solver == null) {
         try writeErrorResponse(response_buffer, .ERROR, "Type checking not completed.");
@@ -2020,7 +2069,8 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
 
     var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => {
+        error.WriteFailed,
+        => {
             try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
             return;
         },
@@ -2109,7 +2159,24 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                         };
                     }
                 },
-                else => {},
+                .as,
+                .applied_tag,
+                .nominal,
+                .nominal_external,
+                .record_destructure,
+                .list,
+                .tuple,
+                .num_literal,
+                .frac_f32_literal,
+                .frac_f64_literal,
+                .small_dec_literal,
+                .dec_literal,
+                .num_from_numeral_literal,
+                .str_literal,
+                .str_interpolation,
+                .underscore,
+                .runtime_error,
+                => {},
             }
         }
     }
@@ -2145,7 +2212,9 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) (Allocator
     };
     tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.WriteFailed,
+        error.ErrFinalizingHTMLWriter,
+        error.WriteFailed,
+        => return error.WriteFailed,
     };
     try sexpr_writer_allocating.writer.flush();
 

@@ -551,7 +551,7 @@ pub fn compute(
             },
             .jump => {},
             .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
-            .crash => {},
+            .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
         }
     }
 
@@ -593,7 +593,32 @@ pub fn compute(
         const spine_start: LIR.CFStmtId = if (candidate.def_count == 1)
             switch (store.getCFStmt(candidate.def_stmt)) {
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
-                else => continue :candidates,
+                .init_uninitialized,
+                .assign_ref,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => continue :candidates,
             }
         else if (candidate.def_count == 0)
             ((param_bodies.get(local) orelse continue :candidates) orelse continue :candidates)

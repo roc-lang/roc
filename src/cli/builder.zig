@@ -333,10 +333,7 @@ pub fn writeStaticArchive(
         names[i] = try arena.dupeZ(u8, path);
     }
 
-    const kind: c_int = switch (roc_target.toOsTag()) {
-        .macos => LLVMArchiveKindDarwin,
-        else => LLVMArchiveKindGNU,
-    };
+    const kind: c_int = if (roc_target.toOsTag() == .macos) LLVMArchiveKindDarwin else LLVMArchiveKindGNU;
 
     if (externs.ZigLLVMWriteArchiveFlattened(output_z.ptr, names.ptr, names.len, kind)) {
         return error.ArchiveWriteFailed;

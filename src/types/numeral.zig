@@ -523,7 +523,7 @@ pub fn fits(allocator: Allocator, exact: Exact, target: Target) Allocator.Error!
     switch (target) {
         .f32, .f64 => return true,
         .dec => return (try decBits(allocator, exact)) != null,
-        else => {
+        .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => {
             const magnitude = intMagnitude(exact) orelse return false;
             return intTargetAccepts(target, magnitude, exact.is_negative);
         },

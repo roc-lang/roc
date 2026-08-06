@@ -9,6 +9,12 @@ const platform = @import("platform.zig");
 pub const FdInfo = struct {
     fd_str: []u8,
     size: usize,
+    /// The page size the parent process observed. Both processes run on the
+    /// same kernel, so this is the child's page size too, and taking it from
+    /// the parent keeps the child from needing its own way to ask -- on Linux
+    /// the only way to ask is `getauxval`, which a child that links no libc
+    /// and starts without Zig's startup code cannot answer.
+    page_size: usize,
 
     pub fn deinit(self: *FdInfo, allocator: std.mem.Allocator) void {
         allocator.free(self.fd_str);
@@ -58,7 +64,33 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
     // Get our own executable path
     const exe_path = std.process.executablePathAlloc(io, allocator) catch |err| switch (err) {
         error.OutOfMemory => return error.AllocationFailed,
-        else => {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.FileNotFound,
+        error.FileSystem,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotLink,
+        error.OperationUnsupported,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ProcessNotFound,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.UnrecognizedVolume,
+        => {
             std.log.err("Failed to get executable path", .{});
             return error.FdInfoReadFailed;
         },
@@ -103,14 +135,45 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
     // Read the file
     const content = std.Io.Dir.cwd().readFileAlloc(io, fd_file_path, allocator, .limited(128)) catch |err| switch (err) {
         error.OutOfMemory => return error.AllocationFailed,
-        else => {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => {
             std.log.err("Failed to read fd file at '{s}'", .{fd_file_path});
             return error.FileReadFailed;
         },
     };
     defer allocator.free(content);
 
-    // Parse the content: first line is fd, second line is size
+    // Parse the content: first line is fd, second line is size, third is page size
     var lines = std.mem.tokenizeScalar(u8, content, '\n');
     const fd_line = lines.next() orelse {
         std.log.err("Invalid fd file format: missing fd line", .{});
@@ -118,6 +181,10 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
     };
     const size_line = lines.next() orelse {
         std.log.err("Invalid fd file format: missing size line", .{});
+        return error.FdInfoReadFailed;
+    };
+    const page_size_line = lines.next() orelse {
+        std.log.err("Invalid fd file format: missing page size line", .{});
         return error.FdInfoReadFailed;
     };
 
@@ -132,8 +199,15 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
         return error.FdInfoReadFailed;
     };
 
+    const page_size = std.fmt.parseInt(usize, std.mem.trim(u8, page_size_line, " \r\t"), 10) catch {
+        std.log.err("Failed to parse page size from '{s}'", .{page_size_line});
+        allocator.free(fd_str);
+        return error.FdInfoReadFailed;
+    };
+
     return FdInfo{
         .fd_str = fd_str,
         .size = size,
+        .page_size = page_size,
     };
 }

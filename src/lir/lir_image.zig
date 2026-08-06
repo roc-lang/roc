@@ -31,7 +31,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v11: LocalSpan lengths are u32 for large proc frame-local spans.
 /// v12: statements carry virtual inline-scope ids and the image stores the
 ///      corresponding source-procedure/call-site graph.
-pub const FORMAT_VERSION: u32 = 12;
+/// v13: erased calls and procedures carry explicit packed-argument plans.
+pub const FORMAT_VERSION: u32 = 13;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -97,6 +98,8 @@ pub const LirStoreImage = extern struct {
     locals: ArrayRef,
     local_ids: ArrayRef,
     u64s: ArrayRef,
+    u32s: ArrayRef,
+    erased_call_arg_plans: ArrayRef,
     proc_specs: ArrayRef,
     strings: StringLiteralStoreImage,
     next_synthetic_symbol: u64,
@@ -120,6 +123,8 @@ pub const LirStoreImage = extern struct {
             .locals = try arrayRef(base_ptr, image_size, store.locals.unsafeRawItemsForView()),
             .local_ids = try arrayRef(base_ptr, image_size, store.local_ids.unsafeRawItemsForView()),
             .u64s = try arrayRef(base_ptr, image_size, store.u64s.unsafeRawItemsForView()),
+            .u32s = try arrayRef(base_ptr, image_size, store.u32s.unsafeRawItemsForView()),
+            .erased_call_arg_plans = try arrayRef(base_ptr, image_size, store.erased_call_arg_plans.unsafeRawItemsForView()),
             .proc_specs = try arrayRef(base_ptr, image_size, store.proc_specs.unsafeRawItemsForView()),
             .strings = try StringLiteralStoreImage.fromStore(base_ptr, image_size, &store.strings),
             .next_synthetic_symbol = store.next_synthetic_symbol,
@@ -150,6 +155,8 @@ pub const LirStoreImage = extern struct {
             .locals = try copyArrayRef(allocator, base_ptr, image_capacity, store.locals.unsafeRawItemsForView()),
             .local_ids = try copyArrayRef(allocator, base_ptr, image_capacity, store.local_ids.unsafeRawItemsForView()),
             .u64s = try copyArrayRef(allocator, base_ptr, image_capacity, store.u64s.unsafeRawItemsForView()),
+            .u32s = try copyArrayRef(allocator, base_ptr, image_capacity, store.u32s.unsafeRawItemsForView()),
+            .erased_call_arg_plans = try copyArrayRef(allocator, base_ptr, image_capacity, store.erased_call_arg_plans.unsafeRawItemsForView()),
             .proc_specs = try copyArrayRef(allocator, base_ptr, image_capacity, store.proc_specs.unsafeRawItemsForView()),
             .strings = try StringLiteralStoreImage.copyFromStore(allocator, base_ptr, image_capacity, &store.strings),
             .next_synthetic_symbol = store.next_synthetic_symbol,
@@ -175,6 +182,8 @@ pub const LirStoreImage = extern struct {
             .locals = try guardedListFromRef(LIR.Local, "LirStore.locals", base_ptr, image_size, self.locals),
             .local_ids = try guardedListFromRef(LIR.LocalId, "LirStore.local_ids", base_ptr, image_size, self.local_ids),
             .u64s = try guardedListFromRef(u64, "LirStore.u64s", base_ptr, image_size, self.u64s),
+            .u32s = try guardedListFromRef(u32, "LirStore.u32s", base_ptr, image_size, self.u32s),
+            .erased_call_arg_plans = try guardedListFromRef(LIR.ErasedCallArgsPlan, "LirStore.erased_call_arg_plans", base_ptr, image_size, self.erased_call_arg_plans),
             .proc_specs = try guardedListFromRef(LIR.LirProcSpec, "LirStore.proc_specs", base_ptr, image_size, self.proc_specs),
             .strings = try self.strings.view(base_ptr, image_size),
             .string_builder = .{},
@@ -298,7 +307,7 @@ comptime {
     // this file, then update the expected field count below. A same-build
     // omission (a new store field left out of the image plumbing) is otherwise
     // silent, since `FORMAT_VERSION` only guards cross-version mismatches.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 28);
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 30);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
@@ -584,7 +593,7 @@ test "LIR image declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// The 18 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
+/// The 20 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
 /// they appear in `LirStoreImage`. `strings` (a sub-image) and the scalar
 /// `next_synthetic_symbol` are serialized too but exercised separately below.
 const serialized_guarded_fields = [_][]const u8{
@@ -596,6 +605,8 @@ const serialized_guarded_fields = [_][]const u8{
     "locals",
     "local_ids",
     "u64s",
+    "u32s",
+    "erased_call_arg_plans",
     "proc_specs",
     "source_file_bytes",
     "source_file_ends",

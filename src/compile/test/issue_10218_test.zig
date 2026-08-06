@@ -200,14 +200,13 @@ fn expectNoRetainBeforeListSet(
     var retains_before_list_set: usize = 0;
     for (0..store.cfStmtCount()) |stmt_index| {
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        switch (stmt) {
-            .assign_low_level => |assign| {
-                if (assign.op == .list_set) saw_list_set = true;
-            },
-            .incref => |retain| if (try retainReachesListSetCall(store, retain.next, retain.value)) {
+        if (stmt == .assign_low_level) {
+            if (stmt.assign_low_level.op == .list_set) saw_list_set = true;
+        } else if (stmt == .incref) {
+            const retain = stmt.incref;
+            if (try retainReachesListSetCall(store, retain.next, retain.value)) {
                 retains_before_list_set += 1;
-            },
-            else => {},
+            }
         }
     }
     try std.testing.expect(saw_list_set);

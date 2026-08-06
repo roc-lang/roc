@@ -36,21 +36,23 @@ pub fn assertRelocatablePod(comptime T: type) void {
 }
 
 fn assertRelocatablePodInner(comptime T: type) void {
-    switch (@typeInfo(T)) {
-        .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
-        .optional => |o| assertRelocatablePodInner(o.child),
-        .array => |a| assertRelocatablePodInner(a.child),
-        .@"struct" => |s| {
-            for (s.fields) |f| assertRelocatablePodInner(f.type);
-        },
-        .@"union" => |u| {
-            for (u.fields) |f| assertRelocatablePodInner(f.type);
-        },
-        .pointer => @compileError("SerializedSlice element type '" ++ @typeName(T) ++
-            "' contains a pointer/slice; it is not relocation-invariant. Use a side-list (transform B) instead."),
-        else => @compileError("SerializedSlice element type '" ++ @typeName(T) ++
-            "' has an unsupported (possibly non-POD) representation: " ++ @tagName(@typeInfo(T))),
+    const info = @typeInfo(T);
+    const tag = std.meta.activeTag(info);
+    if (tag == .int or tag == .float or tag == .bool or tag == .void or tag == .@"enum" or tag == .error_set or tag == .vector) return;
+    if (tag == .optional) return assertRelocatablePodInner(info.optional.child);
+    if (tag == .array) return assertRelocatablePodInner(info.array.child);
+    if (tag == .@"struct") {
+        for (info.@"struct".fields) |field| assertRelocatablePodInner(field.type);
+        return;
     }
+    if (tag == .@"union") {
+        for (info.@"union".fields) |field| assertRelocatablePodInner(field.type);
+        return;
+    }
+    if (tag == .pointer) @compileError("SerializedSlice element type '" ++ @typeName(T) ++
+        "' contains a pointer/slice; it is not relocation-invariant. Use a side-list (transform B) instead.");
+    @compileError("SerializedSlice element type '" ++ @typeName(T) ++
+        "' has an unsupported (possibly non-POD) representation: " ++ @tagName(info));
 }
 
 /// `@compileError` unless `T` is safe to persist as checked-cache bytes across
@@ -74,32 +76,34 @@ fn assertPortableSerializedInner(comptime T: type) void {
                 "' uses native pointer-width integer storage; use an explicit fixed-width integer");
         }
 
-        switch (@typeInfo(T)) {
-            .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
-            .optional => |o| assertPortableSerializedInner(o.child),
-            .array => |a| assertPortableSerializedInner(a.child),
-            .@"struct" => |s| {
-                if (@hasDecl(T, "SerializedElement")) {
-                    assertPortableSerializedInner(T.SerializedElement);
-                }
-                for (s.fields) |f| assertPortableSerializedInner(f.type);
-            },
-            .@"union" => |u| {
-                if (u.tag_type) |tag| {
-                    assertPortableSerializedInner(tag);
-                } else {
-                    if (u.layout != .@"extern" or !@hasDecl(T, "serialized_portable_extern_union")) {
-                        @compileError("Serialized type '" ++ @typeName(T) ++
-                            "' contains an untagged union; use an explicit serialized representation or a proven extern payload");
-                    }
-                }
-                for (u.fields) |f| assertPortableSerializedInner(f.type);
-            },
-            .pointer => @compileError("Serialized type '" ++ @typeName(T) ++
-                "' contains a pointer/slice; use a relocatable marker or explicit fixed-width storage"),
-            else => @compileError("Serialized type '" ++ @typeName(T) ++
-                "' has an unsupported representation for checked-cache portability: " ++ @tagName(@typeInfo(T))),
+        const info = @typeInfo(T);
+        const tag = std.meta.activeTag(info);
+        if (tag == .int or tag == .float or tag == .bool or tag == .void or tag == .@"enum" or tag == .error_set or tag == .vector) return;
+        if (tag == .optional) return assertPortableSerializedInner(info.optional.child);
+        if (tag == .array) return assertPortableSerializedInner(info.array.child);
+        if (tag == .@"struct") {
+            if (@hasDecl(T, "SerializedElement")) {
+                assertPortableSerializedInner(T.SerializedElement);
+            }
+            for (info.@"struct".fields) |field| assertPortableSerializedInner(field.type);
+            return;
         }
+        if (tag == .@"union") {
+            if (info.@"union".tag_type) |union_tag| {
+                assertPortableSerializedInner(union_tag);
+            } else {
+                if (info.@"union".layout != .@"extern" or !@hasDecl(T, "serialized_portable_extern_union")) {
+                    @compileError("Serialized type '" ++ @typeName(T) ++
+                        "' contains an untagged union; use an explicit serialized representation or a proven extern payload");
+                }
+            }
+            for (info.@"union".fields) |field| assertPortableSerializedInner(field.type);
+            return;
+        }
+        if (tag == .pointer) @compileError("Serialized type '" ++ @typeName(T) ++
+            "' contains a pointer/slice; use a relocatable marker or explicit fixed-width storage");
+        @compileError("Serialized type '" ++ @typeName(T) ++
+            "' has an unsupported representation for checked-cache portability: " ++ @tagName(info));
     }
 }
 
@@ -125,15 +129,30 @@ pub fn assertSerializedDefaultsDefined(comptime T: type) void {
 /// default; defined values read harmlessly.
 fn touchAllDefined(comptime T: type, comptime value: T) void {
     comptime {
-        switch (@typeInfo(T)) {
-            .bool, .int, .float, .@"enum" => _ = (value == value),
-            .optional => |o| if (value) |inner| touchAllDefined(o.child, inner),
-            .array => |a| for (value) |elem| touchAllDefined(a.child, elem),
-            .@"struct" => |s| for (s.fields) |f| touchAllDefined(f.type, @field(value, f.name)),
-            .@"union" => |u| if (u.tag_type != null) switch (value) {
-                inline else => |payload| touchAllDefined(@TypeOf(payload), payload),
-            },
-            else => {},
+        const info = @typeInfo(T);
+        const tag = std.meta.activeTag(info);
+        if (tag == .bool or tag == .int or tag == .float or tag == .@"enum") {
+            _ = (value == value);
+            return;
+        }
+        if (tag == .optional) {
+            if (value) |inner| touchAllDefined(info.optional.child, inner);
+            return;
+        }
+        if (tag == .array) {
+            for (value) |elem| touchAllDefined(info.array.child, elem);
+            return;
+        }
+        if (tag == .@"struct") {
+            for (info.@"struct".fields) |field| touchAllDefined(field.type, @field(value, field.name));
+            return;
+        }
+        if (tag == .@"union" and info.@"union".tag_type != null) {
+            for (info.@"union".fields) |field| {
+                if (std.meta.activeTag(value) == @field(info.@"union".tag_type.?, field.name)) {
+                    touchAllDefined(field.type, @field(value, field.name));
+                }
+            }
         }
     }
 }
@@ -152,22 +171,25 @@ fn touchAllDefined(comptime T: type, comptime value: T) void {
 /// artifact `Serialized` validates the entire sub-store tree at compile time.
 pub fn assertSerializedRelocatable(comptime T: type) void {
     comptime {
-        switch (@typeInfo(T)) {
-            .@"struct" => |s| {
-                if (@hasDecl(T, "serialized_relocatable_pointers")) return;
-                for (s.fields) |f| assertSerializedRelocatable(f.type);
-            },
-            .@"union" => |u| {
-                for (u.fields) |f| assertSerializedRelocatable(f.type);
-            },
-            .array => |a| assertSerializedRelocatable(a.child),
-            .optional => |o| assertSerializedRelocatable(o.child),
-            .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
-            .pointer => @compileError("Serialized type '" ++ @typeName(T) ++
-                "' embeds a pointer/slice outside a relocatable marker; it would dangle after relocation. Wrap it in a SerializedSlice/SerializedOptional."),
-            else => @compileError("Serialized type '" ++ @typeName(T) ++
-                "' has a field with an unsupported (possibly non-relocatable) representation: " ++ @tagName(@typeInfo(T))),
+        @setEvalBranchQuota(1_000_000);
+        const info = @typeInfo(T);
+        const tag = std.meta.activeTag(info);
+        if (tag == .@"struct") {
+            if (@hasDecl(T, "serialized_relocatable_pointers")) return;
+            for (info.@"struct".fields) |field| assertSerializedRelocatable(field.type);
+            return;
         }
+        if (tag == .@"union") {
+            for (info.@"union".fields) |field| assertSerializedRelocatable(field.type);
+            return;
+        }
+        if (tag == .array) return assertSerializedRelocatable(info.array.child);
+        if (tag == .optional) return assertSerializedRelocatable(info.optional.child);
+        if (tag == .int or tag == .float or tag == .bool or tag == .void or tag == .@"enum" or tag == .error_set or tag == .vector) return;
+        if (tag == .pointer) @compileError("Serialized type '" ++ @typeName(T) ++
+            "' embeds a pointer/slice outside a relocatable marker; it would dangle after relocation. Wrap it in a SerializedSlice/SerializedOptional.");
+        @compileError("Serialized type '" ++ @typeName(T) ++
+            "' has a field with an unsupported (possibly non-relocatable) representation: " ++ @tagName(info));
     }
 }
 
@@ -282,16 +304,16 @@ pub fn SerializedOptional(comptime T: type) type {
 /// data, so a store can `comptime`-assert its fixup count is a fixed constant—
 /// the core invariant that makes deserialization O(1) in the data size.
 pub fn relocatablePointerCount(comptime T: type) usize {
-    return switch (@typeInfo(T)) {
-        .@"struct" => |s| blk: {
-            if (@hasDecl(T, "serialized_relocatable_pointers")) break :blk T.serialized_relocatable_pointers;
-            var n: usize = 0;
-            inline for (s.fields) |f| n += relocatablePointerCount(f.type);
-            break :blk n;
-        },
-        .array => |a| a.len * relocatablePointerCount(a.child),
-        else => 0,
-    };
+    @setEvalBranchQuota(1_000_000);
+    const info = @typeInfo(T);
+    if (comptime std.meta.activeTag(info) == .@"struct") {
+        if (@hasDecl(T, "serialized_relocatable_pointers")) return T.serialized_relocatable_pointers;
+        var count: usize = 0;
+        inline for (info.@"struct".fields) |field| count += relocatablePointerCount(field.type);
+        return count;
+    }
+    if (comptime std.meta.activeTag(info) == .array) return info.array.len * relocatablePointerCount(info.array.child);
+    return 0;
 }
 
 /// Recursively fold a `Serialized` type's complete relocation-relevant layout into
@@ -302,51 +324,56 @@ pub fn relocatablePointerCount(comptime T: type) usize {
 /// A change anywhere that could make a previously-written blob deserialize into a
 /// differently-shaped struct therefore changes the digest. Pure compile-time.
 pub fn serializedLayoutFingerprint(comptime T: type, hasher: anytype) void {
-    switch (@typeInfo(T)) {
-        .@"struct" => |s| {
-            // A container (SerializedSlice / SafeList.Serialized / …) fixes a
-            // {offset,len[,capacity]} header but its *element* layout determines the
-            // serialized bytes—fold the element type in so an element reorder is seen.
-            if (@hasDecl(T, "SerializedElement")) {
-                hasher.update("E<");
-                serializedLayoutFingerprint(T.SerializedElement, hasher);
-                hasher.update(">");
-            }
-            hasher.update("struct{");
-            inline for (s.fields) |f| {
-                hasher.update(f.name);
-                hasher.update(":");
-                serializedLayoutFingerprint(f.type, hasher);
-                hasher.update(",");
-            }
-            hasher.update("}");
-        },
-        .@"union" => |u| {
-            hasher.update("union{");
-            inline for (u.fields) |f| {
-                hasher.update(f.name);
-                hasher.update(":");
-                serializedLayoutFingerprint(f.type, hasher);
-                hasher.update(",");
-            }
-            hasher.update("}");
-        },
-        .@"enum" => |e| {
-            hasher.update("enum(");
-            serializedLayoutFingerprint(e.tag_type, hasher);
-            hasher.update(")");
-        },
-        .optional => |o| {
-            hasher.update("?");
-            serializedLayoutFingerprint(o.child, hasher);
-        },
-        .array => |a| {
-            hasher.update(std.fmt.comptimePrint("[{d}]", .{a.len}));
-            serializedLayoutFingerprint(a.child, hasher);
-        },
-        // Scalars and anything else: the name fully captures its size/representation.
-        else => hasher.update(@typeName(T)),
+    const info = @typeInfo(T);
+    const tag = std.meta.activeTag(info);
+    if (comptime tag == .@"struct") {
+        // A container (SerializedSlice / SafeList.Serialized / …) fixes a
+        // {offset,len[,capacity]} header but its *element* layout determines the
+        // serialized bytes—fold the element type in so an element reorder is seen.
+        if (@hasDecl(T, "SerializedElement")) {
+            hasher.update("E<");
+            serializedLayoutFingerprint(T.SerializedElement, hasher);
+            hasher.update(">");
+        }
+        hasher.update("struct{");
+        inline for (info.@"struct".fields) |f| {
+            hasher.update(f.name);
+            hasher.update(":");
+            serializedLayoutFingerprint(f.type, hasher);
+            hasher.update(",");
+        }
+        hasher.update("}");
+        return;
     }
+    if (comptime tag == .@"union") {
+        hasher.update("union{");
+        inline for (info.@"union".fields) |f| {
+            hasher.update(f.name);
+            hasher.update(":");
+            serializedLayoutFingerprint(f.type, hasher);
+            hasher.update(",");
+        }
+        hasher.update("}");
+        return;
+    }
+    if (comptime tag == .@"enum") {
+        hasher.update("enum(");
+        serializedLayoutFingerprint(info.@"enum".tag_type, hasher);
+        hasher.update(")");
+        return;
+    }
+    if (comptime tag == .optional) {
+        hasher.update("?");
+        serializedLayoutFingerprint(info.optional.child, hasher);
+        return;
+    }
+    if (comptime tag == .array) {
+        hasher.update(std.fmt.comptimePrint("[{d}]", .{info.array.len}));
+        serializedLayoutFingerprint(info.array.child, hasher);
+        return;
+    }
+    // Scalars and anything else: the name fully captures its size/representation.
+    hasher.update(@typeName(T));
 }
 
 /// Comptime FNV-1a accumulator. Cheap enough to fold a large recursive layout

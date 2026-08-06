@@ -263,13 +263,9 @@ fn udivmod(comptime T: type, a_: T, b_: T) DivMod(T) {
 // Multiplication helpers
 
 fn DoubleInt(comptime T: type) type {
-    return switch (T) {
-        u32 => i64,
-        u64 => i128,
-        i32 => i64,
-        i64 => i128,
-        else => unreachable,
-    };
+    if (T == u32 or T == i32) return i64;
+    if (T == u64 or T == i64) return i128;
+    unreachable;
 }
 
 fn muldXi(comptime T: type, a: T, b: T) DoubleInt(T) {
@@ -508,11 +504,12 @@ fn u128_to_f64_impl(x: u128) f64 {
 fn float_to_i128(comptime Float: type, x: Float) i128 {
     if (std.math.isNan(x)) return 0;
 
-    const Bits = switch (Float) {
-        f32 => u32,
-        f64 => u64,
-        else => @compileError("float_to_i128 supports only f32 and f64"),
-    };
+    const Bits = if (Float == f32)
+        u32
+    else if (Float == f64)
+        u64
+    else
+        @compileError("float_to_i128 supports only f32 and f64");
     const fraction_bits: u6 = if (Float == f32) 23 else 52;
     const exponent_bits: u6 = if (Float == f32) 8 else 11;
     const exponent_bias: i64 = if (Float == f32) 127 else 1023;
@@ -554,11 +551,12 @@ fn float_to_i128(comptime Float: type, x: Float) i128 {
 fn float_to_u128(comptime Float: type, x: Float) u128 {
     if (std.math.isNan(x)) return 0;
 
-    const Bits = switch (Float) {
-        f32 => u32,
-        f64 => u64,
-        else => @compileError("float_to_u128 supports only f32 and f64"),
-    };
+    const Bits = if (Float == f32)
+        u32
+    else if (Float == f64)
+        u64
+    else
+        @compileError("float_to_u128 supports only f32 and f64");
     const fraction_bits: u6 = if (Float == f32) 23 else 52;
     const exponent_bits: u6 = if (Float == f32) 8 else 11;
     const exponent_bias: i64 = if (Float == f32) 127 else 1023;

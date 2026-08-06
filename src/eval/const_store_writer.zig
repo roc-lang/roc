@@ -101,9 +101,27 @@ pub const Writer = struct {
             .compile_time_callable => switch (plan) {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
-                else => writerInvariant("compile-time callable root did not have a function const plan"),
+                .pending,
+                .layout_only,
+                .zst,
+                .scalar,
+                .str,
+                .list,
+                .box,
+                .tuple,
+                .record,
+                .tag_union,
+                .named,
+                => writerInvariant("compile-time callable root did not have a function const plan"),
             },
-            else => writerInvariant("non compile-time root reached ConstStore writer"),
+            .runtime_entrypoint,
+            .provided_export,
+            .platform_required_binding,
+            .hosted_export,
+            .test_expect,
+            .repl_expr,
+            .dev_expr,
+            => writerInvariant("non compile-time root reached ConstStore writer"),
         };
     }
 
@@ -329,7 +347,15 @@ pub const Writer = struct {
                 break :blk try self.storeValue(elem_plan, layout_value.getIdx(), .{ .ptr = ptr });
             },
             .erased_callable => try self.storeValue(elem_plan, layout_idx, value),
-            else => writerInvariant("box const plan had incompatible layout"),
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .zst,
+            .tag_union,
+            .ptr,
+            => writerInvariant("box const plan had incompatible layout"),
         };
         self.module.const_store.fill(target_node, .{ .box = child });
     }
@@ -652,7 +678,15 @@ pub const Writer = struct {
                 try self.collectStrBackings(elem_plan, layout_value.getIdx(), .{ .ptr = ptr });
             },
             .erased_callable => try self.collectStrBackings(elem_plan, layout_idx, value),
-            else => writerInvariant("box const plan had incompatible layout"),
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .zst,
+            .tag_union,
+            .ptr,
+            => writerInvariant("box const plan had incompatible layout"),
         }
     }
 
@@ -806,7 +840,16 @@ pub const Writer = struct {
         return switch (layout_value.tag) {
             .zst => 0,
             .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr, self.program.layouts.targetUsize()),
-            else => writerInvariant("tag discriminant read had non-tag-union layout"),
+            .scalar,
+            .box,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .ptr,
+            => writerInvariant("tag discriminant read had non-tag-union layout"),
         };
     }
 
@@ -840,7 +883,15 @@ pub const Writer = struct {
                 },
                 .layout_idx = layout_value.getIdx(),
             },
-            else => writerInvariant("tag value read had non-tag layout"),
+            .scalar,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .ptr,
+            => writerInvariant("tag value read had non-tag layout"),
         };
     }
 
@@ -875,7 +926,15 @@ pub const Writer = struct {
                 const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
                 break :blk @intFromPtr(roc_str.asSlice().ptr);
             } else null,
-            else => null,
+            .box_of_zst,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            => null,
         };
         return if (ptr) |raw| .{
             .ptr = raw,
@@ -888,7 +947,16 @@ pub const Writer = struct {
                     const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
                     break :blk roc_str.len();
                 } else 0,
-                else => 0,
+                .box,
+                .box_of_zst,
+                .list_of_zst,
+                .struct_,
+                .closure,
+                .erased_callable,
+                .zst,
+                .tag_union,
+                .ptr,
+                => 0,
             },
             .plan = @intFromEnum(plan_id),
             .layout = @intFromEnum(layout_idx),

@@ -4,6 +4,56 @@ const std = @import("std");
 const builtin = @import("builtin");
 const util = @import("util.zig");
 
+const PlatformOs = enum { linux, macos, windows, wasi, other };
+
+fn classifyPlatformOs(os: std.Target.Os.Tag) PlatformOs {
+    return switch (os) {
+        .linux => .linux,
+        .macos => .macos,
+        .windows => .windows,
+        .wasi => .wasi,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .other,
+    };
+}
+
 /// Explicit (superset) error set for this file's test helpers, composed from the portable
 /// named std/util error sets they use plus the custom errors they return. Declaring a
 /// broader set than any single helper needs is fine and keeps every helper explicit.
@@ -137,7 +187,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
                     return error.RocBuildFailed;
                 }
             },
-            else => {
+            .signal, .stopped, .unknown => {
                 std.debug.print("roc build terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                     build_result.term,
                     build_result.stdout,
@@ -538,23 +588,59 @@ fn buildExpectedResponse(allocator: std.mem.Allocator, value: u64) TestError![]u
 }
 
 fn nativeRunnableTargetName() ?[]const u8 {
+    const arch = builtin.cpu.arch;
+    return switch (classifyPlatformOs(builtin.os.tag)) {
+        .macos => if (arch == .x86_64) "x64mac" else if (arch == .aarch64) "arm64mac" else null,
+        .linux => if (arch == .x86_64) "x64musl" else if (arch == .aarch64) "arm64musl" else null,
+        .windows => if (arch == .x86_64) "x64win" else if (arch == .aarch64) "arm64win" else null,
+        .wasi, .other => null,
+    };
+}
+
+fn isolatedProcessGroupId() ?std.posix.pid_t {
     return switch (builtin.os.tag) {
-        .macos => switch (builtin.cpu.arch) {
-            .x86_64 => "x64mac",
-            .aarch64 => "arm64mac",
-            else => null,
-        },
-        .linux => switch (builtin.cpu.arch) {
-            .x86_64 => "x64musl",
-            .aarch64 => "arm64musl",
-            else => null,
-        },
-        .windows => switch (builtin.cpu.arch) {
-            .x86_64 => "x64win",
-            .aarch64 => "arm64win",
-            else => null,
-        },
-        else => null,
+        .windows, .wasi => null,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .linux,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .macos,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => 0,
     };
 }
 
@@ -564,10 +650,7 @@ fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8,
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
-        .pgid = switch (builtin.os.tag) {
-            .windows, .wasi => null,
-            else => 0,
-        },
+        .pgid = isolatedProcessGroupId(),
     });
     var child_running = true;
     errdefer if (child_running) child.kill(io);
@@ -609,7 +692,7 @@ fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8,
                 return error.ServerFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("server terminated unexpectedly: {}\nSTDERR:\n{s}\n", .{ term, stderr });
             return error.ServerFailed;
         },
@@ -629,10 +712,7 @@ fn runServerAndCheckRequestFailure(allocator: std.mem.Allocator, exe_path: []con
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
-        .pgid = switch (builtin.os.tag) {
-            .windows, .wasi => null,
-            else => 0,
-        },
+        .pgid = isolatedProcessGroupId(),
     });
     var child_running = true;
     errdefer if (child_running) child.kill(io);
@@ -673,7 +753,7 @@ fn runServerAndCheckRequestFailure(allocator: std.mem.Allocator, exe_path: []con
                 return error.ServerFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("server terminated unexpectedly for invalid request: {}\nSTDERR:\n{s}\n", .{ term, stderr });
             return error.ServerFailed;
         },
@@ -709,8 +789,19 @@ fn readPortLine(stdout: std.Io.File) TestError!u16 {
         var byte_buf: [1]u8 = undefined;
         var slices = [_][]u8{byte_buf[0..]};
         const n = stdout.readStreaming(io, &slices) catch |err| switch (err) {
+            error.AccessDenied,
+            error.Canceled,
+            error.ConnectionResetByPeer,
+            error.InputOutput,
+            error.IsDir,
+            error.LockViolation,
+            error.NotOpenForReading,
+            error.SocketUnconnected,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => |read_error| return read_error,
             error.EndOfStream => return error.ServerExitedBeforePort,
-            else => |e| return e,
         };
         if (n == 0) return error.ServerExitedBeforePort;
         if (byte_buf[0] == '\n') break;
@@ -785,8 +876,19 @@ fn readRemaining(allocator: std.mem.Allocator, file: std.Io.File) TestError![]u8
     while (true) {
         var slices = [_][]u8{buffer[0..]};
         const n = file.readStreaming(io, &slices) catch |err| switch (err) {
+            error.AccessDenied,
+            error.Canceled,
+            error.ConnectionResetByPeer,
+            error.InputOutput,
+            error.IsDir,
+            error.LockViolation,
+            error.NotOpenForReading,
+            error.SocketUnconnected,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => |read_error| return read_error,
             error.EndOfStream => break,
-            else => |e| return e,
         };
         if (n == 0) break;
         try output.appendSlice(allocator, buffer[0..n]);
@@ -823,7 +925,7 @@ fn milliTimestamp() i64 {
 }
 
 fn terminateChildGroup(child_id: std.process.Child.Id) void {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => {
             const kernel32 = struct {
                 extern "kernel32" fn TerminateProcess(hProcess: std.os.windows.HANDLE, uExitCode: c_uint) callconv(.winapi) i32;
@@ -831,7 +933,7 @@ fn terminateChildGroup(child_id: std.process.Child.Id) void {
             _ = kernel32.TerminateProcess(child_id, 1);
         },
         .wasi => {},
-        else => {
+        .linux, .macos, .other => {
             const pid: std.posix.pid_t = child_id;
             std.posix.kill(-pid, std.posix.SIG.KILL) catch {
                 std.posix.kill(pid, std.posix.SIG.KILL) catch {};

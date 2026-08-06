@@ -24,6 +24,15 @@ pub const RootRequests = struct {
     layout_requests: []const checked.CheckedTypeId = &.{},
     static_data_requests: []const StaticDataRequest = &.{},
     test_plan_metadata: []const RootTestPlanMetadata = &.{},
+    procedure_template_root_grouping: ProcedureTemplateRootGrouping = .isolated,
+};
+
+/// Explicit grouping contract for adjacent procedure-template roots.
+pub const ProcedureTemplateRootGrouping = enum {
+    /// Seal each root in an independent instantiation graph.
+    isolated,
+    /// Share an instantiation graph across each adjacent template-root group.
+    shared_adjacent,
 };
 
 /// Checked const data that must produce a runtime layout and callable entries.

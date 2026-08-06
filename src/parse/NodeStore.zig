@@ -25,6 +25,136 @@ const TargetConfigValueNodeTag = enum(u32) {
     malformed,
 };
 
+const HeaderNodeTag = enum {
+    app_header,
+    module_header,
+    hosted_header,
+    package_header,
+    platform_header,
+    type_module_header,
+    default_app_header,
+    malformed,
+};
+
+const ExposedItemNodeTag = enum {
+    exposed_item_lower,
+    exposed_item_upper,
+    exposed_item_upper_star,
+    malformed,
+};
+
+const StatementNodeTag = enum {
+    decl,
+    @"var",
+    expr,
+    import,
+    expect,
+    @"for",
+    @"while",
+    crash,
+    dbg,
+    @"return",
+    @"break",
+    type_decl,
+    type_decl_nominal,
+    type_decl_opaque,
+    type_decl_where_alias,
+    type_anno,
+    file_import,
+    malformed,
+};
+
+const PatternNodeTag = enum {
+    ident_patt,
+    var_ident_patt,
+    tag_patt,
+    string_patt,
+    single_quote_patt,
+    int_patt,
+    frac_patt,
+    typed_int_patt,
+    typed_frac_patt,
+    record_patt,
+    list_patt,
+    list_rest_patt,
+    tuple_patt,
+    alternatives_patt,
+    underscore_patt,
+    as_patt,
+    malformed,
+};
+
+const ExprNodeTag = enum {
+    int,
+    frac,
+    typed_int,
+    typed_frac,
+    single_quote,
+    ident,
+    tag,
+    string_part,
+    string,
+    typed_string,
+    typed_multiline_string,
+    multiline_string,
+    list,
+    tuple,
+    record,
+    record_update,
+    field_access,
+    method_call,
+    tuple_access,
+    arrow_call,
+    lambda,
+    apply,
+    suffix_single_question,
+    if_then_else,
+    if_without_else,
+    match,
+    dbg,
+    bin_op,
+    block,
+    ellipsis,
+    for_expr,
+    break_expr,
+    return_expr,
+    malformed,
+    record_builder,
+    nominal_record,
+    nominal_apply,
+    unary_op,
+};
+
+const WhereClauseNodeTag = enum {
+    where_mod_method,
+    where_mod_alias,
+    malformed,
+};
+
+const TypeAnnoNodeTag = enum {
+    ty_apply,
+    ty_var,
+    ty_underscore_var,
+    ty_underscore,
+    ty_ty,
+    ty_union,
+    ty_tuple,
+    ty_record,
+    ty_fn,
+    ty_parens,
+    malformed,
+};
+
+const TargetFileNodeTag = enum {
+    target_file_string,
+    target_file_ident,
+    malformed,
+};
+
+fn narrowNodeTag(comptime T: type, tag: Node.Tag) ?T {
+    return std.meta.stringToEnum(T, @tagName(tag));
+}
+
 /// Packed optional indices store null as 0 and non-null values as value + 1.
 /// All producers must use the fallible helpers below so maxInt(u32) overflows
 /// become OutOfMemory in every build mode.
@@ -684,6 +814,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
                 .alias => .type_decl,
                 .nominal => .type_decl_nominal,
                 .@"opaque" => .type_decl_opaque,
+                .where_alias => .type_decl_where_alias,
             };
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.header);
@@ -1290,7 +1421,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
             node.tag = .where_mod_alias;
             node.region = c.region;
             node.main_token = c.var_tok;
-            node.data.lhs = c.name_tok;
+            node.data.lhs = @intFromEnum(c.alias);
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -1485,7 +1616,9 @@ pub fn nodeCount(store: *const NodeStore) usize {
 /// Retrieves header data from a stored header node, reconstructing the appropriate header type.
 pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(HeaderNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .app_header => {
             const ed_start = node.data.rhs;
             return .{ .app = .{
@@ -1569,16 +1702,15 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves exposed item data from a stored exposed item node.
 pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem.Idx) AST.ExposedItem {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(exposed_item_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(ExposedItemNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid exposed item tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .exposed_item_lower => {
             if (node.data.rhs == 2) {
                 const extra_start = node.data.lhs;
@@ -1646,16 +1778,15 @@ pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid exposed item tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves statement data from a stored statement node, reconstructing the appropriate statement type.
 pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) AST.Statement {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(statement_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(StatementNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .decl => {
             return .{ .decl = .{
                 .pattern = @enumFromInt(node.data.lhs),
@@ -1809,6 +1940,18 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .associated = extra.associated,
             } };
         },
+        .type_decl_where_alias => {
+            const extra = store.decodeTypeDeclExtra(node.main_token);
+
+            return .{ .type_decl = .{
+                .region = node.region,
+                .header = @enumFromInt(node.data.lhs),
+                .anno = @enumFromInt(node.data.rhs),
+                .kind = .where_alias,
+                .where = extra.where,
+                .associated = extra.associated,
+            } };
+        },
         .type_anno => {
             var where_clause: ?AST.Collection.Idx = null;
             var is_var = false;
@@ -1844,16 +1987,15 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves pattern data from a stored pattern node, reconstructing the appropriate pattern type.
 pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(pattern_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(PatternNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid pattern tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .ident_patt => {
             return .{ .ident = .{
                 .ident_tok = node.main_token,
@@ -1999,16 +2141,15 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid pattern tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves expression data from a stored expression node, reconstructing the appropriate expression type.
 pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(ExprNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .int => {
             return .{ .int = .{
                 .token = node.main_token,
@@ -2345,9 +2486,6 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
@@ -2372,16 +2510,14 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
 /// use this to read short literals like a pinned compiler version straight out
 /// of the source, which is only sound when the source says it verbatim.
 pub fn singleStringPartToken(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?Token.Idx {
-    const string = switch (store.getExpr(expr_idx)) {
-        .string => |string| string,
-        else => return null,
-    };
+    const expr = store.getExpr(expr_idx);
+    if (expr != .string) return null;
+    const string = expr.string;
     const parts = store.exprSlice(string.parts);
     if (parts.len != 1) return null;
-    return switch (store.getExpr(parts[0])) {
-        .string_part => |part| part.token,
-        else => null,
-    };
+    const part = store.getExpr(parts[0]);
+    if (part != .string_part) return null;
+    return part.string_part.token;
 }
 
 /// Retrieves match branch data from a stored match branch node.
@@ -2443,7 +2579,9 @@ pub fn typeAnnoIsMalformed(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Id
 /// Get a WhereClause node from the store, using a type-safe index to the node.
 pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(where_clause_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(WhereClauseNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .where_mod_method => {
             const ed_start = @as(usize, @intCast(node.data.lhs));
             const name_tok = store.extra_data.items[ed_start];
@@ -2462,7 +2600,7 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
             return .{ .mod_alias = .{
                 .region = node.region,
                 .var_tok = node.main_token,
-                .name_tok = node.data.lhs,
+                .alias = @enumFromInt(node.data.lhs),
             } };
         },
         .malformed => {
@@ -2471,17 +2609,18 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves type annotation data from a stored type annotation node, reconstructing the appropriate annotation type.
 pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnno {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(ty_anno_idx)));
+    const tag = narrowNodeTag(TypeAnnoNodeTag, node.tag) orelse return .{ .malformed = .{
+        .reason = .ty_anno_unexpected_token,
+        .region = node.region,
+    } };
 
-    switch (node.tag) {
+    switch (tag) {
         .ty_apply => {
             return .{ .apply = .{
                 .region = node.region,
@@ -2609,14 +2748,6 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
         .malformed => {
             return .{ .malformed = .{
                 .reason = @enumFromInt(node.data.lhs),
-                .region = node.region,
-            } };
-        },
-        else => {
-            // Return a malformed type annotation instead of panicking
-            // This handles cases where an invalid node type is encountered
-            return .{ .malformed = .{
-                .reason = .ty_anno_unexpected_token,
                 .region = node.region,
             } };
         },
@@ -3450,8 +3581,10 @@ pub fn getTargetEntry(store: *const NodeStore, idx: AST.TargetEntry.Idx) AST.Tar
 /// Retrieves a TargetFile from a stored node.
 pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.TargetFile {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const tag = narrowNodeTag(TargetFileNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid target_file tag, got {s}", .{@tagName(node.tag)});
 
-    switch (node.tag) {
+    switch (tag) {
         .target_file_string => {
             return .{ .string_literal = if (node.data.lhs != 0) node.main_token else null };
         },
@@ -3463,9 +3596,6 @@ pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.Targe
                 .reason = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
-        },
-        else => {
-            std.debug.panic("Expected a valid target_file tag, got {s}", .{@tagName(node.tag)});
         },
     }
 }

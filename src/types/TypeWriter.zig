@@ -90,18 +90,14 @@ const StaticDispatchTmp = struct {
         const a_type_name = ctx.buf_tmp.items[a.type_name_start..a.type_name_end];
         const b_type_name = ctx.buf_tmp.items[b.type_name_start..b.type_name_end];
         const type_ord = std.mem.order(u8, a_type_name, b_type_name);
-        switch (type_ord) {
-            .eq => {
-                return std.mem.order(
-                    u8,
-                    ctx.idents.getText(a.fn_name),
-                    ctx.idents.getText(b.fn_name),
-                ) == .lt;
-            },
-            else => {
-                return type_ord == .lt;
-            },
+        if (type_ord == .eq) {
+            return std.mem.order(
+                u8,
+                ctx.idents.getText(a.fn_name),
+                ctx.idents.getText(b.fn_name),
+            ) == .lt;
         }
+        return type_ord == .lt;
     }
 };
 
@@ -714,10 +710,17 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
                         return .{ .unbound = resolved.var_ };
                     },
                     .empty_record => return .empty_record,
-                    else => return .invalid,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return .invalid,
                 }
             },
-            else => return .invalid,
+            .err => return .invalid,
         }
     }
 }
@@ -763,7 +766,15 @@ fn gatherTags(self: *TypeWriter, tags: Tag.SafeMultiList.Range, initial_ext: Var
                         ext = ext_tu.ext;
                     },
                     .empty_tag_union => return .empty_tag_union,
-                    else => return .invalid,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    => return .invalid,
                 }
             },
             .err => return .err,

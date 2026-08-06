@@ -261,7 +261,7 @@ pub fn extractModuleDocs(
             else
                 module_env.store.sliceDefs(module_env.all_defs);
         },
-        else => module_env.store.sliceDefs(module_env.all_defs),
+        .type_module, .default_app, .app, .package, .module, .malformed => module_env.store.sliceDefs(module_env.all_defs),
     };
 
     for (defs_slice) |def_idx| {
@@ -351,7 +351,76 @@ pub fn extractModuleDocs(
                     .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                 });
             },
-            else => {},
+            .s_where_alias_decl => |decl| {
+                const header = module_env.store.getTypeHeader(decl.header);
+                const entry_name = module_env.getIdentText(header.relative_name);
+                if (findEntryByName(entries_list.items, entry_name)) continue;
+                if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
+
+                const region = module_env.store.getStatementRegion(stmt_idx);
+                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
+                errdefer if (doc_extract) |d| gpa.free(d.text);
+
+                // The signature is the receiver together with every constraint
+                // the alias names, so the docs list what an implementor must
+                // provide.
+                const receiver = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, decl.receiver);
+                var receiver_moved = false;
+                errdefer if (receiver) |r| if (!receiver_moved) {
+                    r.deinit(gpa);
+                    gpa.destroy(r);
+                };
+                const type_sig: ?*const DocType = if (receiver) |r| wrap: {
+                    // A where alias with no renderable constraints still has a
+                    // receiver to show, and `wrapInWhereClause` leaves it owned
+                    // by this caller.
+                    const wrapped = try wrapInWhereClause(gpa, module_env, local_module_path, r, decl.where);
+                    receiver_moved = true;
+                    break :wrap wrapped orelse r;
+                } else null;
+                errdefer if (type_sig) |sig| {
+                    sig.deinit(gpa);
+                    gpa.destroy(sig);
+                };
+
+                const duped_name = try gpa.dupe(u8, entry_name);
+                errdefer gpa.free(duped_name);
+
+                const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
+                errdefer gpa.free(type_header);
+
+                const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
+                errdefer gpa.free(empty_children);
+
+                try entries_list.append(gpa, DocModel.DocEntry{
+                    .name = duped_name,
+                    .type_header = type_header,
+                    .kind = .where_alias,
+                    .type_signature = type_sig,
+                    .doc_comment = if (doc_extract) |d| d.text else null,
+                    .children = empty_children,
+                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
+                });
+            },
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
         }
     }
 
@@ -761,10 +830,46 @@ fn extractDefEntry(
                         .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                     };
                 },
-                else => return null,
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_alias_decl,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => return null,
             }
         },
-        else => return null,
+        .as,
+        .applied_tag,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => return null,
     }
 }
 
@@ -795,17 +900,11 @@ fn extractNominalChildren(
     def: CIR.Def,
 ) Allocator.Error![]DocModel.DocEntry {
     const expr = module_env.store.getExpr(def.expr);
-    switch (expr) {
-        .e_nominal => |nom| {
-            const backing = module_env.store.getExpr(nom.backing_expr);
-            switch (backing) {
-                .e_record => |rec| {
-                    return try extractRecordChildren(gpa, module_env, rec.fields);
-                },
-                else => {},
-            }
-        },
-        else => {},
+    if (std.meta.activeTag(expr) == .e_nominal) {
+        const backing = module_env.store.getExpr(expr.e_nominal.backing_expr);
+        if (std.meta.activeTag(backing) == .e_record) {
+            return try extractRecordChildren(gpa, module_env, backing.e_record.fields);
+        }
     }
     return try gpa.alloc(DocModel.DocEntry, 0);
 }
@@ -872,14 +971,24 @@ fn extractAnnotationAsDocType(
     };
 
     const where_span = annotation.where orelse return base_type;
+    const wrapped = try wrapInWhereClause(gpa, module_env, local_module_path, base_type, where_span) orelse return base_type;
+    base_type_moved = true;
+    return wrapped;
+}
+
+/// Wrap a type in the constraints of a where clause. Returns null when the
+/// clause contributes nothing renderable, leaving ownership of `base_type` with
+/// the caller.
+fn wrapInWhereClause(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    local_module_path: []const u8,
+    base_type: *const DocType,
+    where_span: CIR.WhereClause.Span,
+) Allocator.Error!?*const DocType {
     var constraints = std.ArrayList(DocType.Constraint).empty;
     defer {
-        for (constraints.items) |*constraint| {
-            constraint.signature.deinit(gpa);
-            gpa.destroy(constraint.signature);
-            gpa.free(constraint.type_var);
-            gpa.free(constraint.method_name);
-        }
+        for (constraints.items) |constraint| constraint.deinit(gpa);
         constraints.deinit(gpa);
     }
 
@@ -888,29 +997,24 @@ fn extractAnnotationAsDocType(
         switch (where_clause) {
             .w_method => |method| {
                 const constraint = try extractWhereMethodConstraint(gpa, module_env, local_module_path, method);
-                errdefer {
-                    constraint.signature.deinit(gpa);
-                    gpa.destroy(constraint.signature);
-                    gpa.free(constraint.type_var);
-                    gpa.free(constraint.method_name);
-                }
+                errdefer constraint.deinit(gpa);
                 try constraints.append(gpa, constraint);
             },
-            .w_alias, .w_malformed => {},
+            .w_alias => |alias| {
+                const constraint = try extractWhereAliasConstraint(gpa, module_env, local_module_path, alias) orelse continue;
+                errdefer constraint.deinit(gpa);
+                try constraints.append(gpa, constraint);
+            },
+            .w_malformed => {},
         }
     }
 
-    if (constraints.items.len == 0) return base_type;
+    if (constraints.items.len == 0) return null;
 
     const owned_constraints = try gpa.alloc(DocType.Constraint, constraints.items.len);
     var constraints_moved = false;
     errdefer if (!constraints_moved) {
-        for (owned_constraints) |*constraint| {
-            constraint.signature.deinit(gpa);
-            gpa.destroy(constraint.signature);
-            gpa.free(constraint.type_var);
-            gpa.free(constraint.method_name);
-        }
+        for (owned_constraints) |constraint| constraint.deinit(gpa);
         gpa.free(owned_constraints);
     };
     @memcpy(owned_constraints, constraints.items);
@@ -921,9 +1025,25 @@ fn extractAnnotationAsDocType(
         .constraints = owned_constraints,
         .layout = sourceWhereClauseLayout(module_env, where_span),
     } });
-    base_type_moved = true;
     constraints_moved = true;
     return wrapped;
+}
+
+fn extractWhereAliasConstraint(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    local_module_path: []const u8,
+    alias: @TypeOf(@as(CIR.WhereClause, undefined).w_alias),
+) Allocator.Error!?DocType.Constraint {
+    const type_var = try extractWhereTypeVarName(gpa, module_env, alias.var_);
+    errdefer gpa.free(type_var);
+
+    const reference = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, alias.alias) orelse {
+        gpa.free(type_var);
+        return null;
+    };
+
+    return .{ .where_alias = .{ .type_var = type_var, .alias = reference } };
 }
 
 fn extractWhereMethodConstraint(
@@ -944,11 +1064,11 @@ fn extractWhereMethodConstraint(
         gpa.destroy(signature);
     }
 
-    return .{
+    return .{ .method = .{
         .type_var = type_var,
         .method_name = method_name,
         .signature = signature,
-    };
+    } };
 }
 
 fn extractWhereMethodSignature(
@@ -1003,7 +1123,17 @@ fn extractWhereTypeVarName(
         switch (module_env.store.getTypeAnno(current)) {
             .rigid_var => |rv| return try gpa.dupe(u8, module_env.getIdentText(rv.name)),
             .rigid_var_lookup => |rv_lookup| current = rv_lookup.ref,
-            else => return try gpa.dupe(u8, "?"),
+            .apply,
+            .underscore,
+            .lookup,
+            .tag_union,
+            .tag,
+            .@"fn",
+            .tuple,
+            .record,
+            .parens,
+            .malformed,
+            => return try gpa.dupe(u8, "?"),
         }
     }
 }
@@ -1286,7 +1416,18 @@ fn extractTypeAnnoAsDocType(
                                     } });
                                     try Builder.pushVisitsReversed(&frames, gpa, tag_args_slice);
                                 },
-                                else => {
+                                .apply,
+                                .rigid_var,
+                                .rigid_var_lookup,
+                                .underscore,
+                                .lookup,
+                                .tag_union,
+                                .@"fn",
+                                .tuple,
+                                .record,
+                                .parens,
+                                .malformed,
+                                => {
                                     try frames.append(gpa, .malformed_tag);
                                 },
                             }
@@ -1478,7 +1619,16 @@ fn extractTypeAnnoAsDocType(
                             tags_len += 1;
                             gpa.free(tu.tags);
                         },
-                        else => unreachable,
+                        .type_ref,
+                        .type_var,
+                        .function,
+                        .record,
+                        .tuple,
+                        .apply,
+                        .where_clause,
+                        .wildcard,
+                        .@"error",
+                        => unreachable,
                     }
                     gpa.destroy(single_tag);
                 }
@@ -1699,14 +1849,11 @@ fn extractDocType(
     // If there are constraints, wrap in a where clause
     if (ctx.constraints_list.items.len > 0) {
         // Deduplicate constraints by (dispatcher_var_name, fn_name)
+        // A solved type's constraints are always method constraints: where
+        // aliases are expanded during checking.
         var unique_constraints = std.ArrayList(DocType.Constraint).empty;
         defer {
-            for (unique_constraints.items) |*c| {
-                gpa.free(c.type_var);
-                gpa.free(c.method_name);
-                c.signature.deinit(gpa);
-                gpa.destroy(c.signature);
-            }
+            for (unique_constraints.items) |c| c.deinit(gpa);
             unique_constraints.deinit(gpa);
         }
 
@@ -1714,8 +1861,8 @@ fn extractDocType(
             // Check for duplicate
             var is_dup = false;
             for (unique_constraints.items) |existing| {
-                if (std.mem.eql(u8, existing.type_var, info.dispatcher_name) and
-                    std.mem.eql(u8, existing.method_name, info.fn_name_text))
+                if (std.mem.eql(u8, existing.method.type_var, info.dispatcher_name) and
+                    std.mem.eql(u8, existing.method.method_name, info.fn_name_text))
                 {
                     is_dup = true;
                     break;
@@ -1731,19 +1878,19 @@ fn extractDocType(
             const fn_type = try extractDocTypeInner(&fn_ctx, info.fn_var) orelse
                 try allocDocType(gpa, .@"error");
 
-            try unique_constraints.append(gpa, .{
+            try unique_constraints.append(gpa, .{ .method = .{
                 .type_var = try gpa.dupe(u8, info.dispatcher_name),
                 .method_name = try gpa.dupe(u8, info.fn_name_text),
                 .signature = fn_type,
-            });
+            } });
         }
 
         // Sort constraints alphabetically by (type_var, method_name)
         std.mem.sort(DocType.Constraint, unique_constraints.items, {}, struct {
             fn lessThan(_: void, a: DocType.Constraint, b: DocType.Constraint) bool {
-                const type_cmp = std.mem.order(u8, a.type_var, b.type_var);
+                const type_cmp = std.mem.order(u8, a.method.type_var, b.method.type_var);
                 if (type_cmp != .eq) return type_cmp == .lt;
-                return std.mem.order(u8, a.method_name, b.method_name) == .lt;
+                return std.mem.order(u8, a.method.method_name, b.method.method_name) == .lt;
             }
         }.lessThan);
 
@@ -2132,10 +2279,17 @@ fn extractRecord(
                         break;
                     },
                     .empty_record => break,
-                    else => break,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => break,
                 }
             },
-            else => break,
+            .err => break,
         }
     }
 
@@ -2299,7 +2453,16 @@ fn extractTagUnion(
         },
         .structure => |ft| switch (ft) {
             .empty_tag_union => {}, // closed union
-            else => {
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            => {
                 is_open = true;
                 ext_type = try extractDocTypeInner(ctx, tag_union.ext);
             },
@@ -2383,7 +2546,7 @@ fn convertModuleKind(kind: ModuleEnv.ModuleKind) DocModel.ModuleKind {
         .package => .package,
         .platform => .platform,
         .type_module => .type_module,
-        else => .app, // hosted and malformed modules are not documented as package modules
+        .hosted, .malformed => .app, // hosted and malformed modules are not documented as package modules
     };
 }
 

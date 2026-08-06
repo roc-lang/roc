@@ -288,7 +288,26 @@ fn assertNoPostCheckType(comptime T: type, comptime path: []const u8) void {
                 assertNoPostCheckType(field.type, path ++ "." ++ field.name);
             }
         },
-        else => {},
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .int,
+        .float,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        => {},
     }
 }
 
@@ -696,29 +715,24 @@ test "Monotype match lowering relates patterns before specialization and project
     );
     try expectContains(match_source, "const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node)");
     try expectContains(match_source, "try relateRequestComponent(");
+    try expectContains(match_source, "try entry.ctx.preRegisterPatternBindersAtNode");
     try expectContains(match_source, "entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame");
-    try expectContains(match_source, "try entry.ctx.rebindPreRegisteredPatternBindersAtNode");
     try expectContains(match_source, "try entry.ctx.lowerMatchBranchBody");
-    try expectContains(match_source, "try entry.ctx.lowerPatternAtNode(entry.pattern.pattern, scrutinee_node)");
+    try expectContains(match_source, "try entry.ctx.lowerMatchPatternAtNode");
     try expectNotContains(match_source, "resolvedTypeViewForNode(scrutinee_node)");
     try expectNotContains(match_source, "lowerPatternAtType(entry.pattern.pattern");
+    try expectNotContains(lower_source, "rebindPreRegisteredPatternBindersAtNode");
 
     const relate = std.mem.find(u8, match_source, "try relateRequestComponent(").?;
-    const prepare_rebind = std.mem.find(u8, match_source, "try entry.ctx.rebindPreRegisteredPatternBindersAtNode").?;
+    const prepare_binders = std.mem.find(u8, match_source, "try entry.ctx.preRegisterPatternBindersAtNode").?;
     const prepare_result = std.mem.find(u8, match_source, "try entry.ctx.prepareControlFlowResultSelection").?;
     const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
-    const rebind_pattern = guards + std.mem.find(
-        u8,
-        match_source[guards..],
-        "try entry.ctx.rebindPreRegisteredPatternBindersAtNode",
-    ).?;
-    const lower_pattern = std.mem.find(u8, match_source, "try entry.ctx.lowerPatternAtNode").?;
     const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchBranchBody").?;
-    try std.testing.expect(relate < prepare_rebind);
-    try std.testing.expect(prepare_rebind < prepare_result);
+    const lower_pattern = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchPatternAtNode").?;
+    try std.testing.expect(relate < prepare_binders);
+    try std.testing.expect(prepare_binders < prepare_result);
     try std.testing.expect(prepare_result < guards);
-    try std.testing.expect(guards < rebind_pattern);
-    try std.testing.expect(rebind_pattern < lower_body);
+    try std.testing.expect(guards < lower_body);
     try std.testing.expect(lower_body < lower_pattern);
 
     const binder_source = sourceSliceBetween(
@@ -883,8 +897,25 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "const BinderMap = struct",
         "const TypedBinder = struct",
     );
-    try expectContains(binder_map, "locals: []?DraftLocalId");
+    try expectContains(binder_map, "locals: ?[]?DraftLocalId = null");
+    try expectContains(binder_map, "if (self.locals == null)");
     try expectNotContains(binder_map, "AutoHashMap");
+
+    const inst_node = sourceSliceBetween(
+        lower_source,
+        "fn instNode(self: *BodyContext",
+        "fn freshInstNode(self: *BodyContext",
+    );
+    try expectNotContains(inst_node, "self.builder.lowerType(self.view, checked_ty)");
+    try expectNotContains(inst_node, "self.graph.importMono(closed_ty)");
+
+    const fresh_inst_node = sourceSliceBetween(
+        lower_source,
+        "fn freshInstNode(self: *BodyContext",
+        "fn scopedNode(self: *BodyContext",
+    );
+    try expectContains(fresh_inst_node, "TypeInstantiationContext.init");
+    try expectNotContains(fresh_inst_node, "BodyContext.initWithMethodScope");
 
     const source_mapping = sourceSliceBetween(
         lower_source,
@@ -1143,7 +1174,8 @@ test "Monotype recursive materialization predicate stays paired with graph shell
     try expectContains(shell, "const key: PatternNodeVisit");
     try expectContains(shell, "active.contains(key)");
     try expectContains(shell, "defer _ = active.remove(key)");
-    try expectContains(shell, "backing.node == node");
+    try expectContains(shell, "backing.node == representation_node");
+    try expectContains(shell, "constructorRepresentationNode(node)");
     try expectContains(shell, "lowerPatternPlanPlaceholderAtNode");
     try expectContains(shell, ".applied_tag => |tag|");
     try expectContains(shell, ".nominal => |nominal|");
@@ -1256,11 +1288,6 @@ test "Monotype generated-private call requests retain separate request nodes" {
     const full_request = sourceSliceBetween(
         lower_source,
         "fn instantiateTargetCallNodeFromMonoArgs",
-        "fn instantiateTargetCallNodeFromMonoArgAtIndex",
-    );
-    const partial_arg = sourceSliceBetween(
-        lower_source,
-        "fn instantiateTargetCallNodeFromMonoArgAtIndex",
         "fn callArgumentEvidenceNode",
     );
     const iterator = sourceSliceBetween(
@@ -1271,8 +1298,8 @@ test "Monotype generated-private call requests retain separate request nodes" {
 
     try expectContains(full_request, "checkedMonoRequestNode");
     try expectContains(full_request, "functionRequestNode(self.graph, fn_node, request_args, request_ret)");
-    try expectContains(partial_arg, "checkedMonoRequestNode");
-    try expectContains(partial_arg, "self.graphFunctionNode(request_args, function_nodes.ret)");
+    try expectNotContains(lower_source, "instantiateTargetCallNodeFromMonoArgAtIndex");
+    try expectNotContains(lower_source, "methodTargetMonoTypeFromArgAtIndexIsolated");
     try expectContains(iterator, "checkedMonoRequestNode");
     try expectContains(iterator, "self.graphFunctionNode(request_args, request_ret)");
     try expectNotContains(iterator, "self.graph.unify(formal_node, try self.graph.importMono(evidence_ty))");

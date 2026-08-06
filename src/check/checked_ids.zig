@@ -117,4 +117,28 @@ pub const CaptureId = enum(u32) {
         std.debug.assert(self.isGenerated());
         return @intFromEnum(self) & ~generated_bit;
     }
+
+    /// Direct-column index for this namespaced identity.
+    pub fn denseIndex(self: CaptureId) usize {
+        const raw = @intFromEnum(self);
+        const namespace: usize = if ((raw & generated_bit) == 0)
+            0
+        else if ((raw & lift_bit) == 0)
+            1
+        else
+            2;
+        const index = if (namespace == 0) raw else raw & (lift_bit - 1);
+        return @as(usize, index) * 3 + namespace;
+    }
+
+    /// Construct a namespaced identity from its direct-column index.
+    pub fn fromDenseIndex(dense_index: usize) CaptureId {
+        const index: u32 = @intCast(dense_index / 3);
+        return switch (dense_index % 3) {
+            0 => canonical(index),
+            1 => generatedCheck(index),
+            2 => generatedLift(index),
+            else => unreachable,
+        };
+    }
 };

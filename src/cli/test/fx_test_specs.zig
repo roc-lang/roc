@@ -290,6 +290,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Repro: named outer direct map2 value dropped before static output",
     },
     .{
+        .roc_file = "test/fx/control_flow_selected_runtime_representation_repro.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: #10596 local if binding between iterator call and empty iterator",
+    },
+    .{
         .roc_file = "test/fx/drop_concat_unused_repro.roc",
         .io_spec = "1>done",
         .description = "Repro: dropped concat string before static output",
@@ -321,6 +326,11 @@ pub const io_spec_tests = [_]TestSpec{
     },
     // Bug regression tests
     .{
+        .roc_file = "test/fx/erased_small_first_arg.roc",
+        .io_spec = "1>2",
+        .description = "Regression test: LLVM erased callable ABI preserves a sub-word first argument (issue #10364)",
+    },
+    .{
         .roc_file = "test/fx/unify_scratch_fresh_vars_rank_bug.roc",
         .io_spec = "1>ok",
         .description = "Regression test: unify scratch fresh_vars must be cleared between calls",
@@ -334,6 +344,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/list_map_fallible.roc",
         .io_spec = "1>done",
         .description = "Regression test: List.map with fallible function (U64.from_str)",
+    },
+    .{
+        .roc_file = "test/fx/issue_10368_list_map_reuse.roc",
+        .io_spec = "1>one map 0803c9e914002577bbfa01bae7cf9e32a7ef9d1c9e07d19542be4df2c190cbaf|1>two maps f0e5e7a2abe3428a08147f2fbb9eaad2261990945cbfbfcaf37149c6002e215d",
+        .description = "Regression test: optimized List.map reuse preserves a shared parameter-derived input",
     },
     .{
         .roc_file = "test/fx/list_append_stdin_uaf.roc",

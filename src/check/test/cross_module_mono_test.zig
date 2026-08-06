@@ -32,11 +32,13 @@ fn findTypeDeclByName(env: *const ModuleEnv, name: base.Ident.Idx) ?CIR.Statemen
 fn findTypeDeclByNameInSpan(env: *const ModuleEnv, span: CIR.Statement.Span, name: base.Ident.Idx) ?CIR.Statement.Idx {
     for (0..span.span.len) |offset| {
         const stmt_idx = env.store.statementAt(span, offset);
-        const header_idx = switch (env.store.getStatement(stmt_idx)) {
-            .s_nominal_decl => |nominal| nominal.header,
-            .s_alias_decl => |alias| alias.header,
-            else => continue,
-        };
+        const stmt = env.store.getStatement(stmt_idx);
+        const header_idx = if (stmt == .s_nominal_decl)
+            stmt.s_nominal_decl.header
+        else if (stmt == .s_alias_decl)
+            stmt.s_alias_decl.header
+        else
+            continue;
         if (env.store.getTypeHeader(header_idx).name.eql(name)) return stmt_idx;
     }
     return null;

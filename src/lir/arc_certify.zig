@@ -182,7 +182,7 @@ fn certifyStoreWithWorkStats(
     diag: *Diagnostic,
     work_stats: ?*CertifierWorkStats,
 ) CertifyError!void {
-    try certifyProcAbiMetadata(store, layouts, diag);
+    try certifyProcAbiMetadata(allocator, store, layouts, diag);
 
     var rc_local = try allocator.alloc(bool, store.localCount());
     defer allocator.free(rc_local);
@@ -201,12 +201,12 @@ fn certifyStoreWithWorkStats(
         .sigs = sigs,
         .rc_local = rc_local,
         .lender_arena = std.heap.ArenaAllocator.init(allocator),
-        .records = std.AutoHashMap(LIR.JoinPointId, JoinRecord).init(allocator),
+        .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
         .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
-        .repr_scratch = std.AutoHashMap(ValueId, u32).init(allocator),
-        .join_bodies = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
-        .reads_before_rebind_cache = std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
-        .erased_owner_states = std.AutoHashMap(LIR.LocalId, ErasedOwnerState).init(allocator),
+        .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
+        .join_bodies = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
+        .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
+        .erased_owner_states = collections.DenseMap(LIR.LocalId, ErasedOwnerState).init(allocator),
         .diag = diag,
         .work_stats = work_stats,
     };
@@ -230,6 +230,7 @@ fn certifyStoreWithWorkStats(
 /// decrefed. Internal Roc-ABI destination variants may also carry the marker,
 /// so every non-null marker names a final erased-callable argument.
 fn certifyProcAbiMetadata(
+    allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     diag: *Diagnostic,
@@ -255,7 +256,14 @@ fn certifyProcAbiMetadata(
             }
         }
 
-        if (proc.abi != .erased_callable) continue;
+        if (proc.abi != .erased_callable) {
+            if (proc.erased_call_args != null) {
+                diag.context_proc = proc_id;
+                diag.set("proc={d}: ordinary Roc ABI proc carried an erased-call argument plan", .{proc_index});
+                return error.Certification;
+            }
+            continue;
+        }
         if (GuardedList.borrowLen(args) < 2) {
             diag.context_proc = proc_id;
             diag.set("proc={d}: erased-callable ABI requires trailing capture and reuse arguments", .{proc_index});
@@ -272,6 +280,66 @@ fn certifyProcAbiMetadata(
         if (proc.erased_reuse_arg == null) {
             diag.context_proc = proc_id;
             diag.set("proc={d}: erased-callable reuse argument must carry its ownership marker", .{proc_index});
+            return error.Certification;
+        }
+
+        const arg_plan = proc.erased_call_args orelse {
+            diag.context_proc = proc_id;
+            diag.set("proc={d}: erased-callable ABI proc lacks an argument plan", .{proc_index});
+            return error.Certification;
+        };
+        try certifyErasedCallArgsPlan(
+            allocator,
+            store,
+            layouts,
+            arg_plan,
+            proc.args,
+            GuardedList.borrowLen(args) - 2,
+            diag,
+        );
+    }
+}
+
+fn certifyErasedCallArgsPlan(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    plan_id: LIR.ErasedCallArgsPlanId,
+    args_span: LIR.LocalSpan,
+    explicit_count: usize,
+    diag: *Diagnostic,
+) CertifyError!void {
+    if (@intFromEnum(plan_id) >= store.erasedCallArgsPlanCount()) {
+        diag.set("erased-call argument plan index is out of bounds", .{});
+        return error.Certification;
+    }
+
+    const args = store.getLocalSpan(args_span);
+    if (explicit_count > GuardedList.borrowLen(args)) {
+        diag.set("erased-call argument plan has more fields than the argument span", .{});
+        return error.Certification;
+    }
+    const arg_layouts = try allocator.alloc(layout_mod.Idx, explicit_count);
+    defer allocator.free(arg_layouts);
+    for (0..explicit_count) |i| {
+        arg_layouts[i] = store.getLocal(GuardedList.at(args, i)).layout_idx;
+    }
+    const expected_offsets = try allocator.alloc(u32, explicit_count);
+    defer allocator.free(expected_offsets);
+    const expected = layout_mod.erased_call_abi.plan(layouts, arg_layouts, expected_offsets);
+
+    const actual = store.getErasedCallArgsPlan(plan_id);
+    const actual_offsets = store.getErasedCallArgOffsets(actual);
+    if (actual.size != expected.size or
+        actual.alignment != expected.alignment or
+        GuardedList.borrowLen(actual_offsets) != explicit_count)
+    {
+        diag.set("erased-call argument plan metrics do not match its arguments", .{});
+        return error.Certification;
+    }
+    for (expected_offsets, 0..) |expected_offset, i| {
+        if (GuardedList.at(actual_offsets, i) != expected_offset) {
+            diag.set("erased-call argument plan offset {d} does not match its argument", .{i});
             return error.Certification;
         }
     }
@@ -295,13 +363,16 @@ fn certifyRcAtomicity(
 
     for (0..store.cfStmtCount()) |stmt_index| {
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = switch (stmt) {
-            .incref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
-            .decref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
-            .decref_if_initialized => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
-            .free => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
-            else => continue,
-        };
+        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = if (stmt == .incref)
+            .{ .value = stmt.incref.value, .atomicity = stmt.incref.atomicity }
+        else if (stmt == .decref)
+            .{ .value = stmt.decref.value, .atomicity = stmt.decref.atomicity }
+        else if (stmt == .decref_if_initialized)
+            .{ .value = stmt.decref_if_initialized.value, .atomicity = stmt.decref_if_initialized.atomicity }
+        else if (stmt == .free)
+            .{ .value = stmt.free.value, .atomicity = stmt.free.atomicity }
+        else
+            continue;
         if (checked.atomicity == .atomic) continue;
         const index = @intFromEnum(checked.value);
         if (index < visible.capacity() and visible.isSet(index)) {
@@ -382,10 +453,9 @@ fn certifyUniqueArgs(
         defer uniqueness.deinit(allocator);
 
         for (proc_stmts.items) |current| {
-            const assign = switch (store.getCFStmt(current)) {
-                .assign_low_level => |assign| assign,
-                else => continue,
-            };
+            const stmt = store.getCFStmt(current);
+            if (stmt != .assign_low_level) continue;
+            const assign = stmt.assign_low_level;
             if (assign.unique_args == 0) continue;
             const stmt_index = @intFromEnum(current);
             if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
@@ -509,7 +579,7 @@ fn writeFailureContext(
     }
     context.append("\n", .{});
 
-    var reachable = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
+    var reachable = collections.DenseMap(LIR.CFStmtId, void).init(store.allocator);
     defer reachable.deinit();
     if (proc.body) |body| {
         var walk = std.ArrayList(LIR.CFStmtId).empty;
@@ -574,10 +644,8 @@ fn writeFailureContext(
         for (extra_locals) |extra| {
             mentions = mentions or stmtMentionsLocal(store, stmt, extra);
         }
-        const structural = switch (stmt) {
-            .join, .jump, .incref, .decref, .decref_if_initialized, .free => true,
-            else => false,
-        };
+        const structural = stmt == .join or stmt == .jump or stmt == .incref or
+            stmt == .decref or stmt == .decref_if_initialized or stmt == .free;
         const nearby = if (stmt_id) |focus_stmt| if (index > @intFromEnum(focus_stmt))
             index - @intFromEnum(focus_stmt) <= 12
         else
@@ -664,7 +732,18 @@ fn writeFailureContext(
                 context.append(" next={d}", .{@intFromEnum(a.next)});
             },
             inline .assign_literal, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
-            else => {},
+            .store_struct,
+            .store_tag,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .loop_continue,
+            .loop_break,
+            .crash,
+            => {},
         }
         context.append("\n", .{});
     }
@@ -755,7 +834,8 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
             break :blk false;
         },
         .ret => |r| r.value == needle,
-        .join, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
+        .crash => |s| if (s.msg.localId()) |message| message == needle else false,
+        .join, .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
     };
 }
 
@@ -1100,27 +1180,27 @@ const Certifier = struct {
     rc_local: []const bool,
     values: std.ArrayList(ValueInfo) = .empty,
     lender_arena: std.heap.ArenaAllocator,
-    records: std.AutoHashMap(LIR.JoinPointId, JoinRecord),
+    records: collections.DenseMap(LIR.JoinPointId, JoinRecord),
     memo: std.AutoHashMap(MemoEntry, void),
     /// Statements with more than one structural predecessor. Only these
     /// statements can be revisited by distinct control-flow walks, so only
     /// these need quotient-state memoization.
     memo_points: std.bit_set.DynamicBitSetUnmanaged = .{},
     summary_scratch: std.ArrayList(LocalSummary) = .empty,
-    repr_scratch: std.AutoHashMap(ValueId, u32),
+    repr_scratch: collections.DenseMap(ValueId, u32),
     /// Dense position per reference-counted store local used by the proc
     /// being certified, or `no_dense` otherwise.
     local_dense: std.ArrayList(u32) = .empty,
     /// Reference-counted store local id per dense position.
     proc_locals: std.ArrayList(LIR.LocalId) = .empty,
     /// Join bodies of the proc being certified, for jump-following scans.
-    join_bodies: std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId),
+    join_bodies: collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId),
     /// Per-proc cache for join-body read-before-rebind sets. These bitsets use
     /// dense proc-local positions, so the cache is cleared at each proc boundary.
-    reads_before_rebind_cache: std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged),
+    reads_before_rebind_cache: collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged),
     /// Exact erased-allocation producer relation for the current proc, plus
     /// calls checked after every reachable definition has been collected.
-    erased_owner_states: std.AutoHashMap(LIR.LocalId, ErasedOwnerState),
+    erased_owner_states: collections.DenseMap(LIR.LocalId, ErasedOwnerState),
     erased_call_owner_checks: std.ArrayList(ErasedCallOwnerCheck) = .empty,
     /// Scratch bitset over dense proc-local positions, reused by
     /// join-relevance extension.
@@ -1997,7 +2077,7 @@ const Certifier = struct {
                 if (data.discriminant_size != 0) break :blk null;
                 break :blk payload.source;
             },
-            else => null,
+            .discriminant, .field, .list_reinterpret => null,
         } orelse return null;
 
         const source_layout = self.store.getLocal(source).layout_idx;
@@ -2055,7 +2135,7 @@ const Certifier = struct {
             try self.noteErasedOwnerDefinition(param, null);
         }
 
-        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.allocator);
+        var visited = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
@@ -2097,6 +2177,17 @@ const Certifier = struct {
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_call_erased => |assign| {
+                    self.diag.context_proc = self.current_proc;
+                    self.diag.context_stmt = current;
+                    try certifyErasedCallArgsPlan(
+                        self.allocator,
+                        self.store,
+                        self.layouts,
+                        assign.arg_plan,
+                        assign.args,
+                        self.store.getLocalSpan(assign.args).len,
+                        self.diag,
+                    );
                     try self.noteProcLocal(assign.target);
                     try self.noteErasedOwnerDefinition(assign.target, null);
                     try self.noteProcLocal(assign.closure);
@@ -2249,7 +2340,8 @@ const Certifier = struct {
                     try stack.append(self.allocator, join_stmt.remainder);
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
-                .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
+                .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
                 .comptime_branch_taken => |marker| try stack.append(self.allocator, marker.next),
             }
         }
@@ -2428,14 +2520,14 @@ const Certifier = struct {
         allocator: Allocator,
         nodes: std.ArrayList(ReadBeforeRebindNode),
         successors: std.ArrayList(LIR.CFStmtId),
-        indices: std.AutoHashMap(LIR.CFStmtId, usize),
+        indices: collections.DenseMap(LIR.CFStmtId, usize),
 
         fn init(allocator: Allocator) ReadBeforeRebindGraph {
             return .{
                 .allocator = allocator,
                 .nodes = .empty,
                 .successors = .empty,
-                .indices = std.AutoHashMap(LIR.CFStmtId, usize).init(allocator),
+                .indices = collections.DenseMap(LIR.CFStmtId, usize).init(allocator),
             };
         }
     };
@@ -2669,7 +2761,10 @@ const Certifier = struct {
                     }
                 },
                 .ret => |ret_stmt| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, ret_stmt.value),
-                .runtime_error, .comptime_exhaustiveness_failed, .crash, .loop_continue, .loop_break => {},
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, message);
+                },
+                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
                 .comptime_branch_taken => |marker| try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next),
             }
         }
@@ -3354,7 +3449,13 @@ const Certifier = struct {
                     try self.checkLeaks(&state);
                     return;
                 },
-                .crash => {
+                .crash => |crash_stmt| {
+                    if (crash_stmt.msg.localId()) |message| {
+                        if (self.isRc(message)) {
+                            const value = try self.requireLive(&state, message);
+                            try self.consumeUnit(&state, value, message);
+                        }
+                    }
                     try self.checkLeaks(&state);
                     return;
                 },
@@ -3781,7 +3882,7 @@ const CertifyTest = struct {
     }
 
     fn certifyProcAbiMetadataOnly(self: *CertifyTest) CertifyError!void {
-        return certifyProcAbiMetadata(&self.store, &self.layouts, &self.diag);
+        return certifyProcAbiMetadata(self.allocator, &self.store, &self.layouts, &self.diag);
     }
 };
 
@@ -3795,10 +3896,12 @@ test "certify accepts consistent erased-callable proc ABI metadata" {
         const reuse = try f.local(erased_callable);
         const result = try f.local(.i64);
         const body = try f.ret(result);
+        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
             .erased_reuse_arg = reuse,
+            .erased_call_args = arg_plan,
             .body = body,
             .ret_layout = .i64,
             .abi = .erased_callable,
@@ -3815,10 +3918,12 @@ test "certify accepts consistent erased-callable proc ABI metadata" {
         const capture = try f.local(.opaque_ptr);
         const reuse = try f.local(erased_callable);
         const body = try f.ret(reuse);
+        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
             .erased_reuse_arg = reuse,
+            .erased_call_args = arg_plan,
             .body = body,
             .ret_layout = erased_callable,
             .abi = .erased_callable,
@@ -3933,6 +4038,57 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
     }
 }
 
+test "certify rejects an erased-call argument plan that differs from the signature" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const first = try f.local(.u8);
+    const second = try f.local(.u64);
+    const capture = try f.local(.opaque_ptr);
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const reuse = try f.local(erased_callable);
+    const result = try f.local(.i64);
+    const body = try f.ret(result);
+    const wrong_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{ .u8, .u8 });
+    _ = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = try f.store.addLocalSpan(&.{ first, second, capture, reuse }),
+        .erased_reuse_arg = reuse,
+        .erased_call_args = wrong_plan,
+        .body = body,
+        .ret_layout = .i64,
+        .abi = .erased_callable,
+    });
+
+    try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "plan metrics do not match") != null);
+}
+
+test "certify rejects an erased call site whose argument plan differs" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const closure = try f.local(erased_callable);
+    const first = try f.local(.u8);
+    const second = try f.local(.u64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const args = try f.store.addLocalSpan(&.{ first, second });
+    const wrong_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{ .u8, .u8 });
+    const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .closure = closure,
+        .args = args,
+        .arg_plan = wrong_plan,
+        .next = ret,
+    } });
+    _ = try f.addProc(&.{ closure, first, second }, body, .i64);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "plan metrics do not match") != null);
+}
+
 test "unique-argument certification isolates shared locals between procedures" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -4045,10 +4201,12 @@ test "certify rejects inconsistent erased call reuse fields" {
         const closure = try f.local(erased_callable);
         const result = try f.local(erased_callable);
         const ret = try f.ret(result);
+        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
             .target = result,
             .closure = closure,
             .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
             .reuse_closure = true,
             .reuse_source = null,
             .next = ret,
@@ -4065,10 +4223,12 @@ test "certify rejects inconsistent erased call reuse fields" {
         const closure = try f.local(erased_callable);
         const result = try f.local(erased_callable);
         const ret = try f.ret(result);
+        const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
             .target = result,
             .closure = closure,
             .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
             .reuse_closure = false,
             .reuse_source = closure,
             .next = ret,
@@ -4087,10 +4247,12 @@ test "certify accepts erased call reuse from a transparent outer owner" {
     const closure = try f.local(erased_callable);
     const result = try f.local(erased_callable);
     const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
     const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
         .closure = closure,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .reuse_closure = true,
         .reuse_source = owner,
         .next = ret,
@@ -4112,10 +4274,12 @@ test "certify rejects erased call reuse from a different allocation" {
     const unrelated = try f.local(erased_callable);
     const result = try f.local(erased_callable);
     const ret = try f.ret(result);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
     const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
         .closure = closure,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .reuse_closure = true,
         .reuse_source = unrelated,
         .next = ret,

@@ -1,7 +1,46 @@
 //! Regression tests for specific bug fixes.
 
 const std = @import("std");
+const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
+
+test "check - repro - issue 10365 - erroneous captured lambda poisons closure owner" {
+    const src =
+        \\wrap : U64, a -> Box(({} => a))
+        \\wrap = |_handle, value| Box.box(|{}| value)
+        \\
+        \\main! = || {
+        \\    handle : U64
+        \\    handle = 900
+        \\
+        \\    run! : U64 -> U64
+        \\    run! = |n| {
+        \\        f = Box.unbox(wrap(handle, n))
+        \\        f({})
+        \\    }
+        \\
+        \\    run!(42)
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node = test_env.checker.cir.store.nodes.get(node_idx);
+        if (!std.mem.startsWith(u8, @tagName(node.tag), "expr_")) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr = test_env.checker.cir.store.getExpr(expr_idx);
+        if (expr == .e_closure) {
+            try std.testing.expect(test_env.checker.cir.store.getExpr(expr.e_closure.lambda_idx) == .e_lambda);
+        }
+    }
+}
 
 test "check - repro - issue 8764" {
     const src =
@@ -809,4 +848,23 @@ test "check - repro - issue 10184 - tag syntax for value-backed nominal reports 
     defer test_env.deinit();
 
     try test_env.assertOneTypeError("Invalid Nominal Tag");
+}
+
+test "check - repro - issue 10490 - standard library errors compose through open unions" {
+    // Repro for https://github.com/roc-lang/roc/issues/10490: standard library
+    // errors should compose through `?` without callers mapping their tags.
+    const src =
+        \\parse_name_and_year = |str| {
+        \\    { before: name, after: birth_year_str } = str.split_first(" was born in ")?
+        \\    birth_year = U16.from_str(birth_year_str)?
+        \\    Ok({ name, birth_year })
+        \\}
+        \\
+        \\_ = parse_name_and_year("Alice was born in 1990")
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
 }

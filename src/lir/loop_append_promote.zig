@@ -42,6 +42,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 
@@ -60,7 +61,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
     var pass = Pass{
         .store = store,
         .layouts = layouts,
-        .append_kind = std.AutoHashMap(LIR.LirProcSpecId, ?ProcKind).init(store.allocator),
+        .append_kind = collections.DenseMap(LIR.LirProcSpecId, ?ProcKind).init(store.allocator),
     };
     defer pass.append_kind.deinit();
 
@@ -108,7 +109,7 @@ const Edge = struct {
 const Pass = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
-    append_kind: std.AutoHashMap(LIR.LirProcSpecId, ?ProcKind),
+    append_kind: collections.DenseMap(LIR.LirProcSpecId, ?ProcKind),
 
     // Helper-proc classification
 
@@ -143,7 +144,7 @@ const Pass = struct {
         const params = self.store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(params) != 2) return null;
 
-        var env = std.AutoHashMap(LocalId, Abstract).init(self.store.allocator);
+        var env = collections.DenseMap(LocalId, Abstract).init(self.store.allocator);
         defer env.deinit();
         try env.put(GuardedList.at(params, 0), .{ .arg = 0 });
         try env.put(GuardedList.at(params, 1), .{ .arg = 1 });
@@ -155,7 +156,7 @@ const Pass = struct {
                 .assign_ref => |assign| {
                     const value: Abstract = switch (assign.op) {
                         .local => |src| env.get(src) orelse .other,
-                        else => .other,
+                        .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => .other,
                     };
                     try env.put(assign.target, value);
                     current = assign.next;
@@ -164,7 +165,7 @@ const Pass = struct {
                     const value: Abstract = switch (assign.value) {
                         .i64_literal => |lit| if (lit.value >= 0) .{ .literal = @intCast(lit.value) } else Abstract.other,
                         .i128_literal => |lit| if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) .{ .literal = @intCast(lit.value) } else Abstract.other,
-                        else => .other,
+                        .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => .other,
                     };
                     try env.put(assign.target, value);
                     current = assign.next;
@@ -183,10 +184,38 @@ const Pass = struct {
                         .reserve_forward, .reserve_lit => .reserve,
                         .unsafe_of_args => .append_unsafe,
                         .append_of_reserve => .checked_append,
-                        else => null,
+                        .arg, .literal, .other => null,
                     };
                 },
-                else => return null,
+                .init_uninitialized,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .crash,
+                => return null,
             }
         }
         return null;
@@ -195,7 +224,7 @@ const Pass = struct {
     /// Abstract outcome of one call or low-level step of a helper body.
     fn classifyStep(
         self: *Pass,
-        env: *std.AutoHashMap(LocalId, Abstract),
+        env: *collections.DenseMap(LocalId, Abstract),
         op: ?LowLevelOp,
         args_span: LIR.LocalSpan,
         callee: ?LIR.LirProcSpecId,
@@ -207,11 +236,11 @@ const Pass = struct {
         const a1 = env.get(GuardedList.at(args, 1)) orelse return .other;
 
         const step: enum { reserve, append_unsafe, checked_append, other } = blk: {
-            if (op) |low_level| break :blk switch (low_level) {
-                .list_reserve => .reserve,
-                .list_append_unsafe => .append_unsafe,
-                else => .other,
-            };
+            if (op) |low_level| {
+                if (low_level == .list_reserve) break :blk .reserve;
+                if (low_level == .list_append_unsafe) break :blk .append_unsafe;
+                break :blk .other;
+            }
             const kind = (try self.classifyProc(callee.?, depth + 1)) orelse break :blk .other;
             break :blk switch (kind) {
                 .reserve => .reserve,
@@ -227,10 +256,10 @@ const Pass = struct {
                     break :blk switch (a1) {
                         .literal => |k| if (k >= 1) Abstract.reserve_lit else .other,
                         .arg => |m| if (m == 1) Abstract.reserve_forward else .other,
-                        else => .other,
+                        .reserve_forward, .reserve_lit, .unsafe_of_args, .append_of_reserve, .other => .other,
                     };
                 },
-                else => .other,
+                .literal, .reserve_forward, .reserve_lit, .unsafe_of_args, .append_of_reserve, .other => .other,
             },
             .append_unsafe => switch (a0) {
                 // The spare must be a known positive literal by the time the
@@ -238,20 +267,20 @@ const Pass = struct {
                 // spare could be zero at runtime.
                 .reserve_lit => switch (a1) {
                     .arg => |n| if (n == 1) Abstract.append_of_reserve else .other,
-                    else => .other,
+                    .literal, .reserve_forward, .reserve_lit, .unsafe_of_args, .append_of_reserve, .other => .other,
                 },
                 .arg => |n| blk: {
                     if (n != 0) break :blk .other;
                     break :blk switch (a1) {
                         .arg => |m| if (m == 1) Abstract.unsafe_of_args else .other,
-                        else => .other,
+                        .literal, .reserve_forward, .reserve_lit, .unsafe_of_args, .append_of_reserve, .other => .other,
                     };
                 },
-                else => .other,
+                .literal, .reserve_forward, .unsafe_of_args, .append_of_reserve, .other => .other,
             },
             .checked_append => switch (a0) {
                 .arg => |n| if (n == 0 and a1 == .arg and a1.arg == 1) Abstract.append_of_reserve else .other,
-                else => .other,
+                .literal, .reserve_forward, .reserve_lit, .unsafe_of_args, .append_of_reserve, .other => .other,
             },
             .other => .other,
         };
@@ -269,23 +298,23 @@ const Pass = struct {
         edges: std.ArrayList(Edge) = .empty,
         /// Per-local counts of total operand uses and of uses this pass
         /// understands. A carrier with untracked uses is tainted.
-        total_uses: std.AutoHashMap(LocalId, u32),
-        tracked_uses: std.AutoHashMap(LocalId, u32),
+        total_uses: collections.DenseMap(LocalId, u32),
+        tracked_uses: collections.DenseMap(LocalId, u32),
         /// Owning join statement of every join parameter.
-        param_join: std.AutoHashMap(LocalId, CFStmtId),
+        param_join: collections.DenseMap(LocalId, CFStmtId),
         joins: std.ArrayList(JoinInfo) = .empty,
         max_join_id: u32 = 0,
         /// Locals written by `set_local` in any mode other than
         /// initialize-join-param; a chain parameter in this set has writes the
         /// analysis does not model.
-        dirty_targets: std.AutoHashMap(LocalId, void),
+        dirty_targets: collections.DenseMap(LocalId, void),
         /// Direct-assignment definition counts per local. A join parameter
         /// initialized this way on some edge has no place to receive a slack
         /// write, and a chain value defined by more than one statement has no
         /// single slack: branches can assign the same result local and
         /// converge without a join parameter, leaving the other path's slack
         /// never computed.
-        assigned_targets: std.AutoHashMap(LocalId, u32),
+        assigned_targets: collections.DenseMap(LocalId, u32),
 
         fn deinit(self: *Scan, allocator: Allocator) void {
             self.edges.deinit(allocator);
@@ -298,7 +327,7 @@ const Pass = struct {
         }
     };
 
-    fn bumpUse(map: *std.AutoHashMap(LocalId, u32), local: LocalId) ResourceError!void {
+    fn bumpUse(map: *collections.DenseMap(LocalId, u32), local: LocalId) ResourceError!void {
         const entry = try map.getOrPut(local);
         if (!entry.found_existing) entry.value_ptr.* = 0;
         entry.value_ptr.* += 1;
@@ -319,7 +348,7 @@ const Pass = struct {
         const allocator = self.store.allocator;
         var stack = std.ArrayList(CFStmtId).empty;
         defer stack.deinit(allocator);
-        var visited = std.AutoHashMap(CFStmtId, void).init(allocator);
+        var visited = collections.DenseMap(CFStmtId, void).init(allocator);
         defer visited.deinit();
         try stack.append(allocator, body);
         while (stack.pop()) |current| {
@@ -377,14 +406,8 @@ const Pass = struct {
                     const args = self.store.getLocalSpan(assign.args);
                     const arg_count = GuardedList.borrowLen(args);
                     const list_arg0 = arg_count > 0 and self.isListLocal(GuardedList.at(args, 0));
-                    const rebinds = switch (assign.op) {
-                        .list_reserve, .list_append_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_sublist, .list_append_le_bytes, .list_set => true,
-                        else => false,
-                    };
-                    const read_ok = switch (assign.op) {
-                        .list_len, .list_get_unsafe, .list_slack_unique => true,
-                        else => false,
-                    };
+                    const rebinds = assign.op == .list_reserve or assign.op == .list_append_unsafe or assign.op == .list_append_range_within or assign.op == .list_copy_range_within or assign.op == .list_append_sublist or assign.op == .list_append_le_bytes or assign.op == .list_set;
+                    const read_ok = assign.op == .list_len or assign.op == .list_get_unsafe or assign.op == .list_slack_unique;
                     if (rebinds and list_arg0 and self.isListLocal(assign.target)) {
                         // Range-within appends promote to a slack-guarded
                         // diamond of their own; zero-sized elements have no
@@ -392,11 +415,12 @@ const Pass = struct {
                         const elem_size = self.layouts.builtinListAbi(self.store.getLocal(assign.target).layout_idx).elem_size;
                         const kind: EdgeKind = if (elem_size == 0)
                             .refresh_op
-                        else switch (assign.op) {
-                            .list_append_range_within => .range_append,
-                            .list_set => .set_op,
-                            else => .refresh_op,
-                        };
+                        else if (assign.op == .list_append_range_within)
+                            .range_append
+                        else if (assign.op == .list_set)
+                            .set_op
+                        else
+                            .refresh_op;
                         try scan.edges.append(allocator, .{
                             .kind = kind,
                             .stmt = current,
@@ -556,7 +580,7 @@ const Pass = struct {
         const allocator = self.store.allocator;
         var stack = std.ArrayList(CFStmtId).empty;
         defer stack.deinit(allocator);
-        var visited = std.AutoHashMap(CFStmtId, void).init(allocator);
+        var visited = collections.DenseMap(CFStmtId, void).init(allocator);
         defer visited.deinit();
         try stack.append(allocator, body);
         while (stack.pop()) |current| {
@@ -603,7 +627,7 @@ const Pass = struct {
         if (proc.body == null or proc.hosted != null) return;
         const allocator = self.store.allocator;
 
-        var proc_args = std.AutoHashMap(LocalId, void).init(allocator);
+        var proc_args = collections.DenseMap(LocalId, void).init(allocator);
         defer proc_args.deinit();
         {
             const args = self.store.getLocalSpan(proc.args);
@@ -616,18 +640,18 @@ const Pass = struct {
         // works from a fresh scan and promotes at most one parameter;
         // already-promoted parameters are skipped by identity on later
         // rounds.
-        var attempted = std.AutoHashMap(LocalId, void).init(allocator);
+        var attempted = collections.DenseMap(LocalId, void).init(allocator);
         defer attempted.deinit();
 
         var promoting = true;
         while (promoting) {
             promoting = false;
             var scan = Scan{
-                .total_uses = std.AutoHashMap(LocalId, u32).init(allocator),
-                .tracked_uses = std.AutoHashMap(LocalId, u32).init(allocator),
-                .param_join = std.AutoHashMap(LocalId, CFStmtId).init(allocator),
-                .dirty_targets = std.AutoHashMap(LocalId, void).init(allocator),
-                .assigned_targets = std.AutoHashMap(LocalId, u32).init(allocator),
+                .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
+                .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
+                .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+                .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
+                .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
             };
             defer scan.deinit(allocator);
             try self.scanProc(self.store.getProcSpec(proc_id).body.?, &scan);
@@ -667,7 +691,7 @@ const Pass = struct {
     fn promoteParam(
         self: *Pass,
         scan: *Scan,
-        proc_args: *std.AutoHashMap(LocalId, void),
+        proc_args: *collections.DenseMap(LocalId, void),
         loop_stmt: CFStmtId,
         list_param: LocalId,
         max_join_id: *u32,
@@ -676,7 +700,7 @@ const Pass = struct {
         const allocator = self.store.allocator;
 
         // Forward closure of the loop parameter over the chain edges.
-        var carriers = std.AutoHashMap(LocalId, void).init(allocator);
+        var carriers = collections.DenseMap(LocalId, void).init(allocator);
         defer carriers.deinit();
         try carriers.put(list_param, {});
         var changed = true;
@@ -693,7 +717,7 @@ const Pass = struct {
 
         var rewrite_site_count: u32 = 0;
         var has_sets = false;
-        var chain_params = std.AutoHashMap(LocalId, CFStmtId).init(allocator);
+        var chain_params = collections.DenseMap(LocalId, CFStmtId).init(allocator);
         defer chain_params.deinit();
         try chain_params.put(list_param, loop_stmt);
 
@@ -709,7 +733,7 @@ const Pass = struct {
                     const owner = scan.param_join.get(edge.target) orelse return false;
                     try chain_params.put(edge.target, owner);
                 },
-                else => {},
+                .alias, .refresh_op => {},
             }
         }
         if (rewrite_site_count == 0) return false;
@@ -759,7 +783,7 @@ const Pass = struct {
         // definition (a materialized phi); a definition the chain does not
         // model would leave its path's slack never computed.
         {
-            var chain_defs = std.AutoHashMap(LocalId, u32).init(allocator);
+            var chain_defs = collections.DenseMap(LocalId, u32).init(allocator);
             defer chain_defs.deinit();
             for (scan.edges.items) |edge| {
                 if (edge.kind == .param_write) continue;
@@ -836,8 +860,8 @@ const Pass = struct {
     fn apply(
         self: *Pass,
         scan: *Scan,
-        carriers: *std.AutoHashMap(LocalId, void),
-        chain_params: *std.AutoHashMap(LocalId, CFStmtId),
+        carriers: *collections.DenseMap(LocalId, void),
+        chain_params: *collections.DenseMap(LocalId, CFStmtId),
         has_sets: bool,
         max_join_id: *u32,
         new_locals: *std.ArrayList(LocalId),
@@ -847,9 +871,9 @@ const Pass = struct {
         // One slack parameter per chain join; chains containing element
         // overwrites also carry an owned flag (one when the list uniquely
         // owns a non-slice allocation, so a set may run in place).
-        var slack_params = std.AutoHashMap(LocalId, LocalId).init(allocator);
+        var slack_params = collections.DenseMap(LocalId, LocalId).init(allocator);
         defer slack_params.deinit();
-        var owned_params = std.AutoHashMap(LocalId, LocalId).init(allocator);
+        var owned_params = collections.DenseMap(LocalId, LocalId).init(allocator);
         defer owned_params.deinit();
         {
             var it = chain_params.iterator();
@@ -878,9 +902,9 @@ const Pass = struct {
         // so resolution runs to a fixpoint over the edges instead of assuming
         // definition order. Every carrier is reachable from a chain parameter
         // through these edges, so the fixpoint resolves them all.
-        var slack_of = std.AutoHashMap(LocalId, LocalId).init(allocator);
+        var slack_of = collections.DenseMap(LocalId, LocalId).init(allocator);
         defer slack_of.deinit();
-        var owned_of = std.AutoHashMap(LocalId, LocalId).init(allocator);
+        var owned_of = collections.DenseMap(LocalId, LocalId).init(allocator);
         defer owned_of.deinit();
         {
             var it = chain_params.keyIterator();
@@ -893,12 +917,12 @@ const Pass = struct {
         // A carrier defined by several chain edges gets one shared slack
         // local, defined next to each of its definitions: the materialized
         // form of the slack's control-flow merge.
-        var shared_slack = std.AutoHashMap(LocalId, LocalId).init(allocator);
+        var shared_slack = collections.DenseMap(LocalId, LocalId).init(allocator);
         defer shared_slack.deinit();
-        var shared_owned = std.AutoHashMap(LocalId, LocalId).init(allocator);
+        var shared_owned = collections.DenseMap(LocalId, LocalId).init(allocator);
         defer shared_owned.deinit();
         {
-            var def_counts = std.AutoHashMap(LocalId, u32).init(allocator);
+            var def_counts = collections.DenseMap(LocalId, u32).init(allocator);
             defer def_counts.deinit();
             for (scan.edges.items) |edge| {
                 if (edge.kind == .param_write) continue;
@@ -921,7 +945,7 @@ const Pass = struct {
             }
         }
 
-        var rewritten = std.AutoHashMap(CFStmtId, void).init(allocator);
+        var rewritten = collections.DenseMap(CFStmtId, void).init(allocator);
         defer rewritten.deinit();
         var resolving = true;
         while (resolving) {
@@ -1080,7 +1104,7 @@ const Pass = struct {
         self: *Pass,
         target: LocalId,
         has_sets: bool,
-        shared_owned: *const std.AutoHashMap(LocalId, LocalId),
+        shared_owned: *const collections.DenseMap(LocalId, LocalId),
         new_locals: *std.ArrayList(LocalId),
     ) ResourceError!?LocalId {
         if (!has_sets) return null;
@@ -1645,14 +1669,73 @@ test "promote threads slack through an append-only loop" {
                         },
                         .set_local => |set| grow = set.next,
                         .jump => break,
-                        else => return error.TestUnexpectedResult,
+                        .init_uninitialized,
+                        .assign_ref,
+                        .assign_call,
+                        .assign_call_erased,
+                        .assign_packed_erased_fn,
+                        .assign_list,
+                        .assign_struct,
+                        .assign_tag,
+                        .store_struct,
+                        .store_tag,
+                        .debug,
+                        .expect,
+                        .expect_err,
+                        .runtime_error,
+                        .comptime_exhaustiveness_failed,
+                        .comptime_branch_taken,
+                        .incref,
+                        .decref,
+                        .decref_if_initialized,
+                        .free,
+                        .switch_stmt,
+                        .switch_initialized_payload,
+                        .str_match,
+                        .str_match_set,
+                        .loop_continue,
+                        .loop_break,
+                        .join,
+                        .ret,
+                        .crash,
+                        => return error.TestUnexpectedResult,
                     }
                 }
                 try testing.expect(saw_reserve);
                 try testing.expect(saw_measure);
                 break;
             },
-            else => return error.TestUnexpectedResult,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.TestUnexpectedResult,
         }
     }
     try testing.expect(found_switch);

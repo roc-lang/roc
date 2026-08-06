@@ -442,15 +442,13 @@ fn walkTree(
         const joined_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
         const next_path = try normalizePath(allocator, joined_path);
 
-        switch (entry.kind) {
-            .directory => {
-                defer allocator.free(next_path);
-                try walkTree(allocator, arena, io, next_path, test_files, mod_files, source_tests);
-            },
-            .file => {
-                try handleFile(allocator, arena, io, next_path, entry.name, test_files, mod_files, source_tests);
-            },
-            else => allocator.free(next_path),
+        if (entry.kind == .directory) {
+            defer allocator.free(next_path);
+            try walkTree(allocator, arena, io, next_path, test_files, mod_files, source_tests);
+        } else if (entry.kind == .file) {
+            try handleFile(allocator, arena, io, next_path, entry.name, test_files, mod_files, source_tests);
+        } else {
+            allocator.free(next_path);
         }
     }
 }
@@ -530,18 +528,20 @@ fn collectFileTests(
         const name_token = opt_name_token.unwrap() orelse continue;
 
         const token_slice = tree.tokenSlice(name_token);
-        const decoded: []const u8, const kind: SourceTest.Kind = switch (tree.tokenTag(name_token)) {
+        const name_tag = tree.tokenTag(name_token);
+        const decoded: []const u8, const kind: SourceTest.Kind = if (name_tag == .string_literal)
             // The name may contain escapes; decode so it matches the raw
             // bytes reported by test binaries.
-            .string_literal => .{ try std.zig.string_literal.parseAlloc(arena, token_slice), .named },
+            .{ try std.zig.string_literal.parseAlloc(arena, token_slice), .named }
+        else if (name_tag == .identifier)
             // Doctest: `test declName { ... }`, where the identifier itself
             // may be @"..."-quoted.
-            .identifier => if (token_slice[0] == '@')
+            if (token_slice[0] == '@')
                 .{ try std.zig.string_literal.parseAlloc(arena, token_slice[1..]), .doctest }
             else
-                .{ try arena.dupe(u8, token_slice), .doctest },
-            else => unreachable,
-        };
+                .{ try arena.dupe(u8, token_slice), .doctest }
+        else
+            unreachable;
 
         const file = file_copy orelse blk: {
             const copy = try arena.dupe(u8, path);
@@ -588,10 +588,41 @@ fn collectFileImports(
     scan_queue: *PathList,
 ) !void {
     const source = readSourceFile(allocator, std_io, file_path) catch |err| switch (err) {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.OutOfMemory,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
         // Imports can name generated files that don't exist in the source
         // tree (e.g. compiled_builtins.zig); they can't wire anything.
         error.FileNotFound => return,
-        else => return err,
     };
     defer allocator.free(source);
 

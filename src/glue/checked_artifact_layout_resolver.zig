@@ -5,6 +5,7 @@
 //! through the shared layout graph/store.
 
 const std = @import("std");
+const collections = @import("collections");
 const check = @import("check");
 const layout = @import("layout");
 
@@ -577,7 +578,7 @@ pub const Resolver = struct {
         root: CheckedArtifact.CheckedTypeId,
     ) Error!void {
         var current: ?CheckedArtifact.CheckedTypeId = root;
-        var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         while (current) |current_id| {
@@ -599,7 +600,14 @@ pub const Resolver = struct {
                     if (variable.row_default == .empty_record) break;
                     return error.UnresolvedByValue;
                 },
-                else => return error.UnresolvedByValue,
+                .pending,
+                .err,
+                .tuple,
+                .nominal,
+                .function,
+                .tag_union,
+                .empty_tag_union,
+                => return error.UnresolvedByValue,
             }
         }
     }
@@ -611,7 +619,7 @@ pub const Resolver = struct {
         root: CheckedArtifact.CheckedTypeId,
     ) Error!void {
         var current: ?CheckedArtifact.CheckedTypeId = root;
-        var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         while (current) |current_id| {
@@ -629,7 +637,15 @@ pub const Resolver = struct {
                     if (variable.row_default == .empty_tag_union) break;
                     return error.UnresolvedByValue;
                 },
-                else => return error.UnresolvedByValue,
+                .pending,
+                .err,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                => return error.UnresolvedByValue,
             }
         }
     }

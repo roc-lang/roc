@@ -132,7 +132,23 @@ fn reserveUniqueTestDir(io: std.Io, allocator: std.mem.Allocator, namespace: []c
                 allocator.free(cache_root_rel);
                 continue;
             },
-            else => return err,
+            error.PermissionDenied,
+            error.SystemResources,
+            error.Unexpected,
+            error.DiskQuota,
+            error.NoSpaceLeft,
+            error.AccessDenied,
+            error.NoDevice,
+            error.Canceled,
+            error.SymLinkLoop,
+            error.LinkQuotaExceeded,
+            error.FileNotFound,
+            error.NotDir,
+            error.ReadOnlyFileSystem,
+            error.NetworkNotFound,
+            error.NameTooLong,
+            error.BadPathName,
+            => return err,
         };
 
         return cache_root_rel;
@@ -160,7 +176,47 @@ fn terminateChildGroup(job: windows_job.Handle, child_id: std.process.Child.Id) 
     switch (builtin.os.tag) {
         .windows => windows_job.terminate(job, 1),
         .wasi => {},
-        else => {
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .linux,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .macos,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => {
             const pid: std.posix.pid_t = child_id;
             std.posix.kill(-pid, std.posix.SIG.KILL) catch {
                 std.posix.kill(pid, std.posix.SIG.KILL) catch {};
@@ -244,7 +300,47 @@ pub fn runChildWithTimeout(
         // the whole group (child + any grandchildren) on timeout.
         .pgid = switch (builtin.os.tag) {
             .windows, .wasi => null,
-            else => 0,
+            .freestanding,
+            .other,
+            .contiki,
+            .fuchsia,
+            .hermit,
+            .managarm,
+            .haiku,
+            .hurd,
+            .illumos,
+            .plan9,
+            .rtems,
+            .serenity,
+            .dragonfly,
+            .driverkit,
+            .ios,
+            .maccatalyst,
+            .tvos,
+            .visionos,
+            .watchos,
+            .uefi,
+            .linux,
+            .freebsd,
+            .openbsd,
+            .netbsd,
+            .macos,
+            .@"3ds",
+            .ps3,
+            .ps4,
+            .ps5,
+            .psp,
+            .vita,
+            .emscripten,
+            .amdhsa,
+            .amdpal,
+            .cuda,
+            .mesa3d,
+            .nvcl,
+            .opencl,
+            .opengl,
+            .vulkan,
+            => 0,
         },
     });
     errdefer child.kill(io);
@@ -293,7 +389,10 @@ pub fn runChildWithTimeout(
         if (stderr_reader.buffered().len > options.max_output_bytes) return error.StreamTooLong;
     } else |err| switch (err) {
         error.EndOfStream => {},
-        else => |e| return e,
+        error.Canceled,
+        error.ConcurrencyUnavailable,
+        error.Timeout,
+        => |stream_error| return stream_error,
     }
     try multi_reader.checkAnyError();
 
@@ -615,7 +714,7 @@ pub fn checkSuccess(result: RocResult) ResultCheckError!void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -640,7 +739,7 @@ pub fn checkFailure(result: RocResult) ResultCheckError!void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("ERROR: Process terminated abnormally: {} (expected clean failure with non-zero exit code)\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -671,7 +770,7 @@ pub fn checkTestSuccess(result: RocResult) ResultCheckError!void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Test terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.TestFailed;

@@ -16,7 +16,42 @@ const SupportedOS = enum { windows, posix };
 pub const SUPPORTED_OS = switch (builtin.os.tag) {
     .windows => SupportedOS.windows,
     .linux, .macos, .freebsd, .openbsd, .netbsd, .dragonfly => SupportedOS.posix,
-    else => |tag| @compileError(@tagName(tag) ++ " is not a supported OS for ReplLine!"),
+    .freestanding,
+    .other,
+    .contiki,
+    .fuchsia,
+    .hermit,
+    .managarm,
+    .haiku,
+    .hurd,
+    .illumos,
+    .plan9,
+    .rtems,
+    .serenity,
+    .driverkit,
+    .ios,
+    .maccatalyst,
+    .tvos,
+    .visionos,
+    .watchos,
+    .uefi,
+    .@"3ds",
+    .ps3,
+    .ps4,
+    .ps5,
+    .psp,
+    .vita,
+    .emscripten,
+    .wasi,
+    .amdhsa,
+    .amdpal,
+    .cuda,
+    .mesa3d,
+    .nvcl,
+    .opencl,
+    .opengl,
+    .vulkan,
+    => |tag| @compileError(@tagName(tag) ++ " is not a supported OS for ReplLine!"),
 };
 
 /// Platform-specific newline sequence.
@@ -567,44 +602,38 @@ fn historyForward(state: *LineState) CommandError!void {
 
 fn findCommandFn(state: *LineState) CommandFn {
     const key = state.in_buffer[0];
-    return switch (key) {
-        ' '...'~' => printChar,
-        ansi_term.BACKSPACE => deleteBefore,
-        ansi_term.ctrlKey('D') => exitRepl,
-        ansi_term.ctrlKey('L') => clearScreen,
-        ansi_term.ctrlKey('C') => handleCtrlC,
-        ansi_term.ctrlKey('A') => moveCursorToStart,
-        ansi_term.ctrlKey('E') => moveCursorToEnd,
-        ansi_term.ctrlKey('K') => killLineToEnd,
-        ansi_term.ctrlKey('U') => deleteToStart,
-        ansi_term.ctrlKey('W') => deleteWordBackward,
-        ansi_term.ctrlKey('Y') => yank,
-        ansi_term.ctrlKey('B') => moveCursorLeft,
-        ansi_term.ctrlKey('F') => moveCursorRight,
-        ansi_term.ctrlKey('H') => deleteBefore,
-        control_code.lf, control_code.cr => acceptLine,
-        control_code.esc => {
-            if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
-                return switch (state.in_buffer[2]) {
-                    ansi_term.LEFT => moveCursorLeft,
-                    ansi_term.RIGHT => moveCursorRight,
-                    ansi_term.UP => historyBackward,
-                    ansi_term.DOWN => historyForward,
-                    else => doNothing,
-                };
-            } else if (state.bytes_read == 2) {
-                return switch (state.in_buffer[1]) {
-                    'b', 'B' => moveWordLeft,
-                    'f', 'F' => moveWordRight,
-                    'd', 'D' => killWordForward,
-                    else => doNothing,
-                };
-            } else {
-                return doNothing;
-            }
-        },
-        else => doNothing,
-    };
+    if (key >= ' ' and key <= '~') return printChar;
+    if (key == ansi_term.BACKSPACE) return deleteBefore;
+    if (key == ansi_term.ctrlKey('D')) return exitRepl;
+    if (key == ansi_term.ctrlKey('L')) return clearScreen;
+    if (key == ansi_term.ctrlKey('C')) return handleCtrlC;
+    if (key == ansi_term.ctrlKey('A')) return moveCursorToStart;
+    if (key == ansi_term.ctrlKey('E')) return moveCursorToEnd;
+    if (key == ansi_term.ctrlKey('K')) return killLineToEnd;
+    if (key == ansi_term.ctrlKey('U')) return deleteToStart;
+    if (key == ansi_term.ctrlKey('W')) return deleteWordBackward;
+    if (key == ansi_term.ctrlKey('Y')) return yank;
+    if (key == ansi_term.ctrlKey('B')) return moveCursorLeft;
+    if (key == ansi_term.ctrlKey('F')) return moveCursorRight;
+    if (key == ansi_term.ctrlKey('H')) return deleteBefore;
+    if (key == control_code.lf or key == control_code.cr) return acceptLine;
+    if (key != control_code.esc) return doNothing;
+
+    if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
+        const direction = state.in_buffer[2];
+        if (direction == ansi_term.LEFT) return moveCursorLeft;
+        if (direction == ansi_term.RIGHT) return moveCursorRight;
+        if (direction == ansi_term.UP) return historyBackward;
+        if (direction == ansi_term.DOWN) return historyForward;
+    } else if (state.bytes_read == 2) {
+        return switch (state.in_buffer[1]) {
+            'b', 'B' => moveWordLeft,
+            'f', 'F' => moveWordRight,
+            'd', 'D' => killWordForward,
+            else => doNothing,
+        };
+    }
+    return doNothing;
 }
 
 /// All possible errors that can occur during line reading.
@@ -660,7 +689,18 @@ fn readLineSimple(outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *
                 }
                 return .{ .line = try line_buffer.toOwnedSlice(outlive) };
             },
-            else => return err,
+            error.AccessDenied,
+            error.Canceled,
+            error.ConnectionResetByPeer,
+            error.InputOutput,
+            error.IsDir,
+            error.LockViolation,
+            error.NotOpenForReading,
+            error.SocketUnconnected,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => return err,
         };
         if (bytes_read == 0) {
             // Belt-and-suspenders: treat a zero-byte read as EOF as well.
@@ -754,10 +794,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
         for (events.items) |event| {
             // The Ctrl-C "press again to quit" arming only survives consecutive
             // Ctrl-C presses; any other input event disarms it.
-            const is_ctrl_c = switch (event) {
-                .byte => |b| b == ansi_term.ctrlKey('C'),
-                else => false,
-            };
+            const is_ctrl_c = std.meta.activeTag(event) == .byte and event.byte == ansi_term.ctrlKey('C');
             if (!is_ctrl_c) state.ctrl_c_armed = false;
 
             switch (event) {
@@ -829,7 +866,22 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                         done = true;
                         break;
                     },
-                    else => |readline_error| return readline_error,
+                    error.AccessDenied,
+                    error.Canceled,
+                    error.ConnectionResetByPeer,
+                    error.DeleteEmptyLineBuffer,
+                    error.EndOfStream,
+                    error.InputOutput,
+                    error.IsDir,
+                    error.LockViolation,
+                    error.NotOpenForReading,
+                    error.OutOfMemory,
+                    error.SocketUnconnected,
+                    error.SystemResources,
+                    error.Unexpected,
+                    error.WouldBlock,
+                    error.WriteFailed,
+                    => |readline_error| return readline_error,
                 }
             };
         }

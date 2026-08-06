@@ -362,9 +362,12 @@ const Printer = struct {
                     try writer.print("ret l{d}\n", .{@intFromEnum(s.value)});
                     return;
                 },
-                .crash => {
+                .crash => |s| {
                     try writeIndent(indent, writer);
-                    try writer.writeAll("crash\n");
+                    switch (s.msg) {
+                        .literal => try writer.writeAll("crash\n"),
+                        .local => |local| try writer.print("crash l{d}\n", .{@intFromEnum(local)}),
+                    }
                     return;
                 },
                 .runtime_error => {

@@ -56,17 +56,17 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ScalarizeError!vo
         .store = store,
         .layouts = layouts,
         .allocator = store.allocator,
-        .use_other = std.AutoHashMap(LIR.LocalId, void).init(store.allocator),
-        .field_reads = std.AutoHashMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .init_writes = std.AutoHashMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .write_other = std.AutoHashMap(LIR.LocalId, void).init(store.allocator),
-        .struct_builds = std.AutoHashMap(LIR.LocalId, StructBuild).init(store.allocator),
-        .alias_init_writes = std.AutoHashMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .alias_defs = std.AutoHashMap(LIR.LocalId, AliasDef).init(store.allocator),
-        .join_params = std.AutoHashMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .transparent = std.AutoHashMap(LIR.LocalId, void).init(store.allocator),
-        .removed = std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId).init(store.allocator),
-        .visited = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator),
+        .use_other = collections.DenseMap(LIR.LocalId, void).init(store.allocator),
+        .field_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
+        .init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
+        .write_other = collections.DenseMap(LIR.LocalId, void).init(store.allocator),
+        .struct_builds = collections.DenseMap(LIR.LocalId, StructBuild).init(store.allocator),
+        .alias_init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
+        .alias_defs = collections.DenseMap(LIR.LocalId, AliasDef).init(store.allocator),
+        .join_params = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
+        .transparent = collections.DenseMap(LIR.LocalId, void).init(store.allocator),
+        .removed = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(store.allocator),
+        .visited = collections.DenseMap(LIR.CFStmtId, void).init(store.allocator),
         .stack = .empty,
     };
     defer pass.deinit();
@@ -114,25 +114,25 @@ const Pass = struct {
     layouts: *const layout_mod.Store,
     allocator: Allocator,
     /// Locals with any use other than a field read.
-    use_other: std.AutoHashMap(LIR.LocalId, void),
+    use_other: collections.DenseMap(LIR.LocalId, void),
     /// Field-read statements per source local.
-    field_reads: std.AutoHashMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    field_reads: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
     /// `initialize_join_param` writes per target local.
-    init_writes: std.AutoHashMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    init_writes: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
     /// Locals with any write other than an `initialize_join_param`.
-    write_other: std.AutoHashMap(LIR.LocalId, void),
+    write_other: collections.DenseMap(LIR.LocalId, void),
     /// Struct-literal defs per target local.
-    struct_builds: std.AutoHashMap(LIR.LocalId, StructBuild),
+    struct_builds: collections.DenseMap(LIR.LocalId, StructBuild),
     /// Direct `ref.local` assignments into a join parameter, per parameter.
     /// Lowering initializes a join parameter on some edges this way instead
     /// of with `set_local`; such a statement is an initializer that can seed
     /// per-field writes, exactly like a non-literal `set_local` initializer.
-    alias_init_writes: std.AutoHashMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    alias_init_writes: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
     /// Pure `ref.local` defs per target local. Lowered user code reads
     /// aggregates through such aliases, so the pass looks through them:
     /// an alias whose uses are all field reads (or further such aliases) is
     /// transparent, and its reads count as reads of the alias's source.
-    alias_defs: std.AutoHashMap(LIR.LocalId, AliasDef),
+    alias_defs: collections.DenseMap(LIR.LocalId, AliasDef),
     /// How many join-parameter slots list each local. A join parameter can be
     /// written by a plain assignment on a jump edge, so an alias-shaped
     /// definition of one is an edge initializer, never a transparent alias.
@@ -140,13 +140,13 @@ const Pass = struct {
     /// joins; scalarizing such a local for one join would steal the shared
     /// initializers from the others, so only a local listed exactly once may
     /// scalarize.
-    join_params: std.AutoHashMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    join_params: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
     /// Aliases proved transparent this round.
-    transparent: std.AutoHashMap(LIR.LocalId, void),
+    transparent: collections.DenseMap(LIR.LocalId, void),
     /// Deleted build statements mapped to their continuations, for edge
     /// patching.
-    removed: std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId),
-    visited: std.AutoHashMap(LIR.CFStmtId, void),
+    removed: collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId),
+    visited: collections.DenseMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId),
     /// Field-parameter locals created this round; they join the proc's
     /// frame locals so frame plans cover them.
@@ -544,10 +544,9 @@ const Pass = struct {
         // The transparent aliases' definitions read a value that no longer
         // exists; every use of them was rewritten above, so they are deleted.
         for (closure.stmts.items) |alias_stmt| {
-            const alias_next = switch (self.store.getCFStmt(alias_stmt)) {
-                .assign_ref => |a| a.next,
-                else => unreachable,
-            };
+            const alias = self.store.getCFStmt(alias_stmt);
+            std.debug.assert(alias == .assign_ref);
+            const alias_next = alias.assign_ref.next;
             try self.removed.put(alias_stmt, alias_next);
         }
 
@@ -574,10 +573,9 @@ const Pass = struct {
                 const operands = self.store.getLocalSpan(site.fields);
                 try self.writeFields(write_stmt, write.next, field_locals, operands);
 
-                const build_next = switch (self.store.getCFStmt(site.stmt)) {
-                    .assign_struct => |b| b.next,
-                    else => unreachable,
-                };
+                const build_stmt = self.store.getCFStmt(site.stmt);
+                std.debug.assert(build_stmt == .assign_struct);
+                const build_next = build_stmt.assign_struct.next;
                 try self.removed.put(site.stmt, build_next);
             } else {
                 try self.seedWrite(write_stmt, write.value, write.next, field_locals);
@@ -594,10 +592,9 @@ const Pass = struct {
         // Each direct build becomes per-field writes in its place.
         for (direct_builds) |site| {
             const operands = self.store.getLocalSpan(site.fields);
-            const build_next = switch (self.store.getCFStmt(site.stmt)) {
-                .assign_struct => |b| b.next,
-                else => unreachable,
-            };
+            const build_stmt = self.store.getCFStmt(site.stmt);
+            std.debug.assert(build_stmt == .assign_struct);
+            const build_next = build_stmt.assign_struct.next;
             try self.writeFields(site.stmt, build_next, field_locals, operands);
         }
 
@@ -1073,6 +1070,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, join_stmt.remainder);
                 },
                 .ret => |ret_stmt| try self.noteUse(ret_stmt.value),
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteUse(message),
                 .incref => |rc| {
                     try self.noteUse(rc.value);
                     try self.stack.append(self.allocator, rc.next);
@@ -1090,7 +1088,7 @@ const Pass = struct {
                     try self.noteUse(rc.value);
                     try self.stack.append(self.allocator, rc.next);
                 },
-                .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
     }

@@ -245,6 +245,7 @@ const listAppendLeBytes = list.listAppendLeBytes;
 const listAppendSublist = list.listAppendSublist;
 const listPrepend = list.listPrepend;
 const listSublist = list.listSublist;
+const listSublistBorrowed = list.listSublistBorrowed;
 const listDropAt = list.listDropAt;
 const listReplace = list.listReplace;
 const listSwap = list.listSwap;
@@ -596,6 +597,11 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
     }
 }
 
+/// Wrapper: project a runtime RocStr to the host crash ABI using the actual RocStr storage.
+pub fn roc_builtins_crash_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.c) void {
+    roc_ops.crash(str_ptr.asSlice());
+}
+
 /// Wrapper: project a runtime RocStr to the host dbg ABI using the actual RocStr storage.
 pub fn roc_builtins_dbg_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.c) void {
     roc_ops.dbg(str_ptr.asSlice());
@@ -899,6 +905,12 @@ pub fn roc_builtins_list_sublist(out: *RocList, list_bytes: ?[*]u8, list_len: us
     } else {
         out.* = listSublist(l, alignment, element_width, false, start, len, null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
+}
+
+/// Wrapper for the ARC-selected borrowed List.sublist view.
+pub fn roc_builtins_list_sublist_borrowed(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, element_width: usize, start: u64, len: u64, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = listSublistBorrowed(l, element_width, start, len, elements_refcounted, roc_ops);
 }
 
 /// Wrapper: listDropAt(list, index) -> List. The update mode is forwarded to

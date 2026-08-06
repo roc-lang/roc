@@ -711,7 +711,7 @@ pub const Store = struct {
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = content;
-        desc.empty_tag_union_is_default = false;
+        desc.flags.empty_tag_union_is_default = false;
         try self.setDesc(resolved.desc_idx, desc);
     }
 
@@ -722,8 +722,31 @@ pub const Store = struct {
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = .{ .structure = .empty_tag_union };
-        desc.empty_tag_union_is_default = true;
+        desc.flags.empty_tag_union_is_default = true;
         try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Record that checking rejected a static-dispatch obligation whose
+    /// constraint function type is `target_var`'s equivalence class. This is
+    /// evidence metadata: the class's content is left exactly as the unifier
+    /// left it. Returns whether this call is what rejected the class, so a
+    /// caller mirroring the marker into a durable record writes one entry per
+    /// class rather than one per occurrence.
+    pub fn markVarStaticDispatchRejected(self: *Self, target_var: Var) Allocator.Error!bool {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        const resolved = self.resolveVar(target_var);
+        if (resolved.desc.flags.static_dispatch_rejected) return false;
+        var desc = resolved.desc;
+        desc.flags.static_dispatch_rejected = true;
+        try self.setDesc(resolved.desc_idx, desc);
+        return true;
+    }
+
+    /// Whether checking rejected a static-dispatch obligation on `target_var`'s
+    /// equivalence class.
+    pub fn varStaticDispatchRejected(self: *const Self, target_var: Var) bool {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        return self.resolveVar(target_var).desc.flags.static_dispatch_rejected;
     }
 
     /// The declared rule a `dangerousSetVarRedirect` call site bends the solved
@@ -747,11 +770,6 @@ pub const Store = struct {
         /// whose error has already been reported, and the redirect only lets
         /// checking continue past it.
         diagnostic_recovery_reported_error,
-        /// (ii) design.md "Platform/App Relation" (for-clause alias identity):
-        /// a platform requirement's for-clause alias is a binder over an
-        /// app-supplied type, so copied occurrences of the alias resolve to the
-        /// app's own type declaration.
-        for_clause_alias_identity,
         /// (ii) design.md "Hosted Try Question Widening": `?` on a direct call
         /// of a hosted function widens the condition's closed error row to the
         /// enclosing annotated return's error row when every visible error is
@@ -1075,9 +1093,25 @@ pub const Store = struct {
         return self.record_fields.sliceRange(range);
     }
 
+    /// Get a record field at a specific offset within a range.
+    /// Use this for index-based iteration when checking can trigger reallocations.
+    pub fn getRecordFieldAt(self: *const Self, range: RecordFieldSafeMultiList.Range, offset: u32) RecordField {
+        std.debug.assert(offset < range.count);
+        const idx: RecordFieldSafeMultiList.Idx = @enumFromInt(@intFromEnum(range.start) + offset);
+        return self.record_fields.get(idx);
+    }
+
     /// Given a range, get a slice of tags from the backing array
     pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
         return self.tags.sliceRange(range);
+    }
+
+    /// Get a tag at a specific offset within a range.
+    /// Use this for index-based iteration when checking can trigger reallocations.
+    pub fn getTagAt(self: *const Self, range: TagSafeMultiList.Range, offset: u32) Tag {
+        std.debug.assert(offset < range.count);
+        const idx: TagSafeMultiList.Idx = @enumFromInt(@intFromEnum(range.start) + offset);
+        return self.tags.get(idx);
     }
 
     /// Given a range, get a slice of interpolation part metadata from the backing array
@@ -1364,7 +1398,14 @@ pub const Store = struct {
                 .alias => |alias| current = self.getAliasBackingVar(alias),
                 .structure => |flat| return switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => true,
-                    else => false,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => false,
                 },
                 .err, .flex, .rigid => return false,
             }
@@ -1443,24 +1484,25 @@ pub const Store = struct {
         const b_data = self.resolveStorageRoot(b_var);
 
         var merged_desc = new_desc;
-        const merged_is_empty_tag_union = switch (merged_desc.content) {
-            .structure => |flat| flat == .empty_tag_union,
-            else => false,
-        };
+        const merged_is_empty_tag_union = merged_desc.content == .structure and
+            merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {
-            const a_is_explicit_empty = switch (a_data.desc.content) {
-                .structure => |flat| flat == .empty_tag_union and !a_data.desc.empty_tag_union_is_default,
-                else => false,
-            };
-            const b_is_explicit_empty = switch (b_data.desc.content) {
-                .structure => |flat| flat == .empty_tag_union and !b_data.desc.empty_tag_union_is_default,
-                else => false,
-            };
-            merged_desc.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
-                (a_data.desc.empty_tag_union_is_default or b_data.desc.empty_tag_union_is_default);
+            const a_is_explicit_empty = a_data.desc.content == .structure and
+                a_data.desc.content.structure == .empty_tag_union and
+                !a_data.desc.flags.empty_tag_union_is_default;
+            const b_is_explicit_empty = b_data.desc.content == .structure and
+                b_data.desc.content.structure == .empty_tag_union and
+                !b_data.desc.flags.empty_tag_union_is_default;
+            merged_desc.flags.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
+                (a_data.desc.flags.empty_tag_union_is_default or b_data.desc.flags.empty_tag_union_is_default);
         } else {
-            merged_desc.empty_tag_union_is_default = false;
+            merged_desc.flags.empty_tag_union_is_default = false;
         }
+        // A rejected dispatch edge is a fact about the constraint callable's
+        // equivalence class, so merging two classes rejects the result if
+        // either side was rejected.
+        merged_desc.flags.static_dispatch_rejected = a_data.desc.flags.static_dispatch_rejected or
+            b_data.desc.flags.static_dispatch_rejected;
 
         if (a_data.storage_var == b_data.storage_var) {
             try self.setDesc(a_data.desc_idx, merged_desc);
@@ -1488,7 +1530,13 @@ pub const Store = struct {
     pub fn poisonOnMismatch(self: *Self, a_var: Var, b_var: Var) Allocator.Error!void {
         var a = self.resolveStorageRoot(a_var);
         const b = self.resolveStorageRoot(b_var);
-        const err_desc = Desc{ .content = .err, .rank = Rank.generalized };
+        // Poisoning replaces the content, not the rejection history: a class
+        // whose dispatch check was already rejected stays rejected.
+        const err_desc = Desc{
+            .content = .err,
+            .rank = Rank.generalized,
+            .flags = .{ .static_dispatch_rejected = a.desc.flags.static_dispatch_rejected or b.desc.flags.static_dispatch_rejected },
+        };
 
         if (a.storage_var == b.storage_var) {
             try self.setDesc(a.desc_idx, err_desc);
@@ -2492,52 +2540,43 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqual(list_elem, deser_list_args[0]);
 
     const deser_func = deserialized.resolveVar(func_var);
-    switch (deser_func.desc.content.structure) {
-        .fn_pure => |func| {
-            const args = deserialized.sliceVars(func.args);
-            try std.testing.expectEqual(@as(usize, 2), args.len);
-            try std.testing.expectEqual(arg1, args[0]);
-            try std.testing.expectEqual(arg2, args[1]);
-            try std.testing.expectEqual(ret, func.ret);
-        },
-        else => unreachable,
-    }
+    try std.testing.expect(deser_func.desc.content.structure == .fn_pure);
+    const func = deser_func.desc.content.structure.fn_pure;
+    const args = deserialized.sliceVars(func.args);
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+    try std.testing.expectEqual(arg1, args[0]);
+    try std.testing.expectEqual(arg2, args[1]);
+    try std.testing.expectEqual(ret, func.ret);
 
     const deser_record = deserialized.resolveVar(record_var);
-    switch (deser_record.desc.content.structure) {
-        .record => |record| {
-            const fields_slice = deserialized.getRecordFieldsSlice(record.fields);
-            try std.testing.expectEqual(@as(usize, 2), fields_slice.len);
-            try std.testing.expectEqual(@as(u29, 100), fields_slice.items(.name)[0].idx);
-            try std.testing.expectEqual(@as(u29, 200), fields_slice.items(.name)[1].idx);
-            try std.testing.expectEqual(field1_var, fields_slice.items(.var_)[0]);
-            try std.testing.expectEqual(field2_var, fields_slice.items(.var_)[1]);
-            try std.testing.expectEqual(record_ext, record.ext);
-        },
-        else => unreachable,
-    }
+    try std.testing.expect(deser_record.desc.content.structure == .record);
+    const record = deser_record.desc.content.structure.record;
+    const fields_slice = deserialized.getRecordFieldsSlice(record.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields_slice.len);
+    try std.testing.expectEqual(@as(u29, 100), fields_slice.items(.name)[0].idx);
+    try std.testing.expectEqual(@as(u29, 200), fields_slice.items(.name)[1].idx);
+    try std.testing.expectEqual(field1_var, fields_slice.items(.var_)[0]);
+    try std.testing.expectEqual(field2_var, fields_slice.items(.var_)[1]);
+    try std.testing.expectEqual(record_ext, record.ext);
 
     const deser_tag_union = deserialized.resolveVar(tag_union_var);
-    switch (deser_tag_union.desc.content.structure) {
-        .tag_union => |tag_union| {
-            const tags_slice = deserialized.getTagsSlice(tag_union.tags);
-            try std.testing.expectEqual(@as(usize, 2), tags_slice.len);
-            try std.testing.expectEqual(@as(u29, 300), tags_slice.items(.name)[0].idx);
-            try std.testing.expectEqual(@as(u29, 400), tags_slice.items(.name)[1].idx);
+    try std.testing.expect(deser_tag_union.desc.content.structure == .tag_union);
+    const tag_union = deser_tag_union.desc.content.structure.tag_union;
+    const tags_slice = deserialized.getTagsSlice(tag_union.tags);
+    try std.testing.expectEqual(@as(usize, 2), tags_slice.len);
+    try std.testing.expectEqual(@as(u29, 300), tags_slice.items(.name)[0].idx);
+    try std.testing.expectEqual(@as(u29, 400), tags_slice.items(.name)[1].idx);
 
-            const tag1_args = deserialized.sliceVars(tags_slice.items(.args)[0]);
-            try std.testing.expectEqual(@as(usize, 1), tag1_args.len);
-            try std.testing.expectEqual(flex, tag1_args[0]);
+    const tag1_args = deserialized.sliceVars(tags_slice.items(.args)[0]);
+    try std.testing.expectEqual(@as(usize, 1), tag1_args.len);
+    try std.testing.expectEqual(flex, tag1_args[0]);
 
-            const tag2_args = deserialized.sliceVars(tags_slice.items(.args)[1]);
-            try std.testing.expectEqual(@as(usize, 2), tag2_args.len);
-            try std.testing.expectEqual(arg1, tag2_args[0]);
-            try std.testing.expectEqual(arg2, tag2_args[1]);
+    const tag2_args = deserialized.sliceVars(tags_slice.items(.args)[1]);
+    try std.testing.expectEqual(@as(usize, 2), tag2_args.len);
+    try std.testing.expectEqual(arg1, tag2_args[0]);
+    try std.testing.expectEqual(arg2, tag2_args[1]);
 
-            try std.testing.expectEqual(tag_union_ext, tag_union.ext);
-        },
-        else => unreachable,
-    }
+    try std.testing.expectEqual(tag_union_ext, tag_union.ext);
 }
 
 test "SlotStore.Serialized roundtrip" {

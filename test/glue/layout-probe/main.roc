@@ -84,7 +84,15 @@ platform ""
 			inputs: ["crt1.o", "libhost.a", app, "libc.a"],
 			output: Exe,
 		},
+		x64v1musl: {
+			inputs: ["crt1.o", "libhost.a", app, "libc.a"],
+			output: Exe,
+		},
 		arm64musl: {
+			inputs: ["crt1.o", "libhost.a", app, "libc.a"],
+			output: Exe,
+		},
+		arm64v1musl: {
 			inputs: ["crt1.o", "libhost.a", app, "libc.a"],
 			output: Exe,
 		},

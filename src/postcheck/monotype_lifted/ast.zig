@@ -54,6 +54,8 @@ pub const ComptimeSiteKind = Mono.ComptimeSiteKind;
 pub const ComptimeSite = Mono.ComptimeSite;
 /// Record field expression entry.
 pub const FieldExpr = Mono.FieldExpr;
+/// Record update expression.
+pub const RecordUpdate = Mono.RecordUpdate;
 /// Keyed pre-lift function capture operand.
 pub const FnDefCapture = Mono.FnDefCapture;
 /// Keyed lifted capture operand (CaptureId + supplying expression).
@@ -342,10 +344,9 @@ pub const ProgramView = struct {
         scrutinee: ExprId,
         branches_span: Span(Branch),
     ) ?ListMapCanReuseMatch {
-        const call = switch (self.exprs[@intFromEnum(scrutinee)].data) {
-            .call_proc => |call| call,
-            else => return null,
-        };
+        const scrutinee_data = self.exprs[@intFromEnum(scrutinee)].data;
+        if (std.meta.activeTag(scrutinee_data) != .call_proc) return null;
+        const call = scrutinee_data.call_proc;
         const callee = switch (call.callee) {
             .lifted => |fn_id| fn_id,
             .func => return null,
@@ -357,24 +358,22 @@ pub const ProgramView = struct {
         if (!self.exprIsListMapCanReuseOp(callee_body)) return null;
 
         for (self.branchSpan(branches_span)) |branch| {
-            if (branch.guard != null) return null;
-            switch (self.pats[@intFromEnum(branch.pat)].data) {
-                .wildcard => return .{ .call_args = call.args, .zero_branch_body = branch.body },
-                .int_lit => |value| if (value.toI128() == 0) {
-                    return .{ .call_args = call.args, .zero_branch_body = branch.body };
-                },
-                else => return null,
+            if (branch.guard != null or branch.bindings.len != 0) return null;
+            const pat_data = self.pats[@intFromEnum(branch.pat)].data;
+            const tag = std.meta.activeTag(pat_data);
+            if (tag == .wildcard or (tag == .int_lit and pat_data.int_lit.toI128() == 0)) {
+                return .{ .call_args = call.args, .zero_branch_body = branch.body };
             }
+            return null;
         }
         return null;
     }
 
     fn exprIsListMapCanReuseOp(self: ProgramView, expr_id: ExprId) bool {
-        return switch (self.exprs[@intFromEnum(expr_id)].data) {
-            .low_level => |ll| ll.op == .list_map_can_reuse,
-            .block => |block| block.statements.len == 0 and self.exprIsListMapCanReuseOp(block.final_expr),
-            else => false,
-        };
+        const data = self.exprs[@intFromEnum(expr_id)].data;
+        const tag = std.meta.activeTag(data);
+        if (tag == .low_level) return data.low_level.op == .list_map_can_reuse;
+        return tag == .block and data.block.statements.len == 0 and self.exprIsListMapCanReuseOp(data.block.final_expr);
     }
 };
 
@@ -1252,10 +1251,9 @@ pub const Program = struct {
         scrutinee: ExprId,
         branches_span: Span(Branch),
     ) ?ListMapCanReuseMatch {
-        const call = switch (self.exprs.unsafeRawItemsForView()[@intFromEnum(scrutinee)].data) {
-            .call_proc => |call| call,
-            else => return null,
-        };
+        const scrutinee_data = self.exprs.unsafeRawItemsForView()[@intFromEnum(scrutinee)].data;
+        if (std.meta.activeTag(scrutinee_data) != .call_proc) return null;
+        const call = scrutinee_data.call_proc;
         const callee = switch (call.callee) {
             .lifted => |fn_id| fn_id,
             .func => return null,
@@ -1269,14 +1267,13 @@ pub const Program = struct {
         const branches = self.branchSpan(branches_span);
         for (0..branches.len) |index| {
             const branch = GuardedList.at(branches, index);
-            if (branch.guard != null) return null;
-            switch (self.pats.unsafeRawItemsForView()[@intFromEnum(branch.pat)].data) {
-                .wildcard => return .{ .call_args = call.args, .zero_branch_body = branch.body },
-                .int_lit => |value| if (value.toI128() == 0) {
-                    return .{ .call_args = call.args, .zero_branch_body = branch.body };
-                },
-                else => return null,
+            if (branch.guard != null or branch.bindings.len != 0) return null;
+            const pat_data = self.pats.unsafeRawItemsForView()[@intFromEnum(branch.pat)].data;
+            const tag = std.meta.activeTag(pat_data);
+            if (tag == .wildcard or (tag == .int_lit and pat_data.int_lit.toI128() == 0)) {
+                return .{ .call_args = call.args, .zero_branch_body = branch.body };
             }
+            return null;
         }
         return null;
     }
@@ -1291,11 +1288,10 @@ pub const Program = struct {
     };
 
     fn exprIsListMapCanReuseOp(self: *const Program, expr_id: ExprId) bool {
-        return switch (self.exprs.unsafeRawItemsForView()[@intFromEnum(expr_id)].data) {
-            .low_level => |ll| ll.op == .list_map_can_reuse,
-            .block => |block| block.statements.len == 0 and self.exprIsListMapCanReuseOp(block.final_expr),
-            else => false,
-        };
+        const data = self.exprs.unsafeRawItemsForView()[@intFromEnum(expr_id)].data;
+        const tag = std.meta.activeTag(data);
+        if (tag == .low_level) return data.low_level.op == .list_map_can_reuse;
+        return tag == .block and data.block.statements.len == 0 and self.exprIsListMapCanReuseOp(data.block.final_expr);
     }
 
     pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) ProgramSpanBorrow(IfBranch, "if_branches") {

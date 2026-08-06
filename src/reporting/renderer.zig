@@ -203,7 +203,21 @@ fn findBoxedRegion(elements: []const DocumentElement) ?BoxedRegion {
                     .line_text = dr.line_text,
                 };
             },
-            else => {},
+            .text,
+            .annotated,
+            .line_break,
+            .indent,
+            .space,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .raw,
+            .reflowing_text,
+            .link,
+            .vertical_stack,
+            .horizontal_concat,
+            .source_code_multi_region,
+            => {},
         }
     }
     return null;
@@ -292,7 +306,17 @@ fn collectStyledText(
                     try colors.append(palette.secondary);
                 }
             },
-            else => {},
+            .indent,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .link,
+            .vertical_stack,
+            .horizontal_concat,
+            .source_code_region,
+            .source_code_multi_region,
+            .source_code_with_underlines,
+            => {},
         }
     }
 }
@@ -814,7 +838,21 @@ fn renderBelowContent(
                 }
                 try renderEmbeddedBox(writer, palette, rw, dr.region_annotation, dr.filename, dr.start_line, sc, dr.end_line, ec, dr.line_text);
             },
-            else => try renderElementAs(.color_terminal, elements[idx], &buf.writer, &ctx),
+            .text,
+            .annotated,
+            .line_break,
+            .indent,
+            .space,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .raw,
+            .reflowing_text,
+            .link,
+            .vertical_stack,
+            .horizontal_concat,
+            .source_code_multi_region,
+            => try renderElementAs(.color_terminal, elements[idx], &buf.writer, &ctx),
         }
     }
     try flushBelowText(writer, &buf, width, &started);

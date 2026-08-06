@@ -199,9 +199,9 @@ const Pass = struct {
     allocator: Allocator,
     local_info: []ValueInfo,
     proc_returns: []ValueInfo,
-    visited: std.AutoHashMap(LIR.CFStmtId, void),
+    visited: collections.DenseMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId),
-    redirects: std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId),
+    redirects: collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId),
     use_counts: []u32,
 
     fn init(result: *LirProgram.Result) Allocator.Error!Pass {
@@ -224,9 +224,9 @@ const Pass = struct {
             .allocator = allocator,
             .local_info = local_info,
             .proc_returns = proc_returns,
-            .visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator),
+            .visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
             .stack = .empty,
-            .redirects = std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
+            .redirects = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
             .use_counts = use_counts,
         };
     }
@@ -512,6 +512,7 @@ const Pass = struct {
             .str_match => |s| self.noteUse(s.source),
             .str_match_set => |s| self.noteUse(s.source),
             .ret => |s| self.noteUse(s.value),
+            .crash => |s| if (s.msg.localId()) |message| self.noteUse(message),
             .incref => |s| self.noteUse(s.value),
             .decref => |s| self.noteUse(s.value),
             .decref_if_initialized => |s| {
@@ -524,7 +525,6 @@ const Pass = struct {
             .comptime_branch_taken,
             .join,
             .jump,
-            .crash,
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .loop_continue,
@@ -538,10 +538,8 @@ const Pass = struct {
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
-            const switch_stmt = switch (stmt) {
-                .switch_stmt => |s| s,
-                else => continue,
-            };
+            if (stmt != .switch_stmt) continue;
+            const switch_stmt = stmt.switch_stmt;
             const tags = &self.localInfo(switch_stmt.cond).tags;
             if (!tags.hasKnownValues()) continue;
 
@@ -588,18 +586,12 @@ const Pass = struct {
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
-            const assign = switch (stmt) {
-                .assign_ref => |a| a,
-                else => continue,
-            };
-            switch (assign.op) {
-                .discriminant => {},
-                else => continue,
-            }
-            const switch_stmt = switch (self.store.getCFStmt(assign.next)) {
-                .switch_stmt => |s| s,
-                else => continue,
-            };
+            if (stmt != .assign_ref) continue;
+            const assign = stmt.assign_ref;
+            if (assign.op != .discriminant) continue;
+            const next_stmt = self.store.getCFStmt(assign.next);
+            if (next_stmt != .switch_stmt) continue;
+            const switch_stmt = next_stmt.switch_stmt;
             if (switch_stmt.cond != assign.target) continue;
             if (self.useCount(assign.target) != 1) continue;
             const next = self.resolveRedirect(assign.next);
@@ -1289,6 +1281,7 @@ test "tag reachability retains branches for erased call results" {
     const closure = try f.local(f.outer_layout);
     const result = try f.local(f.outer_layout);
     const disc = try f.local(.u16);
+    const arg_plan = try store.internErasedCallArgsPlan(&f.result.layouts, &.{});
 
     const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } });
     const bad = try store.addCFStmt(.{ .runtime_error = {} });
@@ -1306,6 +1299,7 @@ test "tag reachability retains branches for erased call results" {
         .target = result,
         .closure = closure,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .next = disc_read,
     } });
     const proc = try store.addProcSpec(.{

@@ -56,6 +56,115 @@ const RunnerError = std.mem.Allocator.Error || test_harness.Timer.Error || test_
 
 const CaseOrigin = enum { corpus, generated };
 
+const TestHelperErrorKind = enum {
+    out_of_memory,
+    crash,
+    other,
+};
+
+fn classifyTestHelperError(err: helpers.TestHelperError) TestHelperErrorKind {
+    return switch (err) {
+        error.OutOfMemory => .out_of_memory,
+        error.Crash => .crash,
+        error.InvalidUtf8,
+        error.FileNotFound,
+        error.AccessDenied,
+        error.NotDir,
+        error.SymLinkLoop,
+        error.InputOutput,
+        error.FileTooBig,
+        error.IsDir,
+        error.ProcessFdQuotaExceeded,
+        error.SystemFdQuotaExceeded,
+        error.NoDevice,
+        error.SystemResources,
+        error.NoSpaceLeft,
+        error.BadPathName,
+        error.DeviceBusy,
+        error.PipeBusy,
+        error.PathAlreadyExists,
+        error.NetworkNotFound,
+        error.AntivirusInterference,
+        error.PermissionDenied,
+        error.Canceled,
+        error.Unexpected,
+        error.NameTooLong,
+        error.DiskQuota,
+        error.BrokenPipe,
+        error.NotOpenForWriting,
+        error.LockViolation,
+        error.WouldBlock,
+        error.FileBusy,
+        error.Unseekable,
+        error.ConnectionResetByPeer,
+        error.NotOpenForReading,
+        error.SocketUnconnected,
+        error.ReadOnlyFileSystem,
+        error.FileLocksUnsupported,
+        error.Streaming,
+        error.LockedMemoryLimitExceeded,
+        error.ParseError,
+        error.WriteFailed,
+        error.MemoryMappingNotSupported,
+        error.MappingAlreadyExists,
+        error.DivisionByZero,
+        error.ThreadQuotaExceeded,
+        error.NotElfFile,
+        error.NotDynamicLibrary,
+        error.MissingDynamicLinkingInformation,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.ElfHashTableNotFound,
+        error.EmptyCode,
+        error.MmapFailed,
+        error.MprotectFailed,
+        error.UnsupportedPlatform,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.LlvmBackendUnavailable,
+        error.DevBackendUnavailable,
+        error.WasmExecFailed,
+        error.TypeCheckError,
+        error.CorruptEmbeddedBuiltins,
+        error.RuntimeError,
+        error.ComptimeExhaustiveness,
+        error.ExpectErr,
+        error.EvaluationFailed,
+        error.EntrypointNotFound,
+        error.InvalidLirImage,
+        error.UnsupportedLirImageVersion,
+        error.Internal,
+        error.UnsupportedTarget,
+        error.PageSizeQueryFailed,
+        error.CreateFileMappingFailed,
+        error.OpenFileMappingFailed,
+        error.MapViewOfFileFailed,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.MemfdCreateFailed,
+        error.FtruncateFailed,
+        error.InvalidHandle,
+        error.WindowsSDKNotFound,
+        error.CompilationFailed,
+        error.NoBitcodeModules,
+        error.UnsupportedLlvmTriple,
+        error.MissingBuiltinBitcode,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.BitcodeParseError,
+        error.ModuleLinkFailed,
+        error.TempFileError,
+        error.LinkFailed,
+        error.UnsupportedLowLevel,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        => .other,
+    };
+}
+
 const Case = struct {
     name: []const u8,
     source: []const u8,
@@ -548,18 +657,18 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
         case.imports,
         null,
         &materialized,
-    ) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return CaseResult{ .status = .compile_skip },
+    ) catch |err| switch (classifyTestHelperError(err)) {
+        .out_of_memory => return error.OutOfMemory,
+        .crash, .other => return CaseResult{ .status = .compile_skip },
     };
     // LIFO defers: the materialized program (allocated from the compile's
     // shared-memory arena) is deinit'd before the arena itself unmaps.
     defer compiled.deinit(gpa);
     defer if (materialized) |*program| program.deinit();
 
-    var transcript = helpers.lirInterpreterTranscript(gpa, &compiled.lowered) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return CaseResult{
+    var transcript = helpers.lirInterpreterTranscript(gpa, &compiled.lowered) catch |err| switch (classifyTestHelperError(err)) {
+        .out_of_memory => return error.OutOfMemory,
+        .crash, .other => return CaseResult{
             .status = .interpreter_error,
             .detail = try std.fmt.allocPrint(gpa, "{s}", .{@errorName(err)}),
         },
@@ -694,13 +803,13 @@ fn compareDevBackend(
     lowered: *const helpers.LoweredProgram,
     transcript: *const helpers.InterpreterTranscript,
 ) std.mem.Allocator.Error!?[]u8 {
-    const dev_output = helpers.devEvaluatorInspectedStr(gpa, lowered) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.Crash => switch (transcript.outcome) {
+    const dev_output = helpers.devEvaluatorInspectedStr(gpa, lowered) catch |err| switch (classifyTestHelperError(err)) {
+        .out_of_memory => return error.OutOfMemory,
+        .crash => switch (transcript.outcome) {
             .aborted => return null,
             .output => |interp_bytes| return try devDivergence(gpa, case, "dev backend termination", interp_bytes, "(crash)"),
         },
-        else => return try std.fmt.allocPrint(
+        .other => return try std.fmt.allocPrint(
             gpa,
             "  case: {s}\n  dev backend error: {s}\n",
             .{ case.name, @errorName(err) },

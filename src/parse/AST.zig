@@ -296,80 +296,64 @@ fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Alloca
         return;
     }
 
-    switch (ctx.tokenTag()) {
-        .UpperIdent,
-        .DotUpperIdent,
-        .NoSpaceDotUpperIdent,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Names that start with uppercase letters are used for tags, type names, and module names in Roc.");
-        },
-        .LowerIdent,
-        .DotLowerIdent,
-        .NoSpaceDotLowerIdent,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.");
-        },
-        .KwApp,
-        .KwAs,
-        .KwCrash,
-        .KwDbg,
-        .KwElse,
-        .KwExpect,
-        .KwExposes,
-        .KwExposing,
-        .KwFor,
-        .KwGenerates,
-        .KwHas,
-        .KwHosted,
-        .KwIf,
-        .KwImplements,
-        .KwImport,
-        .KwImports,
-        .KwIn,
-        .KwInterface,
-        .KwMatch,
-        .KwModule,
-        .KwPackage,
-        .KwPackages,
-        .KwPlatform,
-        .KwProvides,
-        .KwRequires,
-        .KwReturn,
-        .KwTargets,
-        .KwVar,
-        .KwWhere,
-        .KwWhile,
-        .KwWith,
-        .KwBreak,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("That word is reserved by Roc, so it cannot be used as a name in this position.");
-        },
-        .Comma => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("A comma separates items, but there must be a valid item on both sides of it.");
-        },
-        .CloseCurly,
-        .CloseRound,
-        .CloseSquare,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("This closes the current construct, so the parser was looking for the missing item before it.");
-        },
-        .MalformedUnicodeIdent,
-        .MalformedDotUnicodeIdent,
-        .MalformedNoSpaceDotUnicodeIdent,
-        .MalformedNamedUnderscoreUnicode,
-        .MalformedOpaqueNameUnicode,
-        .MalformedOpaqueNameWithoutName,
-        .MalformedUnknownToken,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("This token is malformed, so it cannot be used as ordinary Roc syntax.");
-        },
-        else => {},
+    const token_tag = ctx.tokenTag();
+    if (token_tag == .UpperIdent or token_tag == .DotUpperIdent or token_tag == .NoSpaceDotUpperIdent) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Names that start with uppercase letters are used for tags, type names, and module names in Roc.");
+    } else if (token_tag == .LowerIdent or token_tag == .DotLowerIdent or token_tag == .NoSpaceDotLowerIdent) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.");
+    } else if (token_tag == .KwApp or
+        token_tag == .KwAs or
+        token_tag == .KwCrash or
+        token_tag == .KwDbg or
+        token_tag == .KwElse or
+        token_tag == .KwExpect or
+        token_tag == .KwExposes or
+        token_tag == .KwExposing or
+        token_tag == .KwFor or
+        token_tag == .KwGenerates or
+        token_tag == .KwHas or
+        token_tag == .KwHosted or
+        token_tag == .KwIf or
+        token_tag == .KwImplements or
+        token_tag == .KwImport or
+        token_tag == .KwImports or
+        token_tag == .KwIn or
+        token_tag == .KwInterface or
+        token_tag == .KwMatch or
+        token_tag == .KwModule or
+        token_tag == .KwPackage or
+        token_tag == .KwPackages or
+        token_tag == .KwPlatform or
+        token_tag == .KwProvides or
+        token_tag == .KwRequires or
+        token_tag == .KwReturn or
+        token_tag == .KwTargets or
+        token_tag == .KwVar or
+        token_tag == .KwWhere or
+        token_tag == .KwWhile or
+        token_tag == .KwWith or
+        token_tag == .KwBreak)
+    {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("That word is reserved by Roc, so it cannot be used as a name in this position.");
+    } else if (token_tag == .Comma) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("A comma separates items, but there must be a valid item on both sides of it.");
+    } else if (token_tag == .CloseCurly or token_tag == .CloseRound or token_tag == .CloseSquare) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This closes the current construct, so the parser was looking for the missing item before it.");
+    } else if (token_tag == .MalformedUnicodeIdent or
+        token_tag == .MalformedDotUnicodeIdent or
+        token_tag == .MalformedNoSpaceDotUnicodeIdent or
+        token_tag == .MalformedNamedUnderscoreUnicode or
+        token_tag == .MalformedOpaqueNameUnicode or
+        token_tag == .MalformedOpaqueNameWithoutName or
+        token_tag == .MalformedUnknownToken)
+    {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This token is malformed, so it cannot be used as ordinary Roc syntax.");
     }
 
     if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
@@ -437,8 +421,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
     return switch (diagnostic.tag) {
         .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app header, and it names more than one platform.", "An app can use exactly one `platform` entry. Keep the platform entry you want to run with, and make every other dependency a normal package string.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
         .no_platform => reportParseProblem(ctx, "Missing Platform", "I was parsing an app header, and I could not find a platform entry.", "App headers must include one field whose value starts with `platform`. That platform tells Roc how to run the app.", .{ .example = "app [main] { pf: platform \"../basic-cli/platform.roc\" }" }),
-        .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-July-31-123c5d7\"", .show_found = false }),
-        .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-July-31-123c5d7\"", .show_found = false }),
+        .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
+        .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .roc_version_key_is_reserved => reportParseProblem(ctx, "Reserved Dependency Name", "I was parsing a dependency record, and `roc` is used as the name of a platform or package.", "The `roc` name is reserved for pinning the compiler version, so it cannot name a dependency. Pick a different name for this one.", .{ .example = "pf: platform \"../platform/main.roc\"", .show_found = false }),
         .missing_arrow => reportParseProblem(ctx, "Missing Arrow", "I was parsing a function type, and I expected an arrow here.", "Function types use `->` between arguments and return values. Add the missing arrow or wrap the surrounding type in parentheses if a different grouping was intended.", .{ .example = "Str -> U64" }),
         .expected_exposes => reportParseProblem(ctx, "Expected Exposes", "I was parsing a platform header, and I expected the `exposes` section.", "A platform header must list the values it exposes before the package and provides sections.", .{ .example = "exposes [main]" }),
@@ -546,6 +530,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .file_import_invalid_type => reportParseProblem(ctx, "Invalid File Import Type", "I was parsing a file import type, and only `Str` or `List(U8)` is allowed.", "Use `Str` for text files and `List(U8)` for raw bytes.", .{ .example = "import \"data.txt\" as data : Str" }),
         .nominal_associated_cannot_have_final_expression => reportParseProblem(ctx, "Unexpected Associated Expression", "I was parsing associated items for a nominal type, and I found a plain final expression.", "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
         .type_alias_cannot_have_associated => reportParseProblem(ctx, "Type Alias With Associated Items", "I was parsing a type alias, but only nominal types can have associated items.", "Use `:=` to define a nominal type with associated items, or remove the associated item block from this alias.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
+        .where_alias_cannot_have_associated => reportParseProblem(ctx, "Where Alias With Associated Items", "I was parsing a where alias, but only nominal types can have associated items.", "A where alias names a set of method constraints, so it has no associated items. Remove the associated item block.", .{ .example = "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]" }),
+        .where_alias_expected_where => reportParseProblem(ctx, "Expected Where Clause", "I was parsing a where alias declaration, and I expected `where` after the `:`.", "A where alias is declared by naming a type variable and giving it a set of method constraints.", .{ .example = "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]" }),
         .deprecated_number_suffix => reportDeprecatedNumberSuffix(ctx),
         .expected_targets_colon => reportParseProblem(ctx, "Expected Targets Colon", "I was parsing a `targets` section, and I expected `:` after `targets`.", "The targets section starts with `targets:` followed by a configuration record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
         .expected_targets_open_curly => reportParseProblem(ctx, "Expected Targets Record", "I was parsing a `targets` section, and I expected `{`.", "Targets are configured with fields inside a record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
@@ -683,6 +669,8 @@ pub const Diagnostic = struct {
         file_import_invalid_type,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
+        where_alias_cannot_have_associated,
+        where_alias_expected_where,
         deprecated_number_suffix,
 
         // Targets section parse errors
@@ -890,10 +878,13 @@ pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, 
 /// 1. An alias of the form `Foo = (Bar, Baz)`
 /// 2. A nominal type of the form `Foo := [Bar, Baz]`
 /// 3. An opaque type of the form `Foo :: [Bar, Baz]`
+/// 4. A where alias of the form `a.Foo : where [a.method : a -> Str]`, which
+///    names a reusable set of method constraints rather than a type.
 pub const TypeDeclKind = enum {
     alias,
     nominal,
     @"opaque",
+    where_alias,
 };
 
 /// Represents a statement.  Not all statements are valid in all positions.
@@ -956,9 +947,14 @@ pub const Statement = union(enum) {
     },
     type_decl: struct {
         header: TypeHeader.Idx,
+        /// The declared type. For `.where_alias` declarations this is the
+        /// receiver type variable the constraints apply to (the `a` in
+        /// `a.Foo : where [...]`).
         anno: TypeAnno.Idx,
         kind: TypeDeclKind,
-        /// Where clause (invalid in type declarations, but preserved for error recovery/formatting)
+        /// The constraint set for `.where_alias` declarations. For every other
+        /// kind a where clause is invalid, and is preserved only for error
+        /// recovery and formatting.
         where: ?Collection.Idx,
         /// Associated items block for .nominal types
         /// (e.g. the curly braces in `Foo := [A, B].{ x = 5 }`)
@@ -1105,6 +1101,16 @@ pub const Statement = union(enum) {
                 }
 
                 try ast.store.getTypeAnno(a.anno).pushToSExprTree(gpa, env, ast, tree);
+
+                if (a.where) |where_coll| {
+                    const where_node = tree.beginNode();
+                    try tree.pushStaticAtom("where");
+                    const where_attrs = tree.beginNode();
+                    for (ast.store.whereClauseSlice(.{ .span = ast.store.getCollection(where_coll).span })) |clause_idx| {
+                        try ast.store.getWhereClause(clause_idx).pushToSExprTree(gpa, env, ast, tree);
+                    }
+                    try tree.endNode(where_node, where_attrs);
+                }
 
                 // Add associated block if present
                 if (a.associated) |assoc| {
@@ -2657,20 +2663,25 @@ pub const WhereClause = union(enum) {
         region: TokenizedRegion,
     },
 
-    /// Module type alias constraint.
+    /// Where alias constraint.
     ///
-    /// Specifies that a type variable must satisfy the constraints for an alias type.
-    /// This is useful to avoid writing out the constraints repeatedly which can be cumbersome and error prone
+    /// Specifies that a type variable must satisfy every constraint named by a
+    /// where alias. This avoids writing the same constraints out repeatedly,
+    /// which is cumbersome and error prone.
+    ///
+    /// `alias` names the where alias being applied, and is a `ty` (or an
+    /// `apply` over one) so that module qualification and arguments resolve
+    /// exactly the way they do for any other type name.
     ///
     /// Example:
     /// ```roc
-    /// Sort(a) : a where [a.order : elem, elem -> [LT, EQ, GT]]
+    /// elem.Sort : where [elem.order : elem -> [LT, EQ, GT]]
     ///
     /// sort : List(elem) -> List(elem) where [elem.Sort]
     /// ```
     mod_alias: struct {
         var_tok: Token.Idx,
-        name_tok: Token.Idx,
+        alias: TypeAnno.Idx,
         region: TokenizedRegion,
     },
 
@@ -2716,11 +2727,8 @@ pub const WhereClause = union(enum) {
 
                 try tree.pushStringPair("module-of", ast.resolve(a.var_tok));
 
-                // remove preceding dot
-                const alias_name = ast.resolve(a.name_tok)[1..];
-                try tree.pushStringPair("name", alias_name);
-
                 const attrs = tree.beginNode();
+                try ast.store.getTypeAnno(a.alias).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(begin, attrs);
             },
             .malformed => |m| {
@@ -2919,10 +2927,8 @@ pub const Expr = union(enum) {
     pub const Span = struct { span: base.DataSpan };
 
     pub fn as_string_part_region(self: @This()) Allocator.Error!TokenizedRegion {
-        switch (self) {
-            .string_part => |part| return part.region,
-            else => return error.ExpectedStringPartRegion,
-        }
+        if (self != .string_part) return error.ExpectedStringPartRegion;
+        return self.string_part.region;
     }
 
     /// Extract the region from any Expr variant

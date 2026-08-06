@@ -46,19 +46,14 @@ pub const UndefinedSymbolResolver = *const fn (name: []const u8) ?usize;
 const RelocKind = enum { relative, symbol, unsupported };
 
 fn classifyReloc(r_type: u32) RelocKind {
-    return switch (builtin.cpu.arch) {
-        .aarch64 => switch (r_type) {
-            R_AARCH64_RELATIVE => .relative,
-            R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT, R_AARCH64_ABS64 => .symbol,
-            else => .unsupported,
-        },
-        .x86_64 => switch (r_type) {
-            R_X86_64_RELATIVE => .relative,
-            R_X86_64_GLOB_DAT, R_X86_64_JUMP_SLOT, R_X86_64_64 => .symbol,
-            else => .unsupported,
-        },
-        else => .unsupported,
-    };
+    if (builtin.cpu.arch == .aarch64) {
+        if (r_type == R_AARCH64_RELATIVE) return .relative;
+        if (r_type == R_AARCH64_GLOB_DAT or r_type == R_AARCH64_JUMP_SLOT or r_type == R_AARCH64_ABS64) return .symbol;
+    } else if (builtin.cpu.arch == .x86_64) {
+        if (r_type == R_X86_64_RELATIVE) return .relative;
+        if (r_type == R_X86_64_GLOB_DAT or r_type == R_X86_64_JUMP_SLOT or r_type == R_X86_64_64) return .symbol;
+    }
+    return .unsupported;
 }
 
 /// Whether this build's `std.DynLib` is the relocation-free `ElfDynLib` (a
@@ -115,17 +110,15 @@ pub fn applyDynamicRelocations(base: usize, resolver: ?UndefinedSymbolResolver) 
         var i: usize = 0;
         while (dynv[i].d_tag != elf.DT_NULL) : (i += 1) {
             const val = dynv[i].d_val;
-            switch (dynv[i].d_tag) {
-                elf.DT_RELA => rela = base + val,
-                elf.DT_RELASZ => rela_size = val,
-                elf.DT_RELAENT => rela_ent = val,
-                elf.DT_JMPREL => jmprel = base + val,
-                elf.DT_PLTRELSZ => pltrel_size = val,
-                elf.DT_SYMTAB => symtab = base + val,
-                elf.DT_SYMENT => syment = val,
-                elf.DT_STRTAB => strtab = base + val,
-                else => {},
-            }
+            const tag = dynv[i].d_tag;
+            if (tag == elf.DT_RELA) rela = base + val;
+            if (tag == elf.DT_RELASZ) rela_size = val;
+            if (tag == elf.DT_RELAENT) rela_ent = val;
+            if (tag == elf.DT_JMPREL) jmprel = base + val;
+            if (tag == elf.DT_PLTRELSZ) pltrel_size = val;
+            if (tag == elf.DT_SYMTAB) symtab = base + val;
+            if (tag == elf.DT_SYMENT) syment = val;
+            if (tag == elf.DT_STRTAB) strtab = base + val;
         }
     }
 
@@ -178,19 +171,15 @@ fn applyRelaTable(
 }
 
 fn relativeRelocType() u32 {
-    return switch (builtin.cpu.arch) {
-        .aarch64 => R_AARCH64_RELATIVE,
-        .x86_64 => R_X86_64_RELATIVE,
-        else => 0,
-    };
+    if (builtin.cpu.arch == .aarch64) return R_AARCH64_RELATIVE;
+    if (builtin.cpu.arch == .x86_64) return R_X86_64_RELATIVE;
+    return 0;
 }
 
 fn jumpSlotRelocType() u32 {
-    return switch (builtin.cpu.arch) {
-        .aarch64 => R_AARCH64_JUMP_SLOT,
-        .x86_64 => R_X86_64_JUMP_SLOT,
-        else => 0,
-    };
+    if (builtin.cpu.arch == .aarch64) return R_AARCH64_JUMP_SLOT;
+    if (builtin.cpu.arch == .x86_64) return R_X86_64_JUMP_SLOT;
+    return 0;
 }
 
 const test_resolved_addr: usize = 0xABCD_0000;

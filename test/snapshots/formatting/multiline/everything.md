@@ -136,8 +136,8 @@ UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:81:2:81:4
 UNUSED VARIABLE - everything.md:85:2:85:4
 UNUSED VARIABLE - everything.md:89:2:89:4
-UNSUPPORTED WHERE CLAUSE - everything.md:64:3:64:6
-UNSUPPORTED WHERE CLAUSE - everything.md:65:3:65:6
+NOT A WHERE ALIAS - everything.md:64:4:64:6
+NOT A WHERE ALIAS - everything.md:65:4:65:6
 DECLARATION HAS NO VALUE - everything.md:62:1:66:3
 NON EXHAUSTIVE MATCH - everything.md:94:2:117:3
 # PROBLEMS
@@ -294,28 +294,30 @@ NON EXHAUSTIVE MATCH - everything.md:94:2:117:3
     suppress this warning.
 
 
-┌──────────────────────────┐
-│ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax A is not supported. ────┐
-└┬─────────────────────────┘                                                  │
+┌───────────────────┐
+│ NOT A WHERE ALIAS ├─ A where clause can only name a where alias, but A is ──┐
+└┬──────────────────┘  a type.                                                │
  │                                                                            │
  │  e.A,                                                                      │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────────── everything.md:64:3 ┘
+ │   ‾‾                                                                       │
+ └──────────────────────────────────────────────────────── everything.md:64:4 ┘
 
-    This syntax was used for abilities, which have been removed from Roc. Use
-    method constraints like `where [a.methodName(args) -> ret]` instead.
+    A where alias names a set of method constraints, declared like `a.Sortable
+    : where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as
+    `where [a.Sortable]`
 
 
-┌──────────────────────────┐
-│ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax B is not supported. ────┐
-└┬─────────────────────────┘                                                  │
+┌───────────────────┐
+│ NOT A WHERE ALIAS ├─ A where clause can only name a where alias, but B is ──┐
+└┬──────────────────┘  a type.                                                │
  │                                                                            │
  │  e.B,                                                                      │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────────── everything.md:65:3 ┘
+ │   ‾‾                                                                       │
+ └──────────────────────────────────────────────────────── everything.md:65:4 ┘
 
-    This syntax was used for abilities, which have been removed from Roc. Use
-    method constraints like `where [a.methodName(args) -> ret]` instead.
+    A where alias names a set of method constraints, declared like `a.Sortable
+    : where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as
+    `where [a.Sortable]`
 
 
 ┌──────────────────────────┐
@@ -501,12 +503,38 @@ EndOfFile,
 			(header (name "A")
 				(args
 					(ty-var (raw "a"))))
-			(ty-var (raw "a")))
+			(ty-var (raw "a"))
+			(where
+				(method (mod-of "a") (name "a1")
+					(args
+						(ty-tuple
+							(ty-var (raw "a"))
+							(ty-var (raw "a"))))
+					(ty (name "Str")))
+				(method (mod-of "a") (name "a2")
+					(args
+						(ty-tuple
+							(ty-var (raw "a"))
+							(ty-var (raw "a"))))
+					(ty (name "Str")))))
 		(s-type-decl
 			(header (name "B")
 				(args
 					(ty-var (raw "b"))))
-			(ty-var (raw "b")))
+			(ty-var (raw "b"))
+			(where
+				(method (mod-of "b") (name "b1")
+					(args
+						(ty-tuple
+							(ty-var (raw "b"))
+							(ty-var (raw "b"))))
+					(ty (name "Str")))
+				(method (mod-of "b") (name "b2")
+					(args
+						(ty-tuple
+							(ty-var (raw "b"))
+							(ty-var (raw "b"))))
+					(ty (name "Str")))))
 		(s-type-decl
 			(header (name "C")
 				(args
@@ -544,8 +572,10 @@ EndOfFile,
 				(ty-var (raw "e"))
 				(ty-var (raw "e")))
 			(where
-				(alias (mod-of "e") (name "A"))
-				(alias (mod-of "e") (name "B"))))
+				(alias (mod-of "e")
+					(ty (name "A")))
+				(alias (mod-of "e")
+					(ty (name "B")))))
 		(s-decl
 			(p-ident (raw "h"))
 			(e-lambda
@@ -631,8 +661,12 @@ NO CHANGE
 				(ty-rigid-var (name "e"))
 				(ty-rigid-var-lookup (ty-rigid-var (name "e"))))
 			(where
-				(alias (ty-rigid-var-lookup (ty-rigid-var (name "e"))) (name "A"))
-				(alias (ty-rigid-var-lookup (ty-rigid-var (name "e"))) (name "B")))))
+				(alias
+					(ty-rigid-var-lookup (ty-rigid-var (name "e")))
+					(ty-lookup (name "A") (local)))
+				(alias
+					(ty-rigid-var-lookup (ty-rigid-var (name "e")))
+					(ty-lookup (name "B") (local))))))
 	(d-let
 		(p-assign (ident "h"))
 		(e-lambda
@@ -661,7 +695,7 @@ NO CHANGE
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 340)
+					(e-call (constraint-fn-var 346)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local
@@ -777,7 +811,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "e -> e"))
+		(patt (type "Error -> Error"))
 		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))] -> c")))
 	(type_decls
 		(alias (type "A(a)")
@@ -803,6 +837,6 @@ NO CHANGE
 		(alias (type "F")
 			(ty-header (name "F"))))
 	(expressions
-		(expr (type "e -> e"))
+		(expr (type "Error -> Error"))
 		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))] -> c"))))
 ~~~

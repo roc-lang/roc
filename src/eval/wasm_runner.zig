@@ -471,8 +471,22 @@ pub fn runWasmOutcomeWithStats(
                 std.debug.assert(false);
                 unreachable;
             },
-            else => return error.WasmExecFailed,
+            error.TrapDebug,
+            error.TrapIndirectCallTypeMismatch,
+            error.TrapIntegerDivisionByZero,
+            error.TrapIntegerOverflow,
+            error.TrapInvalidIntegerConversion,
+            error.TrapInvalidResume,
+            error.TrapNegativeDenominator,
+            error.TrapOutOfBoundsMemoryAccess,
+            error.TrapOutOfBoundsTableAccess,
+            error.TrapStackExhausted,
+            error.TrapUndefinedElement,
+            error.TrapUninitializedElement,
+            error.TrapUnknown,
+            => return error.WasmExecFailed,
         }
+        return error.WasmExecFailed;
     };
     if (run_state.crashed) return .{
         .outcome = .{ .crashed = try run_state.takeCrashMessage() },
@@ -1049,7 +1063,7 @@ fn hostDecUnaryMath(state: *WasmRunState, module: *bytebox.ModuleInstance, param
             state.recordCrash("Decimal asin input is outside [-1, 1]!");
             return;
         },
-        else => {},
+        .sin, .cos, .tan, .atan => {},
     }
 
     var dec_ops = wasmDecRocOps(state);

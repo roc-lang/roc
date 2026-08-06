@@ -49,10 +49,7 @@ pub const Class = enum {
     pub const stack: [8]Class = .{ .memory, .none, .none, .none, .none, .none, .none, .none };
 
     pub fn isX87(class: Class) bool {
-        return switch (class) {
-            .x87, .x87up => true,
-            else => false,
-        };
+        return class == .x87 or class == .x87up;
     }
 
     /// Combine a field's class with the eightbyte's running class (System V).
@@ -112,13 +109,8 @@ pub fn classifyWindows(store: *const Store, idx: Idx) Class {
         .zst => unreachable,
     }
 
-    return switch (size) {
-        1, 2, 4, 8 => .integer,
-        else => switch (lay.tag) {
-            .scalar => .win_i128, // a >8-byte integer scalar (i128)
-            else => .memory,
-        },
-    };
+    if (size == 1 or size == 2 or size == 4 or size == 8) return .integer;
+    return if (lay.tag == .scalar) .win_i128 else .memory;
 }
 
 /// Classify under the System V AMD64 ABI. Returns up to eight eightbyte classes; unused
@@ -213,7 +205,15 @@ fn classifyAggregateSysV(store: *const Store, result: *[8]Class, base_offset: u3
             }
         },
         .closure => classifyAggregateSysV(store, result, base_offset, lay.getClosure().captures_layout_idx),
-        else => classifyMemberSysV(store, result, base_offset, idx),
+        .scalar,
+        .box,
+        .box_of_zst,
+        .list,
+        .list_of_zst,
+        .erased_callable,
+        .zst,
+        .ptr,
+        => classifyMemberSysV(store, result, base_offset, idx),
     }
 }
 
@@ -223,7 +223,15 @@ fn classifyMemberSysV(store: *const Store, result: *[8]Class, offset: u32, idx: 
     const lay = store.getLayout(idx);
     switch (lay.tag) {
         .struct_, .tag_union, .closure => classifyAggregateSysV(store, result, offset, idx),
-        else => {
+        .scalar,
+        .box,
+        .box_of_zst,
+        .list,
+        .list_of_zst,
+        .erased_callable,
+        .zst,
+        .ptr,
+        => {
             const member = classifySystemV(store, idx, .other);
             var j: usize = 0;
             while (j < member.len and member[j] != .none) : (j += 1) {
@@ -255,11 +263,10 @@ fn finishSystemV(result_in: [8]Class, size: u32) [8]Class {
 
     // "If one of the classes is MEMORY, the whole argument is passed in memory."
     // "If X87UP is not preceded by X87, the whole argument is passed in memory."
-    for (result, 0..) |class, i| switch (class) {
-        .memory => return Class.stack,
-        .x87up => if (i == 0 or result[i - 1] != .x87) return Class.stack,
-        else => continue,
-    };
+    for (result, 0..) |class, i| {
+        if (class == .memory) return Class.stack;
+        if (class == .x87up and (i == 0 or result[i - 1] != .x87)) return Class.stack;
+    }
 
     // "If the size of the aggregate exceeds two eightbytes and the first eightbyte isn't SSE
     // or any other eightbyte isn't SSEUP, the whole argument is passed in memory."
@@ -272,10 +279,7 @@ fn finishSystemV(result_in: [8]Class, size: u32) [8]Class {
 
     // "If SSEUP is not preceded by SSE or SSEUP, it is converted to SSE."
     for (&result, 0..) |*item, i| {
-        if (item.* == .sseup) switch (result[i - 1]) {
-            .sse, .sseup => continue,
-            else => item.* = .sse,
-        };
+        if (item.* == .sseup and result[i - 1] != .sse and result[i - 1] != .sseup) item.* = .sse;
     }
     return result;
 }

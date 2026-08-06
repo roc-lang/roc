@@ -21,16 +21,13 @@ test "fractional literal - basic decimal" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_dec_small => |dec| {
-            try testing.expectEqual(dec.value.numerator, 314);
-            try testing.expectEqual(dec.value.denominator_power_of_ten, 2);
-        },
-        .e_dec => {},
-        else => {
-            std.debug.print("Unexpected expr type: {}\n", .{expr});
-            try testing.expect(false); // Should be dec_small or frac_dec
-        },
+    const tag = std.meta.activeTag(expr);
+    if (tag == .e_dec_small) {
+        try testing.expectEqual(expr.e_dec_small.value.numerator, 314);
+        try testing.expectEqual(expr.e_dec_small.value.denominator_power_of_ten, 2);
+    } else if (tag != .e_dec) {
+        std.debug.print("Unexpected expr type: {}\n", .{expr});
+        try testing.expect(false); // Should be dec_small or frac_dec
     }
 }
 
@@ -42,21 +39,15 @@ test "fractional literal - scientific notation small" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_dec_small => |dec| {
-            try testing.expectEqual(@as(i16, 123), dec.value.numerator);
-            try testing.expectEqual(@as(u8, 12), dec.value.denominator_power_of_ten);
-        },
-        .e_dec => {
-            // RocDec stores the value in a special format
-        },
-        .e_frac_f64 => |frac| {
-            try testing.expectApproxEqAbs(frac.value, 1.23e-10, 1e-20);
-        },
-        else => {
-            std.debug.print("Unexpected expr type for '1.23e-10': {}\n", .{expr});
-            try testing.expect(false); // Should be e_frac_f64
-        },
+    const tag = std.meta.activeTag(expr);
+    if (tag == .e_dec_small) {
+        try testing.expectEqual(@as(i16, 123), expr.e_dec_small.value.numerator);
+        try testing.expectEqual(@as(u8, 12), expr.e_dec_small.value.denominator_power_of_ten);
+    } else if (tag == .e_frac_f64) {
+        try testing.expectApproxEqAbs(expr.e_frac_f64.value, 1.23e-10, 1e-20);
+    } else if (tag != .e_dec) {
+        std.debug.print("Unexpected expr type for '1.23e-10': {}\n", .{expr});
+        try testing.expect(false); // Should be e_frac_f64
     }
 }
 
@@ -68,17 +59,11 @@ test "fractional literal - scientific notation large (near f64 max)" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_num_from_numeral => {
-            const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
-            try testing.expect(literal.isFractional());
-            try testing.expect(!literal.isNegative());
-            try testing.expectEqual(@as(u64, 0), literal.after_decimal_digit_count);
-        },
-        else => {
-            try testing.expect(false); // Should be exact from_numeral
-        },
-    }
+    try testing.expectEqual(.e_num_from_numeral, std.meta.activeTag(expr));
+    const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+    try testing.expect(literal.isFractional());
+    try testing.expect(!literal.isNegative());
+    try testing.expectEqual(@as(u64, 0), literal.after_decimal_digit_count);
 }
 
 test "fractional literal - scientific notation at f32 boundary" {
@@ -89,17 +74,11 @@ test "fractional literal - scientific notation at f32 boundary" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_num_from_numeral => {
-            const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
-            try testing.expect(literal.isFractional());
-            try testing.expect(!literal.isNegative());
-            try testing.expectEqual(@as(u64, 0), literal.after_decimal_digit_count);
-        },
-        else => {
-            try testing.expect(false); // Should be exact from_numeral
-        },
-    }
+    try testing.expectEqual(.e_num_from_numeral, std.meta.activeTag(expr));
+    const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+    try testing.expect(literal.isFractional());
+    try testing.expect(!literal.isNegative());
+    try testing.expectEqual(@as(u64, 0), literal.after_decimal_digit_count);
 }
 
 test "fractional literal - very small scientific notation" {
@@ -114,17 +93,11 @@ test "fractional literal - very small scientific notation" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_num_from_numeral => {
-            const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
-            try testing.expectEqual(@as(u32, 40), literal.after_decimal_digit_count);
-            try testing.expectEqualSlices(u8, &.{1}, test_env.module_env.numeralDigitsAfter(literal));
-            try testing.expectEqualSlices(u8, &.{}, test_env.module_env.numeralDigitsBefore(literal));
-        },
-        else => {
-            try testing.expect(false); // Must keep exact digits, not a compact dec payload
-        },
-    }
+    try testing.expectEqual(.e_num_from_numeral, std.meta.activeTag(expr));
+    const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+    try testing.expectEqual(@as(u32, 40), literal.after_decimal_digit_count);
+    try testing.expectEqualSlices(u8, &.{1}, test_env.module_env.numeralDigitsAfter(literal));
+    try testing.expectEqualSlices(u8, &.{}, test_env.module_env.numeralDigitsBefore(literal));
 }
 
 test "fractional literal - NaN handling" {
@@ -171,14 +144,8 @@ test "fractional literal - scientific notation with capital E" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_dec => |frac| {
-            try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18), 2.5e10, 1e-5);
-        },
-        else => {
-            try testing.expect(false); // Should be frac_dec
-        },
-    }
+    try testing.expectEqual(.e_dec, std.meta.activeTag(expr));
+    try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(expr.e_dec.value.num) / std.math.pow(f64, 10, 18), 2.5e10, 1e-5);
 }
 
 test "fractional literal - negative scientific notation" {
@@ -189,15 +156,9 @@ test "fractional literal - negative scientific notation" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_dec_small => |dec| {
-            try testing.expectEqual(@as(i16, -15), dec.value.numerator);
-            try testing.expectEqual(@as(u8, 6), dec.value.denominator_power_of_ten);
-        },
-        else => {
-            try testing.expect(false); // Should be exact small decimal
-        },
-    }
+    try testing.expectEqual(.e_dec_small, std.meta.activeTag(expr));
+    try testing.expectEqual(@as(i16, -15), expr.e_dec_small.value.numerator);
+    try testing.expectEqual(@as(u8, 6), expr.e_dec_small.value.denominator_power_of_ten);
 }
 
 test "negative zero with scientific notation - value is zero, sign recorded on numeral" {
@@ -208,16 +169,10 @@ test "negative zero with scientific notation - value is zero, sign recorded on n
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_dec_small => |small| {
-            // The compact dec payload has no sign bit for zero...
-            try testing.expectEqual(small.value.numerator, 0);
-            try testing.expectEqual(small.value.denominator_power_of_ten, 0);
-        },
-        else => {
-            try testing.expect(false); // Should be dec_small
-        },
-    }
+    try testing.expectEqual(.e_dec_small, std.meta.activeTag(expr));
+    // The compact dec payload has no sign bit for zero...
+    try testing.expectEqual(expr.e_dec_small.value.numerator, 0);
+    try testing.expectEqual(expr.e_dec_small.value.denominator_power_of_ten, 0);
 
     // ...but the recorded exact numeral keeps the literal's sign.
     const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
@@ -233,15 +188,6 @@ test "small dec - exceeds i16 range falls back to Dec" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    switch (expr) {
-        .e_dec => {
-            // Falls back to Dec because 32768 > 32767 (max i16)
-        },
-        .e_dec_small => {
-            try testing.expect(false); // Should NOT be dec_small
-        },
-        else => {
-            try testing.expect(false); // Should be frac_dec
-        },
-    }
+    // Falls back to Dec because 32768 > 32767 (max i16).
+    try testing.expectEqual(.e_dec, std.meta.activeTag(expr));
 }

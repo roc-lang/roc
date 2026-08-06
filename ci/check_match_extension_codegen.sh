@@ -44,8 +44,11 @@ cd "$repo_root"
 # procedure, and the loop it pins is unchanged; what went away is scheduling
 # driven by the cortex_a76 model, which unrolled this loop one step further.
 # Fewer instructions here means less unrolling, not less work per byte.
+# x64musl rose from 95 to 99 when the x86-64-v3 model was constrained to the
+# instruction features declared by Roc's CPU contract. This prevents LLVM's
+# named model from silently raising the runtime instruction floor.
 expectations=(
-    "x64musl:95"
+    "x64musl:99"
     "arm64musl:82"
 )
 

@@ -142,7 +142,7 @@ pub fn crashMessage(self: *const CompileTimeHost) ?[]const u8 {
         const idx = self.events.items.len - 1 - i;
         switch (self.events.items[idx]) {
             .crashed => |msg| return msg,
-            else => {},
+            .dbg, .expect_failed => {},
         }
     }
     return null;
@@ -301,7 +301,48 @@ fn allocateBytes(allocator: Allocator, len: usize, alignment: usize) ?[*]u8 {
 fn hostBytesAllocator(allocator: Allocator) Allocator {
     return switch (@import("builtin").target.os.tag) {
         .freestanding => std.heap.wasm_allocator,
-        else => allocator,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .linux,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .freebsd,
+        .netbsd,
+        .openbsd,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .macos,
+        .tvos,
+        .visionos,
+        .watchos,
+        .windows,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => allocator,
     };
 }
 

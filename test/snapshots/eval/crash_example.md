@@ -41,10 +41,14 @@ EndOfFile,
 # CANONICALIZE
 ~~~clojure
 (e-block
-	(s-crash (msg "This is a crash statement"))
+	(s-expr
+		(e-run-low-level (op "crash")
+			(args
+				(e-string
+					(e-literal (string "This is a crash statement"))))))
 	(e-empty_record))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "{}"))
 ~~~

@@ -54,6 +54,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 
@@ -336,35 +337,35 @@ const Pass = struct {
     // Per-proc, per-round state. Reset by `resetRound`.
     nodes: std.ArrayList(Node),
     facts: std.ArrayList(Fact),
-    global_env: std.AutoHashMap(LocalId, Binding),
-    path_env: std.AutoHashMap(LocalId, Binding),
+    global_env: collections.DenseMap(LocalId, Binding),
+    path_env: collections.DenseMap(LocalId, Binding),
     undo: std.ArrayList(Undo),
-    len_terms: std.AutoHashMap(NodeId, NodeId),
-    assign_counts: std.AutoHashMap(LocalId, u32),
-    pred_counts: std.AutoHashMap(CFStmtId, u32),
-    jump_counts: std.AutoHashMap(JoinPointId, u32),
-    join_stmts: std.AutoHashMap(JoinPointId, CFStmtId),
-    visited: std.AutoHashMap(CFStmtId, void),
-    region_seen: std.AutoHashMap(CFStmtId, void),
+    len_terms: collections.DenseMap(NodeId, NodeId),
+    assign_counts: collections.DenseMap(LocalId, u32),
+    pred_counts: collections.DenseMap(CFStmtId, u32),
+    jump_counts: collections.DenseMap(JoinPointId, u32),
+    join_stmts: collections.DenseMap(JoinPointId, CFStmtId),
+    visited: collections.DenseMap(CFStmtId, void),
+    region_seen: collections.DenseMap(CFStmtId, void),
     regions: std.ArrayList(CFStmtId),
     frames: std.ArrayList(Frame),
     joins_in_order: std.ArrayList(CFStmtId),
     jump_records: std.ArrayList(JumpRecord),
-    merge_states: std.AutoHashMap(CFStmtId, MergeState),
-    body_joins: std.AutoHashMap(CFStmtId, JoinPointId),
-    len_roots: std.AutoHashMap(NodeId, LocalId),
-    value_roots: std.AutoHashMap(NodeId, LocalId),
+    merge_states: collections.DenseMap(CFStmtId, MergeState),
+    body_joins: collections.DenseMap(CFStmtId, JoinPointId),
+    len_roots: collections.DenseMap(NodeId, LocalId),
+    value_roots: collections.DenseMap(NodeId, LocalId),
     loop_bounds: std.AutoHashMap(u64, LoopBounds),
-    loop_facts: std.AutoHashMap(JoinPointId, LoopFacts),
+    loop_facts: collections.DenseMap(JoinPointId, LoopFacts),
     /// Per merge head: last round's all-edge fact intersection in stable
     /// form, seeded when the merge must walk before its captures complete
     /// (a forced loop-body or cycle-interior region). Facts held by every
     /// path in a round still hold after rewrites, which only remove paths;
     /// round one's intersections are seed-free, grounding the induction.
-    merge_facts: std.AutoHashMap(CFStmtId, LoopFacts),
+    merge_facts: collections.DenseMap(CFStmtId, LoopFacts),
     /// Per merge head: last round's env meet in stable form, seeded with
     /// merge_facts under the same induction.
-    merge_env: std.AutoHashMap(CFStmtId, MergeEnvBounds),
+    merge_env: collections.DenseMap(CFStmtId, MergeEnvBounds),
     /// Facts about the values of single-assignment locals, valid wherever
     /// the value is in scope, like the global env bindings they describe.
     /// Replayed into every region's fact base rather than rewound with the
@@ -386,7 +387,7 @@ const Pass = struct {
     deferred_rewrites: bool,
     max_join_id: u32,
     scratch: std.ArrayList(CFStmtId),
-    query_best: std.AutoHashMap(NodeId, i128),
+    query_best: collections.DenseMap(NodeId, i128),
     rewrites: u32,
     // Debug-only certification state; unused (and empty) in release builds.
     proof_records: std.ArrayList(ProofRecord),
@@ -401,28 +402,28 @@ const Pass = struct {
             .allocator = allocator,
             .nodes = .empty,
             .facts = .empty,
-            .global_env = std.AutoHashMap(LocalId, Binding).init(allocator),
-            .path_env = std.AutoHashMap(LocalId, Binding).init(allocator),
+            .global_env = collections.DenseMap(LocalId, Binding).init(allocator),
+            .path_env = collections.DenseMap(LocalId, Binding).init(allocator),
             .undo = .empty,
-            .len_terms = std.AutoHashMap(NodeId, NodeId).init(allocator),
-            .assign_counts = std.AutoHashMap(LocalId, u32).init(allocator),
-            .pred_counts = std.AutoHashMap(CFStmtId, u32).init(allocator),
-            .jump_counts = std.AutoHashMap(JoinPointId, u32).init(allocator),
-            .join_stmts = std.AutoHashMap(JoinPointId, CFStmtId).init(allocator),
-            .visited = std.AutoHashMap(CFStmtId, void).init(allocator),
-            .region_seen = std.AutoHashMap(CFStmtId, void).init(allocator),
+            .len_terms = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .assign_counts = collections.DenseMap(LocalId, u32).init(allocator),
+            .pred_counts = collections.DenseMap(CFStmtId, u32).init(allocator),
+            .jump_counts = collections.DenseMap(JoinPointId, u32).init(allocator),
+            .join_stmts = collections.DenseMap(JoinPointId, CFStmtId).init(allocator),
+            .visited = collections.DenseMap(CFStmtId, void).init(allocator),
+            .region_seen = collections.DenseMap(CFStmtId, void).init(allocator),
             .regions = .empty,
             .frames = .empty,
             .joins_in_order = .empty,
             .jump_records = .empty,
-            .merge_states = std.AutoHashMap(CFStmtId, MergeState).init(allocator),
-            .body_joins = std.AutoHashMap(CFStmtId, JoinPointId).init(allocator),
-            .len_roots = std.AutoHashMap(NodeId, LocalId).init(allocator),
-            .value_roots = std.AutoHashMap(NodeId, LocalId).init(allocator),
+            .merge_states = collections.DenseMap(CFStmtId, MergeState).init(allocator),
+            .body_joins = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
+            .len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
+            .value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .loop_bounds = std.AutoHashMap(u64, LoopBounds).init(allocator),
-            .loop_facts = std.AutoHashMap(JoinPointId, LoopFacts).init(allocator),
-            .merge_facts = std.AutoHashMap(CFStmtId, LoopFacts).init(allocator),
-            .merge_env = std.AutoHashMap(CFStmtId, MergeEnvBounds).init(allocator),
+            .loop_facts = collections.DenseMap(JoinPointId, LoopFacts).init(allocator),
+            .merge_facts = collections.DenseMap(CFStmtId, LoopFacts).init(allocator),
+            .merge_env = collections.DenseMap(CFStmtId, MergeEnvBounds).init(allocator),
             .global_facts = .empty,
             .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
             .current_region = null,
@@ -431,7 +432,7 @@ const Pass = struct {
             .deferred_rewrites = false,
             .max_join_id = 0,
             .scratch = .empty,
-            .query_best = std.AutoHashMap(NodeId, i128).init(allocator),
+            .query_best = collections.DenseMap(NodeId, i128).init(allocator),
             .rewrites = 0,
             .proof_records = .empty,
             .proof_facts = .empty,
@@ -514,7 +515,8 @@ const Pass = struct {
             .u16 => std.math.maxInt(u16),
             .u32 => std.math.maxInt(u32),
             .u64 => std.math.maxInt(u64),
-            else => null,
+            .bool, .str, .i8, .i16, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => null,
+            _ => null,
         };
     }
 
@@ -722,10 +724,12 @@ const Pass = struct {
             try self.global_env.put(local, binding);
             return;
         }
-        const prev = try self.path_env.fetchPut(local, binding);
+        const entry = try self.path_env.getOrPut(local);
+        const prev: ?Binding = if (entry.found_existing) entry.value_ptr.* else null;
+        entry.value_ptr.* = binding;
         try self.undo.append(self.allocator, .{
             .local = local,
-            .prev = if (prev) |entry| entry.value else null,
+            .prev = prev,
         });
     }
 
@@ -794,7 +798,7 @@ const Pass = struct {
         }
 
         self.scratch.clearRetainingCapacity();
-        var seen = std.AutoHashMap(CFStmtId, void).init(self.allocator);
+        var seen = collections.DenseMap(CFStmtId, void).init(self.allocator);
         defer seen.deinit();
 
         try self.scratch.append(self.allocator, proc.body.?);
@@ -1230,11 +1234,11 @@ const Pass = struct {
         return switch (a) {
             .len_of => |la| switch (b) {
                 .len_of => |lb| la == lb,
-                else => false,
+                .value_of, .constant => false,
             },
             .value_of => |la| switch (b) {
                 .value_of => |lb| la == lb,
-                else => false,
+                .len_of, .constant => false,
             },
             .constant => b == .constant,
         };
@@ -1690,7 +1694,39 @@ const Pass = struct {
         for (self.joins_in_order.items) |join_stmt| {
             const join = switch (self.store.getCFStmt(join_stmt)) {
                 .join => |j| j,
-                else => continue,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .jump,
+                .ret,
+                .crash,
+                => continue,
             };
             const params = self.store.getLocalSpan(join.params);
             if (GuardedList.borrowLen(params) != 1) continue;
@@ -1700,7 +1736,39 @@ const Pass = struct {
 
             const body_switch = switch (self.store.getCFStmt(join.body)) {
                 .switch_stmt => |sw| sw,
-                else => continue,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => continue,
             };
             if (body_switch.cond != param) continue;
 
@@ -1743,7 +1811,39 @@ const Pass = struct {
                 // holds a jump; skip anything that changed shape.
                 switch (self.store.getCFStmt(record.stmt)) {
                     .jump => |jump| if (jump.target != join.id) continue,
-                    else => continue,
+                    .init_uninitialized,
+                    .assign_ref,
+                    .assign_literal,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_low_level,
+                    .assign_list,
+                    .assign_struct,
+                    .assign_tag,
+                    .store_struct,
+                    .store_tag,
+                    .set_local,
+                    .debug,
+                    .expect,
+                    .expect_err,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .comptime_branch_taken,
+                    .incref,
+                    .decref,
+                    .decref_if_initialized,
+                    .free,
+                    .switch_stmt,
+                    .switch_initialized_payload,
+                    .str_match,
+                    .str_match_set,
+                    .loop_continue,
+                    .loop_break,
+                    .join,
+                    .ret,
+                    .crash,
+                    => continue,
                 }
                 const true_jump = try self.store.addCFStmt(.{ .jump = .{ .target = true_id } });
                 const false_jump = try self.store.addCFStmt(.{ .jump = .{ .target = false_id } });
@@ -1921,7 +2021,7 @@ const Pass = struct {
                             .field => |f| {
                                 try self.bindFieldRead(s.target, f.source, f.field_idx);
                             },
-                            else => try self.bindFresh(s.target),
+                            .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => try self.bindFresh(s.target),
                         }
                         current = s.next;
                     },
@@ -2190,7 +2290,7 @@ const Pass = struct {
         const literal: ?i128 = switch (value) {
             .i64_literal => |lit| if (lit.value >= 0) lit.value else null,
             .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
-            else => null,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => null,
         };
         if (literal) |v| {
             if (trackedIntMax(self.localLayout(target)) != null) {
@@ -2325,7 +2425,484 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
-            else => try self.bindFresh(s.target),
+            .str_is_eq,
+            .str_is_eq_static_small,
+            .str_static_small_word_eq,
+            .str_static_small_word_caseless_eq,
+            .str_concat,
+            .str_contains,
+            .str_trim,
+            .str_trim_start,
+            .str_trim_end,
+            .str_caseless_ascii_equals,
+            .str_with_ascii_lowercased,
+            .str_with_ascii_uppercased,
+            .str_starts_with,
+            .str_ends_with,
+            .str_repeat,
+            .str_drop_prefix,
+            .str_drop_prefix_caseless_ascii,
+            .str_drop_suffix,
+            .str_split_first,
+            .str_split_last,
+            .str_count_utf8_bytes,
+            .str_get_utf8_byte_unsafe,
+            .str_substring_unsafe,
+            .str_with_capacity,
+            .str_reserve,
+            .str_release_excess_capacity,
+            .str_to_utf8,
+            .str_from_utf8_lossy,
+            .str_from_utf8,
+            .str_split_on,
+            .str_join_with,
+            .str_inspect,
+            .u8_to_str,
+            .i8_to_str,
+            .u16_to_str,
+            .i16_to_str,
+            .u32_to_str,
+            .i32_to_str,
+            .u64_to_str,
+            .i64_to_str,
+            .u128_to_str,
+            .i128_to_str,
+            .dec_to_str,
+            .f32_to_str,
+            .f64_to_str,
+            .list_get_unsafe,
+            .list_append_unsafe,
+            .list_concat,
+            .list_append_range_within,
+            .list_copy_range_within,
+            .list_append_range_within_unsafe,
+            .list_append_sublist,
+            .list_append_le_bytes,
+            .list_slack_unique,
+            .list_owned_unique,
+            .list_with_capacity,
+            .list_drop_at,
+            .list_sublist,
+            .list_sublist_borrowed,
+            .list_replace_unsafe,
+            .list_swap,
+            .list_prepend,
+            .list_first,
+            .list_last,
+            .list_drop_first,
+            .list_drop_last,
+            .list_take_first,
+            .list_take_last,
+            .list_reverse,
+            .list_reserve,
+            .list_release_excess_capacity,
+            .list_split_first,
+            .list_split_last,
+            .list_map_prepare_reuse,
+            .list_map_can_reuse,
+            .list_map_cast_unsafe,
+            .list_map_extract_unsafe,
+            .list_map_write_unsafe,
+            .bool_not,
+            .dict_pseudo_seed,
+            .hasher_finish,
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_u128,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            .hasher_write_i128,
+            .hasher_write_f32,
+            .hasher_write_f64,
+            .hasher_write_dec,
+            .hasher_write_bytes,
+            .hasher_write_str,
+            .crypto_sha256_hash_bytes,
+            .crypto_sha256_hasher_empty,
+            .crypto_sha256_hasher_write,
+            .crypto_sha256_hasher_finish,
+            .crypto_blake3_hash_bytes,
+            .crypto_blake3_hasher_empty,
+            .crypto_blake3_hasher_write,
+            .crypto_blake3_hasher_finish,
+            .num_is_eq,
+            .num_negate,
+            .num_abs,
+            .num_abs_diff,
+            .num_plus_wrap,
+            .num_minus_wrap,
+            .num_times,
+            .num_times_wrap,
+            .num_times_checked,
+            .num_div_by,
+            .num_div_by_checked,
+            .num_div_trunc_by,
+            .num_div_trunc_by_checked,
+            .num_rem_by,
+            .num_rem_by_checked,
+            .num_mod_by,
+            .num_mod_by_checked,
+            .num_negate_checked,
+            .num_abs_checked,
+            .num_pow,
+            .num_sqrt,
+            .num_sin,
+            .num_cos,
+            .num_tan,
+            .num_asin,
+            .num_acos,
+            .num_atan,
+            .num_log,
+            .num_round,
+            .num_floor,
+            .num_ceiling,
+            .num_to_str,
+            .f32_to_bits,
+            .f32_from_bits,
+            .f64_to_bits,
+            .f64_from_bits,
+            .num_shift_left_by,
+            .num_shift_right_by,
+            .num_bitwise_or,
+            .num_bitwise_xor,
+            .num_bitwise_not,
+            .num_count_one_bits,
+            .num_count_leading_zero_bits,
+            .num_count_trailing_zero_bits,
+            .num_from_le_bytes_unchecked,
+            .simd_load_16_unchecked,
+            .simd_store_16_unchecked,
+            .simd_append_16,
+            .simd_splat,
+            .simd_get_lane_unchecked,
+            .simd_with_lane_unchecked,
+            .simd_to_u128_bits,
+            .simd_from_u128_bits,
+            .simd_add_wrap,
+            .simd_sub_wrap,
+            .simd_add_sat,
+            .simd_sub_sat,
+            .simd_neg_wrap,
+            .simd_abs_wrap,
+            .simd_min,
+            .simd_max,
+            .simd_abs_diff,
+            .simd_avg_rounded,
+            .simd_mul_wrap,
+            .simd_mul_high,
+            .simd_mul_q15_sat,
+            .simd_mul_wide_lo,
+            .simd_mul_wide_hi,
+            .simd_dot_pairs,
+            .simd_dot_pairs_sat,
+            .simd_sad,
+            .simd_and,
+            .simd_or,
+            .simd_xor,
+            .simd_not,
+            .simd_bit_select,
+            .simd_eq_lanes,
+            .simd_gt_lanes,
+            .simd_gte_lanes,
+            .simd_bitmask,
+            .simd_shl_wrap,
+            .simd_shr_wrap,
+            .simd_shr_zf_wrap,
+            .simd_shr_rounded,
+            .simd_interleave_lo,
+            .simd_interleave_hi,
+            .simd_even_lanes,
+            .simd_odd_lanes,
+            .simd_reverse_lanes,
+            .simd_table_lookup,
+            .simd_concat_shift_bytes,
+            .simd_widen_lo,
+            .simd_widen_hi,
+            .simd_pairwise_add_widen,
+            .simd_narrow_wrap,
+            .simd_narrow_sat,
+            .simd_sum_lanes,
+            .simd_sum_lanes_wrap,
+            .simd_clmul_lo,
+            .simd_clmul_hi,
+            .u8_from_str,
+            .i8_from_str,
+            .u16_from_str,
+            .i16_from_str,
+            .u32_from_str,
+            .i32_from_str,
+            .u64_from_str,
+            .i64_from_str,
+            .u128_from_str,
+            .i128_from_str,
+            .dec_from_str,
+            .dec_to_attos,
+            .dec_from_attos,
+            .f32_from_str,
+            .f64_from_str,
+            .u8_to_i8_wrap,
+            .u8_to_i8_try,
+            .u8_to_i16,
+            .u8_to_i32,
+            .u8_to_i64,
+            .u8_to_i128,
+            .u8_to_u16,
+            .u8_to_u32,
+            .u8_to_u64,
+            .u8_to_u128,
+            .u8_to_f32,
+            .u8_to_f64,
+            .u8_to_dec,
+            .i8_to_i16,
+            .i8_to_i32,
+            .i8_to_i64,
+            .i8_to_i128,
+            .i8_to_u8_wrap,
+            .i8_to_u8_try,
+            .i8_to_u16_wrap,
+            .i8_to_u16_try,
+            .i8_to_u32_wrap,
+            .i8_to_u32_try,
+            .i8_to_u64_wrap,
+            .i8_to_u64_try,
+            .i8_to_u128_wrap,
+            .i8_to_u128_try,
+            .i8_to_f32,
+            .i8_to_f64,
+            .i8_to_dec,
+            .u16_to_i8_wrap,
+            .u16_to_i8_try,
+            .u16_to_i16_wrap,
+            .u16_to_i16_try,
+            .u16_to_i32,
+            .u16_to_i64,
+            .u16_to_i128,
+            .u16_to_u8_wrap,
+            .u16_to_u8_try,
+            .u16_to_u32,
+            .u16_to_u64,
+            .u16_to_u128,
+            .u16_to_f32,
+            .u16_to_f64,
+            .u16_to_dec,
+            .i16_to_i8_wrap,
+            .i16_to_i8_try,
+            .i16_to_i32,
+            .i16_to_i64,
+            .i16_to_i128,
+            .i16_to_u8_wrap,
+            .i16_to_u8_try,
+            .i16_to_u16_wrap,
+            .i16_to_u16_try,
+            .i16_to_u32_wrap,
+            .i16_to_u32_try,
+            .i16_to_u64_wrap,
+            .i16_to_u64_try,
+            .i16_to_u128_wrap,
+            .i16_to_u128_try,
+            .i16_to_f32,
+            .i16_to_f64,
+            .i16_to_dec,
+            .u32_to_i8_wrap,
+            .u32_to_i8_try,
+            .u32_to_i16_wrap,
+            .u32_to_i16_try,
+            .u32_to_i32_wrap,
+            .u32_to_i32_try,
+            .u32_to_i64,
+            .u32_to_i128,
+            .u32_to_u8_wrap,
+            .u32_to_u8_try,
+            .u32_to_u16_wrap,
+            .u32_to_u16_try,
+            .u32_to_u64,
+            .u32_to_u128,
+            .u32_to_f32,
+            .u32_to_f64,
+            .u32_to_dec,
+            .i32_to_i8_wrap,
+            .i32_to_i8_try,
+            .i32_to_i16_wrap,
+            .i32_to_i16_try,
+            .i32_to_i64,
+            .i32_to_i128,
+            .i32_to_u8_wrap,
+            .i32_to_u8_try,
+            .i32_to_u16_wrap,
+            .i32_to_u16_try,
+            .i32_to_u32_wrap,
+            .i32_to_u32_try,
+            .i32_to_u64_wrap,
+            .i32_to_u64_try,
+            .i32_to_u128_wrap,
+            .i32_to_u128_try,
+            .i32_to_f32,
+            .i32_to_f64,
+            .i32_to_dec,
+            .u64_to_i8_wrap,
+            .u64_to_i8_try,
+            .u64_to_i16_wrap,
+            .u64_to_i16_try,
+            .u64_to_i32_wrap,
+            .u64_to_i32_try,
+            .u64_to_i64_wrap,
+            .u64_to_i64_try,
+            .u64_to_i128,
+            .u64_to_u8_wrap,
+            .u64_to_u8_try,
+            .u64_to_u16_wrap,
+            .u64_to_u16_try,
+            .u64_to_u32_wrap,
+            .u64_to_u32_try,
+            .u64_to_u128,
+            .u64_to_f32,
+            .u64_to_f64,
+            .u64_to_dec,
+            .i64_to_i8_wrap,
+            .i64_to_i8_try,
+            .i64_to_i16_wrap,
+            .i64_to_i16_try,
+            .i64_to_i32_wrap,
+            .i64_to_i32_try,
+            .i64_to_i128,
+            .i64_to_u8_wrap,
+            .i64_to_u8_try,
+            .i64_to_u16_wrap,
+            .i64_to_u16_try,
+            .i64_to_u32_wrap,
+            .i64_to_u32_try,
+            .i64_to_u64_wrap,
+            .i64_to_u64_try,
+            .i64_to_u128_wrap,
+            .i64_to_u128_try,
+            .i64_to_f32,
+            .i64_to_f64,
+            .i64_to_dec,
+            .u128_to_i8_wrap,
+            .u128_to_i8_try,
+            .u128_to_i16_wrap,
+            .u128_to_i16_try,
+            .u128_to_i32_wrap,
+            .u128_to_i32_try,
+            .u128_to_i64_wrap,
+            .u128_to_i64_try,
+            .u128_to_i128_wrap,
+            .u128_to_i128_try,
+            .u128_to_u8_wrap,
+            .u128_to_u8_try,
+            .u128_to_u16_wrap,
+            .u128_to_u16_try,
+            .u128_to_u32_wrap,
+            .u128_to_u32_try,
+            .u128_to_u64_wrap,
+            .u128_to_u64_try,
+            .u128_to_f32,
+            .u128_to_f64,
+            .u128_to_dec_try_unsafe,
+            .i128_to_i8_wrap,
+            .i128_to_i8_try,
+            .i128_to_i16_wrap,
+            .i128_to_i16_try,
+            .i128_to_i32_wrap,
+            .i128_to_i32_try,
+            .i128_to_i64_wrap,
+            .i128_to_i64_try,
+            .i128_to_u8_wrap,
+            .i128_to_u8_try,
+            .i128_to_u16_wrap,
+            .i128_to_u16_try,
+            .i128_to_u32_wrap,
+            .i128_to_u32_try,
+            .i128_to_u64_wrap,
+            .i128_to_u64_try,
+            .i128_to_u128_wrap,
+            .i128_to_u128_try,
+            .i128_to_f32,
+            .i128_to_f64,
+            .i128_to_dec_try_unsafe,
+            .f32_to_i8_trunc,
+            .f32_to_i8_try_unsafe,
+            .f32_to_i16_trunc,
+            .f32_to_i16_try_unsafe,
+            .f32_to_i32_trunc,
+            .f32_to_i32_try_unsafe,
+            .f32_to_i64_trunc,
+            .f32_to_i64_try_unsafe,
+            .f32_to_i128_trunc,
+            .f32_to_i128_try_unsafe,
+            .f32_to_u8_trunc,
+            .f32_to_u8_try_unsafe,
+            .f32_to_u16_trunc,
+            .f32_to_u16_try_unsafe,
+            .f32_to_u32_trunc,
+            .f32_to_u32_try_unsafe,
+            .f32_to_u64_trunc,
+            .f32_to_u64_try_unsafe,
+            .f32_to_u128_trunc,
+            .f32_to_u128_try_unsafe,
+            .f32_to_f64,
+            .f64_to_i8_trunc,
+            .f64_to_i8_try_unsafe,
+            .f64_to_i16_trunc,
+            .f64_to_i16_try_unsafe,
+            .f64_to_i32_trunc,
+            .f64_to_i32_try_unsafe,
+            .f64_to_i64_trunc,
+            .f64_to_i64_try_unsafe,
+            .f64_to_i128_trunc,
+            .f64_to_i128_try_unsafe,
+            .f64_to_u8_trunc,
+            .f64_to_u8_try_unsafe,
+            .f64_to_u16_trunc,
+            .f64_to_u16_try_unsafe,
+            .f64_to_u32_trunc,
+            .f64_to_u32_try_unsafe,
+            .f64_to_u64_trunc,
+            .f64_to_u64_try_unsafe,
+            .f64_to_u128_trunc,
+            .f64_to_u128_try_unsafe,
+            .f64_to_f32_wrap,
+            .f64_to_f32_try_unsafe,
+            .dec_to_i8_trunc,
+            .dec_to_i8_try_unsafe,
+            .dec_to_i16_trunc,
+            .dec_to_i16_try_unsafe,
+            .dec_to_i32_trunc,
+            .dec_to_i32_try_unsafe,
+            .dec_to_i64_trunc,
+            .dec_to_i64_try_unsafe,
+            .dec_to_i128_trunc,
+            .dec_to_i128_try_unsafe,
+            .dec_to_u8_trunc,
+            .dec_to_u8_try_unsafe,
+            .dec_to_u16_trunc,
+            .dec_to_u16_try_unsafe,
+            .dec_to_u32_trunc,
+            .dec_to_u32_try_unsafe,
+            .dec_to_u64_trunc,
+            .dec_to_u64_try_unsafe,
+            .dec_to_u128_trunc,
+            .dec_to_u128_try_unsafe,
+            .dec_to_f32_wrap,
+            .dec_to_f32_try_unsafe,
+            .dec_to_f64,
+            .box_box,
+            .box_unbox,
+            .box_prepare_update,
+            .erased_capture_load,
+            .ptr_alloca,
+            .box_alloc_zeroed,
+            .ptr_store,
+            .ptr_load,
+            .ptr_cast,
+            .compare,
+            .crash,
+            => try self.bindFresh(s.target),
         }
     }
 
@@ -2347,13 +2924,16 @@ const Pass = struct {
             try self.bindFresh(s.target);
             return;
         };
-        const op: PredOp = switch (s.op) {
-            .num_is_lt => .lt,
-            .num_is_lte => .lte,
-            .num_is_gt => .gt,
-            .num_is_gte => .gte,
-            else => unreachable,
-        };
+        const op: PredOp = if (s.op == .num_is_lt)
+            .lt
+        else if (s.op == .num_is_lte)
+            .lte
+        else if (s.op == .num_is_gt)
+            .gt
+        else if (s.op == .num_is_gte)
+            .gte
+        else
+            unreachable;
 
         // `a < b` holds when `a <= b - 1`; it fails when `b <= a`. The
         // remaining kinds reduce to those two shapes.
@@ -2418,41 +2998,37 @@ const Pass = struct {
 
         var provable = false;
         var result: ?NodeId = null;
-        switch (s.op) {
-            .num_plus_checked => {
-                if (self.constValueOf(rhs)) |c| {
-                    if (c >= 0) {
-                        // Never wraps when lhs stays at most max - c.
-                        if (try self.constNode(max.? - c)) |limit| {
-                            provable = try self.proveLe(lhs, limit, 0);
-                        }
-                        // Control past a surviving checked add proves the sum
-                        // is exact regardless of whether it can be rewritten.
-                        result = try self.derived(lhs, c);
+        if (s.op == .num_plus_checked) {
+            if (self.constValueOf(rhs)) |c| {
+                if (c >= 0) {
+                    // Never wraps when lhs stays at most max - c.
+                    if (try self.constNode(max.? - c)) |limit| {
+                        provable = try self.proveLe(lhs, limit, 0);
                     }
-                } else if (self.constValueOf(lhs)) |c| {
-                    if (c >= 0) {
-                        if (try self.constNode(max.? - c)) |limit| {
-                            provable = try self.proveLe(rhs, limit, 0);
-                        }
-                        result = try self.derived(rhs, c);
+                    // Control past a surviving checked add proves the sum
+                    // is exact regardless of whether it can be rewritten.
+                    result = try self.derived(lhs, c);
+                }
+            } else if (self.constValueOf(lhs)) |c| {
+                if (c >= 0) {
+                    if (try self.constNode(max.? - c)) |limit| {
+                        provable = try self.proveLe(rhs, limit, 0);
                     }
+                    result = try self.derived(rhs, c);
                 }
-            },
-            .num_minus_checked => {
-                // Never wraps when rhs stays at most lhs.
-                provable = try self.proveLe(rhs, lhs, 0);
-                // Control past a surviving checked subtract proves the
-                // difference is exact, so the result stays on lhs's root
-                // with a window widened by rhs's absolute bounds.
-                const rhs_lo = self.absLoOf(rhs);
-                const rhs_hi = self.absHiOf(rhs);
-                if (rhs_lo >= 0) {
-                    result = try self.derivedRange(lhs, -rhs_hi, -rhs_lo);
-                }
-            },
-            else => unreachable,
-        }
+            }
+        } else if (s.op == .num_minus_checked) {
+            // Never wraps when rhs stays at most lhs.
+            provable = try self.proveLe(rhs, lhs, 0);
+            // Control past a surviving checked subtract proves the
+            // difference is exact, so the result stays on lhs's root
+            // with a window widened by rhs's absolute bounds.
+            const rhs_lo = self.absLoOf(rhs);
+            const rhs_hi = self.absHiOf(rhs);
+            if (rhs_lo >= 0) {
+                result = try self.derivedRange(lhs, -rhs_hi, -rhs_lo);
+            }
+        } else unreachable;
 
         if (provable) {
             if (self.live_pending) {
@@ -2516,7 +3092,7 @@ const RangeProveCertify = struct {
     const Graph = struct {
         allocator: Allocator,
         root: CFStmtId,
-        succs: std.AutoHashMap(CFStmtId, []CFStmtId),
+        succs: collections.DenseMap(CFStmtId, []CFStmtId),
 
         fn deinit(self: *Graph) void {
             var it = self.succs.valueIterator();
@@ -2528,7 +3104,7 @@ const RangeProveCertify = struct {
         /// through `a`: removing `a` must make `b` unreachable.
         fn dominates(self: *Graph, a: CFStmtId, b: CFStmtId) bool {
             if (a == b) return true;
-            var seen = std.AutoHashMap(CFStmtId, void).init(self.allocator);
+            var seen = collections.DenseMap(CFStmtId, void).init(self.allocator);
             defer seen.deinit();
             var stack = std.ArrayList(CFStmtId).empty;
             defer stack.deinit(self.allocator);
@@ -2553,11 +3129,11 @@ const RangeProveCertify = struct {
         var graph = Graph{
             .allocator = allocator,
             .root = body,
-            .succs = std.AutoHashMap(CFStmtId, []CFStmtId).init(allocator),
+            .succs = collections.DenseMap(CFStmtId, []CFStmtId).init(allocator),
         };
         errdefer graph.deinit();
 
-        var join_bodies = std.AutoHashMap(JoinPointId, CFStmtId).init(allocator);
+        var join_bodies = collections.DenseMap(JoinPointId, CFStmtId).init(allocator);
         defer join_bodies.deinit();
 
         var stack = std.ArrayList(CFStmtId).empty;
@@ -2637,10 +3213,10 @@ const RangeProveCertify = struct {
 
         var roots = std.ArrayList(NodeId).empty;
         defer roots.deinit(allocator);
-        var index_of = std.AutoHashMap(NodeId, usize).init(allocator);
+        var index_of = collections.DenseMap(NodeId, usize).init(allocator);
         defer index_of.deinit();
         const add_root = struct {
-            fn add(list: *std.ArrayList(NodeId), map: *std.AutoHashMap(NodeId, usize), alloc: Allocator, id: NodeId) bool {
+            fn add(list: *std.ArrayList(NodeId), map: *collections.DenseMap(NodeId, usize), alloc: Allocator, id: NodeId) bool {
                 const entry = map.getOrPut(id) catch return false;
                 if (!entry.found_existing) {
                     entry.value_ptr.* = list.items.len;

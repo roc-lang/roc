@@ -173,11 +173,12 @@ const Extractor = struct {
         const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (stmts_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
-            const header_idx = switch (stmt) {
-                .s_alias_decl => |decl| decl.header,
-                .s_nominal_decl => |decl| decl.header,
-                else => continue,
-            };
+            const header_idx = if (stmt == .s_alias_decl)
+                stmt.s_alias_decl.header
+            else if (stmt == .s_nominal_decl)
+                stmt.s_nominal_decl.header
+            else
+                continue;
             const header = module_env.store.getTypeHeader(header_idx);
             const name = module_env.getIdentText(header.relative_name);
             if (apply_name_filter and !nameIsPublic(name, input.exposed_name)) continue;
@@ -207,12 +208,10 @@ const Extractor = struct {
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             const pattern = module_env.store.getPattern(def.pattern);
-            const ident = switch (pattern) {
-                .assign => |assign| assign.ident,
-                // Type declarations reach defs through nominal patterns; the
-                // statement walk above already covered them.
-                else => continue,
-            };
+            // Type declarations reach defs through nominal patterns; the
+            // statement walk above already covered them.
+            if (pattern != .assign) continue;
+            const ident = pattern.assign.ident;
             const name = module_env.getIdentText(ident);
             if (apply_name_filter and !nameIsPublic(name, input.exposed_name)) continue;
 
@@ -248,30 +247,31 @@ const Extractor = struct {
         var memo = ConvertMemo.empty;
         defer memo.deinit(self.gpa);
 
-        switch (view.payload(root)) {
-            .alias => |alias| {
-                return .{ .alias = .{
-                    .arity = @intCast(alias.args.len),
-                    .target = try self.convertType(view, names, alias.backing, &memo),
-                } };
-            },
-            .nominal => |nominal| {
-                const backing = if (nominal.is_opaque)
-                    null
-                else
-                    view.nominalBackingTemplateForPayload(nominal) orelse
-                        return self.fail(.unpublished_public_type, "transparent exposed nominal type has no published declaration backing");
-                return .{ .nominal = .{
-                    .arity = @intCast(nominal.args.len),
-                    .is_opaque = nominal.is_opaque,
-                    .backing = if (backing) |backing_ty|
-                        try self.convertType(view, names, backing_ty, &memo)
-                    else
-                        null,
-                } };
-            },
-            else => return self.fail(.unpublished_public_type, "exposed type declaration root is not an alias or nominal type"),
+        const payload = view.payload(root);
+        if (payload == .alias) {
+            const alias = payload.alias;
+            return .{ .alias = .{
+                .arity = @intCast(alias.args.len),
+                .target = try self.convertType(view, names, alias.backing, &memo),
+            } };
         }
+        if (payload != .nominal) {
+            return self.fail(.unpublished_public_type, "exposed type declaration root is not an alias or nominal type");
+        }
+        const nominal = payload.nominal;
+        const backing = if (nominal.is_opaque)
+            null
+        else
+            view.nominalBackingTemplateForPayload(nominal) orelse
+                return self.fail(.unpublished_public_type, "transparent exposed nominal type has no published declaration backing");
+        return .{ .nominal = .{
+            .arity = @intCast(nominal.args.len),
+            .is_opaque = nominal.is_opaque,
+            .backing = if (backing) |backing_ty|
+                try self.convertType(view, names, backing_ty, &memo)
+            else
+                null,
+        } };
     }
 
     const ConvertMemo = std.AutoHashMapUnmanaged(CheckedTypeId, PackageApi.TypeId);

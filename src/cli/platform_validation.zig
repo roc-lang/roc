@@ -210,25 +210,22 @@ pub fn renderValidationError(
     stderr: anytype,
     report_config: reporting.ReportingConfig,
 ) bool {
-    switch (result) {
-        .valid => return false,
-        else => {
-            var report = targets_validator.createValidationReport(allocator, result) catch {
-                // Fallback to simple logging if report creation fails
-                std.log.err("Platform validation failed", .{});
-                return true;
-            };
-            defer report.deinit();
+    if (result == .valid) return false;
 
-            reporting.renderReportToTerminal(
-                &report,
-                stderr,
-                reporting.ColorUtils.getPaletteForConfig(report_config),
-                report_config,
-            ) catch {};
-            return true;
-        },
-    }
+    var report = targets_validator.createValidationReport(allocator, result) catch {
+        // Fallback to simple logging if report creation fails
+        std.log.err("Platform validation failed", .{});
+        return true;
+    };
+    defer report.deinit();
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderr,
+        reporting.ColorUtils.getPaletteForConfig(report_config),
+        report_config,
+    ) catch {};
+    return true;
 }
 
 /// Validate all files declared in targets section exist on disk.
@@ -259,10 +256,7 @@ pub fn validateAllTargetFilesExist(
         };
     };
 
-    switch (result) {
-        .valid => return null,
-        else => return result,
-    }
+    return if (result == .valid) null else result;
 }
 
 // Tests

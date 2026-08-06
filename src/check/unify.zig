@@ -294,10 +294,15 @@ const Unifier = struct {
                     .fn_unbound => |func| {
                         return Content{ .structure = FlatType{ .fn_unbound = try self.funcForMerge(vars, func) } };
                     },
-                    else => return content,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .empty_tag_union,
+                    => return content,
                 }
             },
-            else => return content,
+            .flex, .rigid, .alias, .err => return content,
         }
     }
 
@@ -458,10 +463,8 @@ const Unifier = struct {
         var remaining = self.types_store.len();
         while (remaining > 0) : (remaining -= 1) {
             const content = self.types_store.resolveVar(current).desc.content;
-            switch (content) {
-                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
-                else => return content,
-            }
+            if (std.meta.activeTag(content) != .alias) return content;
+            current = self.types_store.getAliasBackingVar(content.alias);
         }
         return error.TypeMismatch;
     }
@@ -471,19 +474,15 @@ const Unifier = struct {
     /// expected backing accepting an already-nominal actual operand.
     fn constructorBackingWouldInverseLift(self: *Self, expected: Var, actual: Var) Error!bool {
         const actual_content = try self.contentThroughAliases(actual);
-        const actual_nominal = switch (actual_content) {
-            .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| nominal,
-                else => return false,
-            },
-            else => return false,
-        };
+        if (std.meta.activeTag(actual_content) != .structure) return false;
+        const actual_flat = actual_content.structure;
+        if (std.meta.activeTag(actual_flat) != .nominal_type) return false;
+        const actual_nominal = actual_flat.nominal_type;
         if (self.types_store.nominalDeclIsInvalid(actual_nominal)) return false;
 
-        return switch (try self.contentThroughAliases(expected)) {
-            .structure => |flat| flat != .nominal_type,
-            else => false,
-        };
+        const expected_content = try self.contentThroughAliases(expected);
+        return std.meta.activeTag(expected_content) == .structure and
+            std.meta.activeTag(expected_content.structure) != .nominal_type;
     }
 
     fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
@@ -512,18 +511,14 @@ const Unifier = struct {
 
     fn handleTypeMismatch(self: *Self) Error!void {
         while (self.scratch.unify_work_stack.items.pop()) |frame| {
-            switch (frame) {
-                .guard_handler => |handler| {
-                    self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
-                    self.unresolved_b = handler.saved_unresolved_b;
-                },
-                .mismatch_handler => |handler| {
-                    switch (handler) {
-                        .propagate => {},
-                        else => return try self.applyMismatchHandling(handler),
-                    }
-                },
-                else => {},
+            const frame_tag = std.meta.activeTag(frame);
+            if (frame_tag == .guard_handler) {
+                const handler = frame.guard_handler;
+                self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
+                self.unresolved_b = handler.saved_unresolved_b;
+            } else if (frame_tag == .mismatch_handler) {
+                const handler = frame.mismatch_handler;
+                if (handler != .propagate) return try self.applyMismatchHandling(handler);
             }
         }
 
@@ -774,7 +769,16 @@ const Unifier = struct {
                     .tuple => |b_tuple| {
                         try self.unifyTuple(vars, a_tuple, b_tuple);
                     },
-                    else => return error.TypeMismatch,
+                    .record,
+                    .record_unbound,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return error.TypeMismatch,
                 }
             },
             .nominal_type => |a_type| {
@@ -815,7 +819,7 @@ const Unifier = struct {
                     .empty_record => {
                         try self.unifyEmptyWithNominal(vars, a_type, .empty_record, .a_is_nominal, .enforce_opacity);
                     },
-                    else => return error.TypeMismatch,
+                    .tuple, .fn_pure, .fn_effectful, .fn_unbound => return error.TypeMismatch,
                 }
             },
             .fn_pure => |a_func| {
@@ -833,7 +837,14 @@ const Unifier = struct {
                         // pure cannot unify with effectful
                         return error.TypeMismatch;
                     },
-                    else => return error.TypeMismatch,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return error.TypeMismatch,
                 }
             },
             .fn_effectful => |a_func| {
@@ -851,7 +862,14 @@ const Unifier = struct {
                         // effectful cannot unify with pure
                         return error.TypeMismatch;
                     },
-                    else => return error.TypeMismatch,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return error.TypeMismatch,
                 }
             },
             .fn_unbound => |a_func| {
@@ -871,7 +889,14 @@ const Unifier = struct {
                         try self.scheduleMerge(vars.*, vars.a.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
                     },
-                    else => return error.TypeMismatch,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return error.TypeMismatch,
                 }
             },
             .record => |a_record| {
@@ -909,7 +934,13 @@ const Unifier = struct {
                         }
                         try self.unifyRecordWithNominal(vars, b_type, a_record.fields, .{ .ext = a_record.ext }, .b_is_nominal);
                     },
-                    else => return error.TypeMismatch,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return error.TypeMismatch,
                 }
             },
             .record_unbound => |a_fields| {
@@ -948,7 +979,13 @@ const Unifier = struct {
                         }
                         try self.unifyRecordWithNominal(vars, b_type, a_fields, .unbound, .b_is_nominal);
                     },
-                    else => return error.TypeMismatch,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return error.TypeMismatch,
                 }
             },
             .empty_record => {
@@ -979,7 +1016,13 @@ const Unifier = struct {
                         }
                         try self.unifyEmptyWithNominal(vars, b_type, .empty_record, .b_is_nominal, .skip_opacity);
                     },
-                    else => return error.TypeMismatch,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return error.TypeMismatch,
                 }
             },
             .tag_union => |a_tag_union| {
@@ -1002,7 +1045,14 @@ const Unifier = struct {
                         }
                         try self.unifyTagUnionWithNominal(vars, b_type, a_tag_union, .b_is_nominal);
                     },
-                    else => return error.TypeMismatch,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .record,
+                    .record_unbound,
+                    .empty_record,
+                    => return error.TypeMismatch,
                 }
             },
             .empty_tag_union => {
@@ -1025,7 +1075,14 @@ const Unifier = struct {
                         }
                         try self.unifyEmptyWithNominal(vars, b_type, .empty_tag_union, .b_is_nominal, .skip_opacity);
                     },
-                    else => return error.TypeMismatch,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .record,
+                    .record_unbound,
+                    .empty_record,
+                    => return error.TypeMismatch,
                 }
             },
         }
@@ -1282,10 +1339,19 @@ const Unifier = struct {
                         .record => |record| {
                             ext_var = record.ext;
                         },
-                        else => return false,
+                        .record_unbound,
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .tag_union,
+                        .empty_tag_union,
+                        => return false,
                     }
                 },
-                else => return false,
+                .flex, .rigid, .err => return false,
             }
         }
     }
@@ -1309,10 +1375,19 @@ const Unifier = struct {
                         .tag_union => |tag_union| {
                             ext_var = tag_union.ext;
                         },
-                        else => return false,
+                        .record,
+                        .record_unbound,
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .empty_tag_union,
+                        => return false,
                     }
                 },
-                else => return false,
+                .flex, .rigid, .err => return false,
             }
         }
     }
@@ -1380,10 +1455,18 @@ const Unifier = struct {
                                 try self.mergeRecordFieldsIntoScratch(&range, fields);
                                 return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
                             },
-                            else => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                            .tuple,
+                            .nominal_type,
+                            .fn_pure,
+                            .fn_effectful,
+                            .fn_unbound,
+                            .empty_record,
+                            .tag_union,
+                            .empty_tag_union,
+                            => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
                         }
                     },
-                    else => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                    .flex, .rigid, .alias, .err => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
                 }
                 continue;
             }
@@ -1398,10 +1481,19 @@ const Unifier = struct {
                             try self.mergeRecordFieldsIntoScratch(&range, ext_record.fields);
                             ext_var = ext_record.ext;
                         },
-                        else => return try self.finishRecordForMerge(range, ext_var),
+                        .record_unbound,
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .tag_union,
+                        .empty_tag_union,
+                        => return try self.finishRecordForMerge(range, ext_var),
                     }
                 },
-                else => return try self.finishRecordForMerge(range, ext_var),
+                .flex, .rigid, .err => return try self.finishRecordForMerge(range, ext_var),
             }
         }
     }
@@ -1435,10 +1527,19 @@ const Unifier = struct {
                                 try self.mergeTagsIntoScratch(&range, target_tag_union.tags);
                                 ext_var = target_tag_union.ext;
                             },
-                            else => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                            .record,
+                            .record_unbound,
+                            .tuple,
+                            .nominal_type,
+                            .fn_pure,
+                            .fn_effectful,
+                            .fn_unbound,
+                            .empty_record,
+                            .empty_tag_union,
+                            => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
                         }
                     },
-                    else => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                    .flex, .rigid, .alias, .err => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
                 }
                 continue;
             }
@@ -1453,10 +1554,19 @@ const Unifier = struct {
                             try self.mergeTagsIntoScratch(&range, ext_tag_union.tags);
                             ext_var = ext_tag_union.ext;
                         },
-                        else => return try self.finishTagUnionForMerge(range, ext_var),
+                        .record,
+                        .record_unbound,
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .empty_tag_union,
+                        => return try self.finishTagUnionForMerge(range, ext_var),
                     }
                 },
-                else => return try self.finishTagUnionForMerge(range, ext_var),
+                .flex, .rigid, .err => return try self.finishTagUnionForMerge(range, ext_var),
             }
         }
     }
@@ -2035,10 +2145,18 @@ const Unifier = struct {
 
                                     return .{ .ext = ext, .range = range };
                                 },
-                                else => return .{ .ext = ext, .range = range },
+                                .tuple,
+                                .nominal_type,
+                                .fn_pure,
+                                .fn_effectful,
+                                .fn_unbound,
+                                .empty_record,
+                                .tag_union,
+                                .empty_tag_union,
+                                => return .{ .ext = ext, .range = range },
                             }
                         },
-                        else => return .{ .ext = ext, .range = range },
+                        .err => return .{ .ext = ext, .range = range },
                     }
                 },
             }
@@ -2506,10 +2624,19 @@ const Unifier = struct {
 
                             ext_var = ext_tag_union.ext;
                         },
-                        else => return .{ .ext = ext_var, .range = range },
+                        .record,
+                        .record_unbound,
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .empty_tag_union,
+                        => return .{ .ext = ext_var, .range = range },
                     }
                 },
-                else => return .{ .ext = ext_var, .range = range },
+                .err => return .{ .ext = ext_var, .range = range },
             }
         }
     }
@@ -3528,8 +3655,17 @@ pub fn structurallyIncompatiblePair(
                 if (constraint_decl != candidate_source_decl) return .refuting;
                 return .safe;
             },
-            else => return .uninspectable,
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return .uninspectable,
         },
-        else => return .uninspectable,
+        .alias, .err => return .uninspectable,
     }
 }

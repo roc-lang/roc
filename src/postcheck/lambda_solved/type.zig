@@ -194,10 +194,9 @@ pub const Store = struct {
     pub fn root(self: *const Store, id: TypeVarId) TypeVarId {
         var current = id;
         while (true) {
-            switch (self.get(current)) {
-                .link => |next| current = next,
-                else => return current,
-            }
+            const content = self.get(current);
+            if (std.meta.activeTag(content) != .link) return current;
+            current = content.link;
         }
     }
 
@@ -208,22 +207,18 @@ pub const Store = struct {
     pub fn rootCompressed(self: *Store, id: TypeVarId) TypeVarId {
         var current = id;
         while (true) {
-            switch (self.get(current)) {
-                .link => |next| current = next,
-                else => break,
-            }
+            const content = self.get(current);
+            if (std.meta.activeTag(content) != .link) break;
+            current = content.link;
         }
 
         const root_id = current;
         current = id;
         while (current != root_id) {
-            switch (self.get(current)) {
-                .link => |next| {
-                    self.set(current, .{ .link = root_id });
-                    current = next;
-                },
-                else => break,
-            }
+            const content = self.get(current);
+            if (std.meta.activeTag(content) != .link) break;
+            self.set(current, .{ .link = root_id });
+            current = content.link;
         }
 
         return root_id;
@@ -327,10 +322,9 @@ pub const Store = struct {
         pub fn root(self: View, id: TypeVarId) TypeVarId {
             var current = id;
             while (true) {
-                switch (self.get(current)) {
-                    .link => |next| current = next,
-                    else => return current,
-                }
+                const content = self.get(current);
+                if (std.meta.activeTag(content) != .link) return current;
+                current = content.link;
             }
         }
 
