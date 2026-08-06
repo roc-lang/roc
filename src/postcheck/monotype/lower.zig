@@ -45607,6 +45607,7 @@ test "specialization evidence equality includes exact target instantiation" {
         .kind = .{ .procedure = .{
             .proc = .{ .proc_base = @enumFromInt(7) },
             .template = .{ .proc_base = @enumFromInt(7), .template = @enumFromInt(8) },
+            .source_def_idx = @enumFromInt(6),
         } },
         .callable_ty = @enumFromInt(7),
     };

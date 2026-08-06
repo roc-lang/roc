@@ -14414,7 +14414,7 @@ fn buildGraphParticipatingDefColumn(
         switch (entry.target.kind) {
             .procedure => |procedure| switch (procedure.runtime_target) {
                 .graph_participating => {
-                    const raw_def = @intFromEnum(entry.target.def_idx);
+                    const raw_def = @intFromEnum(procedure.source_def_idx);
                     if (raw_def >= by_def.len) {
                         checkedArtifactInvariant("graph-participating method target definition is outside its module", .{});
                     }
@@ -33083,8 +33083,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x86, 0x2C, 0x34, 0xAD, 0x23, 0xE4, 0x51, 0x02, 0x1E, 0x8D, 0x7C, 0x2F, 0xAC, 0x1B, 0xEC, 0xFD,
-        0xC1, 0xDD, 0x78, 0xE7, 0x87, 0xAF, 0xB8, 0xD9, 0x23, 0xAC, 0xB8, 0x5D, 0x7C, 0x8F, 0xE4, 0xB4,
+        0x19, 0x4D, 0x3F, 0x7C, 0x7A, 0x00, 0xDC, 0x1E, 0xC1, 0x5C, 0x9B, 0x0D, 0x17, 0xCB, 0xB8, 0x51,
+        0xFC, 0x96, 0x6F, 0x0A, 0x65, 0x7E, 0xAA, 0xC6, 0x1F, 0x38, 0xE6, 0x96, 0x2D, 0x46, 0xAD, 0x5E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -33111,7 +33111,7 @@ test "closed direct evidence excludes specialization-dependent nested recipes" {
     const procedure_target = static_dispatch.MethodTarget{
         .module_idx = 0,
         .def_idx = def_0,
-        .kind = .{ .procedure = .{ .proc = undefined, .template = undefined } },
+        .kind = .{ .procedure = .{ .proc = undefined, .template = undefined, .source_def_idx = def_0 } },
         .callable_ty = callable_ty,
     };
     const local_target = static_dispatch.MethodTarget{
@@ -33172,6 +33172,7 @@ test "template dispatch classification separates direct calls from graph relatio
                 .kind = .{ .procedure = .{
                     .proc = undefined,
                     .template = undefined,
+                    .source_def_idx = def_0,
                     .runtime_target = .{ .low_level = .num_plus_wrap },
                 } },
                 .callable_ty = callable_ty,
@@ -33198,6 +33199,7 @@ test "template dispatch classification separates direct calls from graph relatio
                 .kind = .{ .procedure = .{
                     .proc = undefined,
                     .template = undefined,
+                    .source_def_idx = def_2,
                     .runtime_target = .{ .graph_participating = .{ .iterator_procedure = .iter_map } },
                 } },
                 .callable_ty = callable_ty,

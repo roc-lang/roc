@@ -1136,6 +1136,33 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Local(\"hello world!\")" },
     },
     .{
+        .name = "inspect: referenced recursive from_interpolation preserves exact iterator",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Url
+        \\    from_interpolation = join_parts
+        \\}
+        \\
+        \\join_parts : Str, Iter((Str, Str)) -> Url
+        \\join_parts = |acc, rest|
+        \\    match Iter.next(rest) {
+        \\        Done => Url.Url(acc)
+        \\        One({ item: (interpolated, segment), rest: next }) => join_parts(acc.concat(interpolated).concat(segment), next)
+        \\        Skip({ rest: next }) => join_parts(acc, next)
+        \\    }
+        \\
+        \\main = {
+        \\    name = "world"
+        \\    value : Url
+        \\    value = "hello ${name}!"
+        \\    direct = join_parts("", [("x", "y")].iter())
+        \\    (value, direct)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Url(\"hello world!\"), Url(\"xy\"))" },
+    },
+    .{
         .name = "inspect: generalized interpolation supports custom and builtin specializations",
         .source_kind = .module,
         .source =

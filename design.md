@@ -2378,7 +2378,10 @@ carry the exact implementation, so method-registry construction explicitly
 marks every selected `from_interpolation` procedure target, including a
 capturing block-local target, as graph-participating. Downstream code consumes
 that category; it does not infer it from the method name or rediscover it from
-the callable shape.
+the callable shape. When an associated method is bound by reference to another
+top-level procedure, the registry records that procedure's source definition
+explicitly; graph participation belongs to the body that executes, not to the
+aliasing associated declaration.
 
 Compiler-generated body-local functions are exact producers too. Iterator step
 closures, field-iteration steps, parser runtimes, encoder runtimes, and encoder

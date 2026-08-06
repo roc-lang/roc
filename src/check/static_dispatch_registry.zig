@@ -284,6 +284,9 @@ pub const GraphParticipatingTarget = struct {
 pub const ProcedureMethodTarget = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
+    /// Definition whose procedure body the target executes. This differs from
+    /// `MethodTarget.def_idx` when an associated method is bound by reference.
+    source_def_idx: CIR.Def.Idx,
     runtime_target: ProcedureRuntimeTarget = .procedure,
 };
 
@@ -448,6 +451,7 @@ pub const MethodRegistry = struct {
                         break :blk .{ .procedure = .{
                             .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
                             .template = template,
+                            .source_def_idx = def_idx,
                             .runtime_target = procedureRuntimeTargetForDef(module, def_idx, method_owner, method_requires_exact_graph),
                         } };
                     },
@@ -655,6 +659,7 @@ fn referencedProcedureTargetForMethodBinding(
                         .callable => .{ .procedure = .{
                             .proc = .{ .artifact = template_entry.template.artifact, .proc_base = template_entry.template.proc_base },
                             .template = template_entry.template,
+                            .source_def_idx = target_def_idx,
                             .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner, method_requires_exact_graph),
                         } },
                         .structural => |kind| .{ .structural = kind },
