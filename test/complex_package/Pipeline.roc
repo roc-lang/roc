@@ -1,4 +1,4 @@
-## Pipeline module — the top-level orchestrator.
+## Pipeline module—the top-level orchestrator.
 ## Imports Field, Transform, and Util, creating the deepest point in the import tree.
 ##
 ## Full dependency graph:

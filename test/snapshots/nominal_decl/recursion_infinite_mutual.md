@@ -27,7 +27,7 @@ INVALID RECURSIVE TYPE - recursion_infinite_mutual.md:1:1:1:14
         (U, U64)
 
     Hint: Recursion in a nominal type is only allowed inside a tag union
-    payload or record field — for example `ConsList(a) := [Nil, Cons(a,
+    payload or record field—for example `ConsList(a) := [Nil, Cons(a,
     ConsList(a))]`.
 
 # TOKENS

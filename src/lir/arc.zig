@@ -639,7 +639,7 @@ const ExactBitSet = struct {
 // dependency visits update stable ArcPlan slots; there is no second ownership
 // walk after convergence.
 //
-// Domain and soundness: the abstract state is a must-owned unit set — a bit
+// Domain and soundness: the abstract state is a must-owned unit set—a bit
 // is present at a program point only when every path represented by that
 // point still carries the ownership unit. Statement transfers are the shared
 // `transferFor*` layer, whose state effects are monotone in the input set
@@ -648,9 +648,9 @@ const ExactBitSet = struct {
 // Merges therefore commute with transfers, so one canonical state per
 // region equals the intersection of the per-path states reaching it.
 //
-// Fixpoint and termination: every accumulator — a join's entry state, the
+// Fixpoint and termination: every accumulator—a join's entry state, the
 // per-jump-site states feeding a join's body keep, and a switch's merged
-// continuation entry — only ever shrinks (set intersection) or receives the
+// continuation entry—only ever shrinks (set intersection) or receives the
 // fixed additions the equations prescribe (join params placed after the
 // body-use filter). A region is re-walked only when an accumulator it
 // depends on shrinks, each accumulator is a finite bitset that can shrink at
@@ -667,7 +667,7 @@ const ExactBitSet = struct {
 //   (a unit rebound in the remainder before every jump but read in the body
 //   escapes the remainder filter yet must survive the join entry).
 // - body_keep(J): intersection of the states at every eligible jump to J
-//   (a jump is eligible unless it sits inside J's own body region — loop
+//   (a jump is eligible unless it sits inside J's own body region—loop
 //   back edges conform at emission by releasing down to the keep), filtered
 //   to units read in the shared body, then join params placed owned and
 //   maybe-initialized params placed conditionally, exactly like the
@@ -2865,7 +2865,7 @@ const Inserter = struct {
     // an alias's own local id while the solver had put the unit on the
     // alias's source local). The layer has two levels:
     //
-    // Keying primitives — the only code allowed to touch `OwnedSet` bits at
+    // Keying primitives—the only code allowed to touch `OwnedSet` bits at
     // a transfer site:
     // - `unitOf` is the single alias-to-unit resolution: a borrowed pure
     //   same-value alias moves its source's unit; everything else moves its
@@ -2876,15 +2876,15 @@ const Inserter = struct {
     //   bindings never carry a unit. `placeConditionalUnit` and
     //   `placeCallResultUnit` are its two mode-specific variants.
     // - `takeRebindTarget` ends the previous binding of a name that is
-    //   being rebound. Rebinding kills only that name's own binding — a
-    //   rebound borrowed alias must not release its source's unit — so this
+    //   being rebound. Rebinding kills only that name's own binding—a
+    //   rebound borrowed alias must not release its source's unit—so this
     //   one is keyed by the raw local id on purpose.
     // - `noteEmittedRelease` replays already-emitted release statements into
     //   the state during boundary re-walks; emitted RC statements name unit
     //   locals directly, so raw keying is exact there.
     //
     // Per-instruction transfer functions (`transferFor*`,
-    // `consumeAtTerminal`) — one per ownership-moving instruction kind.
+    // `consumeAtTerminal`)—one per ownership-moving instruction kind.
     // Each advances the abstract ownership state exactly once and returns
     // the concrete decision written into the stable ArcPlan slot by
     // `processSolveSegment`. Adding an ownership-moving LIR instruction
@@ -2951,7 +2951,7 @@ const Inserter = struct {
     /// a release must be emitted before the rebind. Keyed by the raw local
     /// id on purpose: rebinding a name kills only that name's own binding,
     /// never the unit of a value the name merely borrowed (audited for
-    /// issue 9703's keying class — see the layer comment above).
+    /// issue 9703's keying class—see the layer comment above).
     fn takeRebindTarget(_: *const Inserter, owned: *OwnedSet, target: LIR.LocalId) bool {
         if (!owned.contains(target)) return false;
         owned.unset(target);
@@ -3455,9 +3455,9 @@ const Inserter = struct {
 
     /// Runtime uniqueness checks proven redundant at this low-level
     /// statement, by argument position: the argument's value is unique in
-    /// the current emission view (born with count 1 — by a fresh
+    /// the current emission view (born with count 1—by a fresh
     /// allocation, a direct call to a unique-returning callee, or a variant
-    /// parameter seed — and never given another holder), its single
+    /// parameter seed—and never given another holder), its single
     /// ownership unit moves into this op (owned here, and not in the
     /// preserve mask, whose positions pay a retain before the op that holds
     /// the count above 1), and no borrow of it is live at the op. Any doubt
@@ -6531,19 +6531,19 @@ test "RC mutable list binding tail-cleans borrowed final use" {
     try testing.expect(scenario.fixture.countRc(scenario.target, .decref) >= 1);
 }
 
-test "RC branch-aware: symbol used in both match branches — no incref at binding" {
+test "RC branch-aware: symbol used in both match branches—no incref at binding" {
     var scenario = try setupSwitchUse(true, true, false, false);
     defer scenario.fixture.deinit();
     try scenario.fixture.expectRc(scenario.value, 0, 0, 0);
 }
 
-test "RC branch-aware: symbol used in one match branch only — decref in unused branch" {
+test "RC branch-aware: symbol used in one match branch only—decref in unused branch" {
     var scenario = try setupSwitchUse(true, false, false, false);
     defer scenario.fixture.deinit();
     try scenario.fixture.expectRc(scenario.value, 0, 1, 0);
 }
 
-test "RC branch-aware: symbol used twice in one branch — incref in that branch, decref in other" {
+test "RC branch-aware: symbol used twice in one branch—incref in that branch, decref in other" {
     var scenario = try setupSwitchUse(true, false, true, false);
     defer scenario.fixture.deinit();
     try scenario.fixture.expectRc(scenario.value, 1, 1, 0);
@@ -7315,8 +7315,8 @@ test "RC borrow group member used in a join body keeps the lender across the jum
     // The field read is used only inside the join body, so the pair's
     // liveness group must carry its unit through the jump: the jump releases
     // nothing and the pair dies after the read's last use in the body. The
-    // read is a field take, so the pair's death dismantles it — one residual
-    // release of the untaken field on a fresh temporary — instead of
+    // read is a field take, so the pair's death dismantles it—one residual
+    // release of the untaken field on a fresh temporary—instead of
     // releasing the pair whole.
     try f.expectRc(pair, 0, 0, 0);
     try testing.expectEqual(@as(usize, 1), f.countAllRc());
@@ -7645,7 +7645,7 @@ test "RC atomicity: root-returned values keep atomic counts" {
     const list = try f.local(f.list_i64);
     const pair = try f.local(f.pair_list);
 
-    // list = []; pair = {list, list}; ret pair — the pair reaches the host
+    // list = []; pair = {list, list}; ret pair—the pair reaches the host
     // through the root return, and the list is reachable from the pair.
     const ret = try f.ret(pair);
     const pair_assign = try f.assignStruct(pair, &.{ list, list }, ret);
@@ -7671,7 +7671,7 @@ test "RC atomicity: bodyless callee arguments keep atomic counts" {
         .ret_layout = .i64,
     });
 
-    // list = []; alias = list; call hosted(list); expect(alias); ret 1 —
+    // list = []; alias = list; call hosted(list); expect(alias); ret 1—
     // the call's argument crosses a boundary the solver cannot see into.
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, 1, ret);
@@ -7791,7 +7791,7 @@ test "uniqueness: parameter consumed by a checked op keeps its check" {
     const elem = try f.local(.i64);
     const appended = try f.local(f.list_i64);
 
-    // appended = checked_op(param, elem); ret appended — the caller may
+    // appended = checked_op(param, elem); ret appended—the caller may
     // still hold the argument, so the parameter is never born unique.
     const ret = try f.ret(appended);
     const append = try f.assignLowLevel(appended, &.{ param, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
@@ -7812,7 +7812,7 @@ test "uniqueness: append result consumed by a checked op elides the check" {
     const result = try f.local(.i64);
 
     // elem = 5; list = []; first = append_unsafe(list, elem);
-    // second = checked_op(first, elem) — the append's RcEffect marks its
+    // second = checked_op(first, elem)—the append's RcEffect marks its
     // result unique, so the chained op's check is redundant.
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, 1, ret);
@@ -8107,7 +8107,7 @@ test "uniqueness: alias whose source is read elsewhere keeps the check" {
     const result = try f.local(.i64);
 
     // elem = 5; list = []; alias = list; appended = checked_op(alias, elem);
-    // expect(list) — the original is read besides the alias, so the alias
+    // expect(list)—the original is read besides the alias, so the alias
     // must keep its own unit and the count exceeds 1 at the op.
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, 1, ret);
@@ -9083,7 +9083,7 @@ test "RC alias passed as a dying call argument moves the leader unit" {
     // the pure alias is borrowed, so its ownership unit lives on the source
     // local. Passing the alias as a dying owned call argument must move the
     // *source's* unit (no retain before the call, no release after), keyed
-    // through unitOf — testing or clearing the OwnedSet by the alias's own
+    // through unitOf—testing or clearing the OwnedSet by the alias's own
     // id would leak the source's unit. The debug certifier re-checks the
     // emitted schedule during `run`.
     var f = try ArcTest.init(testing.allocator);

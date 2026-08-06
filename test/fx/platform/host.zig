@@ -850,7 +850,7 @@ fn hostedHostGetGreeting(host: HostRecord) callconv(.c) RocStr {
     return RocStr.fromSlice(result_str, ops);
 }
 
-/// Hosted function: Padded.check! — end-to-end host-interop check for a nominal
+/// Hosted function: Padded.check!—end-to-end host-interop check for a nominal
 /// record with an unnamed padding field. The Roc type is
 /// `Padded := { z : U32, _ : U32, a : U32 }`, whose runtime layout must match
 /// this extern struct (declared order, with four reserved padding bytes): z@0,

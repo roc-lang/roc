@@ -424,8 +424,8 @@ pub const Expr = union(enum) {
     /// Structural hashing chosen explicitly by the checker.
     ///
     /// This is not method dispatch. It represents the semantic case where
-    /// `to_hash` is satisfied structurally — threading a `Hasher` through each
-    /// component's hash — rather than via a user-defined `to_hash` method.
+    /// `to_hash` is satisfied structurally—threading a `Hasher` through each
+    /// component's hash—rather than via a user-defined `to_hash` method.
     e_structural_hash: struct {
         value: Expr.Idx,
         hasher: Expr.Idx,

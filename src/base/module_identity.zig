@@ -3,8 +3,8 @@
 //! A module's identity is a deep content hash: SHA-256 over the module's name,
 //! its source bytes, and the identity hashes of its resolved imports (a Merkle
 //! DAG over the transitive closure of module names and source bytes). It is a
-//! pure function of that closure — no coordinator-assigned display strings, no
-//! package names, no filesystem paths, no per-run state — so it satisfies the
+//! pure function of that closure—no coordinator-assigned display strings, no
+//! package names, no filesystem paths, no per-run state—so it satisfies the
 //! caching constraint that any id serialized in a stage's artifact must be a
 //! deterministic function of that stage's cache-key inputs.
 //!
@@ -24,7 +24,7 @@
 //! use site holds a dense `Idx` into the owning store's table. Crossing a
 //! store boundary is a rebase: read the 32-byte hash from the source table and
 //! getOrInsert it into the destination table. Rebase is the single
-//! cross-artifact identity resolution mechanism — no name matching.
+//! cross-artifact identity resolution mechanism—no name matching.
 
 const std = @import("std");
 
@@ -58,7 +58,7 @@ const inline_import_capacity = 32;
 /// and the identity hashes of its resolved direct imports.
 ///
 /// Import hashes are sorted and deduplicated internally, so the result is a
-/// pure function of the SET of resolved import identities — independent of
+/// pure function of the SET of resolved import identities—independent of
 /// resolution order, duplicate import entries, and data-structure iteration
 /// order.
 pub fn computeDeep(
@@ -99,7 +99,7 @@ pub fn computeDeep(
 }
 
 /// Integer equality over two 32-byte identity hashes (a single 256-bit
-/// compare — no byte-wise string comparison).
+/// compare—no byte-wise string comparison).
 pub fn eql(a: *const Hash, b: *const Hash) bool {
     const a_bits: u256 = @bitCast(a.*);
     const b_bits: u256 = @bitCast(b.*);

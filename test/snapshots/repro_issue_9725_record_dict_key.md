@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=repro for https://github.com/roc-lang/roc/issues/9725 — a record must be usable as a Dict key (structural to_hash), like it is as a Set element
+description=repro for https://github.com/roc-lang/roc/issues/9725—a record must be usable as a Dict key (structural to_hash), like it is as a Set element
 type=file
 ~~~
 # SOURCE

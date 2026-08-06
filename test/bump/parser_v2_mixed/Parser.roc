@@ -1,5 +1,5 @@
 ## parser_v1 with `fail` removed and `map` added, alongside a new Extras
-## module — a mixed diff whose rendered output the CLI tests assert in full.
+## module—a mixed diff whose rendered output the CLI tests assert in full.
 
 Parser(input, val) := { run : input -> [Ok(val, input), Err(Str)] }.{
 

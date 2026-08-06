@@ -13,7 +13,7 @@ hand-written lists, and two of them have already diverged:
    (`:516-552`), the `addAll` `addImport` calls (`:591-632`), the
    `getModule` switch (`:641-678`), the `test_configs` array
    (`:699-728`), and the `aggregatorFilters` map (`:26-44`). The
-   switches are exhaustive (safe); the arrays are not — and
+   switches are exhaustive (safe); the arrays are not—and
    `test_configs` already omits several modules present in the enum,
    so "modules that exist" and "modules that get a unit-test step"
    have silently diverged. `src/build/minici.zig:55-82` then
@@ -43,14 +43,14 @@ The build layer also contains the counter-examples: `RocTarget`
 and the CLI, and the compiler version is assembled once into
 `build_options`. The module list is the last large inventory without
 that treatment. Note `ci_manager.yml` already runs `zig build minici`
-as its whole gate — proof the single-entry-point form works in CI.
+as its whole gate—proof the single-entry-point form works in CI.
 
 ## Evidence
 
-- `src/build/modules.zig` — diff the enum against `test_configs` to
+- `src/build/modules.zig`—diff the enum against `test_configs` to
   see the existing omissions.
-- `minici.zig:36-38` — the keep-in-sync comment.
-- `ci_zig.yml:381-385` vs `minici.zig:55-82` — the granularity
+- `minici.zig:36-38`—the keep-in-sync comment.
+- `ci_zig.yml:381-385` vs `minici.zig:55-82`—the granularity
   divergence.
 - `grep -rn '0.16.0' .github/workflows build.zig.zon src/flake.nix`.
 
@@ -122,5 +122,5 @@ work, generated).
 
 ## Related projects
 
-- [cli-declarative-flags.md](cli-declarative-flags.md) — the same
+- [cli-declarative-flags.md](cli-declarative-flags.md)—the same
   declarative-table move for the CLI surface.

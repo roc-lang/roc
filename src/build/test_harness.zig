@@ -229,7 +229,7 @@ pub fn posixRead(fd: posix.fd_t, buf: []u8) error{ReadFailed}!usize {
         const chunk: u32 = @intCast(@min(buf.len, std.math.maxInt(u32)));
         var n_read: u32 = 0;
         if (k32.ReadFile(fd, buf.ptr, chunk, &n_read, null) == .FALSE) {
-            // ERROR_BROKEN_PIPE (109) means clean EOF — surface as 0 bytes, not an error.
+            // ERROR_BROKEN_PIPE (109) means clean EOF—surface as 0 bytes, not an error.
             const err = std.os.windows.GetLastError();
             if (err == .BROKEN_PIPE) return 0;
             return error.ReadFailed;
@@ -758,7 +758,7 @@ pub fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Alloc
 /// Parse standard harness flags from argv.
 pub fn parseStandardArgs(allocator: Allocator, process_args: std.process.Args) !StandardArgs {
     const raw_args = try process_args.toSlice(allocator);
-    // Don't free — we reference slices from it.
+    // Don't free—we reference slices from it.
     // Cast from []const [:0]const u8 to []const []const u8.
     const raw_args_plain: []const []const u8 = @ptrCast(raw_args);
     return parseStandardArgsFromSlice(raw_args_plain, allocator);
@@ -913,7 +913,7 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         /// each logical test has one process boundary and one result frame.
         windows_persistent_workers: bool = true,
         /// Called from the parent thread right before launching each test.
-        /// Use for "RUN <name>" logging — keeps it coherent across N workers.
+        /// Use for "RUN <name>" logging—keeps it coherent across N workers.
         onTestStarted: ?*const fn (Spec) void = null,
         /// Restrict a spec to one named backend when the parent passes
         /// `--worker-backend <name>` alongside `--worker <idx>` (Phase-2
@@ -1210,7 +1210,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         if (elapsed > kill_after_ms and !slot.timed_out) {
                             slot.timed_out = true;
                             const test_name = cfg.getName(specs[slot.test_index]);
-                            std.debug.print("\n  HANG  {s}  ({d}ms) — killing\n", .{ test_name, elapsed });
+                            std.debug.print("\n  HANG  {s}  ({d}ms)—killing\n", .{ test_name, elapsed });
                             if (cfg.use_process_groups) {
                                 posixKill(-slot.pid, posix.SIG.KILL) catch {};
                             } else {
@@ -1240,7 +1240,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// decimal spec indices from stdin one per line, write a
         /// u32-length-prefixed result frame per index, loop until stdin
         /// EOFs). Returns true when the process served as a worker and the
-        /// caller must return without starting its own pool — a worker that
+        /// caller must return without starting its own pool—a worker that
         /// fell through would recursively spawn workers. The caller must pass
         /// the same specs, in the same order, that the parent pool sees:
         /// `buildWorkerArgvTemplate` preserves every selection flag so both
@@ -1272,7 +1272,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 const line = while (true) {
                     if (line_len >= line_buf.len) return true; // malformed index line
                     const n = posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch return true;
-                    if (n == 0) return true; // EOF — parent is done
+                    if (n == 0) return true; // EOF—parent is done
                     if (line_buf[line_len] == '\n') break line_buf[0..line_len];
                     line_len += 1;
                 };

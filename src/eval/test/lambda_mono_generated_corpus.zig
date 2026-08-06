@@ -646,7 +646,7 @@ pub const cases = [_]Case{
     // {scalar, record, branch-reassigned carry} x {bare, adapter chain}. This
     // harness lowers with inline mode `.none`, so SpecConstr never runs here
     // and these cases guard the direct solved-to-LIR lowering of iterator
-    // loops, carries, and effect ordering — not the fusion rewrites. Fusion
+    // loops, carries, and effect ordering—not the fusion rewrites. Fusion
     // correctness for the same shapes is guarded by lir_inline's
     // .none-vs-.wrappers differential and structural tests.
     .{

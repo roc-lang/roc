@@ -47,9 +47,14 @@ cd "$repo_root"
 # x64musl rose from 95 to 99 when the x86-64-v3 model was constrained to the
 # instruction features declared by Roc's CPU contract. This prevents LLVM's
 # named model from silently raising the runtime instruction floor.
+# Both counts rose (x64musl 99 to 124, arm64musl 82 to 92) when generated
+# procs and linked builtins gained inline hints: the surrounding list setup
+# inlines into the procedure instead of staying behind calls. The pinned
+# eight-byte compare loop is unchanged - load, load, compare, advance, with
+# the from_le_bytes bounds test still doubling as the loop's termination.
 expectations=(
-    "x64musl:99"
-    "arm64musl:82"
+    "x64musl:124"
+    "arm64musl:92"
 )
 
 failed=0

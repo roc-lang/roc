@@ -1,10 +1,10 @@
-//! x86-64 C-ABI parameter/return classification for Roc layouts — both the System V
+//! x86-64 C-ABI parameter/return classification for Roc layouts—both the System V
 //! (Linux/macOS) eightbyte algorithm and the Windows x64 convention.
 //!
 //! Adapted from the Zig compiler (MIT License, "Copyright (c) Zig contributors"):
 //! `src/codegen/x86_64/abi.zig` @ 24fdd5b7a4 (Release 0.16.0). The classification
-//! algorithms — System V's per-eightbyte INTEGER/SSE classification with struct/union
-//! recursion and post-merge cleanup, and the Win64 size-based rules — are unchanged; they
+//! algorithms—System V's per-eightbyte INTEGER/SSE classification with struct/union
+//! recursion and post-merge cleanup, and the Win64 size-based rules—are unchanged; they
 //! have been rewritten to read Roc's layout store instead of Zig's `Type`/`Zcu`.
 //!
 //! Roc aggregates always use a C-compatible (extern-like) layout: fields are laid out at
@@ -176,8 +176,8 @@ fn classifyAggregateSysV(store: *const Store, result: *[8]Class, base_offset: u3
             var i: u32 = 0;
             while (i < field_count) : (i += 1) {
                 const field_off = base_offset + store.getStructFieldOffset(struct_idx, i);
-                // Unnamed padding holds uninitialized, alignment-1 bytes — not a
-                // typed member — so it classifies as INTEGER bytes (like a C
+                // Unnamed padding holds uninitialized, alignment-1 bytes—not a
+                // typed member—so it classifies as INTEGER bytes (like a C
                 // `char[N]`), regardless of the type it borrowed its size from.
                 if (store.getStructFieldIsPadding(struct_idx, i)) {
                     classifyPaddingBytesSysV(result, field_off, store.getStructFieldSize(struct_idx, i));
@@ -349,7 +349,7 @@ test "x86_64 SysV: unnamed padding classifies as integer bytes, not its declared
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
-    // { x : U64, _ : F64 } — the second eightbyte is 8 bytes of unnamed, alignment-1
+    // { x : U64, _ : F64 }—the second eightbyte is 8 bytes of unnamed, alignment-1
     // padding. It must classify as INTEGER (like a C `char[8]`), NOT SSE as a real
     // `double` member would, so a nominal mirroring `{ uint64_t; char[8]; }` is passed
     // in two integer registers rather than one integer + one SSE register.

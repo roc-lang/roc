@@ -77,8 +77,8 @@ outputs the explicit mapping from checked ids to runtime encodings, and all
 later stages consume that mapping.
 
 Identity provenance follows meaning provenance. An identity may be derived
-from module content — the module name, the source bytes, and the identities
-of imports — only for definitions whose entire meaning is determined by that
+from module content—the module name, the source bytes, and the identities
+of imports—only for definitions whose entire meaning is determined by that
 content. A binding whose meaning is partly supplied from outside the compiled
 program is identified by its role at that outside boundary instead. Hosted
 functions receive their implementations from the host, and `provides`
@@ -139,9 +139,9 @@ from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
 Recursive walks over post-check types and values must have an explicit
 termination argument. A structure reachable after checking can be
-self-referential — a recursive nominal's backing, or the fixpoint value of a
+self-referential—a recursive nominal's backing, or the fixpoint value of a
 recursively-constructed chain (an iterator wrapped around itself a runtime
-number of times) — so "this walk terminates" is an assumption, not a property,
+number of times)—so "this walk terminates" is an assumption, not a property,
 unless the walk traverses a proven acyclic structure, detects graph cycles, or
 carries explicit proof fuel. Proof fuel is not rewrite evidence. Every
 fuelled query returns a typed result that distinguishes `proven`, `disproven`,
@@ -174,12 +174,12 @@ the field, item, and tag readers (`fieldFromValue`, `itemFromValue`,
 `tagFromValue`, `recordFromValue`, `tupleFromValue`), and `materialize` each
 count the pointer edges they follow against a shared strip cap; the matchers
 retain a runtime match on exhaustion, while those readers and
-`materialize` — which only ever run on values already proven acyclic by the
-rules above — treat reaching the cap as a compiler bug. The shape-driven walks (`valueFromShapeArgs`,
+`materialize`—which only ever run on values already proven acyclic by the
+rules above—treat reaching the cap as a compiler bug. The shape-driven walks (`valueFromShapeArgs`,
 `appendExprsFromValue`, `supplyLoopSlotLeaves`, `shapeMatchesValue`, `shapeEql`)
-carry no budget: `Shape` trees are finite and acyclic by construction — they are
+carry no budget: `Shape` trees are finite and acyclic by construction—they are
 produced only by the budgeted derivations and a nominal shape's backing is a
-fresh allocation, never a back-reference — so those walks terminate on the
+fresh allocation, never a back-reference—so those walks terminate on the
 structure alone.
 
 ## Checking Effects And Const Roots
@@ -738,7 +738,7 @@ supports it.
 Static ownership reasoning lives in exactly one place: LIR ARC insertion.
 ARC insertion computes a whole-program borrows-with-lifetimes solution and
 emits explicit RC statements from it (see ARC Borrow Inference). No other
-stage — checking, post-check lowering, backends, the interpreter, or LirImage —
+stage—checking, post-check lowering, backends, the interpreter, or LirImage—
 contains a borrow, lifetime, uniqueness, or parameter-mode model. Everything
 the solver computes is ARC-stage-local data; none of it appears in checked
 modules, LirImage, or any consumer-visible structure. Runtime mutation still
@@ -1494,8 +1494,8 @@ checked inputs and the checked modules they name. Such tables are serialized
 data, not new cache-id inputs.
 
 `module_identity` includes the module's name. Canonicalization output is not
-a function of source bytes alone — a type module's main type takes its name
-from the module's file name — so no key or identity derived from module
+a function of source bytes alone—a type module's main type takes its name
+from the module's file name—so no key or identity derived from module
 content may be computed from source bytes without the module name.
 
 The cache id does not include target ABI, pointer width, layout ids, field offsets,
@@ -1570,8 +1570,8 @@ Type checking processes a module's top-level defs as binding groups: the SCC
 condensation of the name-reference graph, in deterministic topological order
 (groups ordered by their first member's source position among independent
 groups; members within a group in source order). The graph covers every name
-reference in a def's expression tree — nested lambda bodies and blocks
-included — plus statically-resolvable type-qualified method-call targets. It
+reference in a def's expression tree—nested lambda bodies and blocks
+included—plus statically-resolvable type-qualified method-call targets. It
 is transient checking input computed from canonicalization output when
 checking starts and freed with the checker; a checked module never stores it.
 
@@ -1586,7 +1586,7 @@ generalized scheme from every eligible annotation (a simple `.assign` binding
 whose annotation has no `_` hole): the annotation's type is generated once in
 place, deep-copied into disjoint orphan vars, generalized, and the annotation
 nodes are reset so the def's own body check generates them again exactly as
-always. A reference to an annotated def — by name or by dispatch — before or
+always. A reference to an annotated def—by name or by dispatch—before or
 while its body checks instantiates this standalone scheme, exactly like a
 reference to an imported scheme copy; the def itself still checks with its
 annotation generated in its body's frame, sharing vars with the scheme the
@@ -1605,7 +1605,7 @@ of one with its own rank frame, and annotated (type-var-free) locals
 pre-declare their scheme. There is no deferred post-generalization validation
 of recursive references anywhere; the monomorphic rule leaves nothing to
 validate afterwards. A consequence is that an unannotated recursive def
-used at two incompatible types within its own group is a type error — the
+used at two incompatible types within its own group is a type error—the
 old deferral silently accepted such programs unsoundly.
 
 Static-dispatch dependencies are inherently dynamic (`|a| a.foo()` dispatches
@@ -1614,9 +1614,9 @@ static-dispatch constraint resolves to an unchecked, unannotated local def
 mid-body, the target is only *recorded* (`pending_dispatch_targets`, owned by
 the discovering group) and the constraint re-deferred; the constraint's vars
 are pinned at the group's boundary rank so no inner lambda can generalize
-them first. At the group's generalization boundary — a singleton def's RHS
-frame or a recursive group's shared frame, where no mid-body state is pending
-— the driver checks each target's group in its own nested frame (together
+them first. At the group's generalization boundary—a singleton def's RHS
+frame or a recursive group's shared frame, where no mid-body state is pending—
+the driver checks each target's group in its own nested frame (together
 with any unchecked topological prefix), re-runs dispatch, and interleaves
 boundary literal defaulting to a fixpoint before generalizing. Group checks
 nest only at such boundaries.
@@ -1627,7 +1627,7 @@ dispatch back-edge from a nested group links to them monomorphically and rank
 adjustment keeps the shared structure at the suspended group's rank, where it
 generalizes when that group's boundary completes. A group therefore never
 generalizes while one of its deferred dispatch constraints into an unchecked
-group is outstanding, and a suspended group is never re-entered — both are
+group is outstanding, and a suspended group is never re-entered—both are
 asserted in
 debug builds (`group_stack`, group states, and the pending-target
 stack-suffix discipline).
@@ -1760,7 +1760,7 @@ surface, the app's checked module records one requirement solution per
 platform requirement, keyed by requires-clause index: the exported app value
 that satisfies it as a checked export id (def and checked pattern, never a
 name), the requirement type as solved in the app's env, and the solved types
-of the requirement's identity variables in identity-slot order — the
+of the requirement's identity variables in identity-slot order—the
 first-encounter order the type key digest assigns, shared byte-for-byte
 between the solver-var digest and the checked-payload digest.
 
@@ -2994,8 +2994,8 @@ A loop-carried variable's reassigned copies share its source binder but not
 its local id, so once a loop clone rebinds the carried slot, binder identity
 is the only path those copies resolve through. Cloning a loop therefore drops
 the pre-loop binder value, installs the emitted param under the slot's binder
-identity for any value variant — an opaque scalar param must reach the copies
-too — and, while the loop clone is active, keeps a reassigned carried binder's
+identity for any value variant—an opaque scalar param must reach the copies
+too—and, while the loop clone is active, keeps a reassigned carried binder's
 entry pointing at its latest merged value across the restores of escaping
 `let` clones. Arm and join boundaries restore plainly, so a reassignment
 inside one branch never leaks to its sibling or past the join. Resolving a
@@ -3087,7 +3087,7 @@ rules: it passes its own repro, and nothing in the type system flags that
 subsumption or dispatch policy changed. The solved-graph mutation primitive,
 `Store.dangerousSetVarRedirect` (src/types/store.zig), therefore requires a
 `RedirectRule` enum member naming the declared rule each call site operates
-under — an unreasoned redirect does not compile, and adding a caller means
+under—an unreasoned redirect does not compile, and adding a caller means
 adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
@@ -3106,9 +3106,9 @@ function's boundary type is an ABI contract keyed by its declared closed row
 (see Host Symbol ABI), so the hosted callee cannot adopt the caller's wider
 row, and requiring callers to re-tag hosted errors by hand would make hosted
 functions unusable with `?`. When the `?` condition is a direct call of a
-hosted function — the call's function expression resolves statically to an
+hosted function—the call's function expression resolves statically to an
 `e_hosted_lambda` def; dispatch calls and value-carried functions never
-qualify — and every visible error in the callee's row is included in the
+qualify—and every visible error in the callee's row is included in the
 expected row (same tag names, mutually usable payloads), the checker widens
 the condition at the use site: the condition's root is redirected to a fresh
 `Try` at the expected row (`widenTryConditionForExpectedReturn`, cited as
@@ -3124,10 +3124,10 @@ producer-side check in Monotype lowering (see Host Symbol ABI), which admits
 only the declared type no matter what a use site's type turned out to be. So
 the rule can be tightened, loosened, or replaced on typing grounds alone.
 
-Both sides are pinned by tests: accepted —
+Both sides are pinned by tests: accepted—
 test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
 inside an open-row platform function builds and the host's Ok is observed as
-Ok); rejected — test/fx-open/hosted_try_question_not_included.roc (a direct
+Ok); rejected—test/fx-open/hosted_try_question_not_included.roc (a direct
 hosted `?` whose enclosing annotation omits the hosted error is a type
 error), and the issue #9798 regression test in
 src/check/test/type_checking_integration.zig (a non-hosted `?` into an open
@@ -3150,10 +3150,10 @@ structural shape is selected. Parser eligibility recognizes a flexible
 variable only in the explicit tag-extension position; a bare flexible shape or
 payload remains unsupported until earlier constraints resolve it.
 
-Both sides are pinned by tests: accepted —
+Both sides are pinned by tests: accepted—
 test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
 `Ok(Friendly) == Json.parse(...)` comparison closes the inferred parser row);
-rejected — test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
+rejected—test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
 has a named rigid extension remains a missing-method error).
 
 ### Derived Parser Required-Field Error Composition
@@ -3192,7 +3192,7 @@ branch. Lowering then consumes that solved error row and directly constructs
 an absent required field; absence of that tag from the checked monotype is an
 invariant violation, not a condition lowering may recover from.
 
-Both sides are pinned by tests: accepted —
+Both sides are pinned by tests: accepted—
 test/cli/ParserRequiredFieldError.roc (a non-JSON derived parser reports the
 generic error with the missing field name), and
 test/cli/JsonParseErrorComposition.roc (JSON scalar parsing has only
@@ -3201,7 +3201,7 @@ test/cli/JsonParseErrorComposition.roc (JSON scalar parsing has only
 test/cli/JsonParseGenericWrapperErrors.roc (a generalized wrapper may consume
 the parser errors without losing the concrete record's required-field error),
 and test/cli/ParserCustomNominalField.roc (a custom nominal parser's narrower
-error row injects into its containing record row); rejected —
+error row injects into its containing record row); rejected—
 test/cli/ParserMissingRequiredFieldError.roc (a required-record parser cannot
 use a closed format error row that omits `MissingRequiredField(Str)`).
 
@@ -3220,9 +3220,9 @@ dispatch method-acceptance rule. Rejecting a constrained part retires its copied
 static-dispatch constraints together with the erroneous interpolation so no
 unresolved static-dispatch constraint can cross the checked boundary.
 
-Both sides are pinned by tests: accepted —
+Both sides are pinned by tests: accepted—
 test/cli/issue_10204_imported_interpolation_metadata/Main.roc (an imported
-interpolation instantiated with `Str` checks successfully); rejected —
+interpolation instantiated with `Str` checks successfully); rejected—
 test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
 type mismatch without `CheckedModule` construction panicking).
@@ -3235,56 +3235,56 @@ site to any family below must classify it here.
 `dangerousSetVarRedirect` call sites (all in src/check/Check.zig; the
 `RedirectRule` member at each site is the citation):
 
-- `widenTryConditionForExpectedReturn` — policy: Hosted Try Question
+- `widenTryConditionForExpectedReturn`—policy: Hosted Try Question
   Widening (above).
-- `markErroneousBranchWithExpected` — mechanism: diagnostic recovery. The
+- `markErroneousBranchWithExpected`—mechanism: diagnostic recovery. The
   expression already has a reported error; its var is redirected to a fresh
   var unified with the expected return so checking can continue past it.
 
 Other solved-graph mutations:
 
-- `unifyWithFresh` (`dangerousSetVarDesc`) — mechanism: fast path writing
+- `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.
-- `resetAnnotationNodes` (`resetVarToUnbound`) — mechanism: recycles
+- `resetAnnotationNodes` (`resetVarToUnbound`)—mechanism: recycles
   annotation node vars after the scheme was copied off as a disjoint orphan.
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning
-  (`setVarContent(.err)`) — policy: Type Declaration Template Validity (above)
+  (`setVarContent(.err)`)—policy: Type Declaration Template Validity (above)
   and diagnostic recovery after an already reported problem.
-- `finalizeFunctionEffectsAtBoundary` — policy: directed-effect
+- `finalizeFunctionEffectsAtBoundary`—policy: directed-effect
   materialization at generalization boundaries, the rule declared in
   Checking Effects And Const Roots.
-- `closeAbsentConstructedPayloadVars` / `closePayloadVarToEmpty` — policy:
+- `closeAbsentConstructedPayloadVars` / `closePayloadVarToEmpty`—policy:
   absent-constructor payload closing. A constructed value's unconstrained,
   ignorable payload vars for tags the expression provably never constructs
   close to the empty tag union, so matches on constructed values are
   exhaustive without wildcard arms.
-- `validateDerivedParseTagExt` — policy: Derived Parser Tag-Row Closure
+- `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
   ordinary unification; rigid extensions remain rejected.
-- `constrainDerivedParserRequiredFieldError` — policy: Derived Parser
+- `constrainDerivedParserRequiredFieldError`—policy: Derived Parser
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
   with `[MissingRequiredField(Str), ..]`.
-- `constrainDerivedParserErrorRowIncludes` — policy: Derived Parser
+- `constrainDerivedParserErrorRowIncludes`—policy: Derived Parser
   Required-Field Error Composition (above). A custom parser method's
   instantiated error extension is closed, then its concrete tags gate ordinary
   unification constraints requiring the parent parser row to include them.
-- `constrainInterpolationPartToStr` — policy: Builtin Str Interpolation Part
+- `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
   Compatibility (above). One commit-probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
 - Literal defaulting (`commitLiteralDefault`, `commitLiteralGroupDefault`)
-  — policy: literal defaulting as declared in Static Dispatch At The
+—policy: literal defaulting as declared in Static Dispatch At The
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
   default candidate order (`Dec` first); mutation happens only through
   committed probes of ordinary unification.
-- `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc` — mechanism:
+- `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
 
-Stamped-plan restamps on CIR nodes (discharge time): the restamp rule —
+Stamped-plan restamps on CIR nodes (discharge time): the restamp rule—
 only the node's own constraint may restamp a node that already carries a
-stamped plan — is documented and enforced at the restamp sites
+stamped plan—is documented and enforced at the restamp sites
 (`rewriteEqBinopAsMethodEq`, `rewriteDerivedIsEqMethodCallAsStructuralEq`,
 `rewriteDerivedMethodCallAsStructuralHash`). Plan stamping at creation
 (`replaceExprWithDispatchCall` and friends at plan-creation sites) is the
@@ -3478,7 +3478,7 @@ its runtime representation later uses a transparent backing. Anonymous
 structural types and non-owning internal nodes return `none`.
 
 This head is only ever a lookup KEY for the exact `(MethodOwner,
-MethodNameId)` registry table, consulted for compiler-generated call edges —
+MethodNameId)` registry table, consulted for compiler-generated call edges—
 it is checked type identity carried on the monotype, not a dispatch decision.
 Plan-resolved user dispatch never reads it; those targets come from checked
 evidence alone.
@@ -3785,8 +3785,8 @@ demand whose value is proven unreachable, but they are not part of
 specialization identity. A request beneath one guard context may reuse a
 specialization created beneath another; each such reuse is recorded, and final
 sealing re-verifies the reused body's runtime-value demands. A demand already
-certified under its creation context covers the one emitted body —
-statement-position guards are not monotonic across call sites in one block —
+certified under its creation context covers the one emitted body—
+statement-position guards are not monotonic across call sites in one block—
 and a reuse whose own context cannot certify an otherwise-uncertified demand
 is a compiler invariant violation. Bodies are never duplicated per guard
 context.
@@ -4172,12 +4172,12 @@ harmless.
 The identity is immutable: it is written once when the record is reserved and
 never rewritten, so no structure that indexes by identity ever needs a rekey or
 a second synchronized entry. Later refinements are data on the record. The
-request view may be refined while the record is still `reserved` — once per
+request view may be refined while the record is still `reserved`—once per
 deferring graph that seals its view of the request; the solved view records the
 body's solved type when the record becomes `ready`. Each refinement registers
 an *alias* lookup entry (the new digest also reaches the same record), so a
 request shaped like the current request reuses the record even after the body
-solved a more specific type — the record is never widened (the one-way snapshot
+solved a more specific type—the record is never widened (the one-way snapshot
 rule above). Status transitions (`reserved → lowering → ready`) and both
 refinements happen only through the specialization store's API. A record
 loaded from another shard's cache is a finished snapshot and matches only at
@@ -4447,24 +4447,24 @@ Static dispatch is DECIDED during checking and CONSUMED during Monotype
 lowering. Every dispatch site leaves checking with an explicit resolution on
 its plan:
 
-- `direct_closed(direct_call)` — checking proved the concrete target, projected
+- `direct_closed(direct_call)`—checking proved the concrete target, projected
   its exact target-instantiated callable, proved that callable and its nested
   evidence independent of the enclosing specialization, and recorded the
   target's explicit runtime category.
-- `direct_parametric(direct_call)` — checking proved the same exact target, but
+- `direct_parametric(direct_call)`—checking proved the same exact target, but
   the callable or its nested evidence still consumes an explicit enclosing
   specialization identity.
-- `evidence_dependent(depth, k)` — the dispatcher is the k-th evidence param of the
+- `evidence_dependent(depth, k)`—the dispatcher is the k-th evidence param of the
   d-th enclosing generalized callable. Each specialization edge supplies the
   answer: dictionary passing resolved entirely at compile time.
-- `structural(derivation)` — the checker chose the compiler-derived structural
+- `structural(derivation)`—the checker chose the compiler-derived structural
   implementation (equality, hashing, parsing, encoding, or mapping), either
   from an explicit structural registry declaration on an owned type or for an
   ownerless shape. Mapping derivations include the checker-selected tag and
   direct payload index.
-- `checked_error` — checking rejected the site; executing it anyway (running a
+- `checked_error`—checking rejected the site; executing it anyway (running a
   program with reported errors) lowers to an explicit crash.
-- `unreachable` — the dispatcher is a constrained variable no
+- `unreachable`—the dispatcher is a constrained variable no
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
@@ -4490,7 +4490,7 @@ other member of the same class. `Check.markStaticDispatchFnRejected` sets the
 class bit and appends one durable `ModuleEnv.rejected_static_dispatches` record
 per newly rejected class; `Check.init` rehydrates those records onto their
 classes so re-checking an env already carrying them behaves like a fresh check.
-Every static-dispatch plan lookup — in the checker and in `EvidencePass` —
+Every static-dispatch plan lookup—in the checker and in `EvidencePass`—
 asks the class before resolving its receiver, and must not infer rejection by
 inspecting a callable result type.
 
@@ -4544,13 +4544,13 @@ constraints to guess a target.
 Totality is enforced at the boundary: `validateDispatchEvidence`, run by the
 checked module's `verifyComplete`, asserts that every dispatch-bearing
 checked expression names a plan and that every plan and evidence reference
-lands inside the checked module data's evidence tables. In debug builds —
-where the boundary verifiers run — a missing or corrupt record is a compiler
+lands inside the checked module data's evidence tables. In debug builds—
+where the boundary verifiers run—a missing or corrupt record is a compiler
 bug reported at the boundary, not a lowering panic.
 
 **Evidence params.** Every type scheme with dispatch requirements has one
-deterministic ordered list of (dispatcher var, constraint) pairs —
-its evidence params — enumerated purely from the scheme's type structure
+deterministic ordered list of (dispatcher var, constraint) pairs—
+its evidence params—enumerated purely from the scheme's type structure
 (depth-first: function args then return, type arguments then backing, row
 fields and tags then extension, constraints emitted at each var's first
 occurrence, then constraint fn types walked the same way). Index `k` in this
@@ -4564,10 +4564,10 @@ source constraints share one callable type and contribute one evidence param.
 An ordinary instantiation records the (pristine var, fresh var) pairs of its
 constrained vars. A monomorphic edge to an in-flight recursive value or method
 target records the exact shared scheme root and no copy pairs. Checking
-resolves each edge's requirements — against the enclosing callable's own
+resolves each edge's requirements—against the enclosing callable's own
 evidence params (producing `constraint(k)` again), against concrete types
 (producing `direct` targets through exact registry lookups), through the
-monomorphic default rule, or structurally — and stores the result as site
+monomorphic default rule, or structurally—and stores the result as site
 evidence keyed by the use expression. Monotype lowering materializes a
 specialization's evidence vector at each call edge and passes it to the callee
 specialization; a plan resolved `constraint(k)` reads entry `k` of the
@@ -4606,7 +4606,7 @@ at the current call.
 methods on component types with no checked instantiation record. For these,
 each checked evidence param also carries the label-addressed PATH from its scheme's
 callable to the dispatcher's first occurrence (argument positions, type
-arguments, row labels — labels rather than positions, because Monotype sorts
+arguments, row labels—labels rather than positions, because Monotype sorts
 rows). Monotype resolves such a target's requirements by walking those paths
 over the concrete monomorphic callable at the consumption site, recursively:
 component owners consume the registry's explicit callable-or-structural result;
@@ -4624,7 +4624,7 @@ CheckedModule boundary validates both the path grammar and that every nonempty
 path resolves over its template's checked callable type before Monotype may
 consume it.
 
-Exact registry lookups — `(MethodOwner, MethodNameId)` — happen during
+Exact registry lookups—`(MethodOwner, MethodNameId)`—happen during
 checking, and during path synthesis for compiler-generated
 edges. The registry only ever answers exact lookups after the owner is known
 from checked type content; no stage asks "which owners could match this
@@ -5277,8 +5277,8 @@ Declared field order is explicit data. Record rows are sorted lexicographically
 by name at several stages (checking, Monotype row lowering, and Monotype
 instantiation) because field-name resolution and digests depend on a single
 fixed order, so the declared order is not recoverable from the lowered record
-itself. Canonicalization preserves it — a nominal declaration's record
-annotation keeps its fields in source order — and it is carried forward as a
+itself. Canonicalization preserves it—a nominal declaration's record
+annotation keeps its fields in source order—and it is carried forward as a
 datum on the nominal type, distinct from the (lexicographic) backing row, so
 later stages consume it without rescanning declarations. The struct commit uses
 it only for the unnamed-field opt-in described above; otherwise nominal records
@@ -5294,9 +5294,9 @@ no persisted pattern-decision IR.
 
 Match compilation goes through one shared decision-tree module
 (`src/postcheck/match_tree.zig`), consumed by both LIR lowerers through thin
-accessor contexts. A match lowers to multiway tests — one `switch_stmt` per
+accessor contexts. A match lowers to multiway tests—one `switch_stmt` per
 tested tag or integer position, one `str_match_set` per tested string position,
-one length switch per tested list position — with each occurrence (scrutinee
+one length switch per tested list position—with each occurrence (scrutinee
 position) read into at most one local per dominating scope: one discriminant
 read per tested tag position, one field read per destructured position, one
 length read per list position. Branch bodies and guards are lowered exactly
@@ -5327,7 +5327,7 @@ through re-lowering a Monotype id twice. Direct lowering preserves lifted
 the list-pattern desugarer, after measuring ~(items+1)^branches statement
 blowup. The match
 compiler holds the invariant by construction: rows (branches) are never
-duplicated during specialization — a row that does not test the selected
+duplicated during specialization—a row that does not test the selected
 occurrence ends the test group instead of being copied into every arm, and the
 rows below the group compile once behind a shared exit join. Because rows never
 duplicate, emitted statements are O(total pattern size); a debug statement-count
@@ -5423,7 +5423,7 @@ exactly as all-owned insertion would emit it.
 
 ### Vocabulary
 
-- `Resource`: one refcounted position of one local — the top-level value, or
+- `Resource`: one refcounted position of one local—the top-level value, or
   one nested rc position reachable through the local's committed layout.
 - `Mode`: `borrowed` or `owned`. The mode lattice is `borrowed < owned`.
   A borrowed resource is an alias whose occurrences emit no RC statements. An
@@ -5433,7 +5433,7 @@ exactly as all-owned insertion would emit it.
   control-flow path, the last point at which a value must still be live.
   Lifetimes of values that flow through params and returns are summarized by
   lifetime variables in proc signatures.
-- `RcSig`: the solved ownership signature of one proc — a mode for every
+- `RcSig`: the solved ownership signature of one proc—a mode for every
   refcounted param and return position, plus the lifetime relation between
   borrowed returns and the params they may borrow from.
 - `ArcPlan`: one stage-local slot for a structured path in one ownership
@@ -5897,7 +5897,7 @@ specialization clones proc bodies, but each variant carries fewer RC
 statements, and variant counts are bounded by realized demand vectors. All
 forms run the identical solver; they differ only in which demand vectors get
 a variant, so build modes can never disagree about observable program
-results — only RC statement placement and proc count differ.
+results—only RC statement placement and proc count differ.
 
 ### In-Place Mutation Interaction
 
@@ -5930,40 +5930,40 @@ A container qualifies for dismantling when all of the following hold:
 
 - its committed layout is a struct containing at least one refcounted field
 - its binding is owned, bound exactly once, and is not a join parameter
-- every occurrence of it is a field read, either directly or through a
-  borrowed pure same-value alias whose own occurrences are all field reads
+- every occurrence of it is a field read (directly or through a borrowed
+  pure same-value alias whose own occurrences are all field reads) or an
+  operand-position whole use: moved into an aggregate or a call, returned,
+  or join-carried by `set_local`
 
 A proc parameter solved borrowed qualifies conditionally: its takes are
 solved once against the shared ownership-neutral body but recorded as
 owned-only, applying exactly in emissions whose demand vector overrides that
-parameter to owned — the mode-specialized variants callers with dying
+parameter to owned—the mode-specialized variants callers with dying
 arguments select. Dismantle analysis outputs the exact per-procedure `u16`
 parameter-benefit mask consumed by variant admission; the caller does not
 rediscover the benefit from field reads or uniqueness checks. The base emission
 keeps the borrowed schedule untouched.
 
-A field read of a qualifying container becomes a take when its result binding
-is owned, its result never flows into join-carried state, and the read lies
-on the container's spine: the statement chain from its definition following
-`next` edges and join remainders, never entering switch branches or join
-bodies. The spine may additionally cross a switch whose every branch —
-default included — is a plain statement chain falling straight through to
-the switch's shared continuation: such a diamond's continuation runs exactly
-once on every path, so a take after the rejoin is as good as one before the
-branch. Spine placement is what makes each take execute exactly once, in a
-known order, before the container dies; residual reads may live in branches,
-because the death point follows the last use on every path. The join-state
-restriction — the read result must not be a `set_local` operand or feed a
-join parameter through pure aliases, closed backward over aliasing — keeps
-each take's deferred claim inside one certifier walk segment, where its value
-identity is exact rather than quotiented. A taken field must additionally be
-refcounted and read exactly once in the whole procedure: allowing earlier
-borrows of the same field would be sound, but a borrow after the take could
-observe stale bytes once the taker mutates, and restricting to one read makes
-the rule checkable without order reasoning. A field that fails any per-field
-rule simply stays residual — its read keeps its retain and its stored unit is
-released at the death point — and a container whose take set comes out empty
-keeps today's whole release exactly.
+Which consuming reads become takes is decided per field by a forward
+dataflow from the container's definition over the control-flow graph,
+tracking for each refcounted field whether it may and whether it must have
+been taken on the paths reaching each point. A consuming read is a take only
+where the field cannot have been taken yet—a take where it may already be
+gone would double-consume its unit on that path. A borrow of the field, and
+any whole use of the container, must likewise run where no take can have
+happened: after a take, the container's bytes for that field can alias the
+taker's mutation rather than the original value. Every exit the flow reaches—
+returns, crashes, and jumps that leave the region, such as a loop's back
+edge—must agree on the taken set (`may == must`), so the residual release
+is the same however the death point was reached. Merges meet pointwise, and
+a loop poisons its own takes: a take inside one reaches itself as
+possibly-taken. Consuming reads on exclusive branches thereby take exactly
+when every path through the branching takes the field exactly once—the
+success and fallback arms of a checked mutation are the archetype—and
+a read the flow never reaches keeps its field residual. A field that fails
+any rule simply stays residual—its reads keep their retains and its stored
+unit is released at the death point—and a container whose take set comes
+out empty keeps today's whole release exactly.
 
 Emission changes in exactly two places. A take's read emits no retain: the
 result's unit is the container's stored unit for that field, moved rather
@@ -5978,22 +5978,22 @@ path balancing are untouched.
 Like precise lifetimes, take solving is order-sensitive and therefore runs in
 the ARC stage against the solved modes rather than inside the mode fixpoint.
 It allocates per-candidate tables only: a container that cannot benefit --
-wrong layout shape, borrowed, escaping, or off-spine uses -- contributes
+wrong layout shape, borrowed, or non-operand whole uses -- contributes
 nothing beyond its visit in one linear statement scan, preserving the rule
 that ARC memory scales with ownership work actually demanded.
 
 The certifier verifies takes from the emitted LIR alone, with no side tables,
 by deferred claims. A field read still binds its result at balance zero, but
 the result value remembers which container value and field it came from. When
-such a value is consumed or released without a unit — where the certifier
-previously failed outright — the consumption instead claims that field's
+such a value is consumed or released without a unit—where the certifier
+previously failed outright—the consumption instead claims that field's
 stored unit from the container, provided the container still holds its own
 unit unconditionally and the field is unclaimed; a second claim of the same
 field fails as before. Aggregate moves keep their transient-negative
 discipline: negative balances attempt their claims when the path's outcome is
 fixed, at a terminal's leak check or a jump's quotient. The container's
-balance stays at one throughout — borrowed reads of its unclaimed bytes
-remain legitimate after any claim — and a claim set covering every refcounted
+balance stays at one throughout—borrowed reads of its unclaimed bytes
+remain legitimate after any claim—and a claim set covering every refcounted
 field marks the unit spent: a terminal treats it as balanced and a jump's
 carry check exempts it, while anything less fails as an unspent stored unit.
 A claimed container can be neither consumed, moved into an aggregate, nor
@@ -6023,7 +6023,7 @@ against the borrow typing rules:
 - every join body holds under the entry state of each jump that reaches it:
   jump states are summarized over the names the body relies on (liveness,
   unit counts, alias partition, and borrow anchors) and joined into a
-  forward dataflow fixpoint — summaries agreeing on every name's ownership
+  forward dataflow fixpoint—summaries agreeing on every name's ownership
   mode share one abstraction whose must-alias partition is the meet of
   theirs (with per-fine-class balances re-attributed by constraint
   propagation), and the body is re-certified only when a jump strictly
@@ -6033,7 +6033,7 @@ against the borrow typing rules:
   degenerates to one walk per distinct summary, with no capacity cap and no
   skip path. The join is monotone over a finite-height lattice (partition
   refinement is bounded by the name count; balance divergence across
-  mode-identical entries is itself a finding — per-iteration accumulation),
+  mode-identical entries is itself a finding—per-iteration accumulation),
   so certification of every procedure runs to completion
 - explicit initialized-payload control flow refines conditional ownership:
   the initialized edge promotes the payload to ordinary owned state and the
@@ -6046,7 +6046,7 @@ against the borrow typing rules:
 The certifier consumes only the emitted LIR and the stage-local signature
 table, and leaves no unverified residue: every procedure is certified to a
 fixpoint. The guaranteed property is that every emitted schedule balances
-ownership on all paths — each unit released or transferred exactly once, no
+ownership on all paths—each unit released or transferred exactly once, no
 use after death, no release of a borrow. A certifier failure is a compiler
 bug and stops compilation. Release builds compile the certifier away
 entirely, like every other debug-only boundary check.
@@ -6066,7 +6066,7 @@ Reference counts are atomic today because the host may share a Roc value
 across threads. Roc code itself is single-threaded within one host call, so
 an allocation needs atomic count updates only if a handle to it is ever
 visible to the host: it flows into a hosted call, a root return, an erased
-or address-escaped boundary — or it originated from one, as a root
+or address-escaped boundary—or it originated from one, as a root
 parameter, a hosted-call result, or a payload read out of a host-visible
 container. Every other allocation is confined to one thread for its whole
 life, and its counts may use plain loads and stores.
@@ -6085,7 +6085,7 @@ edges the solver already walks:
   erased-callable procs, procs whose address escapes)
 - pure same-value aliases, in both directions
 - containment, in both directions: aggregate and capture operands link to
-  the constructed value, and payload reads link to their source — storing a
+  the constructed value, and payload reads link to their source—storing a
   visible value makes the container visible, and anything read out of a
   visible container is visible
 - direct-call argument-to-parameter and return-to-result relations
@@ -6152,14 +6152,14 @@ call:
   liveness rule the certifier evaluates
 
 The first two conditions are one more monotone bit per local in the ARC
-solver — born unique, destroyed by any flow edge that can add a holder —
+solver—born unique, destroyed by any flow edge that can add a holder—
 over the same alias and call edges the solver already walks. The third is a
 query against liveness state emission already maintains.
 
 `RcEffect` gains one more explicit mask, `result_unique`: the result's
 outermost allocation has count 1 on return. Mutating ops qualify on both of
-their paths — in place keeps an allocation whose count was already 1, and
-the copy path returns a fresh one — and so do the ops that always allocate
+their paths—in place keeps an allocation whose count was already 1, and
+the copy path returns a fresh one—and so do the ops that always allocate
 their outermost result, including the slicing ops whose inner items
 share (`result_shares_args` describes the inner sharing; uniqueness is a
 property of the outermost allocation alone). As with the other masks, an op
@@ -6214,7 +6214,7 @@ a preservation retain after that observation and incorrectly report a shared
 buffer as unique.
 
 The runtime meaning of `list_map_can_reuse` is "uniquely owned and not a
-seamless slice" — a slice's buffer points into the middle of an allocation
+seamless slice"—a slice's buffer points into the middle of an allocation
 whose header bookkeeping covers the whole allocation, so a unique slice still
 copies. At direct LIR lowering, where layouts exist, the primitive lowers to a
 constant 0 whenever the layouts are not interchangeable (or the optimization
@@ -6228,15 +6228,15 @@ item layouts are not interchangeable or the optimization is disabled
 for dev, interpreter, and compile-time evaluation), so ineligible map
 specializations never carry dead in-place machinery and dev builds lower
 exactly the copy loop. The fold uses the same layout-eligibility decision
-as the primitive, so every interchangeable pair — including different
-types that share one layout — keeps the branch. The debug Lambda Mono
+as the primitive, so every interchangeable pair—including different
+types that share one layout—keeps the branch. The debug Lambda Mono
 materializer runs before layout selection and cannot recompute that
 decision; instead, direct lowering records each statically resolved match
 site as explicit data and the verifier replays the record, so the two
 derivations demand the same set of functions without the materializer ever
 consulting layouts. A wrong record can only misplace dead code, never a
-runtime check — the primitive's own lowering independently gates the
-runtime path — and a fold regression surfaces as a Debug stride assertion
+runtime check—the primitive's own lowering independently gates the
+runtime path—and a fold regression surfaces as a Debug stride assertion
 in the backends rather than as silent dead code.
 
 Inside the in-place loop, `list_map_extract_unsafe` moves one item's
@@ -6247,7 +6247,7 @@ according to the transform's solved convention, and the certifier checks
 the loop like any other code. Between the two ops the slot holds stale
 bytes and the buffer is typed by the output item while later slots still
 hold input items; this window is unobservable because no cleanup path
-walks live values — `crash` is fatal and leaks by design — and the loop
+walks live values—`crash` is fatal and leaks by design—and the loop
 itself is the only holder of the buffer (the runtime count of 1 proved
 there were no other counted handles, and a live borrow of the list would
 have forced the copy path through an owned capture's incref).
@@ -7073,14 +7073,14 @@ Entrypoints are exported under their `provides` strings with natural C ABI
 signatures. No context pointer is threaded through compiled code: hosts that
 need per-call context (for example an arena) own its delivery out of band
 (global or thread-local state), and must establish it on every thread that
-executes Roc code — including threads that invoke stored boxed Roc closures.
+executes Roc code—including threads that invoke stored boxed Roc closures.
 Generated glue exposes closure invocation through helpers that set and restore
 that state so the contract is enforced by signatures rather than remembered.
 
 The declared type is part of that contract, not just the symbol string. A
 hosted function's extern boundary is emitted at the hosted declaration's own
 checked type, as substituted by the platform/app relation's recorded
-requirement solutions (see Platform/App Relation) — the one sanctioned
+requirement solutions (see Platform/App Relation)—the one sanctioned
 transformation. The compiler never emits a hosted extern at any other type: not
 at a caller's widened error row, not at a narrowed one, and not at a
 producer-selected representation that differs from the declared one. A use site
@@ -7098,9 +7098,9 @@ is fixed for all uses exactly as above.
 Monotype lowering holds that boundary where extern specializations are
 produced: emitting a hosted procedure at any other type stops the build with a
 compiler-bug report naming the symbol (`requireHostedExternAtDeclaredAbi`,
-src/postcheck/monotype/lower.zig). The comparison is structural type equality —
+src/postcheck/monotype/lower.zig). The comparison is structural type equality—
 the declared lowering and the request build their graphs separately, so a
-recursive nominal is the same type through either graph — with the declaration's
+recursive nominal is the same type through either graph—with the declaration's
 variable slots open when it has any. The check runs in release builds too,
 because what it prevents is silent: the host returns `Ok`, the app reads those
 bytes as `Err`, and no diagnostic or crash marks the difference. No checker
@@ -7129,7 +7129,7 @@ actually used.
 Shared-library output uses the same symbol ABI: the host objects and app
 object are linked into one library, app/host resolution happens inside that
 link, and dead-strip roots are the exported symbols. Internal `roc_*` symbols
-must be hidden in shared libraries — on ELF, default-visibility exports are
+must be hidden in shared libraries—on ELF, default-visibility exports are
 preemptible, and two Roc-built libraries loaded into one process would
 otherwise interpose each other's runtime symbols.
 
@@ -7462,8 +7462,8 @@ nominal vector types nested in `Num`.
 ### Goals
 
 The purpose of these builtins is to make it possible to write pure-Roc
-implementations of compression and image codecs — DEFLATE (plus zlib/gzip
-framing), PNG, JPEG, WebP, and AVIF, both encoding and decoding — whose
+implementations of compression and image codecs—DEFLATE (plus zlib/gzip
+framing), PNG, JPEG, WebP, and AVIF, both encoding and decoding—whose
 performance approaches state-of-the-art native implementations (libdeflate,
 libjpeg-turbo, libwebp, dav1d, libaom) when both sides are held to 128-bit
 vectors and a single thread. The same operations also cover zstd, brotli,
@@ -7478,7 +7478,7 @@ design law:
 > **Target-specific lowering is fine; target-specific meaning is not.**
 > Speed may vary by target. Bits may not.
 
-The op set was derived from the hot-kernel inventories of the codecs above —
+The op set was derived from the hot-kernel inventories of the codecs above—
 every operation is justified by named kernels that need it (DCT/IDCT
 multiply-accumulate, scanline filters, loop filters, CDEF, palette lookups,
 LZ77 copies, CRC folding, SAD-based encoder search, and so on). Nothing is
@@ -7487,8 +7487,8 @@ included merely because some ISA has an instruction for it.
 ### Invariants
 
 1. **Bit-identical results everywhere.** Pure Roc code produces the same
-   answer on every target and every backend — LLVM, both dev backends, wasm,
-   and the interpreter — and compile-time evaluation, which runs Roc code
+   answer on every target and every backend—LLVM, both dev backends, wasm,
+   and the interpreter—and compile-time evaluation, which runs Roc code
    on the dev backend, must agree with all of them. Every SIMD
    operation therefore has a precise scalar reference meaning, including
    its edge cases: shift counts at or past the lane width, out-of-range
@@ -7514,7 +7514,7 @@ included merely because some ISA has an instruction for it.
    offsets, argument placement, and result placement match the compiled Roc
    code.
 
-Where an operation exists in wasm simd128, we pin wasm's meaning — that
+Where an operation exists in wasm simd128, we pin wasm's meaning—that
 spec already solved "deterministic 128-bit SIMD that lowers well to both SSE
 and NEON," and it makes the wasm backend nearly free. (Operations from
 wasm's *relaxed-simd* extension are explicitly nondeterministic there;
@@ -7526,7 +7526,7 @@ All five target formats are integer in their specifications: AV1 decode is
 bit-exact integer by spec, libjpeg-turbo's production DCT is fixed-point
 integer, and DEFLATE/PNG/WebP have no arithmetic beyond integers. Float
 shows up only in encoder decision heuristics (rate-distortion lambdas,
-perceptual tuning), which convert cleanly to fixed-point — with the side
+perceptual tuning), which convert cleanly to fixed-point—with the side
 benefit that Roc encoders become bit-reproducible across targets, which none
 of the C encoders guarantee. Float SIMD raises real cross-target determinism
 questions (FMA contraction, approximation instructions) that integer SIMD
@@ -7537,10 +7537,10 @@ simply does not have, so it is deferred until something actually needs it.
 Because SIMD operations inline into user code, there is no seam where
 runtime CPU dispatch could live (dispatch requires an out-of-line call
 boundary at kernel granularity, which is exactly what an inlined builtin
-does not have — and Roc has no startup hook for eager dispatch either).
+does not have—and Roc has no startup hook for eager dispatch either).
 Instead, each (architecture, OS) target has a static floor:
 
-- **x86-64:** `x86-64-v3` **plus AES-NI and PCLMULQDQ** — i.e. Intel Haswell
+- **x86-64:** `x86-64-v3` **plus AES-NI and PCLMULQDQ**—i.e. Intel Haswell
   (2013) and later, every AMD Zen. The v-levels deliberately exclude the two
   crypto instructions (they were fused off on some budget parts before
   ~2017), so the floor names them explicitly. Rationale: `pshufb`-class
@@ -7557,8 +7557,8 @@ Instead, each (architecture, OS) target has a static floor:
   extensions.
 - **wasm:** the `simd128` feature (universally shipped in engines since
   2021; the wasm backend already assumes it). wasm has no carryless
-  multiply and no AES instructions, so those two operations get slower —
-  but bit-identical — software lowerings on wasm.
+  multiply and no AES instructions, so those two operations get slower—
+  but bit-identical—software lowerings on wasm.
 
 Under these floors both native architectures guarantee the same capability
 set: full 128-bit integer SIMD, a one-instruction byte shuffle, carryless
@@ -7620,13 +7620,13 @@ Deliberately **not** one parameterized `Vec(lane)` type, for three reasons:
    function.
 2. Generic user code over vector types falls out of `where` method
    constraints on the concrete types, exactly the way `List.sum` is generic
-   over `plus`/`default` — no `Lane` type or new machinery needed.
+   over `plus`/`default`—no `Lane` type or new machinery needed.
 3. It matches the house style: `Num` spells out thirteen scalar types
    longhand; eight more siblings are stylistically seamless, and every op
    stays monomorphic, which is what predictable lowering wants.
 
 Comparison results are **same-typed vectors** whose lanes are all-ones or
-all-zero (wasm-style) — there is no separate mask type. That is the machine
+all-zero (wasm-style)—there is no separate mask type. That is the machine
 representation on all three ISAs, and it composes with the bitwise ops and
 `bit_select` for free.
 
@@ -7651,14 +7651,14 @@ representation on all three ISAs, and it composes with the bitwise ops and
 - Every type carries the standard citizenship methods: `default` (zero
   vector), `is_eq`, `to_hash`, `to_inspect`, plus `splat`, `from_list`,
   `to_list`. The vector types deliberately do not participate in
-  `parser_for`/`encoder_for` derivation and have no `from_numeral` —
+  `parser_for`/`encoder_for` derivation and have no `from_numeral`—
   vectors are not literals or serialization leaves.
 
 #### Lane order
 
 Lane `i` of a vector occupies bits `[i * lane_bits, (i + 1) * lane_bits)`
 of the 128-bit value, and the vector's byte-serialized form (for `load`,
-`store`, `to_list` on `U8x16`, hashing) is little-endian — lane 0 first,
+`store`, `to_list` on `U8x16`, hashing) is little-endian—lane 0 first,
 each lane's bytes least-significant first. This matches the in-register and
 in-memory reality of x86-64, AArch64, and wasm, so no target pays a
 byte-swap tax.
@@ -7783,7 +7783,7 @@ It also exhausts all eight AArch64 GP argument registers before passing
 `U8`/`U16`/`U32`, which pins Apple's compact stack offsets in hosted and
 provided directions.
 
-### Pinned meaning — the edge cases
+### Pinned meaning—the edge cases
 
 These are the cases where ISAs disagree natively and the spec must choose.
 The choices below are implemented by the reference implementations and are
@@ -7808,7 +7808,7 @@ the contract every backend must match:
 - **`sums_of_abs_diffs`** (`psadbw`): result lane 0 holds the sum of
   absolute differences of bytes 0–7, lane 1 of bytes 8–15 (x86 layout,
   pinned; NEON lowers via `uabdl`/`uadalp`).
-- **`avg_rounded`** (`pavgb` / `urhadd` / `avgr_u`): `(a + b + 1) >> 1` —
+- **`avg_rounded`** (`pavgb` / `urhadd` / `avgr_u`): `(a + b + 1) >> 1`—
   all three ISAs already agree.
 - **Saturating narrowing** uses the source signedness to clamp into the
   destination range exactly as the scalar `to_*_try` bounds would define
@@ -7915,8 +7915,8 @@ calls the generated contracts in both directions.
 ### Doc comments name the instructions
 
 Every operation's doc comment states the instruction (or short sequence)
-that implements it on x86-64, AArch64/NEON, and wasm simd128 — e.g.
-`table_lookup` names `pshufb`, `tbl`, and `i8x16.swizzle` — so that
+that implements it on x86-64, AArch64/NEON, and wasm simd128—e.g.
+`table_lookup` names `pshufb`, `tbl`, and `i8x16.swizzle`—so that
 searching the docs for an instruction name finds the Roc builtin that
 provides it. Where a target needs a fixup or emulation, the doc says so.
 
@@ -7924,7 +7924,7 @@ provides it. Where a target needs a fixup or emulation, the doc says so.
 
 - `load : List(U8), U64 -> Try(V, [OutOfBounds, ..])` and
   `store : V, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])` are the
-  checked bulk accessors (bytes, little-endian, any alignment — unaligned
+  checked bulk accessors (bytes, little-endian, any alignment—unaligned
   128-bit access is effectively free on every supported CPU). The checked
   form costs nothing in optimized loops: LLVM already merges the bounds
   check of exactly this shape into the loop condition (see issue #10301,
@@ -7944,9 +7944,9 @@ known gaps, deliberately excluded from the SIMD effort, are:
 
 - wrapping scalar arithmetic does not exist, and plain `+`/`-`/`*` are
   checked (crash-on-overflow) even at `--opt=speed`, which also blocks
-  auto-vectorization of reductions — #10300;
+  auto-vectorization of reductions—#10300;
 - `for`/`Iter` loops carry per-item step calls and refcount traffic
-  that the equivalent `while` loop does not — #10301;
+  that the equivalent `while` loop does not—#10301;
 - no scalar rotate, byte-swap, or unaligned multi-byte loads from
   `List(U8)` (bit-reader fuel for entropy decoders).
 
@@ -7967,7 +7967,7 @@ the pass/fail bar while the language is 128-bit-only.
 - Whether a 32/48/64-byte `table_lookup` tier (NEON `tbl2`–`tbl4`) earns
   its place once real kernels are measured (expressible today as multiple
   16-byte lookups plus selects).
-- Typed-item loads (`List(U16)` → `U16x8`, etc.) — deferred until a
+- Typed-item loads (`List(U16)` → `U16x8`, etc.)—deferred until a
   kernel wants them; byte buffers are the codec substrate.
 - Saturating arithmetic on 32/64-bit lanes, `abs` on `I64x2`, and unsigned
   ordering compares on `U64x2` are omitted because no cataloged kernel

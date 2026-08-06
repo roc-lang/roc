@@ -89,6 +89,13 @@ pub const BuiltinKind = enum {
     str_from_utf8_result,
     list_append_unsafe,
     list_concat,
+    list_append_range_within,
+    list_append_range_within_unsafe,
+    list_copy_range_within,
+    list_append_sublist,
+    list_append_le_bytes,
+    list_slack_unique,
+    list_owned_unique,
     list_drop_at,
     list_reserve,
     list_replace,
@@ -153,7 +160,7 @@ const RocOps = @import("builtins").host_abi.RocOps;
 /// `takes_roc_ops` flag is silent stack corruption at runtime, so every field is
 /// read straight from `@typeInfo` of the wrapper instead of written by hand. Each
 /// `BuiltinKind` resolves to the `builtin_registry.BuiltinFn` member of the same
-/// name — a missing member is a compile error, pinning this enum to the registry —
+/// name—a missing member is a compile error, pinning this enum to the registry—
 /// and that member supplies the symbol name (`symbolName()`) and the wrapper type
 /// the params, results, and `takes_roc_ops` flag are lowered from.
 pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = blk: {
