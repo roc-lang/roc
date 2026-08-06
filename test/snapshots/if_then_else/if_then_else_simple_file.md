@@ -39,7 +39,7 @@ MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
 
     The value's type, which does not have a method named `from_quote`, is:
 
-        [A, ..]
+        [A]
 
 # TOKENS
 ~~~zig
@@ -90,7 +90,7 @@ foo = if 1 A
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[A, ..]")))
+		(patt (type "[A]")))
 	(expressions
-		(expr (type "[A, ..]"))))
+		(expr (type "[A]"))))
 ~~~

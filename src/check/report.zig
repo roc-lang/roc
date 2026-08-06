@@ -85,6 +85,7 @@ const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
+const RedundantOpenTagUnion = problem_mod.RedundantOpenTagUnion;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
@@ -963,6 +964,7 @@ pub const ReportBuilder = struct {
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
+            .redundant_open_tag_union => |data| return self.buildRedundantOpenTagUnionReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
@@ -3964,6 +3966,24 @@ pub const ReportBuilder = struct {
             D.bytes("Add a trailing"),
             D.bytes("!").withAnnotation(.inline_code),
             D.bytes("to this function name."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildRedundantOpenTagUnionReport(self: *Self, data: RedundantOpenTagUnion) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Redundant Open Tag Union", "This tag union has an explicit `..`, but it is already implicitly open.", .warning);
+        errdefer report.deinit();
+
+        try self.addSourceWarningRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Tag unions in output positions, like the return type of a function, are automatically open. Remove the"),
+            D.bytes("..").withAnnotation(.inline_code),
+            D.bytes("or bind it to a named type variable like"),
+            D.bytes("..others").withAnnotation(.inline_code),
+            D.bytes("if you want to refer to the extension elsewhere."),
         }, self, &report);
         return report;
     }

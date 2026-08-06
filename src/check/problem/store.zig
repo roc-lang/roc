@@ -224,6 +224,7 @@ pub const Store = struct {
                     .invalid_tuple_access,
                     .literal_defaulted,
                     .redundant_pattern,
+                    .redundant_open_tag_union,
                     .unmatchable_pattern,
                     .unreachable_code,
                     .comptime_unused_branch,

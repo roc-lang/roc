@@ -3092,6 +3092,50 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Polarity: Output-Position Tag Unions Are Implicitly Open
+
+Every type annotation is walked with a polarity: the root is positive
+(output), function argument positions negate the surrounding polarity, and
+all other positions (returns, type application args, record fields, tuple
+elems, tag payloads) preserve it. An extensionless tag union with at least
+one tag in a positive position is implicitly open — `parse : Str -> Try(U8,
+[InvalidU8])` means exactly what `parse : Str -> Try(U8, [InvalidU8, ..])`
+used to — while the same union in a negative position stays closed as
+written. An explicit anonymous `..` in a positive position is therefore
+redundant and warns (`Redundant Open Tag Union`); a named extension
+(`..others`) is always honored. A union with no tags (`[]`) is exempt: it
+asserts uninhabitedness (`Try(a, [])` needs no `Err` branch), which opening
+would destroy.
+
+An alias of a tag union defers the decision to each use site: the alias
+declaration stores a marker rigid (`types.polarity_var_text`) as the ext of
+each extensionless union in its body, and instantiation resolves every marker
+by the polarity of the position the alias is used in, negating through
+functions embedded in the alias body (`Instantiator.PolarityVarBehavior`).
+Nominal declaration bodies close markers as written.
+
+An annotation whose generated type gains a variable this way (directly or
+through an alias) denotes a scheme, so its value binding generalizes exactly
+as if the variable had been spelled out (`Check.annotation_scheme_has_vars`).
+Two boundaries opt out: host-boundary annotations (hosted lambdas and
+`provides` defs) keep their rows as written, because the host side is a fixed
+ABI rather than a Roc producer; and derived structural parsers/encoders
+determine each tag row exactly, so implicit openness collapses (the flex ext
+unifies with `[]`) before derivation (`Check.closeTagRowsForDerivation`).
+Display follows the same polarity: an anonymous, unshared, unconstrained flex
+ext in an output position is not rendered as `..`.
+
+Monotype adapts to the resulting rows in two places. A stored constant's
+ground representation can be narrower than a use-site request that widened
+its implicitly open row, so produced-value witnesses compare flattened rows
+and let checked-only tags join the witness — the value is restored at the
+widened representation — rather than unifying two closed rows that disagree.
+And stored codec restores (parser/encoder runtime functions) emit bodies
+from a resolved view before their graph freezes; their requests may still
+carry live checked row defaults at that point, so
+`InstGraph.groundUnresolvedDefaults` commits those defaults early, matching
+what final sealing would materialize.
+
 ### Hosted Try Question Widening
 
 `?` unwraps a `Try` condition and re-raises its error row into the enclosing
@@ -3099,7 +3143,9 @@ function's return row. When the callee's error row is closed and the
 enclosing annotated return's row is open (a rigid extension), ordinary
 unification rejects the pair, and that mismatch is a type error by design: a
 closed error row is not widened into an open annotated row at use sites
-(issue #9798's program is rejected).
+(issue #9798's program is rejected). Under polarity, a non-hosted callee's
+annotated error row is itself implicitly open, so this pairing now arises
+only where closed rows still exist — chiefly hosted boundary rows.
 
 The one declared exception is a direct call of a hosted function. A hosted
 function's boundary type is an ABI contract keyed by its declared closed row
@@ -3129,9 +3175,11 @@ test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
 inside an open-row platform function builds and the host's Ok is observed as
 Ok); rejected — test/fx-open/hosted_try_question_not_included.roc (a direct
 hosted `?` whose enclosing annotation omits the hosted error is a type
-error), and the issue #9798 regression test in
-src/check/test/type_checking_integration.zig (a non-hosted `?` into an open
-annotated row is a type error even when the visible errors are included).
+error). The non-hosted side of issue #9798 is superseded by polarity: a
+non-hosted callee's annotated error row is implicitly open, so `?` flows it
+into the enclosing row through ordinary unification (pinned by "try flows
+error row between open output rows" in
+src/check/test/type_checking_integration.zig).
 
 ### Derived Parser Tag-Row Closure
 
@@ -3146,9 +3194,11 @@ was checked, so that parser dispatch is rejected.
 
 This is the parser counterpart of derived encoder validation, which already
 closes an unconstrained flexible tag extension once the encoder's exact
-structural shape is selected. Parser eligibility recognizes a flexible
-variable only in the explicit tag-extension position; a bare flexible shape or
-payload remains unsupported until earlier constraints resolve it.
+structural shape is selected. Implicit output-position openness is already
+collapsed by `Check.closeTagRowsForDerivation` before eligibility runs, so a
+flexible extension that survives to the eligibility probe is a genuinely
+unresolved row and defers rather than qualifying; a bare flexible shape or
+payload likewise remains unsupported until earlier constraints resolve it.
 
 Both sides are pinned by tests: accepted —
 test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated

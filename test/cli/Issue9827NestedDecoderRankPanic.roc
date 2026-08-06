@@ -6,10 +6,10 @@
 # Panicked with "trying to add var at rank 3, but current rank is 2".
 Stmt : { id : U64 }
 
-str_dec : Str -> (List(Str) -> (Stmt => Try(Str, [FieldNotFound(Str), ..])))
+str_dec : Str -> (List(Str) -> (Stmt => Try(Str, [FieldNotFound(Str)])))
 str_dec = |_name| |_cols| |_stmt| Ok("todo")
 
-nullable_i64_dec : Str -> (List(Str) -> (Stmt => Try([Null, NotNull(I64)], [FieldNotFound(Str), ..])))
+nullable_i64_dec : Str -> (List(Str) -> (Stmt => Try([Null, NotNull(I64)], [FieldNotFound(Str)])))
 nullable_i64_dec = |_name| |_cols| |_stmt| Ok(NotNull(1))
 
 main! = |_args| {

@@ -27,7 +27,7 @@ TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
 
     The type is:
 
-        [Err(a), Ok(b), Transform(c -> c), Validate(d -> Bool), ..]
+        [Err(a), Ok(b), Transform(c -> c), Validate(d -> Bool)]
           where [
             a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
             b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
@@ -207,15 +207,15 @@ expect result == result
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]")))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]")))
 	(expressions
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool)]"))))
 ~~~

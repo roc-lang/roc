@@ -26,7 +26,7 @@ pub const echo_module_source = @embedFile("platform/Echo.roc");
 /// object's hosted symbol.
 pub const run_shim_platform_main_source =
     \\platform ""
-    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
+    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8)]) }
     \\    exposes [Echo]
     \\    packages {}
     \\    provides { "roc_main": main_for_host! }
@@ -51,7 +51,7 @@ pub const run_shim_platform_main_source =
 /// process entrypoint and passes the process arguments to this Roc entrypoint.
 pub const build_platform_main_source =
     \\platform ""
-    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
+    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8)]) }
     \\    exposes [Echo]
     \\    packages {}
 ++ "\n    provides { \"" ++ builtins.shim_symbols.roc_default_start_main ++ "\": main_for_host! }" ++
@@ -89,7 +89,7 @@ pub const build_platform_main_source =
 /// folds failed inline expects into the process status code.
 pub const build_c_platform_main_source =
     \\platform ""
-    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
+    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8)]) }
     \\    exposes [Echo]
     \\    packages {}
 ++ "\n    provides { \"" ++ builtins.shim_symbols.roc_default_start_main ++ "\": main_for_host! }" ++
@@ -124,7 +124,7 @@ pub const build_c_platform_main_source =
 /// compile to an archive that a host can link and satisfy.
 pub const build_wasm_archive_platform_main_source =
     \\platform ""
-    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
+    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8)]) }
     \\    exposes [Echo]
     \\    packages {}
     \\    provides { "main": main_for_host! }

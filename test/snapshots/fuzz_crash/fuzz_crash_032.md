@@ -241,7 +241,7 @@ This pattern contains invalid syntax or uses unsupported features.
 
     The second branch is:
 
-        [LocalStatus, ..]
+        [LocalStatus]
 
     But the previous branches result in:
 

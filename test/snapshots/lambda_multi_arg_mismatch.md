@@ -77,7 +77,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 
     The value's type, which does not have a method named `from_numeral`, is:
 
-        [True, ..]
+        [True]
 
 
 ┌────────────────┐
@@ -90,7 +90,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 
     The value's type, which does not have a method named `from_quote`, is:
 
-        [True, ..]
+        [True]
 
 # TOKENS
 ~~~zig
@@ -253,8 +253,8 @@ result = multi_arg_fn(
 (inferred-types
 	(defs
 		(patt (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(patt (type "([True, ..], Str, Dec, List(Dec), Str)")))
+		(patt (type "([True], Str, Dec, List(Dec), Str)")))
 	(expressions
 		(expr (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(expr (type "([True, ..], Str, Dec, List(Dec), Str)"))))
+		(expr (type "([True], Str, Dec, List(Dec), Str)"))))
 ~~~

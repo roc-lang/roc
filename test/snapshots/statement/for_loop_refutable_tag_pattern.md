@@ -23,7 +23,7 @@ NON EXHAUSTIVE DESTRUCTURE - for_loop_refutable_tag_pattern.md:2:9:2:19
  └───────────────────────────────────── for_loop_refutable_tag_pattern.md:2:9 ┘
 
     The value being destructured has type:
-            [Err(Str), Ok(Dec), ..]
+            [Err(Str), Ok(Dec)]
 
     Missing patterns:
             Err _
@@ -110,8 +110,8 @@ main! = |_args| {
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "_arg -> [Ok({}), ..]")))
+		(patt (type "_arg -> [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "_arg -> [Ok({}), ..]"))))
+		(expr (type "_arg -> [Ok({})]"))))
 ~~~

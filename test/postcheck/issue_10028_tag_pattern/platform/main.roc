@@ -1,6 +1,6 @@
 platform ""
 	requires {
-		main! : () => Try({}, [Exit(I64), ..])
+		main! : () => Try({}, [Exit(I64)])
 	}
 	exposes [Draw]
 	packages {}

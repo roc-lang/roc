@@ -21,7 +21,7 @@ MISSING METHOD - bool_closure_type_check.md:1:6:1:8
 
     The value's type, which does not have a method named `not`, is:
 
-        [True, ..]
+        [True]
 
 # TOKENS
 ~~~zig
@@ -54,5 +54,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[True, ..]"))
+(expr (type "[True]"))
 ~~~

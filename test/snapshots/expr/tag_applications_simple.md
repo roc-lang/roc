@@ -32,7 +32,7 @@ MISSING METHOD - tag_applications_simple.md:2:10:2:12
 
     The value's type, which does not have a method named `from_numeral`, is:
 
-        [Ok([Just(a), ..]), ..]
+        [Ok([Just(a)])]
           where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
@@ -149,5 +149,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List([Err(Str), Just(Dec), Left(Dec), None, Nothing, Ok(Str), Right(Dec), Some([Ok([Just(Dec), ..]), ..]), Try([Ok([Some([True, ..]), ..]), ..]), ..])"))
+(expr (type "List([Err(Str), Just(Dec), Left(Dec), None, Nothing, Ok(Str), Right(Dec), Some([Ok([Just(Dec)])]), Try([Ok([Some([True])])])])"))
 ~~~

@@ -41,7 +41,7 @@ TYPE MISMATCH - binops.md:16:5:16:5
 
     But the expression between the `match` parenthesis has the type:
 
-        [None, ..]
+        [None]
 
     These can never match! Either the pattern or expression has a problem.
 

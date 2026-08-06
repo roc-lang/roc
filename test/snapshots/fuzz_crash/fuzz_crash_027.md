@@ -1086,11 +1086,11 @@ Numbers cannot have leading zeros.
 
     In the second pattern, `lue` is:
 
-        [Red, ..]
+        [Red]
 
     But in the first pattern, `lue` is:
 
-        [Red, ..]
+        [Red]
 
     A name shared across `|` patterns in the same `match` branch must have one
     compatible type.
@@ -1106,7 +1106,7 @@ Numbers cannot have leading zeros.
 
     The value's type, which does not have a method named `from_quote`, is:
 
-        [Blue, Red, ..]
+        [Blue, Red]
 
 
 ┌────────────────┐
@@ -1119,7 +1119,7 @@ Numbers cannot have leading zeros.
 
     The value's type, which does not have a method named `from_quote`, is:
 
-        [Blue, Red, ..]
+        [Blue, Red]
 
 
 ┌───────────────┐
@@ -1170,7 +1170,7 @@ Numbers cannot have leading zeros.
 
     But the expression between the `match` parenthesis has the type:
 
-        [Blue, Red, ..]
+        [Blue, Red]
 
     These can never match! Either the pattern or expression has a problem.
 
