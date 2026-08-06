@@ -196,7 +196,7 @@ NO CHANGE
 												(builtin)
 												(e-tag (name "Err")
 													(args
-														(e-call (constraint-fn-var 373)
+														(e-call (constraint-fn-var 367)
 															(e-lambda
 																(args
 																	(p-assign (ident "e")))

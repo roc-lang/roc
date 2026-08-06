@@ -108,6 +108,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/frac_test.zig"));
     std.testing.refAllDecls(@import("test/if_statement_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10151_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10338_test.zig"));
+    std.testing.refAllDecls(@import("test/roc_version_test.zig"));
     std.testing.refAllDecls(@import("test/import_validation_test.zig"));
     std.testing.refAllDecls(@import("test/int_test.zig"));
     std.testing.refAllDecls(@import("test/range_test.zig"));

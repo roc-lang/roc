@@ -20,50 +20,42 @@ pub fn handler(comptime ServerType: type) type {
                 return;
             };
 
-            const obj = switch (params) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "selectionRange params must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(params) != .object) {
+                try self.sendError(id, .invalid_params, "selectionRange params must be an object");
+                return;
+            }
+            const obj = params.object;
 
             // Extract textDocument.uri
             const text_doc_value = obj.get("textDocument") orelse {
                 try self.sendError(id, .invalid_params, "missing textDocument");
                 return;
             };
-            const text_doc = switch (text_doc_value) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "textDocument must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(text_doc_value) != .object) {
+                try self.sendError(id, .invalid_params, "textDocument must be an object");
+                return;
+            }
+            const text_doc = text_doc_value.object;
             const uri_value = text_doc.get("uri") orelse {
                 try self.sendError(id, .invalid_params, "missing uri");
                 return;
             };
-            const uri = switch (uri_value) {
-                .string => |s| s,
-                else => {
-                    try self.sendError(id, .invalid_params, "uri must be a string");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(uri_value) != .string) {
+                try self.sendError(id, .invalid_params, "uri must be a string");
+                return;
+            }
+            const uri = uri_value.string;
 
             // Extract positions array
             const positions_value = obj.get("positions") orelse {
                 try self.sendError(id, .invalid_params, "missing positions");
                 return;
             };
-            const positions = switch (positions_value) {
-                .array => |a| a,
-                else => {
-                    try self.sendError(id, .invalid_params, "positions must be an array");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(positions_value) != .array) {
+                try self.sendError(id, .invalid_params, "positions must be an array");
+                return;
+            }
+            const positions = positions_value.array;
 
             // Get the document text from the store
             const doc = self.doc_store.get(uri);
@@ -85,32 +77,27 @@ pub fn handler(comptime ServerType: type) type {
             }
 
             for (positions.items) |pos_value| {
-                const pos_obj = switch (pos_value) {
-                    .object => |o| o,
-                    else => {
-                        try results.append(self.allocator, null);
-                        continue;
-                    },
-                };
+                if (std.meta.activeTag(pos_value) != .object) {
+                    try results.append(self.allocator, null);
+                    continue;
+                }
+                const pos_obj = pos_value.object;
 
                 const line: u32 = blk: {
                     const v = pos_obj.get("line") orelse break :blk 0;
-                    break :blk switch (v) {
-                        .integer => |i| @intCast(i),
-                        else => 0,
-                    };
+                    break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
                 };
                 const character: u32 = blk: {
                     const v = pos_obj.get("character") orelse break :blk 0;
-                    break :blk switch (v) {
-                        .integer => |i| @intCast(i),
-                        else => 0,
-                    };
+                    break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
                 };
 
                 const selection_range = computeSelectionRange(self.allocator, text, line, character) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    else => null,
+                    error.InvalidPosition,
+                    error.NoRangeFound,
+                    error.ParseFailed,
+                    => null,
                 };
                 try results.append(self.allocator, selection_range);
             }

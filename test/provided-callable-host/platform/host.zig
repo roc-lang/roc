@@ -1,0 +1,118 @@
+//! End-to-end host ABI regression for provided roots containing boxed callables.
+//!
+//! The host obtains a capturing callable from one provided root and passes
+//! ownership to another provided root which ignores it. The callee must emit
+//! the erased-callable release helper, including its closure-environment drop.
+
+const std = @import("std");
+const build_options = @import("build_options");
+const builtin = @import("builtin");
+const builtins = @import("builtins");
+const host_alloc = @import("host_alloc");
+const shim_io = @import("shim_io");
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
+
+pub const std_options: std.Options = .{
+    .logFn = std.log.defaultLog,
+    .log_level = .warn,
+    .allow_stack_tracing = false,
+};
+
+const RocOps = builtins.host_abi.RocOps;
+
+const HostEnv = struct {
+    gpa: std.heap.DebugAllocator(.{
+        .thread_safe = false,
+        .stack_trace_frames = build_options.debug_gpa_stack_trace_frames,
+    }),
+    alloc_count: usize,
+    dealloc_count: usize,
+
+    pub fn rocAllocator(self: *HostEnv) std.mem.Allocator {
+        return self.gpa.allocator();
+    }
+};
+
+extern fn roc_make_boxed_callable(offset: u64) callconv(.c) ?[*]u8;
+extern fn roc_drop_boxed_callable(callable: ?[*]u8) callconv(.c) void;
+
+var g_roc_ops: ?*RocOps = null;
+
+fn getOps() *RocOps {
+    return g_roc_ops.?;
+}
+
+comptime {
+    host_alloc.exportRuntimeSymbols(getOps, .{});
+    @export(&main, .{ .name = "main" });
+
+    if (builtin.os.tag == .windows) {
+        @export(&__main, .{ .name = "__main" });
+    }
+}
+
+fn __main() callconv(.c) void {}
+
+fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
+    if (argc != 2 or !std.mem.eql(u8, std.mem.span(argv[1]), "--run-provided-boxed-callable-drop")) {
+        std.debug.print("usage: <app> --run-provided-boxed-callable-drop\n", .{});
+        return 1;
+    }
+
+    var host_env = HostEnv{
+        .gpa = .{},
+        .alloc_count = 0,
+        .dealloc_count = 0,
+    };
+    defer _ = build_options.debugGpaOk(host_env.gpa.deinit());
+
+    var roc_ops = RocOps{
+        .env = @ptrCast(&host_env),
+        .roc_alloc = rocAllocFn,
+        .roc_dealloc = rocDeallocFn,
+        .roc_realloc = callbacks.rocReallocFn,
+        .roc_dbg = callbacks.rocDbgFn,
+        .roc_expect_failed = callbacks.rocExpectFailedFn,
+        .roc_crashed = callbacks.rocCrashedFn,
+        .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
+    };
+    g_roc_ops = &roc_ops;
+
+    const callable = roc_make_boxed_callable(41) orelse {
+        std.debug.print("provided callable maker returned null\n", .{});
+        return 1;
+    };
+    if (host_env.alloc_count == 0) {
+        std.debug.print("provided callable maker did not allocate\n", .{});
+        return 1;
+    }
+
+    roc_drop_boxed_callable(callable);
+    if (host_env.dealloc_count != host_env.alloc_count) {
+        std.debug.print("provided callable drop released {d} of {d} allocations\n", .{
+            host_env.dealloc_count,
+            host_env.alloc_count,
+        });
+        return 1;
+    }
+
+    std.debug.print("provided boxed callable drop ok\n", .{});
+    return 0;
+}
+
+const callbacks = host_alloc.Callbacks(HostEnv);
+
+fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+    host.alloc_count += 1;
+    return callbacks.rocAllocFn(ops, length, alignment);
+}
+
+fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+    host.dealloc_count += 1;
+    callbacks.rocDeallocFn(ops, ptr, alignment);
+}

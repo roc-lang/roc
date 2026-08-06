@@ -43,7 +43,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-t = 0->(0)()
+t = 0 |> (0)
 ~~~
 # CANONICALIZE
 ~~~clojure

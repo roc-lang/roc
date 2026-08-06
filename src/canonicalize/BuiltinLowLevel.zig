@@ -34,12 +34,26 @@ pub const IntrinsicId = enum(u8) {
         argument: u8,
     };
 
+    /// Arity for intrinsics whose implementation is emitted at each checked
+    /// call site. Null identifies wrappers lowered through another explicit
+    /// checked protocol.
+    pub fn callsiteArity(self: IntrinsicId) ?u8 {
+        return switch (self) {
+            .str_inspect, .structural_eq => null,
+            .parse_tag_union, .field_names_rename_fields, .field_names_for_size => 2,
+            .field_names_shortest_name,
+            .field_names_longest_name,
+            .field_names_iter,
+            .field_name,
+            => 1,
+        };
+    }
+
+    pub const max_callsite_arity = 2;
+
     /// Explicit request-topology contract for compiler-owned intrinsic calls.
     pub fn requestResultSource(self: IntrinsicId) RequestResultSource {
-        return switch (self) {
-            .field_names_rename_fields => .{ .argument = 0 },
-            else => .declared_return,
-        };
+        return if (self == .field_names_rename_fields) .{ .argument = 0 } else .declared_return;
     }
 };
 
@@ -321,6 +335,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
         try low_level_map.put(list_swap_unsafe_ident, .list_swap);
     }
+    if (env.common.findIdent("list_map_prepare_reuse")) |list_map_prepare_reuse_ident| {
+        try low_level_map.put(list_map_prepare_reuse_ident, .list_map_prepare_reuse);
+    }
     if (env.common.findIdent("list_map_can_reuse")) |list_map_can_reuse_ident| {
         try low_level_map.put(list_map_can_reuse_ident, .list_map_can_reuse);
     }
@@ -436,6 +453,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.from_bits", .{}, .f32_from_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.to_bits", .{}, .f64_to_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.from_bits", .{}, .f64_from_bits);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.to_attos", .{}, .dec_to_attos);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.from_attos", .{}, .dec_from_attos);
 
     // Numeric comparison operations (all numeric types)
     for (numeric_types) |num_type| {
@@ -630,6 +649,14 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_one_bits", .{num_type}, .num_count_one_bits);
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_leading_zero_bits", .{num_type}, .num_count_leading_zero_bits);
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_trailing_zero_bits", .{num_type}, .num_count_trailing_zero_bits);
+    }
+
+    // Little-endian byte-list loads (multi-byte integer types only; a one-byte
+    // load is List.get). The result's layout carries the width, so a single
+    // low-level op serves every one of them.
+    const multibyte_integer_types = [_][]const u8{ "u16", "i16", "u32", "i32", "u64", "i64", "u128", "i128" };
+    for (multibyte_integer_types) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "{s}_from_le_bytes_unchecked", .{num_type}, .num_from_le_bytes_unchecked);
     }
 
     // Bitwise logical operations (integer types only)
@@ -1539,10 +1566,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
                 // The annotation must be a function type for low-level operations
                 const annotation = env.store.getAnnotation(def.annotation.?);
                 const type_anno = env.store.getTypeAnno(annotation.anno);
-                const num_params: u32 = switch (type_anno) {
-                    .@"fn" => |func| func.args.span.len,
-                    else => return error.BuiltinLowLevelAnnotationMustBeFunction,
-                };
+                if (type_anno != .@"fn") return error.BuiltinLowLevelAnnotationMustBeFunction;
+                const num_params: u32 = type_anno.@"fn".args.span.len;
 
                 // Create parameter patterns for the lambda
                 const patterns_start = env.store.scratchTop("patterns");
@@ -1589,6 +1614,15 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
                 // Track this replaced def index
                 try new_def_indices.append(gpa, def_idx);
+                if (env.provided_low_level_defs.items.items.len > 0) {
+                    const previous = env.provided_low_level_defs.items.items[env.provided_low_level_defs.items.items.len - 1];
+                    std.debug.assert(previous.def_idx < @intFromEnum(def_idx));
+                }
+                _ = try env.provided_low_level_defs.append(gpa, .{
+                    .def_idx = @intFromEnum(def_idx),
+                    .op = low_level_op,
+                    ._padding = 0,
+                });
             }
         }
     }
@@ -1599,4 +1633,16 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
 
     return new_def_indices;
+}
+
+test "intrinsic call-site protocol classifies every intrinsic" {
+    try std.testing.expectEqual(@as(?u8, null), IntrinsicId.str_inspect.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, null), IntrinsicId.structural_eq.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.parse_tag_union.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.field_names_rename_fields.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_shortest_name.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_longest_name.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_iter.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.field_names_for_size.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_name.callsiteArity());
 }

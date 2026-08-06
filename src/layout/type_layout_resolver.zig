@@ -698,7 +698,14 @@ pub const Resolver = struct {
                             break :rows;
                         },
                         .empty_record => break :rows,
-                        else => unreachable,
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .tag_union,
+                        .empty_tag_union,
+                        => unreachable,
                     },
                     .flex, .rigid => break :rows,
                     .err => unreachable,
@@ -739,7 +746,15 @@ pub const Resolver = struct {
                             continue :rows;
                         },
                         .empty_tag_union => break :rows,
-                        else => unreachable,
+                        .record,
+                        .record_unbound,
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        => unreachable,
                     },
                     .flex, .rigid => break :rows,
                     .err => unreachable,
@@ -818,7 +833,7 @@ pub const Resolver = struct {
                         }
                     }
                 },
-                else => {},
+                .structure, .err => {},
             }
             break;
         }
@@ -854,7 +869,12 @@ pub const Resolver = struct {
                     .quote, .interpolation => {},
                 },
                 .desugared_binop, .desugared_unaryop => return true,
-                .method_call, .where_clause => {},
+                // A `where`-clause contract naming the numeral-conversion hook
+                // asserts the same thing a numeral literal's own constraint
+                // does, and the checker defaults such a var to Dec — the
+                // layout must agree.
+                .where_clause => if (constraint.fn_name.eql(self.envFor(module_idx).idents.from_numeral)) return true,
+                .method_call => {},
             }
         }
 

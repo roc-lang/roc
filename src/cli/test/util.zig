@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const windows_job = @import("test_harness").windows_job;
 
 fn milliTimestamp(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .awake).toMilliseconds();
@@ -81,7 +82,7 @@ pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-o
 /// Errors that can occur while setting up a temporary CLI test directory.
 pub const TestDirError = std.mem.Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || std.Io.Dir.RealPathFileAllocError;
 /// Errors that can occur while waiting for child process output in tests.
-pub const ChildTimeoutError = std.mem.Allocator.Error || std.process.SpawnError || std.Thread.SpawnError || std.process.Child.WaitError || std.Io.File.MultiReader.UnendingError || error{
+pub const ChildTimeoutError = std.mem.Allocator.Error || std.process.SpawnError || std.Thread.SpawnError || std.process.Child.WaitError || std.Io.File.MultiReader.UnendingError || windows_job.Error || error{
     StreamTooLong,
     Timeout,
     WriteFailed,
@@ -131,7 +132,23 @@ fn reserveUniqueTestDir(io: std.Io, allocator: std.mem.Allocator, namespace: []c
                 allocator.free(cache_root_rel);
                 continue;
             },
-            else => return err,
+            error.PermissionDenied,
+            error.SystemResources,
+            error.Unexpected,
+            error.DiskQuota,
+            error.NoSpaceLeft,
+            error.AccessDenied,
+            error.NoDevice,
+            error.Canceled,
+            error.SymLinkLoop,
+            error.LinkQuotaExceeded,
+            error.FileNotFound,
+            error.NotDir,
+            error.ReadOnlyFileSystem,
+            error.NetworkNotFound,
+            error.NameTooLong,
+            error.BadPathName,
+            => return err,
         };
 
         return cache_root_rel;
@@ -155,16 +172,51 @@ pub const ChildRunOptions = struct {
     timeout_ms: u64 = default_child_timeout_ms,
 };
 
-fn terminateChildGroup(child_id: std.process.Child.Id) void {
+fn terminateChildGroup(job: windows_job.Handle, child_id: std.process.Child.Id) void {
     switch (builtin.os.tag) {
-        .windows => {
-            const kernel32 = struct {
-                extern "kernel32" fn TerminateProcess(hProcess: std.os.windows.HANDLE, uExitCode: c_uint) callconv(.winapi) i32;
-            };
-            _ = kernel32.TerminateProcess(child_id, 1);
-        },
+        .windows => windows_job.terminate(job, 1),
         .wasi => {},
-        else => {
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .linux,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .macos,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => {
             const pid: std.posix.pid_t = child_id;
             std.posix.kill(-pid, std.posix.SIG.KILL) catch {
                 std.posix.kill(pid, std.posix.SIG.KILL) catch {};
@@ -204,6 +256,7 @@ pub fn runChildWithTimeout(
     options: ChildRunOptions,
 ) ChildTimeoutError!std.process.RunResult {
     const Watch = struct {
+        job: windows_job.Handle,
         child_id: std.process.Child.Id,
         io: std.Io,
         timeout_ms: u64,
@@ -220,12 +273,17 @@ pub fn runChildWithTimeout(
                 const elapsed_ms: u64 = @intCast(@max(0, milliTimestamp(self.io) - start_ms));
                 if (elapsed_ms >= self.timeout_ms) {
                     self.timed_out.store(true, .release);
-                    terminateChildGroup(self.child_id);
+                    terminateChildGroup(self.job, self.child_id);
                     return;
                 }
             }
         }
     };
+
+    const child_job = if (comptime builtin.os.tag == .windows)
+        try windows_job.create()
+    else {};
+    defer if (comptime builtin.os.tag == .windows) windows_job.close(child_job);
 
     var child = try std.process.spawn(io, .{
         .argv = argv,
@@ -234,19 +292,69 @@ pub fn runChildWithTimeout(
         .stderr = .pipe,
         .cwd = if (options.cwd) |path| .{ .path = path } else .inherit,
         .environ_map = options.env_map,
+        // On Windows, do not let the process run until it belongs to its Job
+        // Object. Otherwise it could spawn an untracked descendant in the
+        // gap between CreateProcess and AssignProcessToJobObject.
+        .start_suspended = builtin.os.tag == .windows,
         // Put the child in its own process group so the watchdog can signal
         // the whole group (child + any grandchildren) on timeout.
         .pgid = switch (builtin.os.tag) {
             .windows, .wasi => null,
-            else => 0,
+            .freestanding,
+            .other,
+            .contiki,
+            .fuchsia,
+            .hermit,
+            .managarm,
+            .haiku,
+            .hurd,
+            .illumos,
+            .plan9,
+            .rtems,
+            .serenity,
+            .dragonfly,
+            .driverkit,
+            .ios,
+            .maccatalyst,
+            .tvos,
+            .visionos,
+            .watchos,
+            .uefi,
+            .linux,
+            .freebsd,
+            .openbsd,
+            .netbsd,
+            .macos,
+            .@"3ds",
+            .ps3,
+            .ps4,
+            .ps5,
+            .psp,
+            .vita,
+            .emscripten,
+            .amdhsa,
+            .amdpal,
+            .cuda,
+            .mesa3d,
+            .nvcl,
+            .opencl,
+            .opengl,
+            .vulkan,
+            => 0,
         },
     });
     errdefer child.kill(io);
+
+    if (comptime builtin.os.tag == .windows) {
+        try windows_job.assign(child_job, child.id.?);
+        try windows_job.resumeChild(&child);
+    }
 
     // The watchdog signals the child's process group; it needs the child id.
     const child_pid: ?std.process.Child.Id = child.id;
 
     var watch = Watch{
+        .job = child_job,
         .child_id = child_pid orelse undefined,
         .io = io,
         .timeout_ms = if (child_pid == null) 0 else options.timeout_ms,
@@ -281,7 +389,10 @@ pub fn runChildWithTimeout(
         if (stderr_reader.buffered().len > options.max_output_bytes) return error.StreamTooLong;
     } else |err| switch (err) {
         error.EndOfStream => {},
-        else => |e| return e,
+        error.Canceled,
+        error.ConcurrencyUnavailable,
+        error.Timeout,
+        => |stream_error| return stream_error,
     }
     try multi_reader.checkAnyError();
 
@@ -603,7 +714,7 @@ pub fn checkSuccess(result: RocResult) ResultCheckError!void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -628,7 +739,7 @@ pub fn checkFailure(result: RocResult) ResultCheckError!void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("ERROR: Process terminated abnormally: {} (expected clean failure with non-zero exit code)\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -659,7 +770,7 @@ pub fn checkTestSuccess(result: RocResult) ResultCheckError!void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Test terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.TestFailed;

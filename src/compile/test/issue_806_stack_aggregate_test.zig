@@ -251,9 +251,8 @@ fn hasLargeStackStructAssign(
     layouts: *const layout.Store,
 ) bool {
     for (store.getCFStmts()) |stmt| {
-        switch (stmt) {
-            .assign_struct => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
-            else => {},
+        if (stmt == .assign_struct and isUnsafeLargeAggregateLocal(store, layouts, stmt.assign_struct.target)) {
+            return true;
         }
     }
     return false;
@@ -264,9 +263,8 @@ fn hasLargeStackTagAssign(
     layouts: *const layout.Store,
 ) bool {
     for (store.getCFStmts()) |stmt| {
-        switch (stmt) {
-            .assign_tag => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
-            else => {},
+        if (stmt == .assign_tag and isUnsafeLargeAggregateLocal(store, layouts, stmt.assign_tag.target)) {
+            return true;
         }
     }
     return false;
@@ -277,10 +275,11 @@ fn hasLargeStackCallReturn(
     layouts: *const layout.Store,
 ) bool {
     for (store.getCFStmts()) |stmt| {
-        switch (stmt) {
-            .assign_call => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
-            .assign_call_erased => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
-            else => {},
+        if (stmt == .assign_call and isUnsafeLargeAggregateLocal(store, layouts, stmt.assign_call.target)) {
+            return true;
+        }
+        if (stmt == .assign_call_erased and isUnsafeLargeAggregateLocal(store, layouts, stmt.assign_call_erased.target)) {
+            return true;
         }
     }
     return false;
@@ -295,10 +294,11 @@ fn hasLargeStackCallArgument(
     }
 
     for (store.getCFStmts()) |stmt| {
-        switch (stmt) {
-            .assign_call => |assign| if (spanHasUnsafeLargeAggregateLocal(store, layouts, assign.args)) return true,
-            .assign_call_erased => |assign| if (spanHasUnsafeLargeAggregateLocal(store, layouts, assign.args)) return true,
-            else => {},
+        if (stmt == .assign_call and spanHasUnsafeLargeAggregateLocal(store, layouts, stmt.assign_call.args)) {
+            return true;
+        }
+        if (stmt == .assign_call_erased and spanHasUnsafeLargeAggregateLocal(store, layouts, stmt.assign_call_erased.args)) {
+            return true;
         }
     }
     return false;
@@ -313,9 +313,8 @@ fn hasLargeStackReturn(
     }
 
     for (store.getCFStmts()) |stmt| {
-        switch (stmt) {
-            .ret => |ret| if (isUnsafeLargeAggregateLocal(store, layouts, ret.value)) return true,
-            else => {},
+        if (stmt == .ret and isUnsafeLargeAggregateLocal(store, layouts, stmt.ret.value)) {
+            return true;
         }
     }
     return false;
@@ -344,30 +343,25 @@ fn rejectConsumerOwnedLargeStackClosureCaptures(
     try std.testing.expect(hasPackedErasedFn(store));
 
     for (store.getCFStmts()) |stmt| {
-        switch (stmt) {
-            .assign_packed_erased_fn => |assign| {
-                if (assign.capture) |capture| {
-                    if (isUnsafeLargeAggregateLocal(store, layouts, capture)) {
-                        return error.Issue806UnsafeLargeStackClosureCapture;
-                    }
+        if (stmt == .assign_packed_erased_fn) {
+            const assign = stmt.assign_packed_erased_fn;
+            if (assign.capture) |capture| {
+                if (isUnsafeLargeAggregateLocal(store, layouts, capture)) {
+                    return error.Issue806UnsafeLargeStackClosureCapture;
                 }
-                if (assign.capture_layout) |capture_layout| {
-                    if (isUnsafeLargeAggregateLayoutIdx(layouts, capture_layout)) {
-                        return error.Issue806UnsafeLargeStackClosureCapture;
-                    }
+            }
+            if (assign.capture_layout) |capture_layout| {
+                if (isUnsafeLargeAggregateLayoutIdx(layouts, capture_layout)) {
+                    return error.Issue806UnsafeLargeStackClosureCapture;
                 }
-            },
-            else => {},
+            }
         }
     }
 }
 
 fn hasPackedErasedFn(store: *const lir.LirStore) bool {
     for (store.getCFStmts()) |stmt| {
-        switch (stmt) {
-            .assign_packed_erased_fn => return true,
-            else => {},
-        }
+        if (stmt == .assign_packed_erased_fn) return true;
     }
     return false;
 }
@@ -385,13 +379,10 @@ fn rejectConsumerOwnedLargeStackPatternPayloads(
     }
 
     for (store.getCFStmts()) |stmt| {
-        switch (stmt) {
-            .switch_initialized_payload => |switch_payload| {
-                if (isUnsafeLargeAggregateLocal(store, layouts, switch_payload.payload)) {
-                    return error.Issue806UnsafeLargeStackPatternPayload;
-                }
-            },
-            else => {},
+        if (stmt == .switch_initialized_payload and
+            isUnsafeLargeAggregateLocal(store, layouts, stmt.switch_initialized_payload.payload))
+        {
+            return error.Issue806UnsafeLargeStackPatternPayload;
         }
     }
 }
@@ -500,10 +491,8 @@ fn isUnsafeLargeAggregateLayoutIdx(layouts: *const layout.Store, layout_idx: lay
 }
 
 fn isUnsafeLargeAggregateLayout(layouts: *const layout.Store, local_layout: layout.Layout) bool {
-    return switch (local_layout.tag) {
-        .struct_, .tag_union => layoutIsLargerThanGuardPages(layouts, local_layout),
-        else => false,
-    };
+    return (local_layout.tag == .struct_ or local_layout.tag == .tag_union) and
+        layoutIsLargerThanGuardPages(layouts, local_layout);
 }
 
 fn layoutIsLargerThanGuardPages(layouts: *const layout.Store, local_layout: layout.Layout) bool {

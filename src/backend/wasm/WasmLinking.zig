@@ -256,7 +256,7 @@ pub const SymInfo = struct {
             .global => if (self.index < global_imports.len) global_imports[self.index].field_name else null,
             .table => if (self.index < table_imports.len) table_imports[self.index].field_name else null,
             .event => if (self.index < fn_imports.len) fn_imports[self.index].field_name else null,
-            else => null,
+            .data, .section => null,
         };
     }
 };

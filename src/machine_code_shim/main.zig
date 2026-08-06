@@ -77,9 +77,7 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
     VirtualProtectFailed,
 };
 
-const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError || error{
-    SysctlFailed,
-};
+const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError;
 
 var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
 var runtime_state: RuntimeState = undefined;
@@ -112,8 +110,7 @@ fn viewRuntimeImage(
 }
 
 fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
-    const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
+    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo());
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);
@@ -416,10 +413,75 @@ fn protectDataPages(
     try ipc.platform.protectMappedMemory(view.data.ptr, protected_len, protection);
 }
 
+const HostArch = enum { x86, x86_64, aarch64, other };
+
+fn hostArch() HostArch {
+    return switch (builtin.cpu.arch) {
+        .x86 => .x86,
+        .x86_64 => .x86_64,
+        .aarch64, .aarch64_be => .aarch64,
+        .alpha,
+        .amdgcn,
+        .arc,
+        .arceb,
+        .arm,
+        .armeb,
+        .avr,
+        .bpfeb,
+        .bpfel,
+        .csky,
+        .hexagon,
+        .hppa,
+        .hppa64,
+        .kalimba,
+        .kvx,
+        .lanai,
+        .loongarch32,
+        .loongarch64,
+        .m68k,
+        .microblaze,
+        .microblazeel,
+        .mips,
+        .mipsel,
+        .mips64,
+        .mips64el,
+        .msp430,
+        .nvptx,
+        .nvptx64,
+        .or1k,
+        .powerpc,
+        .powerpcle,
+        .powerpc64,
+        .powerpc64le,
+        .propeller,
+        .riscv32,
+        .riscv32be,
+        .riscv64,
+        .riscv64be,
+        .s390x,
+        .sh,
+        .sheb,
+        .sparc,
+        .sparc64,
+        .spirv32,
+        .spirv64,
+        .thumb,
+        .thumbeb,
+        .ve,
+        .wasm32,
+        .wasm64,
+        .x86_16,
+        .xcore,
+        .xtensa,
+        .xtensaeb,
+        => .other,
+    };
+}
+
 fn flushInstructionCache(memory: []const u8) void {
-    switch (builtin.cpu.arch) {
+    switch (hostArch()) {
         .x86, .x86_64 => {},
-        else => {
+        .aarch64, .other => {
             const clearCache = struct {
                 extern fn __clear_cache(start: *const anyopaque, end: *const anyopaque) void;
             }.__clear_cache;
@@ -485,15 +547,15 @@ comptime {
 }
 
 fn jumpStubSize() JumpStubError!usize {
-    return switch (builtin.cpu.arch) {
+    return switch (hostArch()) {
         .x86_64 => x86_64_jump_stub_size,
-        .aarch64, .aarch64_be => aarch64_jump_stub_size,
-        else => error.UnsupportedPlatform,
+        .aarch64 => aarch64_jump_stub_size,
+        .x86, .other => error.UnsupportedPlatform,
     };
 }
 
 fn writeJumpStub(buf: []u8, target_addr: usize) JumpStubError!void {
-    switch (builtin.cpu.arch) {
+    switch (hostArch()) {
         .x86_64 => {
             if (buf.len < x86_64_jump_stub_size) return error.InvalidDevRunImage;
             buf[0] = 0x49; // movabs r11, imm64
@@ -503,7 +565,7 @@ fn writeJumpStub(buf: []u8, target_addr: usize) JumpStubError!void {
             buf[11] = 0xFF;
             buf[12] = 0xE3;
         },
-        .aarch64, .aarch64_be => {
+        .aarch64 => {
             if (buf.len < aarch64_jump_stub_size) return error.InvalidDevRunImage;
             const addr: u64 = @intCast(target_addr);
             std.mem.writeInt(u32, buf[0..][0..4], movzX16(@truncate(addr), 0), .little);
@@ -512,7 +574,7 @@ fn writeJumpStub(buf: []u8, target_addr: usize) JumpStubError!void {
             std.mem.writeInt(u32, buf[12..][0..4], movkX16(@truncate(addr >> 48), 48), .little);
             std.mem.writeInt(u32, buf[16..][0..4], 0xD61F_0200, .little); // br x16
         },
-        else => return error.UnsupportedPlatform,
+        .x86, .other => return error.UnsupportedPlatform,
     }
 }
 
@@ -808,10 +870,10 @@ fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
 }
 
 test "loaded dev program borrows direct shared image metadata" {
-    const code: []const u8 = switch (builtin.cpu.arch) {
+    const code: []const u8 = switch (hostArch()) {
         .x86_64 => &[_]u8{0xC3},
-        .aarch64, .aarch64_be => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 },
-        else => return error.SkipZigTest,
+        .aarch64 => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 },
+        .x86, .other => return error.SkipZigTest,
     };
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();

@@ -44,10 +44,7 @@ const ShimError = error{
     OutOfMemory,
 };
 
-const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError || error{
-    SysctlFailed,
-    UnsupportedPlatform,
-};
+const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError;
 
 var runtime_state_initialized: bool = false;
 var runtime_state: RuntimeState = undefined;
@@ -63,8 +60,7 @@ fn allocator() Allocator {
 }
 
 fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
-    const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
+    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo());
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);

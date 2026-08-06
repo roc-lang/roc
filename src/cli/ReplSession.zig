@@ -53,12 +53,13 @@ module_root: []const u8 = ".",
 pub const StepResult = union(enum) {
     output: []u8,
     diagnostic: []u8,
+    runtime_crash: []u8,
     none,
     exit,
 
     pub fn deinit(self: StepResult, allocator: Allocator) void {
         switch (self) {
-            .output, .diagnostic => |bytes| allocator.free(bytes),
+            .output, .diagnostic, .runtime_crash => |bytes| allocator.free(bytes),
             .none, .exit => {},
         }
     }
@@ -120,6 +121,14 @@ pub fn step(self: *ReplSession, input: []const u8) ReplStepError![]u8 {
     return switch (result) {
         .output => |bytes| bytes,
         .diagnostic => |bytes| bytes,
+        .runtime_crash => |message| {
+            defer self.allocator.free(message);
+            return std.fmt.allocPrint(
+                self.allocator,
+                "This Roc code crashed with: \"{f}\"",
+                .{std.zig.fmtString(message)},
+            );
+        },
         .none => self.allocator.dupe(u8, ""),
         .exit => self.allocator.dupe(u8, "Goodbye!"),
     };
@@ -351,16 +360,29 @@ fn resolveImports(self: *ReplSession) Allocator.Error!ImportResolution {
     const import_source = try self.importDefinitionsSource();
     defer self.allocator.free(import_source);
 
-    const seed_names = try self.importNamesOf(import_source);
+    const seed_imports = try self.importsOf(import_source);
     defer {
-        for (seed_names) |name| self.allocator.free(name);
-        self.allocator.free(seed_names);
+        for (seed_imports) |seed_import| self.allocator.free(seed_import.import_name);
+        self.allocator.free(seed_imports);
     }
 
     var failure: ?[]u8 = null;
     errdefer if (failure) |msg| self.allocator.free(msg);
 
-    for (seed_names) |name| {
+    for (seed_imports) |seed_import| {
+        const name = (try compile.module_discovery.resolveLocalImportLogicalPath(
+            self.allocator,
+            "Repl",
+            seed_import,
+        )) orelse {
+            failure = try std.fmt.allocPrint(
+                self.allocator,
+                "The import `{s}` traverses above the REPL module root.",
+                .{seed_import.import_name},
+            );
+            break;
+        };
+        defer self.allocator.free(name);
         try self.addModuleRecursive(name, &sources, &visited, &failure);
         if (failure != null) break;
     }
@@ -431,7 +453,38 @@ fn addModuleRecursive(
                 "I couldn't find the imported module `{s}` (looked for `{s}` relative to the current directory).",
                 .{ module_name, read_path },
             ),
-            else => try std.fmt.allocPrint(
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.ConnectionResetByPeer,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileTooBig,
+            error.InputOutput,
+            error.IsDir,
+            error.LockViolation,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.NotOpenForReading,
+            error.OutOfMemory,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.SocketUnconnected,
+            error.StreamTooLong,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => try std.fmt.allocPrint(
                 self.allocator,
                 "I couldn't read the imported module `{s}` (`{s}`): {s}.",
                 .{ module_name, read_path, @errorName(err) },
@@ -443,12 +496,26 @@ fn addModuleRecursive(
 
     // Resolve this module's own imports first so dependencies are appended
     // before it.
-    const child_names = try self.importNamesOf(source);
+    const child_imports = try self.importsOf(source);
     defer {
-        for (child_names) |name| self.allocator.free(name);
-        self.allocator.free(child_names);
+        for (child_imports) |child_import| self.allocator.free(child_import.import_name);
+        self.allocator.free(child_imports);
     }
-    for (child_names) |child| {
+    for (child_imports) |child_import| {
+        const child = (try compile.module_discovery.resolveLocalImportLogicalPath(
+            self.allocator,
+            module_name,
+            child_import,
+        )) orelse {
+            failure.* = try std.fmt.allocPrint(
+                self.allocator,
+                "The import `{s}` traverses above the REPL module root.",
+                .{child_import.import_name},
+            );
+            self.allocator.free(source);
+            return;
+        };
+        defer self.allocator.free(child);
         try self.addModuleRecursive(child, sources, visited, failure);
         if (failure.* != null) {
             self.allocator.free(source);
@@ -467,7 +534,7 @@ fn addModuleRecursive(
 
 /// Parse `source` as a module and return the unqualified sibling module names it
 /// imports (caller owns the slice and each name).
-fn importNamesOf(self: *ReplSession, source: []const u8) Allocator.Error![][]const u8 {
+fn importsOf(self: *ReplSession, source: []const u8) Allocator.Error![]compile.module_discovery.LocalImport {
     var env = try ModuleEnv.init(self.allocator, source);
     defer env.deinit();
     env.common.source = source;
@@ -480,12 +547,12 @@ fn importNamesOf(self: *ReplSession, source: []const u8) Allocator.Error![][]con
 }
 
 /// Map a module name to its source path: `Util` -> `Util.roc`,
-/// `Foo.Bar` -> `Foo/Bar.roc`.
+/// `Foo/Bar` -> `Foo/Bar.roc`.
 fn modulePathFromName(allocator: Allocator, module_name: []const u8) Allocator.Error![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
-    var it = std.mem.splitScalar(u8, module_name, '.');
+    var it = std.mem.splitScalar(u8, module_name, '/');
     var first = true;
     while (it.next()) |part| {
         if (!first) try buffer.appendSlice(allocator, std.fs.path.sep_str) else first = false;
@@ -639,7 +706,103 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         if (try eval.test_helpers.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
             const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => return .{ .valid = false, .error_message = null },
+                error.AccessDenied,
+                error.AntivirusInterference,
+                error.BadPathName,
+                error.BitcodeParseError,
+                error.BrokenPipe,
+                error.Canceled,
+                error.CompilationFailed,
+                error.ComptimeExhaustiveness,
+                error.ConnectionResetByPeer,
+                error.CorruptEmbeddedBuiltins,
+                error.Crash,
+                error.CreateFileMappingFailed,
+                error.DevBackendUnavailable,
+                error.DeviceBusy,
+                error.DiskQuota,
+                error.DivisionByZero,
+                error.ElfHashTableNotFound,
+                error.ElfStringSectionNotFound,
+                error.ElfSymSectionNotFound,
+                error.EmptyCode,
+                error.EntrypointNotFound,
+                error.EvaluationFailed,
+                error.ExpectErr,
+                error.FileBusy,
+                error.FileLocksUnsupported,
+                error.FileNotFound,
+                error.FileTooBig,
+                error.FtruncateFailed,
+                error.InputOutput,
+                error.Internal,
+                error.InvalidHandle,
+                error.InvalidLirImage,
+                error.InvalidUtf8,
+                error.IsDir,
+                error.LinkFailed,
+                error.LlvmBackendUnavailable,
+                error.LlvmModuleVerificationFailed,
+                error.LlvmObjectEmitFailed,
+                error.LockViolation,
+                error.LockedMemoryLimitExceeded,
+                error.MapViewOfFileFailed,
+                error.MappingAlreadyExists,
+                error.MemfdCreateFailed,
+                error.MemoryMappingNotSupported,
+                error.MissingBuiltinBitcode,
+                error.MissingDynamicLinkingInformation,
+                error.MmapFailed,
+                error.ModuleLinkFailed,
+                error.MprotectFailed,
+                error.NameTooLong,
+                error.NetworkNotFound,
+                error.NoBitcodeModules,
+                error.NoDevice,
+                error.NoSpaceLeft,
+                error.NotDir,
+                error.NotDynamicLibrary,
+                error.NotElfFile,
+                error.NotOpenForReading,
+                error.NotOpenForWriting,
+                error.OpenFileMappingFailed,
+                error.PageSizeQueryFailed,
+                error.ParseError,
+                error.PathAlreadyExists,
+                error.PermissionDenied,
+                error.PipeBusy,
+                error.ProcessFdQuotaExceeded,
+                error.ReadOnlyFileSystem,
+                error.RuntimeError,
+                error.ShmOpenFailed,
+                error.ShmUnlinkFailed,
+                error.SocketUnconnected,
+                error.Streaming,
+                error.SymLinkLoop,
+                error.SystemFdQuotaExceeded,
+                error.SystemResources,
+                error.TempFileError,
+                error.TempFileOpenFailed,
+                error.TempFileUnlinkFailed,
+                error.TestExpectedEqual,
+                error.TestUnexpectedResult,
+                error.ThreadQuotaExceeded,
+                error.TypeCheckError,
+                error.Unexpected,
+                error.Unseekable,
+                error.UnsupportedLirImageVersion,
+                error.UnsupportedLlvmTriple,
+                error.UnsupportedLowLevel,
+                error.UnsupportedPlatform,
+                error.UnsupportedTarget,
+                error.UnwindRegistrationFailed,
+                error.VirtualAllocFailed,
+                error.VirtualProtectFailed,
+                error.WasmExecFailed,
+                error.WindowsSDKNotFound,
+                error.WouldBlock,
+                error.WriteFailed,
+                => return .{ .valid = false, .error_message = null },
             };
             return .{ .valid = false, .error_message = msg };
         }
@@ -648,18 +811,209 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         error.TypeCheckError => {
             const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => return .{ .valid = false, .error_message = null },
+                error.AccessDenied,
+                error.AntivirusInterference,
+                error.BadPathName,
+                error.BitcodeParseError,
+                error.BrokenPipe,
+                error.Canceled,
+                error.CompilationFailed,
+                error.ComptimeExhaustiveness,
+                error.ConnectionResetByPeer,
+                error.CorruptEmbeddedBuiltins,
+                error.Crash,
+                error.CreateFileMappingFailed,
+                error.DevBackendUnavailable,
+                error.DeviceBusy,
+                error.DiskQuota,
+                error.DivisionByZero,
+                error.ElfHashTableNotFound,
+                error.ElfStringSectionNotFound,
+                error.ElfSymSectionNotFound,
+                error.EmptyCode,
+                error.EntrypointNotFound,
+                error.EvaluationFailed,
+                error.ExpectErr,
+                error.FileBusy,
+                error.FileLocksUnsupported,
+                error.FileNotFound,
+                error.FileTooBig,
+                error.FtruncateFailed,
+                error.InputOutput,
+                error.Internal,
+                error.InvalidHandle,
+                error.InvalidLirImage,
+                error.InvalidUtf8,
+                error.IsDir,
+                error.LinkFailed,
+                error.LlvmBackendUnavailable,
+                error.LlvmModuleVerificationFailed,
+                error.LlvmObjectEmitFailed,
+                error.LockViolation,
+                error.LockedMemoryLimitExceeded,
+                error.MapViewOfFileFailed,
+                error.MappingAlreadyExists,
+                error.MemfdCreateFailed,
+                error.MemoryMappingNotSupported,
+                error.MissingBuiltinBitcode,
+                error.MissingDynamicLinkingInformation,
+                error.MmapFailed,
+                error.ModuleLinkFailed,
+                error.MprotectFailed,
+                error.NameTooLong,
+                error.NetworkNotFound,
+                error.NoBitcodeModules,
+                error.NoDevice,
+                error.NoSpaceLeft,
+                error.NotDir,
+                error.NotDynamicLibrary,
+                error.NotElfFile,
+                error.NotOpenForReading,
+                error.NotOpenForWriting,
+                error.OpenFileMappingFailed,
+                error.PageSizeQueryFailed,
+                error.PathAlreadyExists,
+                error.PermissionDenied,
+                error.PipeBusy,
+                error.ProcessFdQuotaExceeded,
+                error.ReadOnlyFileSystem,
+                error.RuntimeError,
+                error.ShmOpenFailed,
+                error.ShmUnlinkFailed,
+                error.SocketUnconnected,
+                error.Streaming,
+                error.SymLinkLoop,
+                error.SystemFdQuotaExceeded,
+                error.SystemResources,
+                error.TempFileError,
+                error.TempFileOpenFailed,
+                error.TempFileUnlinkFailed,
+                error.TestExpectedEqual,
+                error.TestUnexpectedResult,
+                error.ThreadQuotaExceeded,
+                error.Unexpected,
+                error.Unseekable,
+                error.UnsupportedLirImageVersion,
+                error.UnsupportedLlvmTriple,
+                error.UnsupportedLowLevel,
+                error.UnsupportedPlatform,
+                error.UnsupportedTarget,
+                error.UnwindRegistrationFailed,
+                error.VirtualAllocFailed,
+                error.VirtualProtectFailed,
+                error.WasmExecFailed,
+                error.WindowsSDKNotFound,
+                error.WouldBlock,
+                error.WriteFailed,
+                error.ParseError,
+                error.TypeCheckError,
+                => return .{ .valid = false, .error_message = null },
             };
             return .{ .valid = false, .error_message = msg };
         },
         error.ParseError => {
             const msg = self.renderModuleParseDiagnostics(source, report_config) catch |render_err| switch (render_err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => return .{ .valid = false, .error_message = null },
+                error.WriteFailed => return .{ .valid = false, .error_message = null },
             };
             return .{ .valid = false, .error_message = msg };
         },
-        else => return .{ .valid = false, .error_message = null },
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingDynamicLinkingInformation,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.OutOfMemory,
+        error.PageSizeQueryFailed,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => return .{ .valid = false, .error_message = null },
     }
 }
 
@@ -692,7 +1046,102 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     ) catch |err| switch (err) {
         error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
         error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingDynamicLinkingInformation,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.OutOfMemory,
+        error.PageSizeQueryFailed,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => return err,
     };
     defer compiled.deinit(self.allocator);
 
@@ -706,18 +1155,124 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
     }
 
-    return switch (self.backend_kind) {
-        .interpreter => .{ .output = try eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered) },
-        .dev => .{ .output = try eval.test_helpers.devEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
-        .llvm => .{ .output = try eval.test_helpers.llvmEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
-        .wasm => .{ .output = try eval.test_helpers.wasmEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
+    const lowered = &compiled.lowered;
+    const program: eval.InspectedRun.Program = .{
+        .store = &lowered.view.store,
+        .layouts = &lowered.view.layouts,
+        .main_proc = lowered.mainProc(),
+    };
+    const result = switch (self.backend_kind) {
+        .interpreter => try eval.InspectedRun.run(self.allocator, .interpreter, program),
+        .dev => try eval.InspectedRun.run(self.allocator, .dev, program),
+        .wasm => try eval.InspectedRun.run(self.allocator, .wasm, program),
+        .llvm => try eval.InspectedRun.run(self.allocator, .llvm, program),
+    };
+    return switch (result.outcome) {
+        .returned => |output| .{ .output = output },
+        .crashed => |message| .{ .runtime_crash = message },
     };
 }
 
 fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const ModuleSource, report_config: reporting.ReportingConfig) ModuleRenderError![]u8 {
     return eval.test_helpers.renderProblemsWithConfigAndImports(self.allocator, .module, source, imports, report_config, self.roc_ctx) catch |err| switch (err) {
         error.ParseError => self.renderModuleParseDiagnostics(source, report_config),
-        else => err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingDynamicLinkingInformation,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.OutOfMemory,
+        error.PageSizeQueryFailed,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.TypeCheckError,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => err,
     };
 }
 
@@ -908,7 +1463,12 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
         .import => |import| .{
             .kind = .definition,
             .definition_kind = .import,
-            .name = if (import.alias_tok) |tok| ast.resolve(tok) else ast.resolve(import.module_name_tok),
+            .name = if (import.alias_tok) |tok|
+                ast.resolve(tok)
+            else if (import.target.nested_start_tok) |nested_start|
+                ast.resolve(nested_start + import.target.nested_len - 1)
+            else
+                ast.resolve(import.target.module_name_tok),
         },
         .file_import => |file_import| .{
             .kind = .definition,
@@ -937,48 +1497,40 @@ fn inputDiagnosticsAreIncomplete(ast: *const parse.AST) bool {
 
 fn tokenizeDiagnosticIsIncomplete(diagnostic: parse.tokenize.Diagnostic, source_len: usize) bool {
     const reaches_eof = diagnostic.region.end.offset >= source_len;
-    return reaches_eof and switch (diagnostic.tag) {
-        .UnclosedString,
-        .SingleQuoteUnclosed,
-        .InvalidUnicodeEscapeSequence,
-        => true,
-        else => false,
-    };
+    return reaches_eof and (diagnostic.tag == .UnclosedString or
+        diagnostic.tag == .SingleQuoteUnclosed or
+        diagnostic.tag == .InvalidUnicodeEscapeSequence);
 }
 
 fn parseDiagnosticIsIncompleteAtEof(ast: *const parse.AST, diagnostic: parse.AST.Diagnostic) bool {
     if (!diagnosticRegionTouchesEof(ast, diagnostic.region)) return false;
 
-    return switch (diagnostic.tag) {
-        .pattern_unexpected_eof,
-        .string_unclosed,
-        .string_expected_close_interpolation,
-        .incomplete_import,
-        .expected_expr_bar,
-        .expected_expr_close_curly,
-        .expected_expr_close_curly_or_comma,
-        .expected_expr_close_round_or_comma,
-        .expected_expr_close_square_or_comma,
-        .expected_close_curly_at_end_of_match,
-        .expected_open_curly_after_match,
-        .expected_expr_apply_close_round,
-        .expected_ty_apply_close_round,
-        .expected_ty_anno_close_round,
-        .expected_ty_anno_close_round_or_comma,
-        .expected_ty_close_curly_or_comma,
-        .expected_ty_close_square_or_comma,
-        .expected_expr_comma,
-        .expected_arrow,
-        .expr_unexpected_token,
-        .statement_unexpected_token,
-        .ty_anno_unexpected_token,
-        .var_expected_equals,
-        .for_expected_in,
-        .match_branch_missing_arrow,
-        .where_expected_close_bracket,
-        => true,
-        else => false,
-    };
+    return diagnostic.tag == .pattern_unexpected_eof or
+        diagnostic.tag == .string_unclosed or
+        diagnostic.tag == .string_expected_close_interpolation or
+        diagnostic.tag == .incomplete_import or
+        diagnostic.tag == .expected_expr_bar or
+        diagnostic.tag == .expected_expr_close_curly or
+        diagnostic.tag == .expected_expr_close_curly_or_comma or
+        diagnostic.tag == .expected_expr_close_round_or_comma or
+        diagnostic.tag == .expected_expr_close_square_or_comma or
+        diagnostic.tag == .expected_close_curly_at_end_of_match or
+        diagnostic.tag == .expected_open_curly_after_match or
+        diagnostic.tag == .expected_expr_apply_close_round or
+        diagnostic.tag == .expected_ty_apply_close_round or
+        diagnostic.tag == .expected_ty_anno_close_round or
+        diagnostic.tag == .expected_ty_anno_close_round_or_comma or
+        diagnostic.tag == .expected_ty_close_curly_or_comma or
+        diagnostic.tag == .expected_ty_close_square_or_comma or
+        diagnostic.tag == .expected_expr_comma or
+        diagnostic.tag == .expected_arrow or
+        diagnostic.tag == .expr_unexpected_token or
+        diagnostic.tag == .statement_unexpected_token or
+        diagnostic.tag == .ty_anno_unexpected_token or
+        diagnostic.tag == .var_expected_equals or
+        diagnostic.tag == .for_expected_in or
+        diagnostic.tag == .match_branch_missing_arrow or
+        diagnostic.tag == .where_expected_close_bracket;
 }
 
 fn diagnosticRegionTouchesEof(ast: *const parse.AST, region: parse.AST.TokenizedRegion) bool {
@@ -994,12 +1546,10 @@ fn diagnosticRegionTouchesEof(ast: *const parse.AST, region: parse.AST.Tokenized
 
 fn declarationName(ast: *const parse.AST, pattern_idx: parse.AST.Pattern.Idx) ?[]const u8 {
     const pattern = ast.store.getPattern(pattern_idx);
-    return switch (pattern) {
-        .ident => |ident| ast.resolve(ident.ident_tok),
-        .var_ident => |ident| ast.resolve(ident.ident_tok),
-        .as => |as_pattern| ast.resolve(as_pattern.name),
-        else => null,
-    };
+    if (pattern == .ident) return ast.resolve(pattern.ident.ident_tok);
+    if (pattern == .var_ident) return ast.resolve(pattern.var_ident.ident_tok);
+    if (pattern == .as) return ast.resolve(pattern.as.name);
+    return null;
 }
 
 fn isSpecialCommand(line: []const u8) bool {
@@ -1703,6 +2253,22 @@ test "Repl - invalid syntax preserves definitions" {
     const result = try repl.step("x");
     defer testing.allocator.free(result);
     try testing.expectEqualStrings("42.0", result);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10491: a runtime crash is
+// reported without terminating the REPL session.
+test "Repl - issue 10491 integer overflow reports crash and continues" {
+    const steps = &[_][2][]const u8{
+        .{
+            "U64.highest + U64.highest",
+            "This Roc code crashed with: \"Integer addition overflowed\"",
+        },
+        .{ "1 + 1", "2.0" },
+    };
+
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10063: the annotated

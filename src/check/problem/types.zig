@@ -36,7 +36,9 @@ pub const Problem = union(enum) {
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     recursive_alias: RecursiveAlias,
-    unsupported_alias_where_clause: UnsupportedAliasWhereClause,
+    not_a_where_alias: NotAWhereAlias,
+    where_alias_in_type_position: WhereAliasInTypePosition,
+    recursive_where_alias: RecursiveWhereAlias,
     where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
@@ -47,6 +49,7 @@ pub const Problem = union(enum) {
     effectful_expect: EffectfulExpect,
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
+    associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
     host_boundary_open_row: HostBoundaryOpenRow,
     platform_def_not_found: PlatformDefNotFound,
@@ -94,6 +97,8 @@ pub const PlatformHostedSection = struct {
         function_not_in_section,
         /// A section entry names a function that is not a hosted function
         unknown_function,
+        /// A section entry names a function with a Roc implementation
+        function_has_implementation,
         /// Two section entries name the same hosted function
         duplicate_function,
         /// Two hosted/provides entries use the same linker symbol
@@ -127,6 +132,14 @@ pub const HostBoundaryOpenRow = struct {
 
 /// A standalone type annotation without an implementation cannot be used as a runtime value.
 pub const AnnotationOnlyValue = struct {
+    region: base.Region,
+};
+
+/// A statically named associated item was absent after transparent aliases
+/// were resolved to their terminal type.
+pub const AssociatedItemNotFound = struct {
+    type_name: Ident.Idx,
+    item_name: Ident.Idx,
     region: base.Region,
 };
 
@@ -511,10 +524,23 @@ pub const RecursiveAlias = struct {
     region: base.Region,
 };
 
-/// Error when using alias syntax in where clause (e.g., `where [a.SomeAlias]`)
-/// This syntax was used for abilities which have been removed from the language
-pub const UnsupportedAliasWhereClause = struct {
-    alias_name: base.Ident.Idx,
+/// Error when a where clause names something that is not a where alias, such as
+/// an ordinary type (e.g. `where [a.Str]`).
+pub const NotAWhereAlias = struct {
+    name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when a where alias is used where a type is expected.
+pub const WhereAliasInTypePosition = struct {
+    name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when a where alias's constraints reach the alias itself, directly or
+/// through other where aliases.
+pub const RecursiveWhereAlias = struct {
+    name: base.Ident.Idx,
     region: base.Region,
 };
 

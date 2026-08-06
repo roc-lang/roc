@@ -93,6 +93,12 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
+/// A record update whose base supplies every field not present in `fields`.
+pub const RecordUpdate = struct {
+    base: ExprId,
+    fields: Span(FieldExpr),
+};
+
 /// Record destructuring field pattern.
 pub const RecordDestruct = struct {
     name: Type.names.RecordFieldNameId,
@@ -237,6 +243,7 @@ pub const ExprData = union(enum) {
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
+    record_update: RecordUpdate,
     capture_record: Span(ExprId),
     tag: struct {
         name: Type.names.TagNameId,
@@ -382,6 +389,7 @@ pub const StrPatternStep = struct {
 /// Match branch.
 pub const Branch = struct {
     pat: PatId,
+    bindings: Span(StmtId) = Span(StmtId).empty(),
     guard: ?ExprId = null,
     body: ExprId,
 };

@@ -145,6 +145,26 @@ pub const U64Span = extern struct {
     }
 };
 
+/// Span into flat u32 storage.
+pub const U32Span = extern struct {
+    start: u32,
+    len: u32,
+
+    pub fn empty() U32Span {
+        return .{ .start = 0, .len = 0 };
+    }
+};
+
+/// Identifier of one interned erased-call argument layout plan.
+pub const ErasedCallArgsPlanId = enum(u32) { _ };
+
+/// Exact packed-argument struct layout shared by an erased caller and callee.
+pub const ErasedCallArgsPlan = extern struct {
+    offsets: U32Span,
+    size: u32,
+    alignment: u32,
+};
+
 /// Builtin low-level operations reused from `base`.
 pub const LowLevel = base.LowLevel;
 
@@ -430,6 +450,19 @@ pub fn layoutNeedsStackProbe(layouts: *const layout.Store, layout_idx: layout.Id
     return size >= stack_probe_page_size;
 }
 
+/// A compiler-generated static message or a source-level `Str` evaluated at runtime.
+pub const CrashMessage = union(enum) {
+    literal: StringLiteral.Idx,
+    local: LocalId,
+
+    pub fn localId(self: CrashMessage) ?LocalId {
+        return switch (self) {
+            .literal => null,
+            .local => |local| local,
+        };
+    }
+};
+
 /// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     init_uninitialized: struct {
@@ -457,6 +490,20 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
+        arg_plan: ErasedCallArgsPlanId,
+        /// Consume the allocation denoted by `closure` as the destination for
+        /// an erased-callable result.
+        /// The erased callee may repack it when the returned capture payload has
+        /// the same committed size and alignment; otherwise it releases the
+        /// consumed allocation and returns a fresh one. At the machine ABI this
+        /// passes the callable data pointer as the nullable fifth argument.
+        reuse_closure: bool = false,
+        /// Ownership source consumed by `reuse_closure`. This may be an outer
+        /// transparent nominal/tag wrapper of `closure`; both must denote the
+        /// same erased-callable allocation, while this local carries its owned
+        /// unit. Debug certification proves that allocation identity through
+        /// the exact representation-transparent producer chain.
+        reuse_source: ?LocalId = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -465,7 +512,9 @@ pub const CFStmt = union(enum) {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: ErasedCallableOnDrop,
-        /// Optional consumed erased callable allocation to repack.
+        /// Optional local containing a consumed erased callable allocation to
+        /// repack. The local itself is present statically, but its runtime value
+        /// may be null when an ABI caller declined to transfer ownership.
         ///
         /// When present, this statement returns a unique erased callable with
         /// the new proc/drop/capture. If `reuse_unique` is true, ARC proved the
@@ -670,15 +719,30 @@ pub const CFStmt = union(enum) {
         value: LocalId,
     },
     crash: struct {
-        msg: StringLiteral.Idx,
+        msg: CrashMessage,
     },
 };
+
+/// Return whether an erased call's reuse flag and consumed ownership source
+/// describe the same optional reuse operation.
+pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
+    return assign.reuse_closure == (assign.reuse_source != null);
+}
 
 /// Lowered proc specification rooted either at a statement body or at explicit
 /// hosted-proc metadata.
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
+    /// Hidden erased-callable ownership input. Every erased-callable ABI proc
+    /// records its final argument here, regardless of whether its result can
+    /// reuse the allocation. Its local has erased-callable layout so ARC always
+    /// consumes a non-null transfer; its runtime pointer may be null when the
+    /// caller declines reuse. Internal Roc-ABI destination variants preserve
+    /// this marker when they forward the same input.
+    erased_reuse_arg: ?LocalId = null,
+    /// Packed explicit-argument layout required by the erased-callable ABI.
+    erased_call_args: ?ErasedCallArgsPlanId = null,
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: ?CFStmtId = null,

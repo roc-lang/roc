@@ -2,7 +2,7 @@ platform ""
     requires {
         main! : () => {}
     }
-    exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element, Padded]
+    exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element, Padded, Rb]
     packages {}
     provides { "roc_main": main_for_host! }
     hosted {
@@ -13,10 +13,12 @@ platform ""
         "roc_host_boxed_recursive_tree": Host.boxed_recursive_tree!,
         "roc_host_boxed_with_boxed_capture": Host.boxed_with_boxed_capture!,
         "roc_host_call_boxed": Host.call_boxed!,
+        "roc_host_call_boxed_transition": Host.call_boxed_transition!,
         "roc_host_get_greeting": Host.get_greeting!,
         "roc_host_release_stored_boxed": Host.release_stored_boxed!,
         "roc_host_reset_boxed_drop_report": Host.reset_boxed_drop_report!,
         "roc_host_roundtrip_boxed": Host.roundtrip_boxed!,
+        "roc_host_boxed_transition": Host.boxed_transition!,
         "roc_host_store_boxed": Host.store_boxed!,
         "roc_host_stored_boxed_call": Host.stored_boxed_call!,
         "roc_padded_check": Padded.check!,
@@ -29,7 +31,9 @@ platform ""
         x64mac: { inputs: ["libhost.a", app] },
         arm64mac: { inputs: ["libhost.a", app] },
         x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
+        x64v1musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
         arm64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
+        arm64v1musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
         x64win: { inputs: ["host.lib", app] },
         arm64win: { inputs: ["host.lib", app] },
     }
@@ -43,6 +47,7 @@ import NodeA
 import NodeB
 import Element
 import Padded
+import Rb
 
 main_for_host! : () => {}
 main_for_host! = main!

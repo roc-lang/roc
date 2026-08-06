@@ -191,12 +191,8 @@ pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(Layout
     /// Returns true if this layout represents a signed integer type.
     /// Used for determining signed vs unsigned operations (sdiv vs udiv, etc.)
     pub fn isSigned(self: Idx) bool {
-        return switch (self) {
-            .i8, .i16, .i32, .i64, .i128, .dec, .i8x16, .i16x8, .i32x4, .i64x2 => true,
-            .u8, .u16, .u32, .u64, .u128, .u8x16, .u16x8, .u32x4, .u64x2 => false,
-            // Default to signed for other types (floats don't use this, bools are unsigned)
-            else => true,
-        };
+        // Default to signed for other types (floats don't use this).
+        return self != .u8 and self != .u16 and self != .u32 and self != .u64 and self != .u128 and self != .u8x16 and self != .u16x8 and self != .u32x4 and self != .u64x2;
     }
 
     /// Default numeric type for unbound/polymorphic numbers.
@@ -891,7 +887,7 @@ pub const Layout = packed struct {
             .list, .list_of_zst => true, // Lists need refcounting
             .box, .box_of_zst => true, // Boxes need refcounting
             .erased_callable => true, // Boxed erased functions need refcounting
-            else => false,
+            .struct_, .closure, .zst, .tag_union, .ptr => false,
         };
     }
 

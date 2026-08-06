@@ -696,12 +696,8 @@ pub const Store = struct {
         var idx = initial_idx;
         while (true) {
             const content = self.contents.get(idx).*;
-            switch (content) {
-                .alias => |alias| {
-                    idx = alias.backing;
-                },
-                else => return content,
-            }
+            if (std.meta.activeTag(content) != .alias) return content;
+            idx = content.alias.backing;
         }
     }
 
@@ -711,14 +707,13 @@ pub const Store = struct {
     pub fn isClosedRecord(self: *const Self, idx: SnapshotContentIdx) bool {
         var cur = idx;
         while (true) {
-            switch (self.getContentUnwrapAlias(cur)) {
-                .structure => |s| switch (s) {
-                    .empty_record => return true,
-                    .record => |record| cur = record.ext,
-                    else => return false,
-                },
-                else => return false,
-            }
+            const content = self.getContentUnwrapAlias(cur);
+            if (std.meta.activeTag(content) != .structure) return false;
+            const structure = content.structure;
+            const tag = std.meta.activeTag(structure);
+            if (tag == .empty_record) return true;
+            if (tag != .record) return false;
+            cur = structure.record.ext;
         }
     }
 
@@ -738,8 +733,8 @@ pub const Store = struct {
         defer trace.end();
 
         const unwrapped = self.getContentUnwrapAlias(idx);
-        switch (unwrapped) {
-            .structure => |s| switch (s) {
+        if (std.meta.activeTag(unwrapped) == .structure) {
+            switch (unwrapped.structure) {
                 .record => |record| {
                     // Gather all fields into fields_out
                     const fields_out_top: u32 = @intCast(fields_out.items.len);
@@ -767,10 +762,18 @@ pub const Store = struct {
                     return RecordFieldSnapshot{ .record = fields_out_range };
                 },
                 .empty_record => return .empty_record,
-                else => return .not_a_record,
-            },
-            else => return .not_a_record,
+                .box,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .tag_union,
+                .empty_tag_union,
+                => return .not_a_record,
+            }
         }
+        return .not_a_record;
     }
 
     /// Gather all fields from a record, following extension chain.
@@ -811,7 +814,15 @@ pub const Store = struct {
                         break;
                     },
                     .empty_record => break,
-                    else => break,
+                    .box,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => break,
                 },
                 .alias => |alias| {
                     ext_idx = alias.backing;

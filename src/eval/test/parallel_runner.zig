@@ -158,6 +158,82 @@ pub const TestCase = struct {
     };
 };
 
+fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.ConstScalar {
+    return switch (value) {
+        .scalar => |scalar| scalar,
+        .pending,
+        .zst,
+        .str,
+        .list,
+        .box,
+        .tuple,
+        .record,
+        .crash,
+        .tag,
+        .nominal,
+        .fn_value,
+        => null,
+    };
+}
+
+fn constList(value: check.CheckedArtifact.ConstValue) ?[]const check.CheckedArtifact.ConstNodeId {
+    return switch (value) {
+        .list => |items| items,
+        .pending,
+        .zst,
+        .scalar,
+        .str,
+        .box,
+        .tuple,
+        .record,
+        .crash,
+        .tag,
+        .nominal,
+        .fn_value,
+        => null,
+    };
+}
+
+fn constF32Bits(value: check.CheckedArtifact.ConstValue) ?u32 {
+    const scalar = constScalar(value) orelse return null;
+    return switch (scalar) {
+        .f32_bits => |bits| bits,
+        .i8,
+        .i16,
+        .i32,
+        .i64,
+        .i128,
+        .u8,
+        .u16,
+        .u32,
+        .u64,
+        .u128,
+        .f64_bits,
+        .dec_bits,
+        => null,
+    };
+}
+
+fn constF64Bits(value: check.CheckedArtifact.ConstValue) ?u64 {
+    const scalar = constScalar(value) orelse return null;
+    return switch (scalar) {
+        .f64_bits => |bits| bits,
+        .i8,
+        .i16,
+        .i32,
+        .i64,
+        .i128,
+        .u8,
+        .u16,
+        .u32,
+        .u64,
+        .u128,
+        .f32_bits,
+        .dec_bits,
+        => null,
+    };
+}
+
 //
 // Test outcome
 //
@@ -898,75 +974,61 @@ fn runComptimeFloatBitsTest(
     const const_store = &resources.checked_artifact.const_store;
 
     const matches = switch (expected) {
-        .comptime_f32_bits => |expected_bits| switch (stored) {
-            .scalar => |scalar| switch (scalar) {
-                .f32_bits => |actual_bits| actual_bits == expected_bits,
-                else => false,
-            },
-            else => false,
+        .comptime_f32_bits => |expected_bits| if (constF32Bits(stored)) |actual_bits|
+            actual_bits == expected_bits
+        else
+            false,
+        .comptime_f64_bits => |expected_bits| if (constF64Bits(stored)) |actual_bits|
+            actual_bits == expected_bits
+        else
+            false,
+        .comptime_f32_list_bits => |expected_bits| blk: {
+            const items = constList(stored) orelse break :blk false;
+            if (items.len != expected_bits.len) break :blk false;
+            for (items, expected_bits) |item, bits| {
+                const actual_bits = constF32Bits(const_store.get(item)) orelse break :blk false;
+                if (actual_bits != bits) break :blk false;
+            }
+            break :blk true;
         },
-        .comptime_f64_bits => |expected_bits| switch (stored) {
-            .scalar => |scalar| switch (scalar) {
-                .f64_bits => |actual_bits| actual_bits == expected_bits,
-                else => false,
-            },
-            else => false,
+        .comptime_f64_list_bits => |expected_bits| blk: {
+            const items = constList(stored) orelse break :blk false;
+            if (items.len != expected_bits.len) break :blk false;
+            for (items, expected_bits) |item, bits| {
+                const actual_bits = constF64Bits(const_store.get(item)) orelse break :blk false;
+                if (actual_bits != bits) break :blk false;
+            }
+            break :blk true;
         },
-        .comptime_f32_list_bits => |expected_bits| switch (stored) {
-            .list => |items| blk: {
-                if (items.len != expected_bits.len) break :blk false;
-                for (items, expected_bits) |item, bits| {
-                    const actual = switch (const_store.get(item)) {
-                        .scalar => |scalar| switch (scalar) {
-                            .f32_bits => |actual_bits| actual_bits,
-                            else => break :blk false,
-                        },
-                        else => break :blk false,
-                    };
-                    if (actual != bits) break :blk false;
-                }
-                break :blk true;
-            },
-            else => false,
-        },
-        .comptime_f64_list_bits => |expected_bits| switch (stored) {
-            .list => |items| blk: {
-                if (items.len != expected_bits.len) break :blk false;
-                for (items, expected_bits) |item, bits| {
-                    const actual = switch (const_store.get(item)) {
-                        .scalar => |scalar| switch (scalar) {
-                            .f64_bits => |actual_bits| actual_bits,
-                            else => break :blk false,
-                        },
-                        else => break :blk false,
-                    };
-                    if (actual != bits) break :blk false;
-                }
-                break :blk true;
-            },
-            else => false,
-        },
-        else => unreachable,
+        .inspect_str,
+        .allocations_at_most,
+        .problem,
+        .crash,
+        .problem_and_crash,
+        => unreachable,
     };
     if (!matches) {
         const message = switch (expected) {
-            .comptime_f32_bits => |expected_bits| switch (stored) {
-                .scalar => |scalar| switch (scalar) {
-                    .f32_bits => |actual_bits| try std.fmt.allocPrint(allocator, "ConstStore F32 bits: expected 0x{x:0>8}, got 0x{x:0>8}", .{ expected_bits, actual_bits }),
-                    else => "ConstStore root was not an F32 scalar",
-                },
-                else => "ConstStore root was not a scalar",
-            },
-            .comptime_f64_bits => |expected_bits| switch (stored) {
-                .scalar => |scalar| switch (scalar) {
-                    .f64_bits => |actual_bits| try std.fmt.allocPrint(allocator, "ConstStore F64 bits: expected 0x{x:0>16}, got 0x{x:0>16}", .{ expected_bits, actual_bits }),
-                    else => "ConstStore root was not an F64 scalar",
-                },
-                else => "ConstStore root was not a scalar",
-            },
+            .comptime_f32_bits => |expected_bits| if (constF32Bits(stored)) |actual_bits|
+                try std.fmt.allocPrint(allocator, "ConstStore F32 bits: expected 0x{x:0>8}, got 0x{x:0>8}", .{ expected_bits, actual_bits })
+            else if (constScalar(stored) != null)
+                "ConstStore root was not an F32 scalar"
+            else
+                "ConstStore root was not a scalar",
+            .comptime_f64_bits => |expected_bits| if (constF64Bits(stored)) |actual_bits|
+                try std.fmt.allocPrint(allocator, "ConstStore F64 bits: expected 0x{x:0>16}, got 0x{x:0>16}", .{ expected_bits, actual_bits })
+            else if (constScalar(stored) != null)
+                "ConstStore root was not an F64 scalar"
+            else
+                "ConstStore root was not a scalar",
             .comptime_f32_list_bits => "ConstStore F32 list did not contain the expected exact element bits",
             .comptime_f64_list_bits => "ConstStore F64 list did not contain the expected exact element bits",
-            else => unreachable,
+            .inspect_str,
+            .allocations_at_most,
+            .problem,
+            .crash,
+            .problem_and_crash,
+            => unreachable,
         };
         return .{
             .status = .fail,
@@ -1068,7 +1130,12 @@ fn materializedComptimeFloatBitsMatch(
         .comptime_f64_bits => |bits| bytesEqualIntegerAt(u64, root_export.bytes, root_export.symbol_offset, bits),
         .comptime_f32_list_bits => |bits| materializedListBitsMatch(u32, exports, root_export, bits),
         .comptime_f64_list_bits => |bits| materializedListBitsMatch(u64, exports, root_export, bits),
-        else => unreachable,
+        .inspect_str,
+        .allocations_at_most,
+        .problem,
+        .crash,
+        .problem_and_crash,
+        => unreachable,
     };
 }
 
@@ -1615,9 +1682,88 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .type_var_marked_unused,
         .underscore_in_type_declaration,
         .module_header_deprecated,
+        .roc_version_mismatch,
         .deprecated_number_suffix,
         => false,
-        else => true,
+        .not_implemented,
+        .exposed_but_not_implemented,
+        .provided_value_is_required,
+        .redundant_exposed,
+        .invalid_num_literal,
+        .empty_tuple,
+        .ident_already_in_scope,
+        .ident_not_in_scope,
+        .read_uninitialized_var,
+        .self_referential_definition,
+        .circular_value_definition,
+        .local_reference_before_definition,
+        .mutually_recursive_local_definitions,
+        .erroneous_value_use,
+        .erroneous_value_expr,
+        .qualified_ident_does_not_exist,
+        .invalid_top_level_statement,
+        .expr_not_canonicalized,
+        .range_op_chained,
+        .invalid_string_interpolation,
+        .unreachable_string_pattern_capture,
+        .pattern_arg_invalid,
+        .pattern_not_canonicalized,
+        .can_lambda_not_implemented,
+        .lambda_body_not_canonicalized,
+        .if_condition_not_canonicalized,
+        .if_then_not_canonicalized,
+        .if_else_not_canonicalized,
+        .if_expr_without_else,
+        .malformed_type_annotation,
+        .malformed_where_clause,
+        .where_clause_not_allowed_in_type_decl,
+        .where_alias_constraint_not_on_receiver,
+        .open_ext_not_allowed_in_type_decl,
+        .unnamed_field_not_allowed_in_structural_record,
+        .var_across_function_boundary,
+        .type_redeclared,
+        .tuple_elem_not_canonicalized,
+        .file_import_not_found,
+        .file_import_io_error,
+        .file_import_absolute_path,
+        .file_import_not_utf8,
+        .module_not_found,
+        .value_not_exposed,
+        .type_not_exposed,
+        .private_type_in_exposed_type,
+        .private_type_in_exposed_field,
+        .type_from_missing_module,
+        .module_not_imported,
+        .nested_type_not_found,
+        .nested_value_not_found,
+        .record_builder_map2_not_found,
+        .too_many_exports,
+        .undeclared_type,
+        .undeclared_type_var,
+        .type_alias_but_needed_nominal,
+        .crash_expects_string,
+        .type_module_missing_matching_type,
+        .type_module_has_alias_not_nominal,
+        .default_app_missing_main,
+        .default_app_wrong_arity,
+        .cannot_import_default_app,
+        .execution_requires_app_or_default_app,
+        .type_name_case_mismatch,
+        .redundant_expose_main_type,
+        .invalid_main_type_rename_in_exposing,
+        .type_alias_redeclared,
+        .nominal_type_redeclared,
+        .builtin_type_shadowed_warning,
+        .type_parameter_conflict,
+        .duplicate_record_field,
+        .duplicate_tag,
+        .f64_pattern_literal,
+        .type_var_starting_with_dollar,
+        .break_outside_loop,
+        .infinite_loop_never_exits,
+        .return_outside_fn,
+        .mutually_recursive_type_aliases,
+        => true,
     };
 }
 
@@ -2515,7 +2661,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
             switch (outcome.status) {
                 .pass => passed += 1,
                 .skip => skipped += 1,
-                else => {
+                .fail, .crash, .timeout => {
                     failed += 1;
                     std.debug.print("  FAIL  {s}", .{tc.name});
                     if (outcome.message) |msg| std.debug.print(": {s}", .{msg});

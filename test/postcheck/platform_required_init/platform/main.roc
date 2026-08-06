@@ -1,8 +1,8 @@
 platform ""
     requires {
         [Model : model] for program : {
-            init! : Host => Try(model, [Exit(I64), ..]),
-            render! : model, Host => Try(model, [Exit(I64), ..]),
+            init! : Host => Try(model, [Exit(I64)]),
+            render! : model, Host => Try(model, [Exit(I64)]),
         }
     }
     exposes [Host]
@@ -20,7 +20,9 @@ platform ""
         x64mac: { inputs: [app], output: Archive },
         arm64mac: { inputs: [app], output: Archive },
         x64musl: { inputs: [app], output: Archive },
+        x64v1musl: { inputs: [app], output: Archive },
         arm64musl: { inputs: [app], output: Archive },
+        arm64v1musl: { inputs: [app], output: Archive },
         x64glibc: { inputs: [app], output: Archive },
         arm64glibc: { inputs: [app], output: Archive },
         x64win: { inputs: [app], output: Archive },

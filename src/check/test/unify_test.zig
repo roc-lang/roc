@@ -398,6 +398,39 @@ test "unifyWriteNoReport - detects mismatch without recording or poisoning" {
     try std.testing.expect(env.module_env.types.resolveVar(b).desc.content != .err);
 }
 
+test "unifyWriteNoReport - keeps successful child unifications before a later mismatch" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const expected_child = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+    const actual_child = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const expected_mismatch = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const actual_mismatch = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+
+    const expected = try env.module_env.types.freshFromContent(try env.mkTuple(&.{ expected_child, expected_mismatch }));
+    const actual = try env.module_env.types.freshFromContent(try env.mkTuple(&.{ actual_child, actual_mismatch }));
+
+    const result = try env.unifyWriteNoReport(expected, actual);
+
+    try std.testing.expectEqual(Result.mismatch, result);
+    try std.testing.expectEqual(@as(usize, 0), env.problems.problems.items.len);
+
+    // Tuple children are processed in order. The first pair committed before
+    // the second pair rejected the relation, and write_no_report preserves it.
+    const expected_child_resolved = env.module_env.types.resolveVar(expected_child);
+    const actual_child_resolved = env.module_env.types.resolveVar(actual_child);
+    try std.testing.expectEqual(expected_child_resolved.var_, actual_child_resolved.var_);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, expected_child_resolved.desc.content);
+
+    // The rejected tuple roots themselves remain distinct and unpoisoned.
+    const expected_resolved = env.module_env.types.resolveVar(expected);
+    const actual_resolved = env.module_env.types.resolveVar(actual);
+    try std.testing.expect(expected_resolved.var_ != actual_resolved.var_);
+    try std.testing.expect(expected_resolved.desc.content != .err);
+    try std.testing.expect(actual_resolved.desc.content != .err);
+}
+
 // unification - aliases //
 
 test "unify - aliases with different names but same backing" {
@@ -1998,7 +2031,8 @@ test "unify order - resulting type is order-independent for recursive types" {
 
 test "unify order - deferred constraint origin var depends on operand order" {
     // While the resulting *type* is order-independent, two artifacts are NOT:
-    //   1. union_ makes the SECOND operand the surviving root (store.zig).
+    //   1. union_ makes the SECOND operand the checked representative, while
+    //      selecting its private storage root independently (store.zig).
     //   2. a deferred static-dispatch constraint is attached to `b`, the second
     //      operand (unify.zig recordDeferredConstraint / unresolved_b).
     // So unifying a constrained flex with a concrete type in opposite orders
@@ -2102,10 +2136,127 @@ fn copyIntoConsumer(consumer: *TestEnv, source: *DeclaringModule, var_: Var) std
         &consumer.module_env.types,
         var_,
         &var_mapping,
+        null,
         source.env,
         consumer.module_env,
         consumer.module_env.gpa,
     );
+}
+
+test "cross-module copy substitutes exact source vars without conflating equal rigid names" {
+    const gpa = std.testing.allocator;
+    var source = try TestEnv.init(gpa);
+    defer source.deinit();
+    var consumer = try TestEnv.init(gpa);
+    defer consumer.deinit();
+
+    const rigid_name = try source.module_env.insertIdent(Ident.for_text("shared"));
+    const substituted_source = try source.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_name) });
+    const copied_source = try source.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_name) });
+    const source_tuple = try source.module_env.types.freshFromContent(try source.mkTuple(&.{ substituted_source, copied_source }));
+
+    const replacement = try consumer.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    var var_mapping = std.AutoHashMap(Var, Var).init(gpa);
+    defer var_mapping.deinit();
+    try var_mapping.put(substituted_source, replacement);
+
+    const copied_tuple_root = try copy_import.copyVar(
+        &source.module_env.types,
+        &consumer.module_env.types,
+        source_tuple,
+        &var_mapping,
+        null,
+        source.module_env,
+        consumer.module_env,
+        gpa,
+    );
+    const copied_content = consumer.module_env.types.resolveVar(copied_tuple_root).desc.content;
+    if (copied_content != .structure) return error.TestUnexpectedResult;
+    const copied_flat_type = copied_content.structure;
+    if (copied_flat_type != .tuple) return error.TestUnexpectedResult;
+    const copied_tuple = copied_flat_type.tuple;
+    const copied_elems = consumer.module_env.types.sliceVars(copied_tuple.elems);
+
+    try std.testing.expectEqual(
+        consumer.module_env.types.resolveVar(replacement).var_,
+        consumer.module_env.types.resolveVar(copied_elems[0]).var_,
+    );
+    try std.testing.expect(
+        consumer.module_env.types.resolveVar(replacement).var_ !=
+            consumer.module_env.types.resolveVar(copied_elems[1]).var_,
+    );
+    try std.testing.expect(consumer.module_env.types.resolveVar(copied_elems[1]).desc.content == .rigid);
+}
+
+test "cross-module copy substitutes every application of an explicit alias declaration" {
+    const gpa = std.testing.allocator;
+    var source = try TestEnv.init(gpa);
+    defer source.deinit();
+    var consumer = try TestEnv.init(gpa);
+    defer consumer.deinit();
+
+    const alias_ident = try source.module_env.insertIdent(Ident.for_text("State"));
+    const backing = try source.module_env.types.freshFromContent(.{ .rigid = Rigid.init(alias_ident) });
+    const arg = try source.module_env.types.freshFromContent(.{ .rigid = Rigid.init(alias_ident) });
+    const source_decl: u32 = 42;
+    const application = try source.module_env.types.freshFromContent(
+        try source.module_env.types.mkAliasWithSourceDecl(
+            .{ .ident_idx = alias_ident },
+            backing,
+            &.{arg},
+            source.module_env.selfModuleIdentity(),
+            source_decl,
+        ),
+    );
+    const other_origin = try source.module_env.internModuleIdentity(&([_]u8{0xA5} ** 32), Ident.Idx.NONE);
+    const unrelated_application = try source.module_env.types.freshFromContent(
+        try source.module_env.types.mkAliasWithSourceDecl(
+            .{ .ident_idx = alias_ident },
+            backing,
+            &.{arg},
+            other_origin,
+            source_decl,
+        ),
+    );
+
+    const replacement = try consumer.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    var var_mapping = std.AutoHashMap(Var, Var).init(gpa);
+    defer var_mapping.deinit();
+    var alias_source_mapping = std.AutoHashMap(copy_import.AliasSource, Var).init(gpa);
+    defer alias_source_mapping.deinit();
+    try alias_source_mapping.put(.{
+        .origin_module = source.module_env.selfModuleIdentity(),
+        .source_decl = source_decl,
+    }, replacement);
+
+    const copied = try copy_import.copyVar(
+        &source.module_env.types,
+        &consumer.module_env.types,
+        application,
+        &var_mapping,
+        &alias_source_mapping,
+        source.module_env,
+        consumer.module_env,
+        gpa,
+    );
+
+    try std.testing.expectEqual(replacement, copied);
+    try std.testing.expectEqual(replacement, var_mapping.get(application).?);
+    try std.testing.expect(var_mapping.contains(backing));
+    try std.testing.expect(var_mapping.contains(arg));
+
+    const unrelated_copy = try copy_import.copyVar(
+        &source.module_env.types,
+        &consumer.module_env.types,
+        unrelated_application,
+        &var_mapping,
+        &alias_source_mapping,
+        source.module_env,
+        consumer.module_env,
+        gpa,
+    );
+    try std.testing.expect(unrelated_copy != replacement);
+    try std.testing.expect(consumer.module_env.types.resolveVar(unrelated_copy).desc.content == .alias);
 }
 
 test "content identity: same module content reached as two envs unifies (two URLs / mirrors / vendored copies)" {

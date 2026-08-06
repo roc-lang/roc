@@ -41,6 +41,8 @@ pub const Counters = struct {
     nested_misses: u64 = 0,
     template_lookup_candidates: u64 = 0,
     nested_lookup_candidates: u64 = 0,
+    /// Top-level digest requests. The hit/miss counters below count recursive
+    /// type nodes visited by those requests, so they do not sum to this value.
     specialization_type_digest_requests: u64 = 0,
     specialization_type_digest_cache_hits: u64 = 0,
     specialization_type_digest_cache_misses: u64 = 0,
@@ -156,6 +158,7 @@ const SpecEntryId = union(enum(u8)) {
 const SpecLookupAddress = struct {
     callable_kind: u8,
     module_bytes: [32]u8,
+    method_scope: [32]u8,
     index_a: u32,
     index_b: u32,
     index_c: u32,
@@ -166,6 +169,7 @@ const SpecLookupAddress = struct {
 
     fn from(
         callable: Ast.CallableIdentity,
+        method_scope: names.CheckedModuleDigest,
         source_digest: names.TypeDigest,
         evidence_digest: Ast.EvidenceDigest,
         type_digest: names.TypeDigest,
@@ -173,6 +177,7 @@ const SpecLookupAddress = struct {
         var key: SpecLookupAddress = .{
             .callable_kind = @intFromEnum(callable),
             .module_bytes = @splat(0),
+            .method_scope = method_scope.bytes,
             .index_a = 0,
             .index_b = 0,
             .index_c = 0,
@@ -303,7 +308,7 @@ pub const SpecBuilder = struct {
         });
         errdefer _ = self.loaded_records.pop();
 
-        const address = SpecLookupAddress.from(record.identity.callable, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.solved_fn_ty_digest);
+        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.solved_fn_ty_digest);
         const gop = try self.lookup.getOrPut(address);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(self.allocator, .{ .loaded = loaded_id });
@@ -321,7 +326,7 @@ pub const SpecBuilder = struct {
         fn_id: Ast.FnId,
     ) std.mem.Allocator.Error!ReserveResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.source_fn_ty_digest, identity.evidence_digest, identity.request_fn_ty_digest);
+        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.request_fn_ty_digest);
         const gop = try self.lookup.getOrPut(address);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
 
@@ -390,7 +395,7 @@ pub const SpecBuilder = struct {
         scope: FindScope,
     ) std.mem.Allocator.Error!?LookupResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization lookup evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.source_fn_ty_digest, identity.evidence_digest, identity.request_fn_ty_digest);
+        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.request_fn_ty_digest);
         const entries = self.lookup.get(address) orelse return null;
         self.countCandidatesBy(identity.callable, entries.items.len);
         return try self.matchInBucket(entries.items, identity, evidence, scope);
@@ -499,7 +504,7 @@ pub const SpecBuilder = struct {
             if (identity_shadow_enabled) {
                 try self.refined_digest_shadow.append(self.allocator, .{ .spec = spec, .digest = request_fn_ty_digest });
             }
-            try self.appendAliasEntry(record.identity.callable, record.identity.source_fn_ty_digest, record.identity.evidence_digest, request_fn_ty_digest, spec);
+            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, request_fn_ty_digest, spec);
         }
     }
 
@@ -529,7 +534,7 @@ pub const SpecBuilder = struct {
         record.solved_fn_ty_digest = solved_fn_ty_digest;
         record.status = .ready;
         if (!digestEql(solved_fn_ty_digest, record.request_fn_ty_digest)) {
-            try self.appendAliasEntry(record.identity.callable, record.identity.source_fn_ty_digest, record.identity.evidence_digest, solved_fn_ty_digest, spec);
+            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, solved_fn_ty_digest, spec);
         }
     }
 
@@ -539,12 +544,13 @@ pub const SpecBuilder = struct {
     fn appendAliasEntry(
         self: *SpecBuilder,
         callable: Ast.CallableIdentity,
+        method_scope: names.CheckedModuleDigest,
         source_digest: names.TypeDigest,
         evidence_digest: Ast.EvidenceDigest,
         type_digest: names.TypeDigest,
         spec: Ast.SpecId,
     ) std.mem.Allocator.Error!void {
-        const address = SpecLookupAddress.from(callable, source_digest, evidence_digest, type_digest);
+        const address = SpecLookupAddress.from(callable, method_scope, source_digest, evidence_digest, type_digest);
         const gop = try self.lookup.getOrPut(address);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         for (gop.value_ptr.items) |existing| {
@@ -673,7 +679,7 @@ pub const SpecBuilder = struct {
     }
 
     fn recordReachableAt(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, digest: names.TypeDigest) bool {
-        const address = SpecLookupAddress.from(record.identity.callable, record.identity.source_fn_ty_digest, record.identity.evidence_digest, digest);
+        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, digest);
         const entries = self.lookup.get(address) orelse return false;
         for (entries.items) |entry_id| {
             switch (entry_id) {
@@ -686,13 +692,14 @@ pub const SpecBuilder = struct {
 
     fn addressInRecordHistory(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, address: SpecLookupAddress) bool {
         const callable = record.identity.callable;
+        const method_scope = record.identity.method_scope;
         const source_digest = record.identity.source_fn_ty_digest;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, source_digest, record.identity.evidence_digest, record.identity.request_fn_ty_digest))) return true;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, source_digest, record.identity.evidence_digest, record.request_fn_ty_digest))) return true;
-        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, source_digest, record.identity.evidence_digest, record.solved_fn_ty_digest))) return true;
+        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.request_fn_ty_digest))) return true;
+        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.request_fn_ty_digest))) return true;
+        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.solved_fn_ty_digest))) return true;
         for (self.refined_digest_shadow.items) |refined| {
             if (refined.spec != spec) continue;
-            if (std.meta.eql(address, SpecLookupAddress.from(callable, source_digest, record.identity.evidence_digest, refined.digest))) return true;
+            if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, refined.digest))) return true;
         }
         return false;
     }
@@ -898,6 +905,37 @@ test "monotype spec builder keeps checked module boundary in callable identity" 
     try std.testing.expectEqual(first.spec, repeated_first.spec);
     try std.testing.expectEqual(Ast.FnSlot{ .local = @enumFromInt(1) }, repeated_first.target);
     try std.testing.expectEqual(@as(usize, 2), builder.records.len());
+    builder.validateLookupIntegrity();
+}
+
+test "monotype spec builder keeps method scope in specialization identity" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var type_store = Type.Store.init(std.testing.allocator);
+    defer type_store.deinit();
+
+    const unit_ty = try type_store.add(.zst);
+    var first_scope = testSpecIdentity(unit_ty, digestWithFirstByte(1), digestWithFirstByte(2));
+    first_scope.method_scope = moduleDigestWithFirstByte(1);
+    var second_scope = first_scope;
+    second_scope.method_scope = moduleDigestWithFirstByte(2);
+
+    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
+    defer records.deinit(std.testing.allocator);
+
+    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
+    defer builder.deinit();
+
+    const first = try builder.reserve(first_scope, testEvidenceView(), @enumFromInt(1));
+    const second = try builder.reserve(second_scope, testEvidenceView(), @enumFromInt(2));
+    const repeated_first = try builder.reserve(first_scope, testEvidenceView(), @enumFromInt(3));
+
+    try std.testing.expect(first.created);
+    try std.testing.expect(second.created);
+    try std.testing.expect(!repeated_first.created);
+    try std.testing.expect(first.spec != second.spec);
+    try std.testing.expectEqual(first.spec, repeated_first.spec);
     builder.validateLookupIntegrity();
 }
 

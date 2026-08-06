@@ -20,7 +20,7 @@ const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
 
 const FxPlatformTestError = util.RocRunError || util.ChildTimeoutError || util.ResultCheckError || std.mem.Allocator.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.CreateDirPathError || std.Io.Dir.ReadFileAllocError || error{
-    DevBackendBuildFailed,
+    NativeBackendBuildFailed,
     DivisionByZeroNotHandled,
     StackOverflowNotHandled,
     StaticDataHostBinaryContainsComptimeOnlyString,
@@ -38,9 +38,11 @@ comptime {
     std.testing.refAllDecls(fx_test_specs);
 }
 
-fn runDevBackendHostSelfTest(
+fn runNativeBackendHostSelfTest(
     allocator: std.mem.Allocator,
     roc_file: []const u8,
+    opt_flag: []const u8,
+    output_basename: []const u8,
     self_test_flag: []const u8,
 ) FxPlatformTestError!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
@@ -49,7 +51,7 @@ fn runDevBackendHostSelfTest(
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "fx_dev_host_test" });
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, output_basename });
     defer allocator.free(output_path);
 
     const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
@@ -78,7 +80,7 @@ fn runDevBackendHostSelfTest(
     const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
         util.roc_binary_path,
         "build",
-        "--opt=dev",
+        opt_flag,
         output_arg,
         roc_file,
     }, .{
@@ -91,17 +93,17 @@ fn runDevBackendHostSelfTest(
     switch (build_result.term) {
         .exited => |code| {
             if (code != 0) {
-                std.debug.print("roc build --opt=dev failed with exit code {}\n", .{code});
+                std.debug.print("roc build {s} failed with exit code {}\n", .{ opt_flag, code });
                 std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{build_result.stderr});
-                return error.DevBackendBuildFailed;
+                return error.NativeBackendBuildFailed;
             }
         },
-        else => {
-            std.debug.print("roc build --opt=dev terminated abnormally: {}\n", .{build_result.term});
+        .signal, .stopped, .unknown => {
+            std.debug.print("roc build {s} terminated abnormally: {}\n", .{ opt_flag, build_result.term });
             std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
             std.debug.print("STDERR: {s}\n", .{build_result.stderr});
-            return error.DevBackendBuildFailed;
+            return error.NativeBackendBuildFailed;
         },
     }
 
@@ -170,14 +172,14 @@ fn buildAndRunDevBackendApp(
                 std.debug.print("roc build --opt=dev failed with exit code {}\n", .{code});
                 std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{build_result.stderr});
-                return error.DevBackendBuildFailed;
+                return error.NativeBackendBuildFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("roc build --opt=dev terminated abnormally: {}\n", .{build_result.term});
             std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
             std.debug.print("STDERR: {s}\n", .{build_result.stderr});
-            return error.DevBackendBuildFailed;
+            return error.NativeBackendBuildFailed;
         },
     }
 
@@ -208,7 +210,7 @@ fn expectInterpreterRuntimeStackOverflow() FxPlatformTestError!void {
             try testing.expect(std.mem.find(u8, run_result.stderr, "This Roc program overflowed its stack memory") != null);
             try testing.expect(std.mem.find(u8, run_result.stderr, "divided by zero") == null);
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Unexpected interpreter termination: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.UnexpectedTermination;
@@ -219,9 +221,11 @@ fn expectInterpreterRuntimeStackOverflow() FxPlatformTestError!void {
 fn expectDevRuntimeStackOverflow() FxPlatformTestError!void {
     const allocator = testing.allocator;
 
-    const run_result = try runDevBackendHostSelfTest(
+    const run_result = try runNativeBackendHostSelfTest(
         allocator,
         "test/fx/hello_world.roc",
+        "--opt=dev",
+        "fx_dev_host_test",
         "--host-test-stack-overflow",
     );
     defer allocator.free(run_result.stdout);
@@ -244,7 +248,7 @@ fn expectDevRuntimeStackOverflow() FxPlatformTestError!void {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.StackOverflowNotHandled;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Unexpected dev termination: {}\n", .{run_result.term});
             return error.UnexpectedTermination;
         },
@@ -269,7 +273,7 @@ fn expectInterpreterRuntimeDivisionByZero() FxPlatformTestError!void {
             try testing.expect(std.mem.find(u8, run_result.stderr, "I64 division by zero") != null);
             try testing.expect(std.mem.find(u8, run_result.stderr, "overflowed its stack memory") == null);
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Unexpected interpreter termination: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.UnexpectedTermination;
@@ -307,7 +311,7 @@ fn expectDevRuntimeDivisionByZero() FxPlatformTestError!void {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.DivisionByZeroNotHandled;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Unexpected dev termination: {}\n", .{run_result.term});
             return error.UnexpectedTermination;
         },
@@ -335,12 +339,58 @@ fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) Fx
     };
 }
 
+fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    const allocator = testing.allocator;
+    const run_result = try runNativeBackendHostSelfTest(
+        allocator,
+        "test/provided-callable-host/app.roc",
+        opt_flag,
+        output_basename,
+        "--run-provided-boxed-callable-drop",
+    );
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .exited => |code| {
+            if (code != 0) {
+                std.debug.print("provided boxed callable drop test exited with code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.UnexpectedExitCode;
+            }
+        },
+        .signal, .stopped, .unknown => {
+            std.debug.print("provided boxed callable drop test terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.UnexpectedTermination;
+        },
+    }
+
+    try testing.expect(std.mem.find(u8, run_result.stderr, "provided boxed callable drop ok") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "[Roc Memory Info]") == null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "panic") == null);
+}
+
 test "fx platform boxed erased callable host boundary (interpreter)" {
     try runIoSpecTest("--opt=interpreter", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
 test "fx platform boxed erased callable host boundary (dev backend)" {
     try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
+test "fx platform boxed erased callable host boundary (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
+test "fx platform provided root drops boxed callable (dev backend)" {
+    try expectProvidedBoxedCallableDrop("--opt=dev", "fx_provided_boxed_callable_drop_dev");
+}
+
+test "fx platform provided root drops boxed callable (speed backend)" {
+    try expectProvidedBoxedCallableDrop("--opt=speed", "fx_provided_boxed_callable_drop_speed");
 }
 
 test "fx platform direct run preserves RocOps after F32.abs before list allocation" {
@@ -381,7 +431,7 @@ test "provided static data exports are host-linkable readonly constants" {
                 return error.StaticDataHostTestFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("static data host test terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -580,7 +630,7 @@ test "fx platform check unused state var reports correct errors" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             return error.RunFailed;
         },
@@ -715,7 +765,7 @@ test "custom platform and package qualifiers work in default roc command" {
                 return error.RunFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("\n❌ Run terminated abnormally: {}\n", .{run_result.term});
             return error.AbnormalTermination;
         },
@@ -813,7 +863,7 @@ test "fx platform run from different cwd" {
                 return error.RunFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -990,7 +1040,7 @@ test "fx platform test_type_mismatch" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1031,7 +1081,7 @@ test "fx platform issue8433" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1114,8 +1164,8 @@ test "run handles a checked type mismatch in function args" {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.TestUnexpectedResult;
         },
-        else => |term| {
-            std.debug.print("Unexpected termination: {}\n", .{term});
+        .stopped, .unknown => {
+            std.debug.print("Unexpected termination: {}\n", .{run_result.term});
             return error.TestUnexpectedResult;
         },
     }
@@ -1373,7 +1423,7 @@ test "fx platform inline expect fails in dev backend binary" {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.SegFault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("ERROR: dev backend binary terminated abnormally: {}\n", .{run_result.term});
             return error.RunFailed;
         },
@@ -1542,7 +1592,7 @@ test "fx platform divergent if with all crash branches does not hit postcheck in
     const did_abort = switch (build_result.term) {
         .exited => |code| code == 134,
         .signal => true,
-        else => true,
+        .stopped, .unknown => true,
     };
     try testing.expect(!did_abort);
     try testing.expect(std.mem.find(u8, build_result.stderr, "postcheck invariant violated") == null);
@@ -1588,7 +1638,7 @@ test "fx platform issue8826 app vs platform type mismatch" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;
@@ -1758,7 +1808,7 @@ test "fx platform issue9118 try operator on tuple in type method (interpreter)" 
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.Segfault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;
@@ -1810,7 +1860,7 @@ test "fx platform issue9118 try operator on tuple in type method (dev backend)" 
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.Segfault;
         },
-        else => {
+        .stopped, .unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;
@@ -1871,11 +1921,222 @@ test "default app resolves a sibling type module imported with exposing" {
                 return error.RunFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("roc terminated abnormally: {}\nSTDERR: {s}\n", .{ result.term, result.stderr });
             return error.RunFailed;
         },
     }
 
     try testing.expectEqualStrings("", result.stdout);
+}
+
+test "slash-qualified imports resolve local, root, parent, nested, and package targets" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    const first_check = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/directory_qualified_local_module/main.roc",
+        &cache_env,
+    );
+    defer allocator.free(first_check.stdout);
+    defer allocator.free(first_check.stderr);
+    try util.checkSuccess(first_check);
+
+    const cached_check = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/directory_qualified_local_module/main.roc",
+        &cache_env,
+    );
+    defer allocator.free(cached_check.stdout);
+    defer allocator.free(cached_check.stderr);
+    try util.checkSuccess(cached_check);
+
+    const app_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{"--opt=interpreter"},
+        "test/fx/directory_qualified_local_module/main.roc",
+    );
+    defer allocator.free(app_result.stdout);
+    defer allocator.free(app_result.stderr);
+    try util.checkSuccess(app_result);
+    try testing.expectEqualStrings("directory-qualified local module\n", app_result.stdout);
+
+    const package_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "check", "--no-cache" },
+        "test/fx/directory_qualified_local_module/package/main.roc",
+    );
+    defer allocator.free(package_result.stdout);
+    defer allocator.free(package_result.stderr);
+    try util.checkSuccess(package_result);
+
+    const path_forms_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "check", "--no-cache" },
+        "test/fx/import_paths/package/main.roc",
+    );
+    defer allocator.free(path_forms_result.stdout);
+    defer allocator.free(path_forms_result.stderr);
+    try util.checkSuccess(path_forms_result);
+
+    const package_public_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "check", "--no-cache" },
+        "test/fx/import_paths/consumer/main.roc",
+    );
+    defer allocator.free(package_public_result.stdout);
+    defer allocator.free(package_public_result.stderr);
+    try util.checkSuccess(package_public_result);
+}
+
+test "imports reject package-root escape and physical source aliases" {
+    const allocator = testing.allocator;
+
+    const private_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "check", "--no-cache" },
+        "test/fx/import_paths/private_consumer/main.roc",
+    );
+    defer allocator.free(private_result.stdout);
+    defer allocator.free(private_result.stderr);
+    try util.checkFailure(private_result);
+    try testing.expect(std.mem.find(u8, private_result.stderr, "PACKAGE MODULE IS PRIVATE") != null);
+
+    var escape_tmp = testing.tmpDir(.{});
+    defer escape_tmp.cleanup();
+    try escape_tmp.dir.createDir(std.testing.io, "pkg", .default_dir);
+    try escape_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "pkg/main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import ../../Outside
+        ,
+    });
+    const escape_root = try escape_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(escape_root);
+    const escape_main = try std.fs.path.join(allocator, &.{ escape_root, "pkg", "main.roc" });
+    defer allocator.free(escape_main);
+    const escape_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, escape_main);
+    defer allocator.free(escape_result.stdout);
+    defer allocator.free(escape_result.stderr);
+    try util.checkFailure(escape_result);
+    try testing.expect(std.mem.find(u8, escape_result.stderr, "IMPORT ESCAPES PACKAGE ROOT") != null);
+
+    var case_tmp = testing.tmpDir(.{});
+    defer case_tmp.cleanup();
+    try case_tmp.dir.createDir(std.testing.io, "Dir", .default_dir);
+    try case_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import dir/Hello
+        ,
+    });
+    try case_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Dir/Hello.roc",
+        .data = "Hello := []\n",
+    });
+    const case_root = try case_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(case_root);
+    const case_main = try std.fs.path.join(allocator, &.{ case_root, "main.roc" });
+    defer allocator.free(case_main);
+    const case_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, case_main);
+    defer allocator.free(case_result.stdout);
+    defer allocator.free(case_result.stderr);
+    try util.checkFailure(case_result);
+
+    if (comptime @import("builtin").os.tag == .windows) return;
+
+    var outside_tmp = testing.tmpDir(.{});
+    defer outside_tmp.cleanup();
+    try outside_tmp.dir.createDir(std.testing.io, "pkg", .default_dir);
+    try outside_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "pkg/main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import Escape
+        ,
+    });
+    try outside_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Outside.roc",
+        .data = "Outside := []\n",
+    });
+    outside_tmp.dir.symLink(std.testing.io, "../Outside.roc", "pkg/Escape.roc", .{}) catch return error.SkipZigTest;
+    const outside_root = try outside_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(outside_root);
+    const outside_main = try std.fs.path.join(allocator, &.{ outside_root, "pkg", "main.roc" });
+    defer allocator.free(outside_main);
+    const outside_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, outside_main);
+    defer allocator.free(outside_result.stdout);
+    defer allocator.free(outside_result.stderr);
+    try util.checkFailure(outside_result);
+    try testing.expect(std.mem.find(u8, outside_result.stderr, "resolves outside") != null);
+
+    var alias_tmp = testing.tmpDir(.{});
+    defer alias_tmp.cleanup();
+    try alias_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import Real
+        \\import Alias
+        ,
+    });
+    try alias_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Real.roc",
+        .data = "Real := []\n",
+    });
+    alias_tmp.dir.symLink(std.testing.io, "Real.roc", "Alias.roc", .{}) catch return error.SkipZigTest;
+    const alias_root = try alias_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(alias_root);
+    const alias_main = try std.fs.path.join(allocator, &.{ alias_root, "main.roc" });
+    defer allocator.free(alias_main);
+    const alias_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, alias_main);
+    defer allocator.free(alias_result.stdout);
+    defer allocator.free(alias_result.stderr);
+    try util.checkFailure(alias_result);
+    try testing.expect(std.mem.find(u8, alias_result.stderr, "IMPORT SOURCE ALIAS") != null);
+    try testing.expect(std.mem.find(u8, alias_result.stderr, "same source file") != null);
+
+    var root_alias_tmp = testing.tmpDir(.{});
+    defer root_alias_tmp.cleanup();
+    try root_alias_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import MainAlias
+        ,
+    });
+    root_alias_tmp.dir.symLink(std.testing.io, "main.roc", "MainAlias.roc", .{}) catch return error.SkipZigTest;
+    const root_alias_root = try root_alias_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(root_alias_root);
+    const root_alias_main = try std.fs.path.join(allocator, &.{ root_alias_root, "main.roc" });
+    defer allocator.free(root_alias_main);
+    const root_alias_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, root_alias_main);
+    defer allocator.free(root_alias_result.stdout);
+    defer allocator.free(root_alias_result.stderr);
+    try util.checkFailure(root_alias_result);
+    try testing.expect(std.mem.find(u8, root_alias_result.stderr, "IMPORT SOURCE ALIAS") != null);
 }

@@ -11,7 +11,6 @@ const builtins = @import("builtins");
 const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
-const wasm32_builtins = @import("wasm32_builtins");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
 const reporting = @import("reporting");
@@ -21,6 +20,7 @@ const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 const EvalDynLib = @import("dynlib.zig").DynLib;
+const InspectedRun = @import("inspected_run.zig");
 
 const Allocator = std.mem.Allocator;
 const CoreCtx = @import("ctx").CoreCtx;
@@ -59,7 +59,7 @@ pub const TestHelperError = Allocator.Error || std.Thread.SpawnError || std.DynL
     UnsupportedTarget,
     UnsupportedPlatform,
     UnwindRegistrationFailed,
-    SysctlFailed,
+    PageSizeQueryFailed,
     CreateFileMappingFailed,
     OpenFileMappingFailed,
     MapViewOfFileFailed,
@@ -77,6 +77,11 @@ pub const TestHelperError = Allocator.Error || std.Thread.SpawnError || std.DynL
     InvalidHandle,
     WindowsSDKNotFound,
     CompilationFailed,
+    NoBitcodeModules,
+    UnsupportedLlvmTriple,
+    MissingBuiltinBitcode,
+    LlvmModuleVerificationFailed,
+    LlvmObjectEmitFailed,
     BitcodeParseError,
     ModuleLinkFailed,
     TempFileError,
@@ -214,7 +219,7 @@ const AvailableImport = struct {
 fn importStatementIdx(env: *const ModuleEnv, module_name: []const u8) ?CIR.Statement.Idx {
     switch (env.module_kind) {
         .type_module => {},
-        else => return null,
+        .default_app, .app, .package, .platform, .hosted, .module, .malformed => return null,
     }
     const type_ident = env.common.findIdent(module_name) orelse return null;
     const type_node_idx = env.getExposedTypeNodeIndexById(type_ident) orelse return null;
@@ -389,6 +394,56 @@ pub const BoolRootModule = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     roots: []const BoolRoot,
+};
+
+/// Timings for JIT-compiling and running boolean test roots with the dev backend.
+pub const DevBoolRootTimingSnapshot = struct {
+    static_strings_ns: u64 = 0,
+    codegen_setup_ns: u64 = 0,
+    procedure_codegen_ns: u64 = 0,
+    entrypoint_codegen_ns: u64 = 0,
+    executable_memory_ns: u64 = 0,
+    root_execution_ns: u64 = 0,
+};
+
+/// Mutable timing collector for one dev-backend boolean-root evaluation batch.
+pub const DevBoolRootTiming = struct {
+    std_io: std.Io,
+    snapshot_value: DevBoolRootTimingSnapshot = .{},
+
+    const Phase = enum {
+        static_strings,
+        codegen_setup,
+        procedure_codegen,
+        entrypoint_codegen,
+        executable_memory,
+        root_execution,
+    };
+
+    pub fn init(std_io: std.Io) DevBoolRootTiming {
+        return .{ .std_io = std_io };
+    }
+
+    pub fn snapshot(self: *const DevBoolRootTiming) DevBoolRootTimingSnapshot {
+        return self.snapshot_value;
+    }
+
+    fn start(self: *const DevBoolRootTiming) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    fn finish(self: *DevBoolRootTiming, started_ns: i96, phase: Phase) void {
+        const finished_ns = std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+        const elapsed_ns: u64 = @intCast(@max(0, finished_ns - started_ns));
+        switch (phase) {
+            .static_strings => self.snapshot_value.static_strings_ns += elapsed_ns,
+            .codegen_setup => self.snapshot_value.codegen_setup_ns += elapsed_ns,
+            .procedure_codegen => self.snapshot_value.procedure_codegen_ns += elapsed_ns,
+            .entrypoint_codegen => self.snapshot_value.entrypoint_codegen_ns += elapsed_ns,
+            .executable_memory => self.snapshot_value.executable_memory_ns += elapsed_ns,
+            .root_execution => self.snapshot_value.root_execution_ns += elapsed_ns,
+        }
+    }
 };
 
 /// Per-call mutable observation state passed to optimized test entrypoints.
@@ -1006,6 +1061,10 @@ fn compileInspectedProgramForTargetImpl(
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
+    if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) {
+        return error.TypeCheckError;
+    }
+
     const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
     errdefer {
         var owned = lowered;
@@ -1501,8 +1560,7 @@ pub fn parseCheckModule(
         .checked_artifact => try czer.validateForExplicitRoots(),
     }
     if (hosted_transform) {
-        var modified_defs = try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
-        defer modified_defs.deinit(module_env.gpa);
+        try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
     }
     const can_elapsed = can_timer.read();
 
@@ -2317,19 +2375,37 @@ pub fn devEvalBoolRoots(
     layouts: *const LayoutStore,
     roots: []const BoolRoot,
 ) TestHelperError![]BoolRootEvalResult {
+    return devEvalBoolRootsWithTiming(allocator, store, layouts, roots, null);
+}
+
+/// JIT-compile and run boolean roots while accumulating detailed dev-backend timings.
+pub fn devEvalBoolRootsWithTiming(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    roots: []const BoolRoot,
+    timing: ?*DevBoolRootTiming,
+) TestHelperError![]BoolRootEvalResult {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
+        const static_strings_started_ns = if (timing) |timings| timings.start() else 0;
         var static_strings = try backend.StaticStringData.build(
             allocator,
             store,
             backend.dev.LirCodeGenMod.host_lir_codegen_target,
         );
         defer static_strings.deinit();
+        if (timing) |timings| timings.finish(static_strings_started_ns, .static_strings);
 
-        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve);
+        const codegen_setup_started_ns = if (timing) |timings| timings.start() else 0;
+        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve, roc_target.host_cpu.level());
         defer codegen.deinit();
+        if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
+
+        const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
         try codegen.compileAllProcSpecs(store.getProcSpecs());
+        if (timing) |timings| timings.finish(procedure_codegen_started_ns, .procedure_codegen);
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
@@ -2339,20 +2415,31 @@ pub fn devEvalBoolRoots(
         errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
 
         for (roots, 0..) |root, i| {
+            const entrypoint_codegen_started_ns = if (timing) |timings| timings.start() else 0;
             const entrypoint = try codegen.generateEntrypointWrapper(
                 root.symbol_name,
                 root.proc,
                 root.arg_layouts,
                 root.ret_layout,
             );
+            if (timing) |timings| timings.finish(entrypoint_codegen_started_ns, .entrypoint_codegen);
+
+            const executable_memory_started_ns = if (timing) |timings| timings.start() else 0;
             var executable = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
                 codegen.getGeneratedCode(),
                 entrypoint.offset,
                 codegen.getUnwindFunctions(),
             );
-            defer executable.deinit();
+            if (timing) |timings| timings.finish(executable_memory_started_ns, .executable_memory);
+            defer {
+                const executable_deinit_started_ns = if (timing) |timings| timings.start() else 0;
+                executable.deinit();
+                if (timing) |timings| timings.finish(executable_deinit_started_ns, .executable_memory);
+            }
 
+            const root_execution_started_ns = if (timing) |timings| timings.start() else 0;
             results[i] = try runExecutableBoolRoot(allocator, layouts, &executable, root, &runtime_env);
+            if (timing) |timings| timings.finish(root_execution_started_ns, .root_execution);
             result_len += 1;
         }
 
@@ -2377,7 +2464,9 @@ const OwnedLlvmCompileOptions = struct {
 
 fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsize, opt: LlvmTestOpt) TestHelperError!OwnedLlvmCompileOptions {
     const llvm_compile = @import("llvm_compile");
-    const native_roc_target = roc_target.RocTarget.detectNative();
+    // This code is compiled to run in this process, so the CPU floor is the
+    // one this machine executes rather than the native target's default.
+    const native_roc_target = roc_target.host_cpu.nativeTarget();
     const resolved_target = std.zig.system.resolveTargetQuery(std.Options.debug_io, native_roc_target.llvmTargetQuery()) catch
         return error.UnsupportedTarget;
     const cpu = try allocator.dupeZ(u8, roc_target.llvmCpuName(resolved_target));
@@ -2739,6 +2828,24 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
     return runLlvmBoolRootCalls(allocator, calls, longjmp_on_crash, max_workers, completion_callback, event_callback);
 }
 
+fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
+    const result = try InspectedRun.run(allocator, backend_kind, .{
+        .store = &lowered.view.store,
+        .layouts = &lowered.view.layouts,
+        .main_proc = lowered.mainProc(),
+    });
+    return switch (result.outcome) {
+        .returned => |output| .{
+            .output = output,
+            .allocation_count = result.allocation_count,
+        },
+        .crashed => |message| {
+            allocator.free(message);
+            return error.Crash;
+        },
+    };
+}
+
 /// Evaluate a lowered program via the LIR interpreter and return the output string.
 pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError![]u8 {
     const result = try lirInterpreterStrWithStats(allocator, lowered);
@@ -2747,41 +2854,7 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
 
 /// Evaluate via the LIR interpreter, returning output string and allocation count.
 pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
-
-    var interp = try Interpreter.init(
-        allocator,
-        &lowered.view.store,
-        &lowered.view.layouts,
-        runtime_env.get_ops(),
-        .preserve,
-    );
-    defer interp.deinit();
-
-    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
-    defer allocator.free(arg_layouts);
-
-    const result = interp.eval(.{
-        .proc_id = lowered.mainProc(),
-        .arg_layouts = arg_layouts,
-    }) catch |err| switch (err) {
-        error.RuntimeError => return error.Crash,
-        error.Crash => return error.Crash,
-        else => return err,
-    };
-    const ret_layout = lowered.view.store.getProcSpec(lowered.mainProc()).ret_layout;
-    const output = try copyReturnedRocStr(
-        allocator,
-        &lowered.view.layouts,
-        ret_layout,
-        result.value.ptr,
-        null,
-    );
-    return .{
-        .output = output,
-        .allocation_count = runtime_env.allocationCallCount(),
-    };
+    return legacyInspectedRun(allocator, .interpreter, lowered);
 }
 
 /// Abort classification for a differential interpreter run.
@@ -2910,167 +2983,13 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
 
 /// Evaluate via the dev JIT backend, returning output string and allocation count.
 pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
-    if (comptime !backend.host_lir_codegen_available) {
-        return error.DevBackendUnavailable;
-    } else {
-        var static_strings = try backend.StaticStringData.build(
-            allocator,
-            &lowered.view.store,
-            backend.dev.LirCodeGenMod.host_lir_codegen_target,
-        );
-        defer static_strings.deinit();
-
-        var codegen = try HostLirCodeGen.init(
-            allocator,
-            &lowered.view.store,
-            &lowered.view.layouts,
-            static_strings.entries,
-            .preserve,
-        );
-        defer codegen.deinit();
-        try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
-
-        const proc = lowered.view.store.getProcSpec(lowered.mainProc());
-        const arg_layouts = try mainProcArgLayouts(allocator, lowered);
-        defer allocator.free(arg_layouts);
-        const entrypoint = try codegen.generateEntrypointWrapper(
-            "roc_eval_test_main",
-            lowered.mainProc(),
-            arg_layouts,
-            proc.ret_layout,
-        );
-        var exec_mem = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
-            codegen.getGeneratedCode(),
-            entrypoint.offset,
-            codegen.getUnwindFunctions(),
-        );
-        defer exec_mem.deinit();
-
-        var runtime_env = RuntimeHostEnv.init(allocator);
-        defer runtime_env.deinit();
-
-        const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
-        defer if (arg_buffer) |buf| allocator.free(buf);
-
-        const ret_layout = proc.ret_layout;
-        const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
-        const alloc_len = @max(size_align.size, 1);
-        const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
-        defer allocator.free(ret_buf);
-        @memset(ret_buf, 0);
-
-        var crash_boundary = runtime_env.enterCrashBoundary();
-        defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
-
-        exec_mem.callRocABI(
-            @ptrCast(runtime_env.get_ops()),
-            @ptrCast(ret_buf.ptr),
-            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-        );
-        switch (runtime_env.crashState()) {
-            .did_not_crash => {},
-            .crashed => return error.Crash,
-        }
-
-        const output = try copyReturnedRocStr(
-            allocator,
-            &lowered.view.layouts,
-            ret_layout,
-            ret_buf.ptr,
-            runtime_env.get_ops(),
-        );
-        return .{
-            .output = output,
-            .allocation_count = runtime_env.allocationCallCount(),
-        };
-    }
+    return legacyInspectedRun(allocator, .dev, lowered);
 }
 
 /// Evaluate a lowered program via the LLVM backend and return the output string.
 pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError![]u8 {
-    if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
-
-    const llvm_compile = @import("llvm_compile");
-    var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, &lowered.view.store);
-    codegen.layout_store = &lowered.view.layouts;
-    defer codegen.deinit();
-
-    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
-    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
-    defer allocator.free(arg_layouts);
-
-    const llvm_entrypoints = [_]llvm_compile.MonoLlvmCodeGen.Entrypoint{.{
-        .symbol_name = "roc_eval_test_main",
-        .proc = lowered.mainProc(),
-        .arg_layouts = arg_layouts,
-        .ret_layout = proc.ret_layout,
-    }};
-    const bitcode = try codegen.generateEntrypointModule("roc_eval_test_module", llvm_entrypoints[0..]);
-    defer {
-        var owned = bitcode;
-        owned.deinit();
-    }
-
-    var compile_options = try llvmCompileOptions(allocator, lowered.view.layouts.targetUsize(), .speed);
-    defer compile_options.deinit(allocator);
-    const dylib_path = try llvm_compile.compileToSharedLibrary(
-        allocator,
-        std.Options.debug_io,
-        bitcode.bitcode,
-        compile_options.options,
-    );
-    defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
-        allocator.free(dylib_path);
-    }
-
-    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
-    defer lib.close();
-
-    const EntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque) callconv(.c) void;
-    const entry = lib.lookup(EntryFn, "roc_eval_test_main") orelse return error.LlvmBackendUnavailable;
-
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
-    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
-        runtime_env.setLongjmpOnCrash(false);
-    }
-
-    const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
-    defer if (arg_buffer) |buf| allocator.free(buf);
-
-    const ret_layout = proc.ret_layout;
-    const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
-    const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
-    defer allocator.free(ret_buf);
-    @memset(ret_buf, 0);
-
-    var crash_boundary = runtime_env.enterCrashBoundary();
-    defer crash_boundary.deinit();
-    const sj = crash_boundary.set();
-    if (sj != 0) return error.Crash;
-
-    var test_context: TestInvocationContext = .{};
-    entry(
-        runtime_env.get_ops(),
-        &test_context,
-        ret_buf.ptr,
-        if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-    );
-    switch (runtime_env.crashState()) {
-        .did_not_crash => {},
-        .crashed => return error.Crash,
-    }
-
-    return copyReturnedRocStr(
-        allocator,
-        &lowered.view.layouts,
-        ret_layout,
-        ret_buf.ptr,
-        runtime_env.get_ops(),
-    );
+    const result = try legacyInspectedRun(allocator, .llvm, lowered);
+    return result.output;
 }
 
 /// Evaluate a lowered program via the wasm backend and return the output string.
@@ -3081,26 +3000,7 @@ pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
 
 /// Evaluate via the wasm backend, returning output string and allocation count.
 pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
-    if (@import("builtin").target.os.tag == .freestanding) return error.WasmExecFailed;
-    var codegen = backend.wasm.WasmCodeGen.init(
-        allocator,
-        &lowered.view.store,
-        &lowered.view.layouts,
-    );
-    defer codegen.deinit();
-
-    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
-    const wasm_result = codegen.generateModule(lowered.mainProc(), proc.ret_layout, wasm32_builtins.bytes) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.HostedFunctionTypeMismatch => return error.Internal,
-    };
-    defer allocator.free(wasm_result.wasm_bytes);
-
-    const result = try @import("wasm_runner.zig").runWasmStrWithStats(allocator, wasm_result.wasm_bytes, wasm_result.heap_base, wasm_result.has_imports);
-    return .{
-        .output = result.output,
-        .allocation_count = result.allocation_count,
-    };
+    return legacyInspectedRun(allocator, .wasm, lowered);
 }
 
 fn copyReturnedRocStr(

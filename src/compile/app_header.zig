@@ -92,10 +92,8 @@ pub fn parseAppHeader(
     const file_node = ast.store.getFile();
     const header = ast.store.getHeader(file_node.header);
 
-    const app = switch (header) {
-        .app => |a| a,
-        else => return error.NotAnAppHeader,
-    };
+    if (header != .app) return error.NotAnAppHeader;
+    const app = header.app;
 
     const platform_field = ast.store.getRecordField(app.platform_idx);
 
@@ -123,6 +121,12 @@ pub fn parseAppHeader(
     const packages_coll = ast.store.getCollection(app.packages);
     const fields = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
     for (fields) |field_idx| {
+        // The compiler version pin shares the packages record with the real
+        // dependencies, but is not one of them.
+        if (app.roc_version) |roc_version_idx| {
+            if (field_idx == roc_version_idx) continue;
+        }
+
         const field = ast.store.getRecordField(field_idx);
         const key_region = ast.tokens.resolve(field.name);
         const shorthand = source[key_region.start.offset..key_region.end.offset];
@@ -133,15 +137,11 @@ pub fn parseAppHeader(
 
         const value_idx = field.value orelse continue;
         const value_node = ast.store.getExpr(value_idx);
-        const spec: []const u8 = switch (value_node) {
-            .string => |str| inner: {
-                const str_region = ast.tokenizedRegionToRegion(str.region);
-                const raw = source[str_region.start.offset..str_region.end.offset];
-                if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"') break :inner "";
-                break :inner raw[1 .. raw.len - 1];
-            },
-            else => "",
-        };
+        if (value_node != .string) continue;
+        const str_region = ast.tokenizedRegionToRegion(value_node.string.region);
+        const raw = source[str_region.start.offset..str_region.end.offset];
+        if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"') continue;
+        const spec = raw[1 .. raw.len - 1];
         if (spec.len == 0) continue;
 
         try entries.append(.{
@@ -164,33 +164,29 @@ fn platformRefFromExpr(
     arena: Allocator,
 ) (Allocator.Error || error{ExpectedPlatformRef})!PlatformRef {
     const e = ast.store.getExpr(expr_idx);
-    return switch (e) {
-        .string => {
-            const s = stringFromExpr(ast, expr_idx) catch return error.ExpectedPlatformRef;
-            return .{ .path_or_url = try arena.dupe(u8, s) };
-        },
-        .ident => |ident| {
-            if (ident.qualifiers.span.len != 0) return error.ExpectedPlatformRef;
-            const text = ast.resolve(ident.token);
-            const platform = compiler_platforms.fromHeaderIdent(text) orelse return error.ExpectedPlatformRef;
-            return .{ .compiler_owned = platform };
-        },
-        else => error.ExpectedPlatformRef,
-    };
+    if (e == .string) {
+        const s = stringFromExpr(ast, expr_idx) catch return error.ExpectedPlatformRef;
+        return .{ .path_or_url = try arena.dupe(u8, s) };
+    }
+    if (e == .ident) {
+        const ident = e.ident;
+        if (ident.qualifiers.span.len != 0) return error.ExpectedPlatformRef;
+        const text = ast.resolve(ident.token);
+        const platform = compiler_platforms.fromHeaderIdent(text) orelse return error.ExpectedPlatformRef;
+        return .{ .compiler_owned = platform };
+    }
+    return error.ExpectedPlatformRef;
 }
 
 fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) error{ExpectedString}![]const u8 {
     const e = ast.store.getExpr(expr_idx);
-    return switch (e) {
-        .string => |s| {
-            for (ast.store.exprSlice(s.parts)) |part_idx| {
-                const part = ast.store.getExpr(part_idx);
-                if (part == .string_part) {
-                    return ast.resolve(part.string_part.token);
-                }
+    if (e == .string) {
+        for (ast.store.exprSlice(e.string.parts)) |part_idx| {
+            const part = ast.store.getExpr(part_idx);
+            if (part == .string_part) {
+                return ast.resolve(part.string_part.token);
             }
-            return error.ExpectedString;
-        },
-        else => error.ExpectedString,
-    };
+        }
+    }
+    return error.ExpectedString;
 }

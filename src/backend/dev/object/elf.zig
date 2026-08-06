@@ -20,7 +20,6 @@ const ELF = struct {
     const CLASS_64 = 2;
     const DATA_LSB = 1; // Little endian
     const VERSION_CURRENT = 1;
-    const OSABI_NONE = 0;
 
     // ELF type
     const ET_REL = 1; // Relocatable file
@@ -153,12 +152,27 @@ pub const Section = enum {
     undef, // External symbol
 };
 
+/// The `EI_OSABI` byte an object declares.
+///
+/// A linker reads this from its input objects to decide which OS-specific
+/// program headers the output needs: `ld.lld` emits OpenBSD's `PT_OPENBSD_*`
+/// headers only when it infers that OSABI from an input, and it takes the value
+/// from the first input that declares anything other than `none`. These values
+/// match what LLVM writes for the same triples, so the two backends' objects
+/// agree when they meet in one link.
+pub const Osabi = enum(u8) {
+    none = 0,
+    freebsd = 9,
+    openbsd = 12,
+};
+
 /// ELF object file writer
 pub const ElfWriter = struct {
     const Self = @This();
 
     allocator: Allocator,
     arch: Architecture,
+    osabi: Osabi,
 
     // Section contents
     text: std.ArrayList(u8),
@@ -195,10 +209,11 @@ pub const ElfWriter = struct {
         addend: i64,
     };
 
-    pub fn init(allocator: Allocator, arch: Architecture) Allocator.Error!Self {
+    pub fn init(allocator: Allocator, arch: Architecture, osabi: Osabi) Allocator.Error!Self {
         var self = Self{
             .allocator = allocator,
             .arch = arch,
+            .osabi = osabi,
             .text = .empty,
             .data = .empty,
             .rodata = .empty,
@@ -573,7 +588,7 @@ pub const ElfWriter = struct {
         ehdr.e_ident[4] = ELF.CLASS_64;
         ehdr.e_ident[5] = ELF.DATA_LSB;
         ehdr.e_ident[6] = ELF.VERSION_CURRENT;
-        ehdr.e_ident[7] = ELF.OSABI_NONE;
+        ehdr.e_ident[7] = @intFromEnum(self.osabi);
         @memset(ehdr.e_ident[8..16], 0);
 
         try output.appendSlice(self.allocator, std.mem.asBytes(&ehdr));
@@ -846,7 +861,7 @@ fn alignUp(value: u64, alignment: u64) u64 {
 // Tests
 
 test "create minimal elf object" {
-    var writer = try ElfWriter.init(std.testing.allocator, .x86_64);
+    var writer = try ElfWriter.init(std.testing.allocator, .x86_64, .none);
     defer writer.deinit();
 
     // Add some test code (ret instruction)
@@ -878,7 +893,7 @@ test "create minimal elf object" {
 }
 
 test "elf with external symbol" {
-    var writer = try ElfWriter.init(std.testing.allocator, .x86_64);
+    var writer = try ElfWriter.init(std.testing.allocator, .x86_64, .none);
     defer writer.deinit();
 
     // Simple code: call to external function (placeholder)

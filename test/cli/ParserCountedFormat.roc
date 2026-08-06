@@ -8,10 +8,10 @@ Counted := [Default].{
 	rename_field : Counted, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : Counted, State -> Try({ value : Str, rest : State }, [Bad, ..])
+	parse_str : Counted, State -> Try({ value : Str, rest : State }, [Bad])
 	parse_str = |_, state| take_token(state)
 
-	parse_u64 : Counted, State -> Try({ value : U64, rest : State }, [Bad, ..])
+	parse_u64 : Counted, State -> Try({ value : U64, rest : State }, [Bad])
 	parse_u64 = |_, state| {
 		parts = take_token(state)?
 
@@ -21,17 +21,17 @@ Counted := [Default].{
 		}
 	}
 
-	parse_list_start : Counted, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [Bad, ..])
+	parse_list_start : Counted, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [Bad])
 	parse_list_start = |_, state| take_count(state, "L")
 
 	## Never reached: this format always reports a count up front.
-	parse_list_next : Counted, State -> Try([Element(State), Done(State)], [Bad, ..])
+	parse_list_next : Counted, State -> Try([Item(State), Done(State)], [Bad])
 	parse_list_next = |_, _| Err(Bad)
 
-	parse_list_after_element : Counted, State -> Try([Continue(State), Done(State)], [Bad, ..])
-	parse_list_after_element = |_, _| Err(Bad)
+	parse_list_after_item : Counted, State -> Try([Continue(State), Done(State)], [Bad])
+	parse_list_after_item = |_, _| Err(Bad)
 
-	parse_tuple_start : Counted, State, U64 -> Try(State, [Bad, ..])
+	parse_tuple_start : Counted, State, U64 -> Try(State, [Bad])
 	parse_tuple_start = |_, state, len| {
 		counted = take_count(state, "T")?
 
@@ -47,13 +47,13 @@ Counted := [Default].{
 		}
 	}
 
-	parse_tuple_next : Counted, State, U64, U64 -> Try(State, [Bad, ..])
+	parse_tuple_next : Counted, State, U64, U64 -> Try(State, [Bad])
 	parse_tuple_next = |_, state, _, _| Ok(state)
 
-	parse_tuple_end : Counted, State, U64 -> Try(State, [Bad, ..])
+	parse_tuple_end : Counted, State, U64 -> Try(State, [Bad])
 	parse_tuple_end = |_, state, _| Ok(state)
 
-	parse_record_start : Counted, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [Bad, ..])
+	parse_record_start : Counted, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [Bad])
 	parse_record_start = |_, state| take_count(state, "R")
 
 	parse_record_field : Counted,
@@ -66,52 +66,52 @@ Counted := [Default].{
 			Continue(State),
 			Done(State),
 		],
-		[Bad, ..],
+		[Bad],
 	)
 	parse_record_field = |_, _, state| {
 		parts = take_token(state)?
 		Ok(TryField({ name: parts.value, rest: parts.rest }))
 	}
 
-	parse_record_after_field : Counted, State -> Try([Continue(State), Done(State)], [Bad, ..])
+	parse_record_after_field : Counted, State -> Try([Continue(State), Done(State)], [Bad])
 	parse_record_after_field = |_, _| Err(Bad)
 
-	skip_record_field : Counted, State -> Try(State, [Bad, ..])
+	skip_record_field : Counted, State -> Try(State, [Bad])
 	skip_record_field = |_, state| {
 		parts = take_token(state)?
 		Ok(parts.rest)
 	}
 
-	parse_dict_start : Counted, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [Bad, ..])
+	parse_dict_start : Counted, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [Bad])
 	parse_dict_start = |_, state| take_count(state, "D")
 
-	parse_dict_next : Counted, State -> Try([Entry(State), Done(State)], [Bad, ..])
+	parse_dict_next : Counted, State -> Try([Entry(State), Done(State)], [Bad])
 	parse_dict_next = |_, _| Err(Bad)
 
-	parse_dict_after_key : Counted, State -> Try(State, [Bad, ..])
+	parse_dict_after_key : Counted, State -> Try(State, [Bad])
 	parse_dict_after_key = |_, state| Ok(state)
 
-	parse_dict_after_entry : Counted, State -> Try([Continue(State), Done(State)], [Bad, ..])
+	parse_dict_after_entry : Counted, State -> Try([Continue(State), Done(State)], [Bad])
 	parse_dict_after_entry = |_, _| Err(Bad)
 
 	## This format's key position holds any value, so a key the driver cannot
 	## render as a key string is read by the key's own parser.
-	parse_key_start : Counted, State -> Try(State, [Bad, ..])
+	parse_key_start : Counted, State -> Try(State, [Bad])
 	parse_key_start = |_, state| Ok(state)
 
-	parse_key_str : Counted, State -> Try({ value : Str, rest : State }, [Bad, ..])
+	parse_key_str : Counted, State -> Try({ value : Str, rest : State }, [Bad])
 	parse_key_str = |_, state| take_token(state)
 
-	parse_key_u64 : Counted, State -> Try({ value : U64, rest : State }, [Bad, ..])
+	parse_key_u64 : Counted, State -> Try({ value : U64, rest : State }, [Bad])
 	parse_key_u64 = |encoding, state| Counted.parse_u64(encoding, state)
 
-	invalid_value : Counted, State -> [Bad, ..]
+	invalid_value : Counted, State -> [Bad]
 	invalid_value = |_, _| Bad
 }
 
 State := { raw : Str }
 
-take_token : State -> Try({ value : Str, rest : State }, [Bad, ..])
+take_token : State -> Try({ value : Str, rest : State }, [Bad])
 take_token = |state| {
 	trimmed = Str.trim_start(state.raw)
 
@@ -126,7 +126,7 @@ take_token = |state| {
 }
 
 ## Consume `marker` followed by the entry count.
-take_count : State, Str -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [Bad, ..])
+take_count : State, Str -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [Bad])
 take_count = |state, marker| {
 	head = take_token(state)?
 

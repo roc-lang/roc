@@ -1048,6 +1048,45 @@ pub fn listSwap(
     return newList;
 }
 
+/// Construct a sublist view borrowed from `list`.
+///
+/// This operation never changes a reference count or consumes `list`. ARC
+/// keeps `list` live for the complete lifetime of the returned view. For
+/// refcounted elements it initializes whole-allocation teardown metadata while
+/// the source is exclusive, so a later owned occurrence can safely retain the
+/// view. Shared sources already had that metadata initialized before sharing.
+pub fn listSublistBorrowed(
+    list: RocList,
+    element_width: usize,
+    start_u64: u64,
+    len_u64: u64,
+    elements_refcounted: bool,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const size = list.len();
+    if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
+        return RocList.empty();
+    }
+
+    const source_ptr = list.bytes orelse return RocList.empty();
+    const start: usize = @intCast(start_u64);
+    const size_minus_start = size - start;
+    const keep_len: usize = @intCast(@min(len_u64, @as(u64, @intCast(size_minus_start))));
+    if (elements_refcounted and list.canReuseAllocation(.Immutable, roc_ops)) {
+        list.setAllocationElementCount(elements_refcounted, roc_ops);
+    }
+    const list_alloc_ptr = RocList.encodeSliceAllocationPtr(source_ptr);
+    const slice_alloc_ptr = list.capacity_or_alloc_ptr;
+    const slice_mask = list.seamlessSliceMask();
+    const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+
+    return .{
+        .bytes = source_ptr + start * element_width,
+        .length = keep_len,
+        .capacity_or_alloc_ptr = alloc_ptr,
+    };
+}
+
 /// List.sublist - returns a sublist of the given list.
 ///
 /// ## Ownership
@@ -1417,23 +1456,30 @@ pub fn listConcat(
     update_mode_b: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    // Early return for empty lists - avoid unnecessary allocations
+    // Early return for empty lists - avoid unnecessary allocations.
+    //
+    // The surviving side is handed back as the result, so it has to satisfy the
+    // op's `result_unique` claim (`base/LowLevel.zig`): `makeUnique` returns it
+    // as-is when nobody else holds its allocation, and clones it when they do.
+    // Returning a shared allocation here would let ARC treat it as freshly
+    // owned and hand a later op a static in-place path into memory someone else
+    // is reading.
     if (list_a.isEmpty()) {
         if (list_b.isEmpty()) {
             // Both are empty, return list_a and clean up list_b
             list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-            return list_a;
+            return list_a.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
         } else {
             // list_a is empty, list_b has elements - return list_b
             // list_a might still need decref if it has capacity
             list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-            return list_b;
+            return list_b.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
         }
     } else if (list_b.isEmpty()) {
         // list_b is empty, list_a has elements - return list_a
         // list_b might still need decref if it has capacity
         list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-        return list_a;
+        return list_a.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
     }
 
     // Check if both lists share the same underlying allocation.
@@ -1997,6 +2043,22 @@ test "RocList empty list creation" {
 
     try std.testing.expectEqual(@as(usize, 0), empty_list.len());
     try std.testing.expect(empty_list.isEmpty());
+}
+
+test "default-platform RocList view matches canonical RocList layout" {
+    const View = @import("roc_str_view").RocList;
+
+    try std.testing.expectEqual(@sizeOf(RocList), @sizeOf(View));
+    try std.testing.expectEqual(@alignOf(RocList), @alignOf(View));
+
+    const canonical_fields = @typeInfo(RocList).@"struct".fields;
+    const view_fields = @typeInfo(View).@"struct".fields;
+    try std.testing.expectEqual(canonical_fields.len, view_fields.len);
+    inline for (canonical_fields, view_fields) |canonical, view| {
+        try std.testing.expect(std.mem.eql(u8, canonical.name, view.name));
+        try std.testing.expectEqual(canonical.type, view.type);
+        try std.testing.expectEqual(@offsetOf(RocList, canonical.name), @offsetOf(View, view.name));
+    }
 }
 
 test "RocList fromSlice basic functionality" {
@@ -2643,6 +2705,22 @@ test "listSublist basic functionality" {
     try std.testing.expectEqual(@as(u8, 4), elements[1]); // data[3]
     try std.testing.expectEqual(@as(u8, 5), elements[2]); // data[4]
     try std.testing.expectEqual(@as(u8, 6), elements[3]); // data[5]
+}
+
+test "borrowed sublist leaves source unique and initializes teardown metadata" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const list = RocList.fromSlice(u8, &.{ 10, 20, 30, 40 }, true, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), true, null, rcNone, test_env.getOps());
+
+    const sublist = listSublistBorrowed(list, @sizeOf(u8), 1, 2, true, test_env.getOps());
+
+    try std.testing.expect(list.isUnique(test_env.getOps()));
+    try std.testing.expectEqual(@as(usize, 4), sublist.getAllocationElementCount(true, test_env.getOps()));
+    try std.testing.expect(sublist.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 2), sublist.len());
+    try std.testing.expectEqualSlices(u8, &.{ 20, 30 }, sublist.elements(u8).?[0..sublist.len()]);
 }
 
 test "listSublist edge cases" {

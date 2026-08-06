@@ -284,7 +284,7 @@ jobs:
       matrix:
         include:
           - os: macos-15-intel
-            cpu_flag: -Dcpu=x86_64_v3
+            cpu_flag: ''
             target_flag: ''
             release_jobs_flag: ''
             zig_test_timeout_flag: ''
@@ -304,12 +304,12 @@ jobs:
             release_jobs_flag: -j2  # Avoid hosted ARM runner disconnects under ReleaseFast parallelism.
             zig_test_timeout_flag: ''
           - os: windows-2022
-            cpu_flag: -Dcpu=x86_64_v3
+            cpu_flag: ''
             target_flag: ''
             release_jobs_flag: ''
             zig_test_timeout_flag: --test-timeout 5m
           - os: windows-2025
-            cpu_flag: -Dcpu=x86_64_v3
+            cpu_flag: ''
             target_flag: ''
             release_jobs_flag: ''
             zig_test_timeout_flag: --test-timeout 5m
@@ -524,7 +524,10 @@ jobs:
           # entries on the full build configuration, so the valgrind build
           # (-Dvalgrind=true, musl target, ReleaseFast) hashes to different
           # entries than any other job's and cannot pick up stale artifacts.
-          command: git clean -fdx -e .zig-cache && zig build -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+          # Keep large ReleaseFast Zig compiler processes from overlapping and
+          # exhausting the hosted runner's memory. This lane builds several
+          # artifacts that individually peak at multiple GiB under valgrind.
+          command: git clean -fdx -e .zig-cache && zig build -j1 -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
           retry_count: 3
 
       - name: install valgrind

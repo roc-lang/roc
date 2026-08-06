@@ -71,10 +71,13 @@ result = poly().to_i128()
 		(e-lambda
 			(args)
 			(e-block
-				(e-crash (msg "x")))))
+				(e-run-low-level (op "crash")
+					(args
+						(e-string
+							(e-literal (string "x"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-dispatch-call (method "to_i128") (constraint-fn-var 203)
+		(e-dispatch-call (method "to_i128") (constraint-fn-var 214)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args))))

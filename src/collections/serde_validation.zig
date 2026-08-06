@@ -98,7 +98,27 @@ fn comptimeHasRelocationMarker(comptime T: type) bool {
         },
         .array => |a| comptimeHasRelocationMarker(a.child),
         .optional => |o| comptimeHasRelocationMarker(o.child),
-        else => false,
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .int,
+        .float,
+        .pointer,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        => false,
     };
 }
 
@@ -123,7 +143,19 @@ pub fn assertSerializedRelocatable(comptime T: type) void {
             .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
             .pointer => @compileError("Serialized type '" ++ @typeName(T) ++
                 "' embeds a pointer/slice outside a relocatable marker; it would dangle after relocation. Wrap it in a serialized relocation marker."),
-            else => @compileError("Serialized type '" ++ @typeName(T) ++
+            .type,
+            .noreturn,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .error_union,
+            .@"fn",
+            .@"opaque",
+            .frame,
+            .@"anyframe",
+            .enum_literal,
+            => @compileError("Serialized type '" ++ @typeName(T) ++
                 "' has a field with an unsupported serialized representation: " ++ @tagName(@typeInfo(T))),
         }
     }
@@ -160,6 +192,26 @@ pub fn validateSerializedRelocations(comptime T: type, self: *const T, backing_l
                     "' contains a relocatable marker; validation cannot choose an active variant without a tag");
             }
         },
-        else => {},
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .int,
+        .float,
+        .pointer,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        => {},
     }
 }

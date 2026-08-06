@@ -118,11 +118,12 @@ pub fn floatToIntTryBits(comptime Float: type, value: Float, target_bits: u32, t
 pub fn floatToIntWrapBits(comptime Float: type, value: Float, target_bits: u32) u128 {
     std.debug.assert(target_bits > 0 and target_bits <= 128);
 
-    const Bits = switch (Float) {
-        f32 => u32,
-        f64 => u64,
-        else => @compileError("floatToIntWrapBits supports only f32 and f64"),
-    };
+    const Bits = if (Float == f32)
+        u32
+    else if (Float == f64)
+        u64
+    else
+        @compileError("floatToIntWrapBits supports only f32 and f64");
     const fraction_bits: u32 = if (Float == f32) 23 else 52;
     const exponent_bits: u32 = if (Float == f32) 8 else 11;
     const exponent_bias: i32 = if (Float == f32) 127 else 1023;

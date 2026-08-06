@@ -220,7 +220,7 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt (type "Str -> Try(U8, ParseErrs)"))
-		(patt (type "Error -> Str"))
+		(patt (type "ParseErrs -> Str"))
 		(patt (type "Error"))
 		(patt (type "_arg -> {}")))
 	(type_decls
@@ -228,7 +228,7 @@ main! = |_| {}
 			(ty-header (name "ParseErrs"))))
 	(expressions
 		(expr (type "Str -> Try(U8, ParseErrs)"))
-		(expr (type "Error -> Str"))
+		(expr (type "ParseErrs -> Str"))
 		(expr (type "Error"))
 		(expr (type "_arg -> {}"))))
 ~~~

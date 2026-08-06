@@ -133,10 +133,8 @@ pub fn validatePlatformHasTargets(
     const header = store.getHeader(file.header);
 
     // Only platform headers should have targets
-    const platform = switch (header) {
-        .platform => |p| p,
-        else => return .{ .valid = {} }, // Non-platform headers don't need targets
-    };
+    if (header != .platform) return .{ .valid = {} }; // Non-platform headers don't need targets
+    const platform = header.platform;
 
     // Check if targets section exists
     if (platform.targets == null) {
@@ -357,6 +355,50 @@ pub fn createValidationReport(
                 try report.document.addLineBreak();
             }
 
+            // A baseline target and its default twin are separate entries on
+            // purpose. Linking a host built at the default CPU level into a
+            // binary that promises to run on the oldest CPUs would put those
+            // instructions back, so the platform has to build and declare a
+            // host for the baseline target of its own accord.
+            if (info.requested_target.cpuLevel() == .v1) {
+                const default_target = info.requested_target.defaultCpuTarget();
+
+                // Nothing asks for a baseline target more often than this
+                // machine does: when the CPU running the compiler is below the
+                // default level's floor, every command that compiles for the
+                // host asks for the baseline spelling of the host's target.
+                if (info.requested_target == target_mod.host_cpu.nativeTarget()) {
+                    try report.document.addText("This machine's CPU does not run the instructions ");
+                    try report.document.addAnnotated(@tagName(default_target), .emphasized);
+                    try report.document.addText(" uses,");
+                    try report.document.addLineBreak();
+                    try report.document.addText("so compiling for this machine means compiling for ");
+                    try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
+                    try report.document.addText(".");
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+                }
+
+                for (info.supported_targets) |spec| {
+                    if (spec.target != default_target) continue;
+
+                    try report.document.addText("This platform supports ");
+                    try report.document.addAnnotated(@tagName(default_target), .emphasized);
+                    try report.document.addText(", whose code requires a newer CPU.");
+                    try report.document.addLineBreak();
+                    try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
+                    try report.document.addText(" needs its own entry, built for the oldest CPUs");
+                    try report.document.addLineBreak();
+                    try report.document.addText("of this architecture, because a host built for ");
+                    try report.document.addAnnotated(@tagName(default_target), .emphasized);
+                    try report.document.addLineBreak();
+                    try report.document.addText("would reintroduce the instructions this target avoids.");
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+                    break;
+                }
+            }
+
             try report.document.addText("To add support, update the targets section in the platform header.");
             try report.document.addLineBreak();
 
@@ -442,6 +484,19 @@ pub fn createValidationReport(
             try report.document.addText("  x64mac, arm64mac      - macOS");
             try report.document.addLineBreak();
             try report.document.addText("  x64win, arm64win      - Windows");
+            try report.document.addLineBreak();
+            try report.document.addText("  wasm32                - WebAssembly");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Adding v1 after the architecture (");
+            try report.document.addAnnotated("x64v1musl", .emphasized);
+            try report.document.addText(", ");
+            try report.document.addAnnotated("arm64v1musl", .emphasized);
+            try report.document.addText(", ");
+            try report.document.addAnnotated("wasm32v1", .emphasized);
+            try report.document.addText(")");
+            try report.document.addLineBreak();
+            try report.document.addText("builds for the oldest CPUs of that architecture.");
             try report.document.addLineBreak();
 
             return report;
@@ -645,15 +700,11 @@ test "validatePlatformHasTargets detects missing targets section" {
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
-    switch (result) {
-        .missing_targets_section => |info| {
-            try std.testing.expectEqualStrings("test/platform/main.roc", info.platform_path);
-        },
-        else => {
-            std.debug.print("Expected missing_targets_section but got {}\n", .{result});
-            return error.UnexpectedResult;
-        },
+    if (result != .missing_targets_section) {
+        std.debug.print("Expected missing_targets_section but got {}\n", .{result});
+        return error.UnexpectedResult;
     }
+    try std.testing.expectEqualStrings("test/platform/main.roc", result.missing_targets_section.platform_path);
 }
 
 test "validatePlatformHasTargets accepts platform with targets section" {
@@ -872,19 +923,16 @@ test "validateTargetFilesExist reports missing target file with valid path" {
     // This should return a missing_target_file result with a valid expected_full_path
     const result = try validateTargetFilesExist(allocator, std.testing.io, config, tmp_dir.dir);
 
-    switch (result) {
-        .missing_target_file => |info| {
-            // The expected_full_path should be a valid string, not garbage
-            // If it's garbage due to use-after-free, this will likely fail or crash
-            try std.testing.expectEqualStrings("targets/x64mac", info.expected_full_path);
-            // Also check that it's still accessible after the function returns
-            try std.testing.expect(info.expected_full_path.len > 0);
-            // Clean up the allocated path
-            allocator.free(info.expected_full_path);
-        },
-        else => {
-            std.debug.print("Expected missing_target_file but got {}\n", .{result});
-            return error.UnexpectedResult;
-        },
+    if (result != .missing_target_file) {
+        std.debug.print("Expected missing_target_file but got {}\n", .{result});
+        return error.UnexpectedResult;
     }
+    const info = result.missing_target_file;
+    // The expected_full_path should be a valid string, not garbage
+    // If it's garbage due to use-after-free, this will likely fail or crash
+    try std.testing.expectEqualStrings("targets/x64mac", info.expected_full_path);
+    // Also check that it's still accessible after the function returns
+    try std.testing.expect(info.expected_full_path.len > 0);
+    // Clean up the allocated path
+    allocator.free(info.expected_full_path);
 }

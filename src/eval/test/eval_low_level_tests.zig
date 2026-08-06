@@ -2,6 +2,145 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+const erased_callable_same_capture_reuse_source =
+    \\{
+    \\    make_boxed : Box(I64) -> Box(({} -> ({} -> I64)))
+    \\    make_boxed = |state| Box.box(|_| |_| Box.unbox(state))
+    \\
+    \\    value = Box.unbox(make_boxed(Box.box(42)))({})({})
+    \\    if value == 42 { "ok" } else { "wrong" }
+    \\}
+;
+
+const erased_callable_long_owner_chain_source =
+    \\{
+    \\    make_boxed : Box(I64) -> Box(({} -> ({} -> I64)))
+    \\    make_boxed = |state| Box.box(|_| |_| Box.unbox(state))
+    \\
+    \\    a00 = make_boxed(Box.box(42))
+    \\    a01 = a00
+    \\    a02 = a01
+    \\    a03 = a02
+    \\    a04 = a03
+    \\    a05 = a04
+    \\    a06 = a05
+    \\    a07 = a06
+    \\    a08 = a07
+    \\    a09 = a08
+    \\    a10 = a09
+    \\    a11 = a10
+    \\    a12 = a11
+    \\    a13 = a12
+    \\    a14 = a13
+    \\    a15 = a14
+    \\    a16 = a15
+    \\    a17 = a16
+    \\    a18 = a17
+    \\    a19 = a18
+    \\    a20 = a19
+    \\    a21 = a20
+    \\    a22 = a21
+    \\    a23 = a22
+    \\    a24 = a23
+    \\    a25 = a24
+    \\    a26 = a25
+    \\    a27 = a26
+    \\    a28 = a27
+    \\    a29 = a28
+    \\    a30 = a29
+    \\    a31 = a30
+    \\    a32 = a31
+    \\    a33 = a32
+    \\    a34 = a33
+    \\    a35 = a34
+    \\    a36 = a35
+    \\    a37 = a36
+    \\    a38 = a37
+    \\    a39 = a38
+    \\    value = Box.unbox(a39)({})({})
+    \\    if value == 42 { "ok" } else { "wrong" }
+    \\}
+;
+
+const erased_callable_aggregate_result_reuse_source =
+    \\{
+    \\    make_boxed : Box(I64) -> Box(({} -> { next : ({} -> I64), observed : I64 }))
+    \\    make_boxed = |state| Box.box(|_| {
+    \\        next_state = Box.box(Box.unbox(state) + 1)
+    \\        { next: |_| Box.unbox(next_state), observed: Box.unbox(state) }
+    \\    })
+    \\
+    \\    result = Box.unbox(make_boxed(Box.box(41)))({})
+    \\    if result.observed == 41 and (result.next)({}) == 42 { "ok" } else { "wrong" }
+    \\}
+;
+
+const erased_callable_aggregate_shared_source =
+    \\{
+    \\    make_boxed : Box(I64) -> Box(({} -> { next : ({} -> I64), observed : I64 }))
+    \\    make_boxed = |state| Box.box(|_| {
+    \\        next_state = Box.box(Box.unbox(state) + 1)
+    \\        { next: |_| Box.unbox(next_state), observed: Box.unbox(state) }
+    \\    })
+    \\
+    \\    shared = make_boxed(Box.box(41))
+    \\    first = Box.unbox(shared)({})
+    \\    second = Box.unbox(shared)({})
+    \\    if first.observed == 41 and (first.next)({}) == 42 and second.observed == 41 and (second.next)({}) == 42 { "ok" } else { "wrong" }
+    \\}
+;
+
+const erased_callable_tagged_aggregate_reuse_source =
+    \\Machine := [Machine(Box((U64 -> Step)))]
+    \\Step := [Emit({ machine : Machine, observed : U64 }), End]
+    \\
+    \\from_state : U64 -> Machine
+    \\from_state = |state| Machine(Box.box(|wake| {
+    \\    if state == 0 {
+    \\        End
+    \\    } else {
+    \\        next = from_state(state - 1)
+    \\        Emit({ machine: next, observed: state + wake })
+    \\    }
+    \\}))
+    \\
+    \\main =
+    \\    match from_state(1) {
+    \\        Machine(boxed) =>
+    \\            match (Box.unbox(boxed))(41) {
+    \\                Emit({ machine, observed }) =>
+    \\                    match machine {
+    \\                        Machine(next) =>
+    \\                            match (Box.unbox(next))(0) {
+    \\                                End => if observed == 42 { "ok" } else { "wrong" }
+    \\                                Emit(_) => "wrong"
+    \\                            }
+    \\                    }
+    \\                End => "wrong"
+    \\            }
+    \\    }
+;
+
+const erased_callable_mixed_demand_tag_source =
+    \\Choice := [One({ next : ({} -> U64), observed : U64 }), Two({ first : ({} -> U64), second : ({} -> U64) })]
+    \\
+    \\make_boxed : Box(U64) -> Box(({} -> Choice))
+    \\make_boxed = |state| Box.box(|_| {
+    \\    next_state = Box.box(Box.unbox(state) + 1)
+    \\    if Box.unbox(state) == 0 {
+    \\        Two({ first: |_| Box.unbox(next_state), second: |_| Box.unbox(next_state) })
+    \\    } else {
+    \\        One({ next: |_| Box.unbox(next_state), observed: Box.unbox(state) })
+    \\    }
+    \\})
+    \\
+    \\main =
+    \\    match (Box.unbox(make_boxed(Box.box(41))))({}) {
+    \\        One({ next, observed }) => if observed == 41 and next({}) == 42 { "ok" } else { "wrong" }
+    \\        Two(_) => "wrong"
+    \\    }
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
@@ -558,6 +697,28 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - Dec boundary rounding to integers",
+        .source =
+        \\{
+        \\Dec.round_to_i128_try(Dec.highest) == Ok(170141183460469231732)
+        \\    and Dec.floor_to_i128_try(Dec.lowest) == Ok(-170141183460469231732)
+        \\    and Dec.ceiling_to_i128_try(Dec.highest) == Ok(170141183460469231732)
+        \\    and Dec.round_to_i64_try(Dec.highest) == Err(OutOfRange)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - Dec.abs lowest crashes on overflow",
+        .source = "Dec.abs(Dec.lowest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "low_level - Dec.lowest divided by negative one crashes on overflow",
+        .source = "Dec.lowest / -1.0",
+        .expected = .{ .crash = {} },
     },
     .{
         .name = "low_level - Str.is_empty returns True for empty string",
@@ -1849,6 +2010,23 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"12.5\"" },
+    },
+    .{
+        .name = "low_level - exact from_str accepts exponent notation issue 10550",
+        .source =
+        \\{
+        \\u32 = match U32.from_str("2e5") {
+        \\    Ok(value) => U32.to_str(value)
+        \\    Err(_) => "bad int"
+        \\}
+        \\dec = match Dec.from_str("2e5") {
+        \\    Ok(value) => Dec.to_str(value)
+        \\    Err(_) => "bad dec"
+        \\}
+        \\"${u32}:${dec}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"200000:200000.0\"" },
     },
     .{
         .name = "low_level - I64.from_str preserves explicit error path",
@@ -5131,6 +5309,57 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "15" },
     },
     .{
+        .name = "boxed lambda round trip: same-shape refcounted erased result is correct across backends",
+        .source = erased_callable_same_capture_reuse_source,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        .name = "boxed lambda round trip: same-shape refcounted erased result reuses allocation",
+        .source = erased_callable_same_capture_reuse_source,
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 2,
+        } },
+    },
+    .{
+        .name = "boxed lambda round trip: long explicit owner chain reuses allocation",
+        .source = erased_callable_long_owner_chain_source,
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 2,
+        } },
+    },
+    .{
+        .name = "boxed lambda round trip: aggregate erased callable result preserves sibling capture reads",
+        .source = erased_callable_aggregate_result_reuse_source,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        .name = "boxed lambda round trip: aggregate erased callable result reuses allocation",
+        .source = erased_callable_aggregate_result_reuse_source,
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 3,
+        } },
+    },
+    .{
+        .name = "boxed lambda round trip: shared aggregate erased callable takes the correct copy fallback",
+        .source = erased_callable_aggregate_shared_source,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        .name = "boxed lambda round trip: tagged aggregate erased callable result is correct",
+        .source_kind = .module,
+        .source = erased_callable_tagged_aggregate_reuse_source,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        .name = "boxed lambda round trip: mixed-demand tag declines erased callable reuse",
+        .source_kind = .module,
+        .source = erased_callable_mixed_demand_tag_source,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
         .name = "boxed lambda round trip: erased record callable field transform",
         .source_kind = .module,
         .source =
@@ -6678,5 +6907,57 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "8" },
+    },
+    .{
+        .name = "low_level - Dec.to_attos reads the stored i128",
+        .source =
+        \\{
+        \\x : Dec
+        \\x = 1.5
+        \\x.to_attos()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1500000000000000000" },
+    },
+    .{
+        .name = "low_level - Dec.from_attos reinterprets rather than converts",
+        .source =
+        \\{
+        \\Dec.from_attos(1500000000000000000).to_str()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"1.5\"" },
+    },
+    .{
+        .name = "low_level - Dec atto roundtrip preserves a negative value",
+        .source =
+        \\{
+        \\x : Dec
+        \\x = -0.25
+        \\Dec.from_attos(x.to_attos()) == x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - Dec and I128 meet at both extremes",
+        .source =
+        \\{
+        \\Dec.to_attos(Dec.highest) == I128.highest
+        \\    and Dec.to_attos(Dec.lowest) == I128.lowest
+        \\    and Dec.from_attos(I128.highest) == Dec.highest
+        \\    and Dec.from_attos(I128.lowest) == Dec.lowest
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - one atto is Dec's smallest step",
+        .source =
+        \\{
+        \\Dec.to_attos(0.000000000000000001) == 1
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
     },
 };

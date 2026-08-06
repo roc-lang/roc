@@ -35,8 +35,35 @@ const windows_cross_targets = [_]CrossTarget{
     .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
 };
 
+/// BSD cross-compile targets
+const bsd_cross_targets = [_]CrossTarget{
+    .{ .name = "x64freebsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .freebsd, .abi = .none } },
+    .{ .name = "x64openbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .openbsd, .abi = .none } },
+    .{ .name = "x64netbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .netbsd, .abi = .none } },
+};
+
 /// All Linux cross-compile targets (musl + glibc)
 const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
+
+comptime {
+    // The prebuilt builtins objects these targets produce are what
+    // `roc build --opt=dev --target=X` links, and `BuiltinsObjects.forTarget`
+    // hands the same object to a `v1` target as to its default twin. That is
+    // only sound while these queries name no CPU model, because Zig then
+    // resolves them to the architecture baseline. Naming a model here would
+    // put instructions the baseline lacks into every `v1` binary, so it has to
+    // come with per-CPU-level objects instead.
+    for (musl_cross_targets ++ glibc_cross_targets ++ windows_cross_targets ++ bsd_cross_targets) |cross_target| {
+        if (cross_target.query.cpu_model != .determined_by_arch_os) {
+            @compileError("cross-compile target " ++ cross_target.name ++
+                " names a CPU model; baseline (v1) targets would link non-baseline builtins");
+        }
+        if (!cross_target.query.cpu_features_add.isEmpty()) {
+            @compileError("cross-compile target " ++ cross_target.name ++
+                " adds CPU features; baseline (v1) targets would link non-baseline builtins");
+        }
+    }
+}
 
 /// Test platform directories that need host libraries built
 const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive", "alloc-count" };
@@ -97,6 +124,13 @@ fn testPlatformRequiresSectionDceHost(platform_dir: []const u8) bool {
     return std.mem.eql(u8, platform_dir, "dylib") or std.mem.eql(u8, platform_dir, "archive");
 }
 
+/// The v1 twin that needs its own test-platform host build.
+fn muslBaselineTestTargetName(target_name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, target_name, "x64musl")) return "x64v1musl";
+    if (std.mem.eql(u8, target_name, "arm64musl")) return "arm64v1musl";
+    return null;
+}
+
 fn testHostNeedsLibc(options: TestHostOptions, target: ResolvedTarget) bool {
     if (!options.uses_stack_handler) return false;
 
@@ -112,7 +146,39 @@ fn testHostNeedsLibc(options: TestHostOptions, target: ResolvedTarget) bool {
         .netbsd,
         .openbsd,
         => true,
-        else => false,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .driverkit,
+        .maccatalyst,
+        .windows,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => false,
     };
 }
 
@@ -129,19 +195,16 @@ const NativeSharedArchiveTarget = struct {
 
 fn nativeSharedArchiveTarget(b: *std.Build, target: ResolvedTarget) NativeSharedArchiveTarget {
     if (target.result.os.tag == .linux) {
-        return switch (target.result.cpu.arch) {
-            .x86_64 => .{
-                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu }),
-                .roc_name = "x64glibc",
-            },
-            .aarch64 => .{
-                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu }),
-                .roc_name = "arm64glibc",
-            },
-            else => .{
-                .resolved = target,
-                .roc_name = roc_target.RocTarget.fromStdTarget(target.result).toName(),
-            },
+        const arch = target.result.cpu.arch;
+        return if (arch == .x86_64) .{
+            .resolved = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu }),
+            .roc_name = "x64glibc",
+        } else if (arch == .aarch64) .{
+            .resolved = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu }),
+            .roc_name = "arm64glibc",
+        } else .{
+            .resolved = target,
+            .roc_name = roc_target.RocTarget.fromStdTarget(target.result).toName(),
         };
     }
 
@@ -157,20 +220,62 @@ fn withRocMacosDeploymentTarget(b: *std.Build, target: ResolvedTarget) ResolvedT
     return b.resolveTargetQuery(roc_target.macos_deployment.query(target.result.cpu.arch));
 }
 
-/// Returns the optimal target query for release builds on the current host.
+/// Returns the target query for release builds on the current host.
+///
+/// `-Dtarget` and `-Dcpu` select the release target, so a packager can trade
+/// portability for speed. With neither flag, the defaults are:
 /// - Linux: Uses musl for fully static binaries
-/// - x86_64: Uses x86_64_v3 for modern CPU features (AVX2, BMI2, etc.)
-fn getReleaseTargetQuery() std.Target.Query {
-    var query: std.Target.Query = .{};
+/// - x86_64 and aarch64: Uses the baseline CPU, so a single released binary
+///   runs on every CPU of that architecture
+///
+/// What that floor costs the parts of this binary which aren't declared as
+/// dependencies in build.zig.zon:
+///
+/// - Zig's standard library has no runtime CPU dispatch anywhere. Its vector
+///   width is picked at comptime by `std.simd.suggestVectorLength` from
+///   `builtin.cpu`: SSE gives 128 bits, AVX2 gives 256, AVX-512 gives 512. So a
+///   baseline build halves the width used by `std.mem`, `std.unicode`,
+///   `std.crypto.blake3` (which is what `roc bundle` hashes with),
+///   `std.compress.flate`, and `std.http.HeadParser`. It does not make them
+///   scalar.
+/// - musl has no ifunc and no x86_64 string assembly, so it is unaffected.
+/// - compiler_rt has no dispatch and nothing above baseline to give up.
+/// - Roc's own code under src/ contains no `@Vector` and no `std.simd`, so the
+///   only thing a higher floor buys it is wider autovectorization.
+///
+/// build.zig.zon carries the same accounting for each declared dependency.
+fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query {
+    // A `-Dtarget` triple names the entire target, ABI included, so it replaces
+    // every default below.
+    if (b.user_input_options.contains("target")) return target.query;
+
+    // `-Dcpu` names only the CPU, so it carries over onto the release ABI
+    // defaults rather than replacing them.
+    const explicit_cpu = b.user_input_options.contains("cpu");
+    var query: std.Target.Query = if (explicit_cpu) target.query else .{};
 
     // Use musl on Linux for static linking
     if (builtin.target.os.tag == .linux) {
         query.abi = .musl;
     }
 
-    // Use x86_64_v3 CPU model for x86_64 (enables AVX2, BMI2, etc.)
-    if (builtin.target.cpu.arch == .x86_64) {
-        query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
+    if (!explicit_cpu) {
+        // An otherwise-empty query means "native CPU", which bakes the build
+        // machine's CPU features into the released binary. Pin the CPU model
+        // explicitly so releases stay portable.
+        const arch = builtin.target.cpu.arch;
+        if (arch == .x86_64 or arch == .aarch64) {
+            // Baseline x86-64 is the 2003 instruction set, which every x86-64
+            // CPU supports. A higher floor makes the binary die of SIGILL
+            // before it can print anything on any CPU below that floor: pinning
+            // x86_64_v3 requires AVX2 and BMI2, which excludes Intel's Celeron
+            // and Pentium Silver lines along with everything pre-Haswell.
+            query.cpu_model = .baseline;
+            // Baseline aarch64 is armv8.0-a, which every aarch64 device supports.
+            // Building natively on an armv9 CI runner emitted SVE (plus LSE and
+            // RCPC) instructions, which crashed with SIGILL on older phones and
+            // Raspberry Pis. On macOS, baseline is apple_m1, i.e. all Apple Silicon.
+        }
     }
 
     return query;
@@ -361,17 +466,14 @@ const UnitTestRunner = struct {
     /// use `std.zig.Server`.
     fn runnerMode(compile: *Step.Compile) @FieldType(Step.Compile.TestRunner, "mode") {
         if (compile.use_llvm == false) {
-            return switch (compile.rootModuleTarget().cpu.arch) {
-                .aarch64,
-                .aarch64_be,
-                .powerpc,
-                .powerpcle,
-                .powerpc64,
-                .powerpc64le,
-                .riscv64,
-                => .simple,
-                else => .server,
-            };
+            const arch = compile.rootModuleTarget().cpu.arch;
+            return if (arch == .aarch64 or
+                arch == .aarch64_be or
+                arch == .powerpc or
+                arch == .powerpcle or
+                arch == .powerpc64 or
+                arch == .powerpc64le or
+                arch == .riscv64) .simple else .server;
         }
         return .server;
     }
@@ -1039,7 +1141,7 @@ const CheckPostcheckArchitectureStep = struct {
                     );
                 }
             },
-            else => {
+            .signal, .stopped, .unknown => {
                 return step.fail("ci/check_postcheck_architecture.pl terminated abnormally", .{});
             },
         }
@@ -1082,7 +1184,7 @@ const CheckWasmBuiltinRoutingStep = struct {
                     .{},
                 );
             },
-            else => return step.fail("ci/check_wasm_builtin_routing.pl terminated abnormally", .{}),
+            .signal, .stopped, .unknown => return step.fail("ci/check_wasm_builtin_routing.pl terminated abnormally", .{}),
         }
     }
 };
@@ -2100,6 +2202,18 @@ fn buildAndCopyTestPlatformHostLib(
         omit_frame_pointer,
         options,
     );
+    const baseline_target_name = muslBaselineTestTargetName(target_name);
+    const baseline_lib = if (baseline_target_name) |name| createTestPlatformHostLib(
+        b,
+        b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, name }),
+        b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" }),
+        b.resolveTargetQuery(roc_target.RocTarget.fromString(name).?.llvmTargetQuery()),
+        host_optimize,
+        roc_modules,
+        strip,
+        omit_frame_pointer,
+        options,
+    ) else null;
 
     // The dylib platform produces a Windows DLL, and a DLL only exposes symbols
     // that carry dllexport storage. Unlike ELF/Mach-O shared objects (which
@@ -2114,9 +2228,23 @@ fn buildAndCopyTestPlatformHostLib(
     // Use correct filename for target platform
     const host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     const archive_path = b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, host_filename });
+    const baseline_archive_path = if (baseline_target_name) |name|
+        b.pathJoin(&.{ "test", platform_dir, "platform/targets", name, host_filename })
+    else
+        null;
 
     const copy_step = b.addUpdateSourceFiles();
     copy_step.addCopyFileToSource(lib.getEmittedBin(), archive_path);
+    if (baseline_archive_path) |path| {
+        copy_step.addCopyFileToSource(baseline_lib.?.getEmittedBin(), path);
+
+        inline for (.{ "crt1.o", "libc.a" }) |runtime_filename| {
+            copy_step.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", target_name, runtime_filename })),
+                b.pathJoin(&.{ "test", platform_dir, "platform/targets", baseline_target_name.?, runtime_filename }),
+            );
+        }
+    }
 
     // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
     // Zig's archive generator doesn't add the required padding byte after odd-sized
@@ -2125,6 +2253,14 @@ fn buildAndCopyTestPlatformHostLib(
     if (target.result.os.tag != .windows) {
         const fix_step = FixArchivePaddingStep.create(b, archive_path);
         fix_step.step.dependOn(&copy_step.step);
+
+        if (baseline_archive_path) |path| {
+            const fix_baseline_step = FixArchivePaddingStep.create(b, path);
+            fix_baseline_step.step.dependOn(&copy_step.step);
+            fix_baseline_step.step.dependOn(&fix_step.step);
+            return &fix_baseline_step.step;
+        }
+
         return &fix_step.step;
     }
 
@@ -2328,9 +2464,9 @@ const ClearRocCacheStep = struct {
 
     /// Get the Roc cache directory path (matches cache_config.zig logic)
     fn getCacheDir(allocator: std.mem.Allocator, environ_map: std.process.Environ.Map) ![]u8 {
-        const cache_dir_name = switch (builtin.os.tag) {
+        const cache_dir_name = switch (roc_target.classifyOs(builtin.os.tag)) {
             .windows => "Roc",
-            else => "roc",
+            .macos, .linux, .freebsd, .openbsd, .netbsd, .other => "roc",
         };
 
         // Respect XDG_CACHE_HOME if set
@@ -2338,20 +2474,20 @@ const ClearRocCacheStep = struct {
             return std.fs.path.join(allocator, &[_][]const u8{ xdg_cache, cache_dir_name });
         } else {
             // Fall back to platform defaults
-            const home_env = switch (builtin.os.tag) {
+            const home_env = switch (roc_target.classifyOs(builtin.os.tag)) {
                 .windows => "APPDATA",
-                else => "HOME",
+                .macos, .linux, .freebsd, .openbsd, .netbsd, .other => "HOME",
             };
 
             const home_dir = environ_map.get(home_env) orelse {
                 return error.NoHomeDirectory;
             };
 
-            return switch (builtin.os.tag) {
+            return switch (roc_target.classifyOs(builtin.os.tag)) {
                 .linux => std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", cache_dir_name }),
                 .macos => std.fs.path.join(allocator, &[_][]const u8{ home_dir, "Library", "Caches", cache_dir_name }),
                 .windows => std.fs.path.join(allocator, &[_][]const u8{ home_dir, cache_dir_name }),
-                else => std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", cache_dir_name }),
+                .freebsd, .openbsd, .netbsd, .other => std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", cache_dir_name }),
             };
         }
     }
@@ -2582,6 +2718,8 @@ pub fn build(b: *std.Build) void {
     const run_check_builtin_format_step = b.step("run-check-builtin-format", "Check Builtin.roc formatting");
     const run_check_glue_abi_step = b.step("run-check-glue-abi", "Check generated Zig glue against the canonical host ABI");
     const run_check_simd_codegen_step = b.step("run-check-simd-codegen", "Check that optimized x86-64 integer SIMD kernels select native instructions");
+    const run_check_match_extension_codegen_step = b.step("run-check-match-extension-codegen", "Check the pinned instruction counts for the match-extension loop");
+    const run_check_baseline_codegen_step = b.step("run-check-baseline-codegen", "Check that v1 targets emit no instruction above the architecture baseline");
     const build_snapshot_tool_step = b.step("build-snapshot-tool", "Build the snapshot tool");
     const run_check_snapshots_step = b.step("run-check-snapshots", "Regenerate snapshots and fail if tracked snapshots changed");
     const build_test_zig_step = b.step("build-test-zig", "Build Zig unit-test binaries");
@@ -2623,11 +2761,13 @@ pub fn build(b: *std.Build) void {
             .abi = if (builtin.target.os.tag == .linux) .musl else null,
         };
 
-        // Use x86_64_v3 (AVX2, no AVX-512) for Valgrind compatibility.
-        // Valgrind 3.22 can't emulate AVX-512 EVEX instructions in musl startup code.
-        // This matches the release target (getReleaseTargetQuery) which also uses x86_64_v3.
+        // Pin baseline x86-64 instead of inheriting the build machine's CPU.
+        // This matches the release target (getReleaseTargetQuery), so a build
+        // from source runs everywhere a released binary does, and it keeps
+        // Valgrind working: Valgrind 3.22 can't emulate the AVX-512 EVEX
+        // instructions a native build emits into musl startup code.
         if (builtin.target.cpu.arch == .x86_64) {
-            default_target_query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
+            default_target_query.cpu_model = .baseline;
         }
 
         break :blk b.standardTargetOptions(.{ .default_target = default_target_query });
@@ -2655,6 +2795,21 @@ pub fn build(b: *std.Build) void {
     const eval_no_fork = b.option(bool, "eval-no-fork", "Run eval tests in-process instead of through fork isolation") orelse false;
     const eval_time_worker = b.option(bool, "eval-time-worker", "Print eval worker startup timing instrumentation") orelse false;
     const glue_release_tag = b.option([]const u8, "glue-release-tag", "Nightly release tag used in generated glue release metadata");
+    const compiler_version_override = b.option([]const u8, "compiler-version", "Report this string as the compiler version instead of <build mode>-<git short sha>; nightly builds pass their release tag");
+    if (compiler_version_override) |override| {
+        // The version string is also a directory name (install root, cache root), so it is
+        // restricted to characters that are a valid path component on every supported OS.
+        if (override.len == 0) {
+            std.log.err("-Dcompiler-version must not be empty", .{});
+            std.process.exit(1);
+        }
+        for (override) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '.' and c != '_') {
+                std.log.err("-Dcompiler-version may only contain letters, digits, '-', '.' and '_', but got \"{s}\"", .{override});
+                std.process.exit(1);
+            }
+        }
+    }
     const enable_valgrind = b.option(bool, "valgrind", "Emit Valgrind client request support") orelse false;
     if (enable_valgrind and (builtin.target.os.tag != .linux or target.result.os.tag != .linux)) {
         std.log.err("-Dvalgrind=true requires a Linux build host and Linux target", .{});
@@ -2724,19 +2879,32 @@ pub fn build(b: *std.Build) void {
     // actual optimization level of each compiled binary. The prefix can't be baked here because
     // build_options is shared between the dev `roc` exe (whose mode follows -Doptimize) and the
     // `release` exe (always built ReleaseFast); a single build-time value can't be right for both.
-    build_options.contents.appendSlice(b.allocator,
-        \\
-        \\pub const compiler_version = @import("std").fmt.comptimePrint("{s}-{s}", .{
-        \\    switch (@import("builtin").mode) {
-        \\        .Debug => "debug",
-        \\        .ReleaseSafe => "release-safe",
-        \\        .ReleaseFast => "release-fast",
-        \\        .ReleaseSmall => "release-small",
-        \\    },
-        \\    compiler_version_git,
-        \\});
-        \\
-    ) catch @panic("OOM");
+    //
+    // -Dcompiler-version replaces the whole string, and is emitted as a string literal so that
+    // `compiler_version` keeps the same type either way. Nightly builds pass their release tag
+    // (e.g. "nightly-2026-July-31-f5556d8"), because "release-fast-<sha>" tells a user nothing
+    // about which nightly they downloaded.
+    if (compiler_version_override) |override| {
+        build_options.contents.appendSlice(b.allocator, b.fmt(
+            \\
+            \\pub const compiler_version = "{s}";
+            \\
+        , .{override})) catch @panic("OOM");
+    } else {
+        build_options.contents.appendSlice(b.allocator,
+            \\
+            \\pub const compiler_version = @import("std").fmt.comptimePrint("{s}-{s}", .{
+            \\    switch (@import("builtin").mode) {
+            \\        .Debug => "debug",
+            \\        .ReleaseSafe => "release-safe",
+            \\        .ReleaseFast => "release-fast",
+            \\        .ReleaseSmall => "release-small",
+            \\    },
+            \\    compiler_version_git,
+            \\});
+            \\
+        ) catch @panic("OOM");
+    }
     // Shared config for every first-party leak-checking DebugAllocator. Capturing a
     // stack trace per allocation dominates Debug-build runtime (~80% of `roc test`
     // wall time on macOS arm64), so traces are off unless -Ddebug-gpa-traces is
@@ -3101,6 +3269,16 @@ pub fn build(b: *std.Build) void {
     run_simd_codegen_check.step.dependOn(build_test_hosts_step);
     run_check_simd_codegen_step.dependOn(&run_simd_codegen_check.step);
 
+    const run_baseline_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_baseline_codegen.sh" });
+    run_baseline_codegen_check.addArtifactArg(roc_exe);
+    run_baseline_codegen_check.step.dependOn(build_test_hosts_step);
+    run_check_baseline_codegen_step.dependOn(&run_baseline_codegen_check.step);
+
+    const run_match_extension_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_match_extension_codegen.sh" });
+    run_match_extension_codegen_check.addArtifactArg(roc_exe);
+    run_match_extension_codegen_check.step.dependOn(build_test_hosts_step);
+    run_check_match_extension_codegen_step.dependOn(&run_match_extension_codegen_check.step);
+
     // Glue ABI locks compile the generated bindings themselves. Zig is checked
     // for every native architecture/OS plus wasm, C is checked against the
     // vector-heavy layout probe over the same matrix, and Rust is checked for
@@ -3186,23 +3364,12 @@ pub fn build(b: *std.Build) void {
         run_rust_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
         run_rust_glue_abi.has_side_effects = true;
 
-        const native_rust_target: ?[]const u8 = switch (target.result.os.tag) {
-            .linux => switch (target.result.cpu.arch) {
-                .x86_64 => "x86_64-unknown-linux-musl",
-                .aarch64 => "aarch64-unknown-linux-musl",
-                else => null,
-            },
-            .macos => switch (target.result.cpu.arch) {
-                .x86_64 => "x86_64-apple-darwin",
-                .aarch64 => "aarch64-apple-darwin",
-                else => null,
-            },
-            .windows => switch (target.result.cpu.arch) {
-                .x86_64 => "x86_64-pc-windows-msvc",
-                .aarch64 => "aarch64-pc-windows-msvc",
-                else => null,
-            },
-            else => null,
+        const native_arch = target.result.cpu.arch;
+        const native_rust_target: ?[]const u8 = switch (roc_target.classifyOs(target.result.os.tag)) {
+            .linux => if (native_arch == .x86_64) "x86_64-unknown-linux-musl" else if (native_arch == .aarch64) "aarch64-unknown-linux-musl" else null,
+            .macos => if (native_arch == .x86_64) "x86_64-apple-darwin" else if (native_arch == .aarch64) "aarch64-apple-darwin" else null,
+            .windows => if (native_arch == .x86_64) "x86_64-pc-windows-msvc" else if (native_arch == .aarch64) "aarch64-pc-windows-msvc" else null,
+            .freebsd, .openbsd, .netbsd, .other => null,
         };
         const rust_lock_targets = [_]?struct { name: []const u8, triple: []const u8, simd128: bool }{
             if (native_rust_target) |triple| .{ .name = "native", .triple = triple, .simd128 = false } else null,
@@ -3234,7 +3401,7 @@ pub fn build(b: *std.Build) void {
 
     // Release build with platform-optimal settings
     {
-        const release_target = b.resolveTargetQuery(getReleaseTargetQuery());
+        const release_target = b.resolveTargetQuery(getReleaseTargetQuery(b, target));
         // Create a release-specific zstd dependency with release settings
         const release_zstd = b.dependency("zstd", .{
             .target = release_target,
@@ -4260,6 +4427,20 @@ pub fn build(b: *std.Build) void {
         build_wasm_single_variant_hosted_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_single_variant_hosted_app.step);
 
+        // Host ABI gate on wasm32: a hosted Try unwrapped with `?` into a wider
+        // error row must still reach the host through its declared boundary,
+        // which the cart shows by returning the host's own "ok".
+        const build_wasm_hosted_try_widen_app = b.addRunArtifact(roc_exe);
+        build_wasm_hosted_try_widen_app.addArgs(&.{
+            "build",
+            "test/wasm/hosted_try_widen_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/hosted_try_widen_static_lib_app.wasm",
+        });
+        build_wasm_hosted_try_widen_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_hosted_try_widen_app.step);
+
         const build_wasm_str_concat_join_app = b.addRunArtifact(roc_exe);
         build_wasm_str_concat_join_app.addArgs(&.{
             "build",
@@ -4434,6 +4615,16 @@ pub fn build(b: *std.Build) void {
             run_wasm_single_variant_hosted_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_single_variant_hosted_test.step);
 
+            const run_wasm_hosted_try_widen_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_hosted_try_widen_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/hosted_try_widen_static_lib_app.wasm",
+                "--expected",
+                "ok",
+            });
+            run_wasm_hosted_try_widen_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_hosted_try_widen_test.step);
+
             const run_wasm_str_concat_join_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_str_concat_join_test.addArgs(&.{
                 "--wasm-path",
@@ -4565,10 +4756,10 @@ pub fn build(b: *std.Build) void {
     // running a separate loader executable that dlopens it and calls its C API.
     {
         const output_target = nativeSharedArchiveTarget(b, target);
-        const dylib_ext = switch (output_target.resolved.result.os.tag) {
+        const dylib_ext = switch (roc_target.classifyOs(output_target.resolved.result.os.tag)) {
             .windows => ".dll",
             .macos => ".dylib",
-            else => ".so",
+            .linux, .freebsd, .openbsd, .netbsd, .other => ".so",
         };
         const dylib_output = b.fmt("test/dylib/app{s}", .{dylib_ext});
 
@@ -4776,6 +4967,30 @@ pub fn build(b: *std.Build) void {
     guarded_list_violation_exe.root_module.addImport("layout", roc_modules.layout);
     guarded_list_violation_exe.root_module.addImport("lir", roc_modules.lir);
     guarded_list_violation_exe.root_module.addImport("postcheck", roc_modules.postcheck);
+
+    // The RcEffect structural validator promises that a row whose fields
+    // contradict each other is a compile error. This probe is a file that
+    // makes such a row; the build requires compiling it to fail, and to fail
+    // with the rule the row breaks.
+    const rc_effect_rejected_row_probe = b.addObject(.{
+        .name = "rc_effect_rejected_row_probe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/base/rc_effect_rejected_row_probe.zig"),
+            .target = target,
+            .optimize = .Debug,
+        }),
+    });
+    rc_effect_rejected_row_probe.root_module.addImport("base", roc_modules.base);
+    rc_effect_rejected_row_probe.expect_errors = .{
+        .contains = "[rule: unique_result_without_source]",
+    };
+
+    const run_rc_effect_rejected_row_step = b.step(
+        "run-test-rc-effect-rejected-row",
+        "Check that a structurally invalid RcEffect row fails to compile",
+    );
+    run_rc_effect_rejected_row_step.dependOn(&rc_effect_rejected_row_probe.step);
+    run_test_zig_step.dependOn(run_rc_effect_rejected_row_step);
 
     const run_guarded_list_violations_step = b.step(
         "run-test-guarded-list-violations",
@@ -4993,6 +5208,23 @@ pub fn build(b: *std.Build) void {
         .compile = cli_runner_unit_test,
     });
 
+    // Tidy unit tests: ci/tidy.zig is an executable root, so like
+    // parallel_cli_runner.zig above its test decls need a dedicated test compile.
+    const tidy_unit_test = b.addTest(.{
+        .name = "tidy_unit",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/tidy.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .filters = test_filters,
+    });
+    test_suites.register(.{
+        .step_suffix = "tidy-unit",
+        .description = "Run tidy Zig unit tests",
+        .compile = tidy_unit_test,
+    });
+
     // LLVM backend aggregator test: src/backend/llvm/mod.zig is not the root of
     // the llvm_codegen module, so its refAllDecls compile coverage needs its own
     // test compile.
@@ -5169,6 +5401,43 @@ pub fn build(b: *std.Build) void {
         .compile = lir_inline_test,
     });
 
+    const rc_conformance_test = b.addTest(.{
+        .name = "rc_conformance_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/rc_conformance_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    });
+    roc_modules.addAll(rc_conformance_test);
+    rc_conformance_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    rc_conformance_test.step.dependOn(&write_compiled_builtins.step);
+    try addLlvmSupportToStep(
+        b,
+        rc_conformance_test,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        llvm_embedded_module,
+        zstd,
+    );
+    if (rc_conformance_test.root_module.resolved_target.?.result.os.tag != .windows or
+        rc_conformance_test.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        rc_conformance_test.root_module.link_libcpp = true;
+    }
+    add_tracy(b, roc_modules.build_options, rc_conformance_test, target, true, flag_enable_tracy);
+
+    test_suites.register(.{
+        .step_suffix = "rc-conformance",
+        .description = "Run RcEffect conformance sweep Zig tests",
+        .compile = rc_conformance_test,
+    });
+
     const trmc_lir_test = b.addTest(.{
         .name = "trmc_lir_test",
         .root_module = b.createModule(.{
@@ -5205,6 +5474,20 @@ pub fn build(b: *std.Build) void {
         .description = "Run TRMC LIR Zig tests",
         .compile = trmc_lir_test,
     });
+
+    const cli_io_writer_test_helper = b.addExecutable(.{
+        .name = "cli_io_writer_test_helper",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/io_writer_test_helper.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    cli_io_writer_test_helper.root_module.addImport("reporting", roc_modules.reporting);
+    cli_io_writer_test_helper.root_module.addImport("ctx", roc_modules.ctx);
+    const install_cli_io_writer_test_helper = b.addInstallArtifact(cli_io_writer_test_helper, .{});
+    const cli_io_writer_test_helper_path = b.getInstallPath(.bin, cli_io_writer_test_helper.out_filename);
 
     // Add CLI test
     const enable_cli_tests = b.option(bool, "cli-tests", "Enable cli tests") orelse true;
@@ -5246,6 +5529,11 @@ pub fn build(b: *std.Build) void {
             .step_suffix = "cli-main",
             .description = "Run roc CLI main Zig tests",
             .compile = cli_test,
+            .deps = &.{&install_cli_io_writer_test_helper.step},
+            .env = &.{.{
+                .key = "ROC_CLI_IO_WRITER_TEST_HELPER",
+                .value = cli_io_writer_test_helper_path,
+            }},
         });
     }
 
@@ -5571,18 +5859,21 @@ pub fn build(b: *std.Build) void {
         // On Linux, we need to use musl explicitly because the CLI's findHostLibrary
         // looks for targets/x64musl/libhost.a first, and musl produces proper static binaries.
         const native_fx_target_dir = roc_target.RocTarget.fromStdTarget(target.result).toName();
-        const fx_host_target, const fx_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
-            .linux => switch (target.result.cpu.arch) {
-                .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
-                .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
-                else => .{ target, native_fx_target_dir },
-            },
-            .windows => switch (target.result.cpu.arch) {
-                .x86_64 => .{ target, "x64win" },
-                .aarch64 => .{ target, "arm64win" },
-                else => .{ target, native_fx_target_dir },
-            },
-            else => .{ target, native_fx_target_dir },
+        const fx_arch = target.result.cpu.arch;
+        const fx_host_target, const fx_host_target_dir: ?[]const u8 = switch (roc_target.classifyOs(target.result.os.tag)) {
+            .linux => if (fx_arch == .x86_64)
+                .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" }
+            else if (fx_arch == .aarch64)
+                .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" }
+            else
+                .{ target, native_fx_target_dir },
+            .windows => if (fx_arch == .x86_64)
+                .{ target, "x64win" }
+            else if (fx_arch == .aarch64)
+                .{ target, "arm64win" }
+            else
+                .{ target, native_fx_target_dir },
+            .macos, .freebsd, .openbsd, .netbsd, .other => .{ target, native_fx_target_dir },
         };
 
         // Create fx test platform host static library
@@ -5662,6 +5953,33 @@ pub fn build(b: *std.Build) void {
         } else final_static_data_host_step;
         b.getInstallStep().dependOn(final_static_data_platform_step);
 
+        const final_provided_callable_host_step = buildAndCopyTestPlatformHostLib(
+            b,
+            "provided-callable-host",
+            fx_host_target,
+            static_data_host_target_dir,
+            optimize,
+            roc_modules,
+            strip,
+            omit_frame_pointer,
+        );
+        b.getInstallStep().dependOn(final_provided_callable_host_step);
+
+        const final_provided_callable_platform_step: *Step = if (std.mem.endsWith(u8, static_data_host_target_dir, "musl")) blk: {
+            const copy_musl_runtime = b.addUpdateSourceFiles();
+            copy_musl_runtime.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", static_data_host_target_dir, "crt1.o" })),
+                b.pathJoin(&.{ "test/provided-callable-host/platform/targets", static_data_host_target_dir, "crt1.o" }),
+            );
+            copy_musl_runtime.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", static_data_host_target_dir, "libc.a" })),
+                b.pathJoin(&.{ "test/provided-callable-host/platform/targets", static_data_host_target_dir, "libc.a" }),
+            );
+            copy_musl_runtime.step.dependOn(final_provided_callable_host_step);
+            break :blk &copy_musl_runtime.step;
+        } else final_provided_callable_host_step;
+        b.getInstallStep().dependOn(final_provided_callable_platform_step);
+
         const fx_platform_test = b.addTest(.{
             .name = "fx_platform_test",
             .root_module = b.createModule(.{
@@ -5670,6 +5988,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 // util.buildIsolatedTestEnvMap touches std.c (Zig 0.16 requires explicit link_libc).
                 .link_libc = true,
+                .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
             }),
             .filters = test_filters,
         });
@@ -5682,53 +6001,36 @@ pub fn build(b: *std.Build) void {
                 // The host library must be copied AND fixed before the test runs.
                 final_fx_host_step,
                 final_static_data_platform_step,
+                final_provided_callable_platform_step,
                 // The tests shell out to the roc CLI.
                 build_roc_step,
             },
         });
 
-        const http_host_target, const http_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
-            .linux => switch (target.result.cpu.arch) {
-                .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
-                .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
-                else => .{ target, null },
-            },
-            .windows => switch (target.result.cpu.arch) {
-                .x86_64 => .{ target, "x64win" },
-                .aarch64 => .{ target, "arm64win" },
-                else => .{ target, null },
-            },
-            .macos => switch (target.result.cpu.arch) {
-                .x86_64 => .{ target, "x64mac" },
-                .aarch64 => .{ target, "arm64mac" },
-                else => .{ target, null },
-            },
-            else => .{ target, null },
+        const http_arch = target.result.cpu.arch;
+        const http_host_target, const http_host_target_dir: ?[]const u8 = switch (roc_target.classifyOs(target.result.os.tag)) {
+            .linux => if (http_arch == .x86_64)
+                .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" }
+            else if (http_arch == .aarch64)
+                .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" }
+            else
+                .{ target, null },
+            .windows => if (http_arch == .x86_64) .{ target, "x64win" } else if (http_arch == .aarch64) .{ target, "arm64win" } else .{ target, null },
+            .macos => if (http_arch == .x86_64) .{ target, "x64mac" } else if (http_arch == .aarch64) .{ target, "arm64mac" } else .{ target, null },
+            .freebsd, .openbsd, .netbsd, .other => .{ target, null },
         };
 
         if (http_host_target_dir) |target_dir| {
-            const http_header_decoder_host_lib = createTestPlatformHostLib(
+            const final_http_host_step = buildAndCopyTestPlatformHostLib(
                 b,
-                "test_http_header_decoder_host",
-                "test/http-headers/platform/host.zig",
+                "http-headers",
                 http_host_target,
+                target_dir,
                 .ReleaseFast,
                 roc_modules,
                 strip,
                 omit_frame_pointer,
-                .{},
             );
-
-            const copy_http_host = b.addUpdateSourceFiles();
-            const http_host_filename = if (http_host_target.result.os.tag == .windows) "host.lib" else "libhost.a";
-            const http_host_path = b.pathJoin(&.{ "test/http-headers/platform/targets", target_dir, http_host_filename });
-            copy_http_host.addCopyFileToSource(http_header_decoder_host_lib.getEmittedBin(), http_host_path);
-
-            const final_http_host_step: *Step = if (http_host_target.result.os.tag != .windows) blk: {
-                const fix_http_host = FixArchivePaddingStep.create(b, http_host_path);
-                fix_http_host.step.dependOn(&copy_http_host.step);
-                break :blk &fix_http_host.step;
-            } else &copy_http_host.step;
             b.getInstallStep().dependOn(final_http_host_step);
 
             const http_app_exe_name = if (http_host_target.result.os.tag == .windows)
@@ -5760,6 +6062,7 @@ pub fn build(b: *std.Build) void {
                     .target = target,
                     .optimize = optimize,
                     .link_libc = true,
+                    .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
                 }),
                 .filters = test_filters,
             });
@@ -5778,28 +6081,16 @@ pub fn build(b: *std.Build) void {
                 },
             });
 
-            const json_decoder_host_lib = createTestPlatformHostLib(
+            const final_json_host_step = buildAndCopyTestPlatformHostLib(
                 b,
-                "test_json_decoder_host",
-                "test/json-decoder/platform/host.zig",
+                "json-decoder",
                 http_host_target,
+                target_dir,
                 .ReleaseFast,
                 roc_modules,
                 strip,
                 omit_frame_pointer,
-                .{},
             );
-
-            const copy_json_host = b.addUpdateSourceFiles();
-            const json_host_filename = if (http_host_target.result.os.tag == .windows) "host.lib" else "libhost.a";
-            const json_host_path = b.pathJoin(&.{ "test/json-decoder/platform/targets", target_dir, json_host_filename });
-            copy_json_host.addCopyFileToSource(json_decoder_host_lib.getEmittedBin(), json_host_path);
-
-            const final_json_host_step: *Step = if (http_host_target.result.os.tag != .windows) blk: {
-                const fix_json_host = FixArchivePaddingStep.create(b, json_host_path);
-                fix_json_host.step.dependOn(&copy_json_host.step);
-                break :blk &fix_json_host.step;
-            } else &copy_json_host.step;
             b.getInstallStep().dependOn(final_json_host_step);
 
             const json_exe_ext = if (http_host_target.result.os.tag == .windows) ".exe" else "";
@@ -5865,6 +6156,7 @@ pub fn build(b: *std.Build) void {
                     .target = target,
                     .optimize = optimize,
                     .link_libc = true,
+                    .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
                 }),
                 .filters = test_filters,
             });
@@ -6260,6 +6552,12 @@ fn addMainExe(
     // SetUnhandledExceptionFilter stack-overflow handler before the interpreter
     // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
     exe.stack_size = 64 * 1024 * 1024;
+    // Keep functions and data in independent sections. Besides allowing the
+    // final linker to discard unused compiler code, this is required on ARM32:
+    // LLD cannot place range-extension thunks inside the monolithic .text
+    // section Zig otherwise emits for Roc's large debug executable.
+    exe.link_function_sections = true;
+    exe.link_data_sections = true;
     configureBackend(exe, target);
     exe.root_module.addImport("llvm_codegen", llvm_codegen_module);
     linkWatchPlatformLibs(exe, target);
@@ -6377,6 +6675,7 @@ fn addMainExe(
         .root_source_file = b.path("src/shim_host_abi.zig"),
     });
     shim_host_abi_module.addImport("builtins", roc_modules.builtins);
+    shim_host_abi_module.addImport("roc_args", roc_modules.roc_args);
 
     // Create LIR interpreter shim static library at build time - fully static without libc
     //
@@ -6433,7 +6732,13 @@ fn addMainExe(
         .linkage = .static,
     });
     configureBackend(machine_code_shim_lib, target);
-    roc_modules.addAll(machine_code_shim_lib);
+    // Only the modules the shim actually imports. The full compiler module set
+    // would put libc in the shim's dependency graph (the bundle module links
+    // zstd), and `link_libc` is resolved over the whole graph regardless of
+    // which modules are reachable from the root source file.
+    machine_code_shim_lib.root_module.addImport("backend", roc_modules.backend);
+    machine_code_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+    machine_code_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
     machine_code_shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     machine_code_shim_lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     machine_code_shim_lib.root_module.addImport("shim_io", b.addModule("shim_io_machine_code", .{
@@ -6444,6 +6749,11 @@ fn addMainExe(
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
     machine_code_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     machine_code_shim_lib.bundle_compiler_rt = true;
+    // On Linux the shim reaches the kernel directly, so the executables it is
+    // linked into need no libc. Declaring that here makes the Zig compiler
+    // enforce it: any new libc dependency in the shim's module graph becomes a
+    // compile error rather than an undefined symbol at the user's link step.
+    if (target.result.os.tag == .linux) machine_code_shim_lib.root_module.link_libc = false;
 
     var machine_code_shim_test_for_registry: ?*Step.Compile = null;
     if (add_machine_code_shim_test) {
@@ -6519,6 +6829,9 @@ fn addMainExe(
         .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
         .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
         .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
+        .{ .name = "x64freebsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .freebsd, .abi = .none } },
+        .{ .name = "x64openbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .openbsd, .abi = .none } },
+        .{ .name = "x64netbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .netbsd, .abi = .none } },
         .{ .name = "x64mac", .query = roc_target.macos_deployment.query(.x86_64) },
         .{ .name = "arm64mac", .query = roc_target.macos_deployment.query(.aarch64) },
     };
@@ -6530,10 +6843,14 @@ fn addMainExe(
         // floor, ...) resolve into the -nostdlib executable. Excluded: wasm32
         // (gets compiler-rt via the dedicated merged object below) and macOS
         // (resolves them against -lSystem at the final link, and `-fcompiler-rt`
-        // crashes the Zig compiler for macOS targets under --listen).
+        // crashes the Zig compiler for macOS targets under --listen). BSD is
+        // also excluded because Zig 0.16.0 segfaults when compiling compiler_rt
+        // for x86_64-*-bsd-none targets.
         const cross_is_wasm = std.mem.eql(u8, cross_target.name, "wasm32");
         const cross_is_macos = cross_target.query.os_tag == .macos;
-        const cross_bundle_compiler_rt = !cross_is_wasm and !cross_is_macos;
+        const cross_os = roc_target.classifyOs(cross_target.query.os_tag orelse .freestanding);
+        const cross_is_bsd = cross_os == .freebsd or cross_os == .openbsd or cross_os == .netbsd;
+        const cross_bundle_compiler_rt = !cross_is_wasm and !cross_is_macos and !cross_is_bsd;
 
         // Build builtins object file for this target.
         const cross_builtins_obj = b.addObject(.{
@@ -6631,13 +6948,18 @@ fn addMainExe(
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
         if (!cross_is_wasm) {
+            const default_platform_os = cross_target.query.os_tag orelse .freestanding;
+            const default_platform_root_source = if (default_platform_os == .linux)
+                b.path("src/default_platform/linux_runtime.zig")
+            else if (default_platform_os == .freebsd or default_platform_os == .netbsd)
+                b.path("src/default_platform/bsd_runtime.zig")
+            else
+                b.path("src/default_platform/c_runtime.zig");
+
             const default_platform_runtime_obj = b.addObject(.{
-                .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
+                .name = b.fmt("roc_default_runtime_{s}", .{cross_target.name}),
                 .root_module = b.createModule(.{
-                    .root_source_file = if (cross_target.query.os_tag == .linux)
-                        b.path("src/default_platform/linux_runtime.zig")
-                    else
-                        b.path("src/default_platform/c_runtime.zig"),
+                    .root_source_file = default_platform_root_source,
                     .target = cross_resolved_target,
                     .optimize = .ReleaseFast,
                     .strip = false,
@@ -6647,19 +6969,54 @@ fn addMainExe(
                 }),
             });
             default_platform_runtime_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
+            default_platform_runtime_obj.root_module.addImport("roc_args", roc_modules.roc_args);
             default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            const default_platform_runtime_options = b.addOptions();
+            default_platform_runtime_options.addOption(bool, "include_process_entrypoint", false);
+            default_platform_runtime_obj.root_module.addOptions("default_platform_options", default_platform_runtime_options);
             default_platform_runtime_obj.root_module.stack_check = false;
             default_platform_runtime_obj.root_module.link_libc = false;
             default_platform_runtime_obj.bundle_compiler_rt = false;
             configureBackend(default_platform_runtime_obj, cross_resolved_target);
 
             const copy_default_platform_runtime = b.addUpdateSourceFiles();
-            const default_platform_ext = if (cross_target.query.os_tag == .windows) "roc_default_platform.obj" else "roc_default_platform.o";
+            const default_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_default_runtime.obj" else "roc_default_runtime.o";
             copy_default_platform_runtime.addCopyFileToSource(
                 default_platform_runtime_obj.getEmittedBin(),
-                b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_platform_ext }),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_runtime_ext }),
             );
             exe.step.dependOn(&copy_default_platform_runtime.step);
+
+            const default_platform_executable_obj = b.addObject(.{
+                .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
+                .root_module = b.createModule(.{
+                    .root_source_file = default_platform_root_source,
+                    .target = cross_resolved_target,
+                    .optimize = .ReleaseFast,
+                    .strip = false,
+                    .omit_frame_pointer = false,
+                    .pic = true,
+                    .single_threaded = true,
+                }),
+            });
+            default_platform_executable_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
+            default_platform_executable_obj.root_module.addImport("roc_args", roc_modules.roc_args);
+            default_platform_executable_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            const default_platform_executable_options = b.addOptions();
+            default_platform_executable_options.addOption(bool, "include_process_entrypoint", true);
+            default_platform_executable_obj.root_module.addOptions("default_platform_options", default_platform_executable_options);
+            default_platform_executable_obj.root_module.stack_check = false;
+            default_platform_executable_obj.root_module.link_libc = false;
+            default_platform_executable_obj.bundle_compiler_rt = false;
+            configureBackend(default_platform_executable_obj, cross_resolved_target);
+
+            const copy_default_platform_executable = b.addUpdateSourceFiles();
+            const default_platform_ext = if (cross_target.query.os_tag == .windows) "roc_default_platform.obj" else "roc_default_platform.o";
+            copy_default_platform_executable.addCopyFileToSource(
+                default_platform_executable_obj.getEmittedBin(),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_platform_ext }),
+            );
+            exe.step.dependOn(&copy_default_platform_executable.step);
         }
     }
 
@@ -7288,11 +7645,13 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
     glibc_stub_build.generateComprehensiveStub(&aw.writer, target_arch) catch |err| {
         std.log.warn("Failed to generate comprehensive stub assembly for {s}: {}, using minimal ELF", .{ target_name, err });
         // Fall back to minimal ELF
-        const stub_content = switch (target.result.cpu.arch) {
-            .aarch64 => createMinimalElfArm64(),
-            .x86_64 => createMinimalElfX64(),
-            else => return null,
-        };
+        const arch = target.result.cpu.arch;
+        const stub_content = if (arch == .aarch64)
+            createMinimalElfArm64()
+        else if (arch == .x86_64)
+            createMinimalElfX64()
+        else
+            return null;
 
         const write_stub = b.addWriteFiles();
         const libc_so_6 = write_stub.add("libc.so.6", stub_content);

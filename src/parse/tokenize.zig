@@ -294,75 +294,57 @@ pub const Token = struct {
         }
 
         pub fn isInterned(tok: Tag) bool {
-            return switch (tok) {
-                .UpperIdent,
-                .LowerIdent,
-                .DotLowerIdent,
-                .DotUpperIdent,
-                .NoSpaceDotLowerIdent,
-                .NoSpaceDotUpperIdent,
-                .NamedUnderscore,
-                .MalformedNamedUnderscoreUnicode,
-                .MalformedNoSpaceDotUnicodeIdent,
-                .MalformedUnicodeIdent,
-                .MalformedDotUnicodeIdent,
-                .MalformedOpaqueNameUnicode,
-                .OpaqueName,
-                => true,
-                else => false,
-            };
+            return tok == .UpperIdent or
+                tok == .LowerIdent or
+                tok == .DotLowerIdent or
+                tok == .DotUpperIdent or
+                tok == .NoSpaceDotLowerIdent or
+                tok == .NoSpaceDotUpperIdent or
+                tok == .NamedUnderscore or
+                tok == .MalformedNamedUnderscoreUnicode or
+                tok == .MalformedNoSpaceDotUnicodeIdent or
+                tok == .MalformedUnicodeIdent or
+                tok == .MalformedDotUnicodeIdent or
+                tok == .MalformedOpaqueNameUnicode or
+                tok == .OpaqueName;
         }
 
         pub fn hasUnderscoreFlags(tok: Tag) bool {
-            return switch (tok) {
-                .LowerIdent,
-                .NamedUnderscore,
-                => true,
-                else => false,
-            };
+            return tok == .LowerIdent or tok == .NamedUnderscore;
         }
 
         /// Returns true if this token can end an expression, meaning a following
         /// minus sign should be treated as a binary operator rather than unary.
         /// For example, in `x-1`, the minus after `x` (LowerIdent) should be binary.
         pub fn canEndExpression(tok: Tag) bool {
-            return switch (tok) {
-                // Identifiers can end expressions
-                .LowerIdent,
-                .UpperIdent,
-                .MalformedUnicodeIdent,
-                .NamedUnderscore,
-                .MalformedNamedUnderscoreUnicode,
-                .OpaqueName,
-                .MalformedOpaqueNameUnicode,
-                // Dot access can end expressions
-                .DotLowerIdent,
-                .DotUpperIdent,
-                .DotInt,
-                .NoSpaceDotLowerIdent,
-                .NoSpaceDotUpperIdent,
-                .NoSpaceDotInt,
-                .MalformedDotUnicodeIdent,
-                .MalformedNoSpaceDotUnicodeIdent,
-                // Numbers can end expressions
-                .Int,
-                .Float,
-                .MalformedNumberBadSuffix,
-                .MalformedNumberUnicodeSuffix,
-                .MalformedNumberNoDigits,
-                .MalformedNumberNoExponentDigits,
-                // Closing brackets can end expressions
-                .CloseRound,
-                .CloseSquare,
-                .CloseCurly,
-                .CloseStringInterpolation,
-                // String literals can end expressions
-                .StringEnd,
-                .SingleQuote,
-                .MalformedSingleQuote,
-                => true,
-                else => false,
-            };
+            return tok == .LowerIdent or
+                tok == .UpperIdent or
+                tok == .MalformedUnicodeIdent or
+                tok == .NamedUnderscore or
+                tok == .MalformedNamedUnderscoreUnicode or
+                tok == .OpaqueName or
+                tok == .MalformedOpaqueNameUnicode or
+                tok == .DotLowerIdent or
+                tok == .DotUpperIdent or
+                tok == .DotInt or
+                tok == .NoSpaceDotLowerIdent or
+                tok == .NoSpaceDotUpperIdent or
+                tok == .NoSpaceDotInt or
+                tok == .MalformedDotUnicodeIdent or
+                tok == .MalformedNoSpaceDotUnicodeIdent or
+                tok == .Int or
+                tok == .Float or
+                tok == .MalformedNumberBadSuffix or
+                tok == .MalformedNumberUnicodeSuffix or
+                tok == .MalformedNumberNoDigits or
+                tok == .MalformedNumberNoExponentDigits or
+                tok == .CloseRound or
+                tok == .CloseSquare or
+                tok == .CloseCurly or
+                tok == .CloseStringInterpolation or
+                tok == .StringEnd or
+                tok == .SingleQuote or
+                tok == .MalformedSingleQuote;
         }
 
         /// This function is used to keep around the first malformed node.

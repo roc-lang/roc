@@ -349,7 +349,7 @@ olor = |color| {
 	(defs
 		(patt (type "_arg -> tus")))
 	(type_decls
-		(alias (type "LocalStatus")
+		(alias (type "Error")
 			(ty-header (name "LocalStatus"))))
 	(expressions
 		(expr (type "_arg -> tus"))))

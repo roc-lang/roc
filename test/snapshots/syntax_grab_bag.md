@@ -215,7 +215,6 @@ expect {
 ~~~
 # EXPECTED
 EXPECTED RECORD ACCESSOR - syntax_grab_bag.md:154:2:154:5
-NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
 MOD NOT FOUND - syntax_grab_bag.md:16:1:16:27
 MOD NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
@@ -293,24 +292,6 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
         pair.0
 
     I found `...` here.
-
-
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: malformed import ───┐
-└┬────────────────┘  mod name contains invalid control characters.         │
- │                                                                            │
- │  import # Comment after import keyword                                     │
- │      pf # Comment after qualifier                                          │
- │          .StdoutMultiline # Comment after ident                            │
- │          exposing [ # Comment after exposing open                          │
- │              line!, # Comment after exposed item                           │
- │              write!, # Another after exposed item                          │
- │          ] # Comment after exposing close                                  │
- │                                                                            │
- └──────────────────────────────────────────────────── syntax_grab_bag.md:6:1 ┘
-
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
 
 
 ┌──────────────────┐
@@ -1905,7 +1886,7 @@ match_time = |
 		3.14 | 6.28 => 314
 		(1, 2, 3) => 123
 		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
 		{ # After pattern record open
 			foo # After pattern record field name
 				: # Before pattern record field value
@@ -2066,7 +2047,11 @@ expect {
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-crash (msg "Unreachable!"))
+				(s-expr
+					(e-run-low-level (op "crash")
+						(args
+							(e-string
+								(e-literal (string "Unreachable!"))))))
 				(s-let
 					(p-assign (ident "tag_with_payload"))
 					(e-tag (name "Ok")
@@ -2079,7 +2064,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1858) (dispatcher-var 374)
+						(e-interpolation (constraint-fn-var 1533) (dispatcher-var 376)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2097,7 +2082,7 @@ expect {
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 1940)
+							(e-dispatch-call (method "plus") (constraint-fn-var 1615)
 								(receiver
 									(e-runtime-error (tag "erroneous_value_use")))
 								(args
@@ -2117,30 +2102,11 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2076)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1751)
 									(receiver
-										(e-match
-											(match
-												(cond
-													(e-runtime-error (tag "erroneous_value_expr")))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-num (value "12"))))))))
+										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2073)
+										(e-dispatch-call (method "times") (constraint-fn-var 1748)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2155,18 +2121,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2109)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1784)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2099)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1774)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2136)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1811)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2126)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1801)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2181,11 +2147,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2173)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1848)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 2170)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1845)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2200,38 +2166,14 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 2231)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1906)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2202)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1877)
 																			(receiver
-																				(e-match
-																					(match
-																						(cond
-																							(e-runtime-error (tag "erroneous_value_expr")))
-																						(branches
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-runtime-error (tag "erroneous_value_expr"))))
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-return
-																										(e-nominal-external
-																											(builtin)
-																											(e-tag (name "Err")
-																												(args
-																													(e-lookup-local
-																														(p-assign (ident "#err")))))))))))))
+																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))
 																	(branches
 																		(branch
@@ -2300,32 +2242,7 @@ expect {
 														(e-lookup-local
 															(p-assign (ident "#err")))))))))))))
 				(s-expr
-					(e-match
-						(match
-							(cond
-								(e-runtime-error (tag "erroneous_value_expr")))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "#ok")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-return
-											(e-nominal-external
-												(builtin)
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err")))))))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(e-runtime-error (tag "erroneous_value_expr"))))
 		(annotation
 			(ty-fn (effectful false)
@@ -2348,7 +2265,7 @@ expect {
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (mod "#malformed_import_0")
+	(s-import (mod "pf.StdoutMultiline")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
@@ -2479,7 +2396,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error -> U64"))
+		(patt (type "U64 -> U64"))
 		(patt (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
@@ -2495,19 +2412,19 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "Foo")
+		(alias (type "Error")
 			(ty-header (name "Foo")))
-		(alias (type "FooMultiline")
+		(alias (type "Error")
 			(ty-header (name "FooMultiline")))
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "SomeMl(a)")
+		(alias (type "Error")
 			(ty-header (name "SomeMl")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "SomeMultiline(a)")
+		(alias (type "Error")
 			(ty-header (name "SomeMultiline")
 				(ty-args
 					(ty-rigid-var (name "a")))))
@@ -2525,7 +2442,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error -> U64"))
+		(expr (type "U64 -> U64"))
 		(expr (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))

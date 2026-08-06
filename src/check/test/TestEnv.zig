@@ -462,18 +462,12 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
         const def = self.module_env.store.getDef(def_idx);
         const ptrn = self.module_env.store.getPattern(def.pattern);
 
-        switch (ptrn) {
-            .assign => |assign| {
-                const def_name = idents.getText(assign.ident);
-                if (std.mem.eql(u8, target_def_name, def_name)) {
-                    try self.type_writer.write(ModuleEnv.varFrom(def_idx), .wrap);
-                    try testing.expectEqualStrings(expected, self.type_writer.get());
-                    return;
-                }
-            },
-            else => {
-                return error.TestUnexpectedResult;
-            },
+        if (ptrn != .assign) return error.TestUnexpectedResult;
+        const def_name = idents.getText(ptrn.assign.ident);
+        if (std.mem.eql(u8, target_def_name, def_name)) {
+            try self.type_writer.write(ModuleEnv.varFrom(def_idx), .wrap);
+            try testing.expectEqualStrings(expected, self.type_writer.get());
+            return;
         }
     }
     return error.TestUnexpectedResult;
@@ -583,6 +577,25 @@ pub fn getLastExprType(self: *TestEnv) TestEnvError!types.Descriptor {
     const last_def_idx = defs_slice[defs_slice.len - 1];
 
     return self.module_env.types.resolveVar(ModuleEnv.varFrom(last_def_idx)).desc;
+}
+
+/// Assert the checker-owned validity bit for a local nominal declaration.
+pub fn assertNominalDeclValidity(self: *TestEnv, name: []const u8, expected: bool) TestEnvError!void {
+    for (self.module_env.store.sliceStatements(self.module_env.all_statements)) |stmt_idx| {
+        const stmt = self.module_env.store.getStatement(stmt_idx);
+        if (stmt != .s_nominal_decl) continue;
+        const nominal = stmt.s_nominal_decl;
+        const header = self.module_env.store.getTypeHeader(nominal.header);
+        if (!std.mem.eql(u8, self.module_env.getIdent(header.relative_name), name)) continue;
+
+        const decl_idx = self.module_env.types.lookupNominalDeclByKey(
+            self.module_env.selfModuleIdentity(),
+            @intFromEnum(stmt_idx),
+        ) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(expected, self.module_env.types.getNominalDecl(decl_idx).isValid());
+        return;
+    }
+    return error.TestUnexpectedResult;
 }
 
 /// Assert that there were no parse, canonicalization, or type checking errors.
@@ -720,7 +733,7 @@ fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytyp
 
     report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
         error.WriteFailed => return error.OutOfMemory,
-        else => return err,
+        error.OutOfMemory => return err,
     };
 }
 

@@ -5,9 +5,12 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const default_platform_options = @import("default_platform_options");
 const linux = std.os.linux;
 
 const RocStr = @import("roc_str_view").RocStr;
+const roc_args = @import("roc_args");
+const RocList = @import("roc_str_view").RocList;
 const shim_symbols = @import("shim_symbols");
 
 pub const panic = std.debug.no_panic;
@@ -51,6 +54,9 @@ const roc_default_backtrace_count = @extern(*const usize, .{
     .linkage = .weak,
 });
 
+const roc_default_start_main: *const fn (RocList) callconv(.c) i32 =
+    @extern(*const fn (RocList) callconv(.c) i32, .{ .name = shim_symbols.roc_default_start_main });
+
 comptime {
     if (builtin.os.tag != .linux) {
         @compileError("default platform Linux runtime must be built for Linux");
@@ -71,12 +77,114 @@ comptime {
     @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
     @export(&rocRealloc, .{ .name = shim_symbols.roc_realloc });
     @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
+
+    if (default_platform_options.include_process_entrypoint) {
+        switch (builtin.cpu.arch) {
+            .x86_64 => {
+                @export(&linuxStartX86_64, .{ .name = "_start" });
+                @export(&linuxStartMain, .{ .name = "roc_default_linux_start_main", .visibility = .hidden });
+            },
+            .aarch64 => {
+                @export(&linuxStartAarch64, .{ .name = "_start" });
+                @export(&linuxStartMain, .{ .name = "roc_default_linux_start_main", .visibility = .hidden });
+            },
+            .alpha,
+            .amdgcn,
+            .arc,
+            .arceb,
+            .arm,
+            .armeb,
+            .aarch64_be,
+            .avr,
+            .bpfeb,
+            .bpfel,
+            .csky,
+            .hexagon,
+            .hppa,
+            .hppa64,
+            .kalimba,
+            .kvx,
+            .lanai,
+            .loongarch32,
+            .loongarch64,
+            .m68k,
+            .microblaze,
+            .microblazeel,
+            .mips,
+            .mipsel,
+            .mips64,
+            .mips64el,
+            .msp430,
+            .nvptx,
+            .nvptx64,
+            .or1k,
+            .powerpc,
+            .powerpcle,
+            .powerpc64,
+            .powerpc64le,
+            .propeller,
+            .riscv32,
+            .riscv32be,
+            .riscv64,
+            .riscv64be,
+            .s390x,
+            .sh,
+            .sheb,
+            .sparc,
+            .sparc64,
+            .spirv32,
+            .spirv64,
+            .thumb,
+            .thumbeb,
+            .ve,
+            .wasm32,
+            .wasm64,
+            .x86_16,
+            .x86,
+            .xcore,
+            .xtensa,
+            .xtensaeb,
+            => @compileError("unsupported default-platform Linux architecture"),
+        }
+    }
 }
 
 /// Set when an inline `expect` fails. A failed inline expect reports and lets
 /// the program continue; `roc_default_exit` turns an otherwise-successful exit
 /// into status 1, matching the interpreter's default-app behavior.
 var inline_expect_failed: bool = false;
+
+fn linuxStartMain(argc: usize, argv: [*][*:0]u8) callconv(.c) noreturn {
+    runtimeInit();
+    const args = roc_args.fromPosixArgv(argc, argv, &rocAlloc) orelse {
+        writeLiteral(stderr_fd, "Unable to allocate command-line arguments\n");
+        exitFailure();
+    };
+    const status = roc_default_start_main(args);
+    if (status == 0 and inline_expect_failed) linux.exit_group(1);
+    linux.exit_group(status);
+}
+
+fn linuxStartX86_64() callconv(.naked) noreturn {
+    asm volatile (
+        \\movq %%rsp, %%rbx
+        \\andq $-16, %%rsp
+        \\movq (%%rbx), %%rdi
+        \\leaq 8(%%rbx), %%rsi
+        \\call roc_default_linux_start_main
+        \\ud2
+    );
+}
+
+fn linuxStartAarch64() callconv(.naked) noreturn {
+    asm volatile (
+        \\mov x19, sp
+        \\ldr x0, [x19]
+        \\add x1, x19, #8
+        \\bl roc_default_linux_start_main
+        \\brk #0
+    );
+}
 
 fn runtimeInit() callconv(.c) void {
     installSignalHandlers();
@@ -238,7 +346,63 @@ fn signalHandler(sig: linux.SIG, _: *const linux.siginfo_t, ctx: ?*anyopaque) ca
                 const fp: usize = @intCast(context.mcontext.regs[29]);
                 printBacktrace(pc, fp);
             },
-            else => {},
+            .alpha,
+            .amdgcn,
+            .arc,
+            .arceb,
+            .arm,
+            .armeb,
+            .aarch64_be,
+            .avr,
+            .bpfeb,
+            .bpfel,
+            .csky,
+            .hexagon,
+            .hppa,
+            .hppa64,
+            .kalimba,
+            .kvx,
+            .lanai,
+            .loongarch32,
+            .loongarch64,
+            .m68k,
+            .microblaze,
+            .microblazeel,
+            .mips,
+            .mipsel,
+            .mips64,
+            .mips64el,
+            .msp430,
+            .nvptx,
+            .nvptx64,
+            .or1k,
+            .powerpc,
+            .powerpcle,
+            .powerpc64,
+            .powerpc64le,
+            .propeller,
+            .riscv32,
+            .riscv32be,
+            .riscv64,
+            .riscv64be,
+            .s390x,
+            .sh,
+            .sheb,
+            .sparc,
+            .sparc64,
+            .spirv32,
+            .spirv64,
+            .thumb,
+            .thumbeb,
+            .ve,
+            .wasm32,
+            .wasm64,
+            .x86_16,
+            .x86,
+            .xcore,
+            .xtensa,
+            .xtensaeb,
+            => {},
         }
     }
 
@@ -496,9 +660,10 @@ fn defaultMemmove(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 
 
 fn defaultMemset(dest: [*]u8, value: c_int, len: usize) callconv(.c) [*]u8 {
     const byte: u8 = @bitCast(@as(i8, @truncate(value)));
+    const volatile_dest: [*]volatile u8 = dest;
     var i: usize = 0;
     while (i < len) : (i += 1) {
-        dest[i] = byte;
+        volatile_dest[i] = byte;
     }
     return dest;
 }

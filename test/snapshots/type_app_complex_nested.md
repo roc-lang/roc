@@ -250,23 +250,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-assign (ident "result")))
-			(e-match
-				(match
-					(cond
-						(e-runtime-error (tag "erroneous_value_expr")))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-empty_list)))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-empty_list)))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)
@@ -283,7 +267,10 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(args
 				(p-underscore))
 			(e-block
-				(e-crash (msg "not implemented"))))
+				(e-run-low-level (op "crash")
+					(args
+						(e-string
+							(e-literal (string "not implemented")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -293,7 +280,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 371)
+			(e-call (constraint-fn-var 361)
 				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-tag (name "Ok")
 					(args
@@ -323,7 +310,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(patt (type "Error -> _ret"))
 		(patt (type "_arg -> List(_c)")))
 	(type_decls
-		(alias (type "ComplexType(a, b)")
+		(alias (type "Error")
 			(ty-header (name "ComplexType")
 				(ty-args
 					(ty-rigid-var (name "a"))

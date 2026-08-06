@@ -97,6 +97,30 @@ export fn roc_stdout_line(str: RocStr) callconv(.c) void {
     env_imports.echo(s.ptr, s.len);
 }
 
+// Matches the Roc type `Try(Str, [HostErr(Str)])` for FallibleHost.str_ok!.
+const FallibleStrResultTag = enum(u8) {
+    err = 0,
+    ok = 1,
+};
+
+const FallibleStrResult = extern struct {
+    payload: extern union {
+        err: RocStr,
+        ok: RocStr,
+    },
+    tag: FallibleStrResultTag,
+};
+
+// Hosted function: FallibleHost.str_ok!, which always returns Ok("ok").
+// Callers that widen its declared error row must still observe that Ok, so
+// this return value is what the wasm cart's expected output tests.
+export fn roc_fallible_str_ok() callconv(.c) FallibleStrResult {
+    return .{
+        .payload = .{ .ok = RocStr.fromSliceSmall("ok") },
+        .tag = .ok,
+    };
+}
+
 fn canaryBlob(comptime marker: []const u8) [4096]u8 {
     @setEvalBranchQuota(20000);
     var blob: [4096]u8 = undefined;

@@ -45,6 +45,116 @@ pub const Options = struct {
     std_io: ?std.Io = null,
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
+    timing: ?*Timing = null,
+};
+
+/// Thread-safe timing totals accumulated across compile-time root batches.
+pub const Timing = struct {
+    std_io: std.Io,
+    lowering: lir.CheckedPipeline.Timing,
+    total_ns: TimingCounter = .{},
+    static_data_ns: TimingCounter = .{},
+    code_generation_ns: TimingCounter = .{},
+    execution_ns: TimingCounter = .{},
+    store_results_ns: TimingCounter = .{},
+    /// Process footprint range observed at burst boundaries. Compile-time
+    /// evaluation runs as bursts interleaved with checking, so the progress
+    /// reporter cannot window-sample it; the brackets that already time each
+    /// burst fold a footprint reading at the same points.
+    mem_min: MemMinCounter = MemMinCounter.init(std.math.maxInt(u64)),
+    mem_max: MemMaxCounter = .{},
+
+    pub fn init(std_io: std.Io) Timing {
+        return .{
+            .std_io = std_io,
+            .lowering = lir.CheckedPipeline.Timing.init(std_io),
+        };
+    }
+
+    pub fn snapshot(self: *const Timing) TimingSnapshot {
+        const lowering = self.lowering.snapshot();
+        return .{
+            .total_ns = self.total_ns.load(),
+            .monotype_ns = lowering.monotype_ns,
+            .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.inline_plan_ns + lowering.lir_gen_ns,
+            .lir_passes_ns = lowering.lir_passes_ns,
+            .arc_ns = lowering.arc_ns,
+            .static_data_ns = self.static_data_ns.load(),
+            .code_generation_ns = self.code_generation_ns.load(),
+            .execution_ns = self.execution_ns.load(),
+            .store_results_ns = self.store_results_ns.load(),
+            .mem_min = self.mem_min.load(),
+            .mem_max = self.mem_max.load(),
+        };
+    }
+
+    pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
+        self.lowering.addSnapshot(.{
+            .monotype_ns = snapshot_value.monotype_ns,
+            // The compile-time evaluation report shows lowering as one
+            // category; re-attribute the merged span to its first stage.
+            .lift_ns = snapshot_value.postcheck_to_lir_ns,
+            .lir_passes_ns = snapshot_value.lir_passes_ns,
+            .arc_ns = snapshot_value.arc_ns,
+        });
+        self.total_ns.add(snapshot_value.total_ns);
+        self.static_data_ns.add(snapshot_value.static_data_ns);
+        self.code_generation_ns.add(snapshot_value.code_generation_ns);
+        self.execution_ns.add(snapshot_value.execution_ns);
+        self.store_results_ns.add(snapshot_value.store_results_ns);
+        if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.min(snapshot_value.mem_min);
+        self.mem_max.max(snapshot_value.mem_max);
+    }
+
+    fn start(self: *Timing) i64 {
+        self.sampleMemory();
+        return nowNs(self.std_io);
+    }
+
+    fn sampleMemory(self: *Timing) void {
+        const bytes = base.process_memory.currentBytes() orelse return;
+        self.mem_min.min(bytes);
+        self.mem_max.max(bytes);
+    }
+
+    fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
+        self.sampleMemory();
+        const elapsed_ns: u64 = @intCast(@max(0, nowNs(self.std_io) - started_ns));
+        switch (phase) {
+            .total => self.total_ns.add(elapsed_ns),
+            .static_data => self.static_data_ns.add(elapsed_ns),
+            .code_generation => self.code_generation_ns.add(elapsed_ns),
+            .execution => self.execution_ns.add(elapsed_ns),
+            .store_results => self.store_results_ns.add(elapsed_ns),
+        }
+    }
+};
+
+const MemMinCounter = base.ConcurrentU64;
+const MemMaxCounter = base.ConcurrentU64;
+const TimingCounter = base.ConcurrentU64;
+
+/// Immutable compile-time finalization timings for progress reporting.
+pub const TimingSnapshot = struct {
+    total_ns: u64 = 0,
+    monotype_ns: u64 = 0,
+    postcheck_to_lir_ns: u64 = 0,
+    lir_passes_ns: u64 = 0,
+    arc_ns: u64 = 0,
+    static_data_ns: u64 = 0,
+    code_generation_ns: u64 = 0,
+    execution_ns: u64 = 0,
+    store_results_ns: u64 = 0,
+    mem_min: u64 = std.math.maxInt(u64),
+    mem_max: u64 = 0,
+};
+
+const TimingPhase = enum {
+    total,
+    static_data,
+    code_generation,
+    execution,
+    store_results,
 };
 
 const ComptimeCoverage = struct {
@@ -155,6 +265,7 @@ fn finalize(
     else
         .{};
     const requests = module.root_requests.compile_time_requests;
+    const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
         var coverage = ComptimeCoverage.init(allocator);
         defer coverage.deinit();
@@ -222,6 +333,9 @@ fn finalize(
     }
 
     try module.const_store.verifyComplete();
+    if (requests.len != 0) {
+        if (options.timing) |timing| timing.finish(total_started_ns, .total);
+    }
 }
 
 const RootStatus = enum {
@@ -407,9 +521,9 @@ const RootCompletionState = struct {
                     dependent_def,
                     dependency_def,
                 ),
-                else => true,
+                .expr, .statement, .required_binding, .hoisted => true,
             },
-            else => true,
+            .expr, .statement, .required_binding, .hoisted => true,
         };
         if (!is_strict) return true;
 
@@ -536,10 +650,12 @@ fn lowerEvalAndFinishRoots(
         .{
             .target_usize = base.target.TargetUsize.native,
             .checked_module_state = .checking_finalization,
+            .timing = if (options.timing) |timing| &timing.lowering else null,
         },
     );
     defer lowered.deinit();
 
+    const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
     const materialized_static_data = static_data_exports.buildStaticData(
         allocator,
         .{
@@ -631,6 +747,7 @@ fn lowerEvalAndFinishRoots(
         error.UnresolvedStaticFunction,
         => finalizationInvariant("interpreter static data referenced an unresolved LIR procedure"),
     };
+    if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
     var host = CompilerHost.init(allocator);
     defer host.deinit();
@@ -648,6 +765,7 @@ fn lowerEvalAndFinishRoots(
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();
 
+    const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
     var had_problem = false;
     if (lowered.lir_result.const_roots.items.len != requests.len) {
         finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
@@ -707,7 +825,7 @@ fn lowerEvalAndFinishRoots(
             .numeral_conversion, .quote_conversion => {
                 payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
             },
-            else => {},
+            .constant, .hoisted_constant, .callable_binding, .expect => {},
         }
 
         module.compile_time_roots.fillPayload(root_id, payload);
@@ -722,6 +840,7 @@ fn lowerEvalAndFinishRoots(
         finishConstRoot(module, compile_time_root, payload, stored_root_type);
         state.markDone(root_id);
     }
+    if (options.timing) |timing| timing.finish(execution_started_ns, .execution);
 
     return had_problem;
 }
@@ -1012,6 +1131,7 @@ fn lowerDevEvalAndFinishRoots(
         .{
             .target_usize = base.target.TargetUsize.native,
             .checked_module_state = .checking_finalization,
+            .timing = if (options.timing) |timing| &timing.lowering else null,
         },
     );
     defer lowered.deinit();
@@ -1019,6 +1139,7 @@ fn lowerDevEvalAndFinishRoots(
     if (lowered.lir_result.const_roots.items.len != requests.len) {
         finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
     }
+    const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
     var static_strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
     defer static_strings.deinit();
 
@@ -1061,13 +1182,18 @@ fn lowerDevEvalAndFinishRoots(
         => finalizationInvariant("materialized compile-time static data omitted an LIR static-data symbol"),
     };
     defer allocator.free(native_static_data);
+    if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
+    const code_generation_started_ns = if (options.timing) |timing| timing.start() else 0;
+    // Compile-time code runs in this process, so it is generated for the CPU
+    // of the machine compiling, not for the CPU the program is compiled for.
     var codegen = try backend.HostLirCodeGen.init(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         static_strings.entries,
         .normalize,
+        roc_target.host_cpu.level(),
     );
     defer codegen.deinit();
     codegen.setNativeStaticData(native_static_data);
@@ -1177,7 +1303,9 @@ fn lowerDevEvalAndFinishRoots(
         error.UnresolvedStaticFunction,
         => finalizationInvariant("compile-time static data referenced an unresolved generated function"),
     };
+    if (options.timing) |timing| timing.finish(code_generation_started_ns, .code_generation);
 
+    const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
     var progress = DevProgressReporter.init(options, jobs[0..jobs_len]);
     defer progress.deinit();
     try progress.start();
@@ -1203,6 +1331,7 @@ fn lowerDevEvalAndFinishRoots(
         },
     );
     progress.finish();
+    if (options.timing) |timing| timing.finish(execution_started_ns, .execution);
 
     if (run_context.had_oom.load(.acquire)) return error.OutOfMemory;
 
@@ -1236,6 +1365,7 @@ fn lowerDevEvalAndFinishRoots(
         .executable = &executable,
     };
 
+    const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();
     writer.setErasedCallableResolver(.{
@@ -1284,7 +1414,7 @@ fn lowerDevEvalAndFinishRoots(
                 payload = conversion.payload;
                 if (conversion.had_problem) had_problem = true;
             },
-            else => {},
+            .constant, .hoisted_constant, .callable_binding, .expect => {},
         }
 
         module.compile_time_roots.fillPayload(job.root_id, payload);
@@ -1299,6 +1429,7 @@ fn lowerDevEvalAndFinishRoots(
         finishConstRoot(module, job.compile_time_root, payload, stored_root_type);
         state.markDone(job.root_id);
     }
+    if (options.timing) |timing| timing.finish(store_results_started_ns, .store_results);
 
     return had_problem;
 }
@@ -1531,13 +1662,24 @@ fn finishLiteralConversionRootDetailed(
 ) FinalizeError!LiteralConversionFinish {
     const try_node = switch (payload) {
         .const_node => |node| node,
-        else => finalizationInvariant("numeral conversion root did not store a constant"),
+        .pending, .fn_value, .expect => finalizationInvariant("numeral conversion root did not store a constant"),
     };
     switch (module.const_store.get(try_node)) {
         // The from_numeral implementation itself crashed; that crash was
         // already stored (and reported when a problem store exists).
         .crash => return .{ .payload = payload, .had_problem = false },
-        else => {},
+        .pending,
+        .zst,
+        .scalar,
+        .str,
+        .list,
+        .box,
+        .tuple,
+        .record,
+        .tag,
+        .nominal,
+        .fn_value,
+        => {},
     }
     const try_tag = constTagValue(module, try_node);
     if (constTagNameIs(try_tag.tag_name, "Ok")) {
@@ -1552,7 +1694,18 @@ fn finishLiteralConversionRootDetailed(
     if (err_tag.payloads.len != 1) finalizationInvariant("numeral conversion error tag did not carry one payload");
     const message_str = switch (module.const_store.get(err_tag.payloads[0])) {
         .str => |str| str,
-        else => finalizationInvariant("numeral conversion error payload was not a string"),
+        .pending,
+        .zst,
+        .scalar,
+        .list,
+        .box,
+        .tuple,
+        .record,
+        .crash,
+        .tag,
+        .nominal,
+        .fn_value,
+        => finalizationInvariant("numeral conversion error payload was not a string"),
     };
     const message = module.const_store.strBytes(message_str);
     if (problem_store) |store| {
@@ -1567,7 +1720,11 @@ fn finishLiteralConversionRootDetailed(
                 .message = message_idx,
                 .region = region,
             } }),
-            else => finalizationInvariant("non literal-conversion root reported a conversion problem"),
+            .constant,
+            .hoisted_constant,
+            .callable_binding,
+            .expect,
+            => finalizationInvariant("non literal-conversion root reported a conversion problem"),
         }
         return .{
             .payload = .{ .const_node = try appendCrashConst(module, message) },
@@ -1586,7 +1743,17 @@ fn constTagValue(
         switch (module.const_store.get(current)) {
             .nominal => |nominal| current = nominal.backing,
             .tag => |tag| return tag,
-            else => finalizationInvariant("numeral conversion constant was not a tag value"),
+            .pending,
+            .zst,
+            .scalar,
+            .str,
+            .list,
+            .box,
+            .tuple,
+            .record,
+            .crash,
+            .fn_value,
+            => finalizationInvariant("numeral conversion constant was not a tag value"),
         }
     }
 }

@@ -22,7 +22,7 @@ INCOMPLETE IMPORT - fuzz_crash_078.md:2:1:2:1
     Imports must name a mod, optionally with a qualifier and exposing list.
 
     For example:
-        import Json.Decode exposing [decode]
+        import Json/Decode exposing [decode]
 
     I reached the end of the file before this construct was complete.
 

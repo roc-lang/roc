@@ -31,13 +31,11 @@ pub const CliArgs = union(enum) {
     problem: ArgProblem,
 
     pub fn deinit(self: CliArgs, alloc: mem.Allocator) void {
-        switch (self) {
-            .fmt => |fmt| alloc.free(fmt.paths),
-            .run => |run| alloc.free(run.app_args),
-            .bundle => |bundle| alloc.free(bundle.paths),
-            .unbundle => |unbundle| alloc.free(unbundle.paths),
-            else => return,
-        }
+        const tag = std.meta.activeTag(self);
+        if (tag == .fmt) alloc.free(self.fmt.paths);
+        if (tag == .run) alloc.free(self.run.app_args);
+        if (tag == .bundle) alloc.free(self.bundle.paths);
+        if (tag == .unbundle) alloc.free(self.unbundle.paths);
     }
 };
 
@@ -129,6 +127,12 @@ fn parseResolveLimitFlag(arg: []const u8, limits: *ResolveLimitArgs) ResolveLimi
     return .not_matched;
 }
 
+fn parseResolveLimitProblem(arg: []const u8, limits: *ResolveLimitArgs) ?ArgProblem {
+    const result = parseResolveLimitFlag(arg, limits);
+    if (std.meta.activeTag(result) == .problem) return result.problem;
+    return null;
+}
+
 const resolve_limit_help =
     \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
     \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages (default: 100, 0 for unlimited)
@@ -182,6 +186,7 @@ pub const BuildArgs = struct {
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
     debug: bool = false, // include debug information in the output binary
+    keep_temp: bool = false, // do not delete temporary directories created during build
     verbose: bool = false, // enable verbose output including cache statistics
     timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable compilation caching
@@ -190,8 +195,6 @@ pub const BuildArgs = struct {
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     wasm_memory: ?usize = null, // initial memory size for WASM targets (default: 64MB)
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
-    exit_on_warnings: bool = true, // exit with code 2 when warnings are emitted
-    warning_count_out: ?*usize = null, // optionally receive the total warning count
     require_executable_output: bool = false, // reject static/shared library targets
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
     suppress_build_status: bool = false, // suppress "Built..." output (used by `roc` execution)
@@ -212,6 +215,7 @@ pub const TestArgs = struct {
     opt: OptLevel, // the optimization level (dev, interpreter, size, speed)
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
+    timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable compilation caching, force re-run all tests
     watch: bool = false, // rerun tests when source inputs change
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
@@ -379,7 +383,7 @@ const main_help =
     \\                     e.g. `roc app.roc -- arg1 arg2`
     \\Options:
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
-    \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+    \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
     \\      --no-color                     Do not use ANSI escape codes in CLI output
     \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
@@ -460,10 +464,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
                 \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -520,6 +521,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var debug: bool = false;
+    var keep_temp: bool = false;
     var verbose: bool = false;
     var timings: bool = false;
     var no_cache: bool = false;
@@ -542,8 +544,9 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<opt>                    Build mode: speed (default LLVM optimized), size (LLVM optimized for binary size), dev (native dev backend), or interpreter (embedded interpreter backend)
-            \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+            \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking
             \\      --debug                        Include debug information in the output binary
+            \\      --keep-temp                    Keep all temporary directories created during build
             \\      --verbose                      Enable verbose output including cache statistics
             \\      --timings                      Show how long each compilation phase took (shown automatically when a build is slow)
             \\      --no-cache                     Disable compilation caching
@@ -555,10 +558,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--target")) {
             if (getFlagValue(arg)) |value| {
                 target = value;
@@ -583,6 +583,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--debug")) {
             debug = true;
+        } else if (mem.eql(u8, arg, "--keep-temp")) {
+            keep_temp = true;
         } else if (mem.startsWith(u8, arg, "--wasm-memory")) {
             if (getFlagValue(arg)) |value| {
                 wasm_memory = std.fmt.parseInt(usize, value, 10) catch {
@@ -638,7 +640,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .keep_temp = keep_temp, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -814,6 +816,7 @@ fn parseTest(args: []const []const u8) CliArgs {
     var opt: OptLevel = default_dev_opt;
     var main: ?[]const u8 = null;
     var verbose: bool = false;
+    var timings: bool = false;
     var no_cache: bool = false;
     var watch: bool = false;
     var watch_inputs_file: ?[]const u8 = null;
@@ -833,6 +836,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\      --opt=<opt>                     Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
             \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose                       Enable verbose output showing individual test results
+            \\      --timings                       Show how long each compilation and test phase took
             \\      --no-cache                      Disable compilation caching, force re-run all tests
             \\      --watch                         Re-run when source inputs change
             \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
@@ -840,10 +844,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -862,6 +863,8 @@ fn parseTest(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.eql(u8, arg, "--timings")) {
+            timings = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--watch")) {
@@ -898,7 +901,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
@@ -1108,10 +1111,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -1178,10 +1178,7 @@ fn parseBump(args: []const []const u8) CliArgs {
             i += 1;
             expect = args[i];
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
@@ -1327,10 +1324,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) 
                 .run_subcommand => run_help,
             } };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.eql(u8, arg, "-v") or mem.eql(u8, arg, "--version")) {
             // We need to free the paths here because we aren't returning the .format variant
             app_args.deinit();
@@ -1412,10 +1406,7 @@ fn parseInstall(args: []const []const u8) CliArgs {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = install_help_with_limits };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
-            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
-                .problem => |problem| return CliArgs{ .problem = problem },
-                else => {},
-            }
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
         } else if (mem.startsWith(u8, arg, "--jobs")) {
             if (getFlagValue(arg)) |value| {
                 max_threads = std.fmt.parseInt(usize, value, 10) catch {
@@ -1711,6 +1702,11 @@ test "roc build" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--thisisactuallyafile", result.build.path);
     }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--keep-temp" });
+        defer result.deinit(gpa);
+        try testing.expect(result.build.keep_temp);
+    }
 }
 
 test "roc fmt" {
@@ -1779,6 +1775,7 @@ test "roc test" {
         try testing.expectEqualStrings("main.roc", result.test_cmd.path);
         try testing.expectEqual(null, result.test_cmd.main);
         try testing.expectEqual(.dev, result.test_cmd.opt);
+        try testing.expect(!result.test_cmd.timings);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "foo.roc" });
@@ -1790,6 +1787,11 @@ test "roc test" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.test_cmd.path);
         try testing.expectEqual(.speed, result.test_cmd.opt);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "--timings", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expect(result.test_cmd.timings);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "--watch", "foo.roc" });

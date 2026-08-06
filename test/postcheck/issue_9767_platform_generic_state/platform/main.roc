@@ -5,7 +5,7 @@ platform ""
                 config : {},
                 run! : Host => Try(State(model), [Exit(I64)]),
             },
-            render! : State(model), Host => Try(State(model), [Exit(I64), ..]),
+            render! : State(model), Host => Try(State(model), [Exit(I64)]),
         }
     }
     exposes [App, Host]
@@ -17,7 +17,9 @@ platform ""
         x64mac: { inputs: [app], output: Archive },
         arm64mac: { inputs: [app], output: Archive },
         x64musl: { inputs: [app], output: Archive },
+        x64v1musl: { inputs: [app], output: Archive },
         arm64musl: { inputs: [app], output: Archive },
+        arm64v1musl: { inputs: [app], output: Archive },
         x64glibc: { inputs: [app], output: Archive },
         arm64glibc: { inputs: [app], output: Archive },
         x64win: { inputs: [app], output: Archive },

@@ -72,21 +72,45 @@ pub const BindingInfo = struct {
 /// (e.g., record destructures, literals, underscore).
 pub fn extractIdentFromPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = store.getPattern(pattern_idx);
-    return switch (pattern) {
-        .assign => |a| a.ident,
-        .as => |a| a.ident,
-        else => null,
-    };
+    if (std.meta.activeTag(pattern) == .assign) return pattern.assign.ident;
+    if (std.meta.activeTag(pattern) == .as) return pattern.as.ident;
+    return null;
 }
 
 /// Extract the identifier from a pattern, recursively following .as patterns
 /// to find the innermost identifier.
 pub fn extractIdentFromPatternRecursive(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = store.getPattern(pattern_idx);
-    return switch (pattern) {
-        .assign => |a| a.ident,
-        .as => |a| a.ident,
-        else => null,
+    if (std.meta.activeTag(pattern) == .assign) return pattern.assign.ident;
+    if (std.meta.activeTag(pattern) == .as) return pattern.as.ident;
+    return null;
+}
+
+/// Return the binding pattern for declaration-like statements.
+pub fn getDeclarationPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
+    return switch (statement) {
+        .s_decl => |decl| decl.pattern,
+        .s_var => |var_stmt| var_stmt.pattern_idx,
+        .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
     };
 }
 
@@ -174,12 +198,7 @@ pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pa
     const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
     for (statements_slice) |stmt_idx| {
         const stmt = module_env.store.getStatement(stmt_idx);
-        const pattern_idx_opt: ?CIR.Pattern.Idx = switch (stmt) {
-            .s_decl => |decl| decl.pattern,
-            .s_var => |var_stmt| var_stmt.pattern_idx,
-            .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
-            else => null,
-        };
+        const pattern_idx_opt = getDeclarationPattern(stmt);
         if (pattern_idx_opt) |pat_idx| {
             if (pat_idx == target_pattern) return .{ .stmt = stmt, .idx = stmt_idx };
         }
@@ -237,7 +256,7 @@ pub fn findDefinitionsWithPrefix(
 
 // Module Lookup Functions
 
-/// Find a module by name in the build environment's schedulers.
+/// Find a module by name in the build environment's Coordinator state.
 /// Returns null if the module is not found or the build environment is null.
 pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleInfo {
     // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
@@ -246,17 +265,12 @@ pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleIn
     else
         module_name;
 
-    // Search all schedulers for a module matching this name
-    var sched_it = build_env.schedulers.iterator();
-    while (sched_it.next()) |entry| {
-        const sched = entry.value_ptr.*;
-        if (sched.getModuleState(base_name)) |mod_state| {
-            if (mod_state.moduleEnv()) |module_env_ptr| {
-                return ModuleInfo{
-                    .module_env = module_env_ptr,
-                    .path = mod_state.path,
-                };
-            }
+    if (build_env.findModuleByName(base_name)) |mod_state| {
+        if (mod_state.moduleEnv()) |module_env_ptr| {
+            return ModuleInfo{
+                .module_env = module_env_ptr,
+                .path = mod_state.path,
+            };
         }
     }
     return null;
@@ -388,6 +402,11 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr2 = null,
         },
         .s_nominal_decl => .{
+            .pattern = null,
+            .expr = null,
+            .expr2 = null,
+        },
+        .s_where_alias_decl => .{
             .pattern = null,
             .expr = null,
             .expr2 = null,

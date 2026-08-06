@@ -4,7 +4,7 @@ app [main!] { pf: platform "platform/main.roc" }
 # Optimized build specialization must not panic on Draw.offset's tag match.
 import pf.Draw
 
-main! : () => Try({}, [Exit(I64), ..])
+main! : () => Try({}, [Exit(I64)])
 main! = || {
 	_offset = Draw.offset(Draw.align_left)
 	Ok({})

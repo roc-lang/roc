@@ -109,7 +109,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        include:
+          - os: ubuntu-24.04
+            build_jobs_flag: ''
+          # Hosted arm64 runners drop off the network mid-`build-ci` at full
+          # parallelism ("The hosted runner lost communication with the
+          # server", no logs preserved). Debug builds fall back to LLVM on
+          # aarch64 -- Zig only self-hosts x86_64 ELF/Mach-O -- so this runner
+          # compiles ~13 artifacts through LLVM at once where the x86_64 one
+          # does not, and starves itself. Same throttle as `release_jobs_flag`
+          # in ci_zig.yml.
+          # - os: ubuntu-24.04-arm
+          #   build_jobs_flag: '-j2'
+          - os: macos-15
+            build_jobs_flag: ''
+          - os: windows-2025
+            build_jobs_flag: ''
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -122,9 +137,23 @@ jobs:
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
 
+      # RustGlue's glue-runtime contract case compiles a `#![no_std]` host with
+      # `rustc --target <arch>-unknown-linux-musl`, and build.zig derives that
+      # target from the host arch, so install the musl target per runner arch.
       - name: Install Rust musl target (Linux)
         if: runner.os == 'Linux'
-        run: rustup target add x86_64-unknown-linux-musl
+        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
+
+      # `build-ci` depends on `build-coverage-tools`, and build.zig only
+      # compiles kcov on Linux arm64 (see `is_coverage_supported`), so arm64 is
+      # the only runner here that needs kcov's headers. Without them the
+      # `kcov_system_lib` link (-lz -lcurl) fails. Mirrors ci_zig.yml's nightly
+      # coverage setup.
+      - name: Install kcov dependencies (Linux arm64)
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
@@ -153,11 +182,15 @@ jobs:
       # on stdout for flaky-retry to match. The minici shards below then consume
       # the build artifact and go straight to the run steps, so their failures
       # are genuine and never retried.
+      # No `error_string_contains` override: this command has no flake signature
+      # of its own, so it uses the action's default list. The override that used
+      # to be here was a stale copy of that default plus a bare `503`, which
+      # matched the runner temp path (`.../2fdaaa19-b503-4660-...`) printed in
+      # every failed build command -- so a deterministic failure retried 4x.
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-ci
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
+          command: zig build ${{ matrix.build_jobs_flag }} build-ci
           retry_count: 3
 
       - name: Pack MiniCI build artifact
@@ -165,6 +198,32 @@ jobs:
         run: |
           set -euo pipefail
           tar -cf minici-build.tar .zig-cache zig-out/bin zig-out/lib
+
+      # Packing is the disk high-water mark of this job: `minici-build.tar` is a
+      # second full copy of `.zig-cache` in the same workspace, and
+      # upload-artifact then stages a zip of that. Report free space and the
+      # packed size here, where the peak actually is.
+      #
+      # No threshold on the tar yet, deliberately. The only figures we have are
+      # the *compressed* uploads (2.1-2.7 GB across the four runners on
+      # 2026-07-26), and a limit invented from those would either fire on
+      # healthy runs or never fire at all. A few runs of this line give the
+      # baseline to set one from.
+      - name: Report disk headroom and packed artifact size
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          df -h "$GITHUB_WORKSPACE" || true
+          if [ -f minici-build.tar ]; then
+            # `wc -c` over `du`: apparent size, comparable across filesystems
+            # and to the uploaded artifact size the log reports later.
+            bytes="$(wc -c < minici-build.tar)"
+            awk -v b="$bytes" 'BEGIN { printf "minici-build.tar %.1f MB (%d bytes)\n", b/1048576, b }'
+          else
+            echo "(no minici-build.tar -- packing did not complete)"
+          fi
 
       - name: Upload MiniCI build artifact
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
@@ -182,9 +241,23 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     env:
-      # Warning threshold for the explicit MiniCI build artifact. This is a
-      # sanity check for the artifact size, not a setup-zig setting.
-      MINICI_BUILD_ARTIFACT_WARN_MB: '10240'
+      # Warning threshold for `.zig-cache` as it stands *after* a shard runs:
+      # the cache restored from the build artifact plus everything the shard's
+      # own run-time compilation added. It is not the artifact size -- the
+      # packed artifact is measured in `zig-minici-build` -- and it is not a
+      # setup-zig setting.
+      #
+      # Observed on 2026-07-26 (roc-lang/roc run 30212177851), post-shard:
+      #   ubuntu-full 22.3 GB (unsharded, so it runs every phase and is
+      #   structurally the largest), ubuntu-arm-zig 11.4 GB, macos-core
+      #   10.8 GB, ubuntu-arm-harness 10.1 GB, macos-zig 9.6 GB,
+      #   macos-harness 8.4 GB.
+      #
+      # The previous 10240 threshold sat below four of those, so it fired every
+      # run on shards that were behaving normally and flagged nothing. This one
+      # sits ~28% above the largest observed shard: high enough to stay quiet
+      # while things are healthy, low enough that a real blowup still trips it.
+      MINICI_SHARD_ZIG_CACHE_WARN_MB: '28672'
     strategy:
       fail-fast: false
       matrix:
@@ -219,6 +292,22 @@ jobs:
             shard: windows-harness
             timeout_minutes: 120
             minici_args: ["--minici-from", *minici_harness_boundary]
+          # arm64 Linux runs no `core` shard: those are early-module Zig unit
+          # tests, which are arch-independent and already covered on arm64 by
+          # the macos-15 shards. The unique arm64+ELF+glibc signal (linking,
+          # host builds, native codegen) lives in `zig` and `harness`.
+          #
+          # These entries must stay below the macOS ones: they alias anchors
+          # that the macOS entries define, and YAML requires the definition to
+          # come first.
+          # - os: ubuntu-24.04-arm
+          #   shard: ubuntu-arm-zig
+          #   timeout_minutes: 120
+          #   minici_args: ["--minici-after", *minici_core_boundary, "--minici-before", *minici_harness_boundary]
+          # - os: ubuntu-24.04-arm
+          #   shard: ubuntu-arm-harness
+          #   timeout_minutes: 120
+          #   minici_args: ["--minici-from", *minici_harness_boundary]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -244,9 +333,21 @@ jobs:
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
 
+      # RustGlue's glue-runtime contract case compiles a `#![no_std]` host with
+      # `rustc --target <arch>-unknown-linux-musl`, and build.zig derives that
+      # target from the host arch, so install the musl target per runner arch.
       - name: Install Rust musl target (Linux)
         if: runner.os == 'Linux'
-        run: rustup target add x86_64-unknown-linux-musl
+        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
+
+      # `run-coverage-parser` is the last MiniCI job, so the harness shard runs
+      # the kcov that `build-ci` compiled. This is a different runner than the
+      # build job, so kcov's shared libraries have to be present here too.
+      - name: Install kcov dependencies (Linux arm64)
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
 
       # The embedded lld-link resolves /defaultlib via the LIB env and roc's
       # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
@@ -264,14 +365,20 @@ jobs:
       # suite for speed. Keep the exact-bit float contract PR-gated with a
       # focused invocation so backend drift cannot wait for the nightly suite.
       - name: Check exact float bits with LLVM
-        if: matrix.shard == 'ubuntu-full' || matrix.shard == 'macos-harness' || matrix.shard == 'windows-harness'
+        if: matrix.shard == 'ubuntu-full' || matrix.shard == 'ubuntu-arm-harness' || matrix.shard == 'macos-harness' || matrix.shard == 'windows-harness'
         run: zig build run-test-eval -- --llvm --threads 1 --filter "exact bits agree across backends"
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
-      # build temp dir. It is restored from the MiniCI build artifact, so report
-      # the composition after each shard to measure artifact size and growth
-      # from run-time build work.
+      # build temp dir. It is restored from the MiniCI build artifact, so the
+      # composition after each shard is the restored cache plus whatever the
+      # shard's own run-time builds added on top. The packed artifact itself is
+      # measured in `zig-minici-build`, at pack time.
       # One level deep on purpose: o/, h/, p/, tmp/ is the whole question.
+      #
+      # `df` first: the cache lives next to the unpacked artifact, and a runner
+      # that fills its disk dies without flushing logs, which looks identical to
+      # memory exhaustion ("lost communication with the server", no logs). The
+      # free-space line is what tells the two apart afterwards.
       - name: Report .zig-cache composition
         if: always() && runner.os != 'Windows'
         continue-on-error: true
@@ -279,8 +386,9 @@ jobs:
         run: |
           set -uo pipefail
           root="${ZIG_LOCAL_CACHE_DIR:-$GITHUB_WORKSPACE/.zig-cache}"
-          limit_mb="$MINICI_BUILD_ARTIFACT_WARN_MB"
+          limit_mb="$MINICI_SHARD_ZIG_CACHE_WARN_MB"
           echo "root=$root  TMPDIR=${TMPDIR:-unset}"
+          df -h "$GITHUB_WORKSPACE" || true
           if [ ! -d "$root" ]; then echo "(no .zig-cache)"; exit 0; fi
           # `du -sk`, not `-sh`/`--block-size`: -k is POSIX and identical on BSD
           # (macOS) and GNU du, and its output can be sorted numerically.
@@ -292,7 +400,7 @@ jobs:
           awk -v k="$total_kb" -v l="$limit_mb" \
             'BEGIN { printf "%10.1f MB  TOTAL (limit %s MB)\n", k/1024, l }'
           if [ "$total_kb" -gt "$(( limit_mb * 1024 ))" ]; then
-            echo "::warning::.zig-cache is $(( total_kb / 1024 )) MB, over the ${limit_mb} MB MiniCI build-artifact warning threshold."
+            echo "::warning::.zig-cache is $(( total_kb / 1024 )) MB after this shard, over the ${limit_mb} MB post-shard warning threshold."
           fi
 
       - name: Report .zig-cache composition (Windows)
@@ -302,8 +410,13 @@ jobs:
         run: |
           $root = if ($env:ZIG_LOCAL_CACHE_DIR) { $env:ZIG_LOCAL_CACHE_DIR }
                   else { Join-Path $env:GITHUB_WORKSPACE '.zig-cache' }
-          $limitMb = [int]$env:MINICI_BUILD_ARTIFACT_WARN_MB
+          $limitMb = [int]$env:MINICI_SHARD_ZIG_CACHE_WARN_MB
           Write-Host "root=$root  TEMP=$env:TEMP"
+          # Disk headroom, for the same reason the Unix branch runs `df`.
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name, @{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}},
+                                @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} |
+            Format-Table -AutoSize | Out-String -Width 200 | Write-Host
           if (-not (Test-Path -LiteralPath $root)) { Write-Host '(no .zig-cache)'; exit 0 }
           # -Force is required, or dotted/hidden subdirs are silently missed.
           # -ErrorAction SilentlyContinue because deep Zig cache paths can exceed
@@ -322,7 +435,7 @@ jobs:
           $totalFiles = ($rows | Measure-Object Files -Sum).Sum
           Write-Host ("TOTAL {0} MB across {1} files (limit {2} MB)" -f $totalMb, $totalFiles, $limitMb)
           if ($totalMb -gt $limitMb) {
-            Write-Host ("::warning::.zig-cache is {0} MB, over the {1} MB MiniCI build-artifact warning threshold." -f $totalMb, $limitMb)
+            Write-Host ("::warning::.zig-cache is {0} MB after this shard, over the {1} MB post-shard warning threshold." -f $totalMb, $limitMb)
           }
 
       - name: Upload MiniCI report and logs
@@ -332,8 +445,79 @@ jobs:
           name: minici-${{ matrix.shard }}
           path: zig-out/minici/
 
+  # The only aarch64 Linux job that runs on a PR. Deliberately not a MiniCI
+  # shard: the `ubuntu-24.04-arm` entries above are commented out because
+  # hosted arm64 runners lose network mid-`build-ci` at full parallelism, and
+  # that is a property of `build-ci` compiling ~13 artifacts through LLVM at
+  # once. This builds one binary and one host lib, so it stays clear of the
+  # failure those entries were disabled for.
+  #
+  arm64-linux-hello-world:
+    needs: check-changes
+    if: needs.check-changes.outputs.zig == 'true'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.16.0
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by the setup action's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
+      # `-f` because the LLVM version on the runner image is not this job's to
+      # depend on; there being no llvm-config to remove is fine.
+      - name: delete llvm-config
+        run: sudo rm -f /usr/lib/llvm-18/bin/llvm-config
+
+      # `build-release` rather than a plain `zig build`, so this runs the binary
+      # shape that ships: musl, and pinned to the aarch64 baseline CPU by
+      # getReleaseTargetQuery. That pin is precisely why the compiler cannot
+      # read its own CPU features out of `builtin.cpu` and has to ask the
+      # machine at runtime.
+      - name: build release roc
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-release
+          retry_count: 3
+
+      # The fx platform ships `crt1.o` and `libc.a` for each target but builds
+      # `libhost.a`, so the arm64musl inputs dir is incomplete until this runs.
+      - name: build the fx platform host
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-test-hosts -Dplatform=fx
+          retry_count: 3
+
+      - name: run hello_world.roc
+        run: |
+          set -euo pipefail
+
+          output="$(./zig-out/bin/roc test/fx/hello_world.roc)"
+          echo "$output"
+
+          if [ "$output" != "Hello, world!" ]; then
+            echo "Expected 'Hello, world!' but got '$output'."
+            exit 1
+          fi
+
   finish:
-    needs: [check-changes, zig-minici-build, zig-minici]
+    needs: [check-changes, zig-minici-build, zig-minici, arm64-linux-hello-world]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -350,6 +534,10 @@ jobs:
             fi
             if [[ "${{ needs.zig-minici.result }}" != "success" ]]; then
               echo "zig-minici failed."
+              exit 1
+            fi
+            if [[ "${{ needs.arm64-linux-hello-world.result }}" != "success" ]]; then
+              echo "arm64-linux-hello-world failed."
               exit 1
             fi
           fi

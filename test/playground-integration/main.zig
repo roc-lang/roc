@@ -482,7 +482,20 @@ fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []co
                 return retry_err;
             };
         },
-        else => {
+        error.BufferUnderrun,
+        error.DuplicateField,
+        error.InvalidCharacter,
+        error.InvalidEnumTag,
+        error.InvalidNumber,
+        error.LengthMismatch,
+        error.MissingField,
+        error.OutOfMemory,
+        error.Overflow,
+        error.UnexpectedEndOfInput,
+        error.UnexpectedToken,
+        error.UnknownField,
+        error.ValueTooLong,
+        => {
             logDebug("[ERROR] Failed to parse JSON response: {}. JSON was: {s}\n", .{ err, response_json_slice });
             logDebug("[ERROR] JSON bytes: {x}\n", .{response_json_slice});
             return err;

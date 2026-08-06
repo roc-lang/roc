@@ -125,9 +125,9 @@ main! = |_| getName({ namee: "luke", age: 21 })
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Str"))
+		(patt (type "{ age: U64, name: Str } -> Str"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "Error -> Str"))
+		(expr (type "{ age: U64, name: Str } -> Str"))
 		(expr (type "_arg -> Error"))))
 ~~~

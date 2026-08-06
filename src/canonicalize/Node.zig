@@ -54,6 +54,7 @@ pub const Tag = enum {
     statement_import,
     statement_alias_decl,
     statement_nominal_decl,
+    statement_where_alias_decl,
     statement_type_anno,
     statement_type_var_alias,
     // Expressions
@@ -78,6 +79,9 @@ pub const Tag = enum {
     expr_type_dispatch_call,
     expr_static_dispatch,
     expr_external_lookup,
+    expr_associated_lookup_local,
+    expr_associated_lookup,
+    expr_associated_lookup_resolved,
     expr_required_lookup,
     expr_apply,
     expr_string,
@@ -219,6 +223,7 @@ pub const Tag = enum {
     diag_malformed_type_annotation,
     diag_malformed_where_clause,
     diag_where_clause_not_allowed_in_type_decl,
+    diag_where_alias_constraint_not_on_receiver,
     diag_open_ext_not_allowed_in_type_decl,
     diag_unnamed_field_not_allowed_in_structural_record,
     diag_type_module_missing_matching_type,
@@ -229,6 +234,7 @@ pub const Tag = enum {
     diag_execution_requires_app_or_default_app,
     diag_type_name_case_mismatch,
     diag_module_header_deprecated,
+    diag_roc_version_mismatch,
     diag_redundant_expose_main_type,
     diag_invalid_main_type_rename_in_exposing,
     diag_var_across_function_boundary,
@@ -305,12 +311,16 @@ pub const Payload = extern union {
     statement_import: StatementImport,
     statement_alias_decl: StatementAliasDecl,
     statement_nominal_decl: StatementNominalDecl,
+    statement_where_alias_decl: StatementWhereAliasDecl,
     statement_type_anno: StatementTypeAnno,
     statement_type_var_alias: StatementTypeVarAlias,
 
     // === Expression payloads ===
     expr_var: ExprVar,
     expr_external_lookup: ExprExternalLookup,
+    expr_associated_lookup_local: ExprAssociatedLookupLocal,
+    expr_associated_lookup: ExprAssociatedLookup,
+    expr_associated_lookup_resolved: ExprAssociatedLookupResolved,
     expr_required_lookup: ExprRequiredLookup,
     expr_tuple: ExprTuple,
     expr_tuple_access: ExprTupleAccess,
@@ -502,6 +512,13 @@ pub const Payload = extern union {
         is_opaque: u32, // 0 or 1
     };
 
+    /// statement_where_alias_decl: header + receiver + where clause
+    pub const StatementWhereAliasDecl = extern struct {
+        header: u32,
+        receiver: u32,
+        where_span_idx: u32, // index into span_with_node_data
+    };
+
     /// statement_type_anno: annotation + name + optional where clause
     pub const StatementTypeAnno = extern struct {
         anno: u32,
@@ -529,6 +546,29 @@ pub const Payload = extern union {
         module_idx: u32,
         target_node_idx: u32,
         ident_idx: u32,
+    };
+
+    /// expr_associated_lookup_local: local type alias plus associated item.
+    pub const ExprAssociatedLookupLocal = extern struct {
+        type_node_idx: u32,
+        type_ident: u32,
+        item_ident: u32,
+    };
+
+    /// expr_associated_lookup: imported type declaration plus associated item.
+    pub const ExprAssociatedLookup = extern struct {
+        module_idx: u32,
+        type_node_idx: u32,
+        type_ident: u32,
+        item_ident: u32,
+    };
+
+    /// expr_associated_lookup_resolved: checker-selected implementation.
+    pub const ExprAssociatedLookupResolved = extern struct {
+        module_identity: u32,
+        target_node_idx: u32,
+        target_def_idx: u32,
+        source_ident: u32,
     };
 
     /// expr_required_lookup: lookup from platform requires clause
@@ -1040,10 +1080,10 @@ pub const Payload = extern union {
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
-    /// where_alias: type variable alias in where clause
+    /// where_alias: a where alias applied to a type variable in a where clause
     pub const WhereAlias = extern struct {
         var_idx: u32,
-        alias_name: u32,
+        alias_idx: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 

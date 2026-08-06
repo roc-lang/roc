@@ -33,10 +33,8 @@ inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
 pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
     if (comptime builtin.mode == .Debug) {
         const ptr_info = @typeInfo(T);
-        const alignment = switch (ptr_info) {
-            .pointer => |p| p.alignment orelse 0,
-            else => @compileError("alignedPtrCast target must be a pointer type"),
-        };
+        if (ptr_info != .pointer) @compileError("alignedPtrCast target must be a pointer type");
+        const alignment = ptr_info.pointer.alignment orelse 0;
         const ptr_int = @intFromPtr(ptr);
         if (alignment > 0 and ptr_int % alignment != 0) {
             // Alignment errors indicate a bug in the caller.
@@ -1019,8 +1017,14 @@ pub const DebugRefcountTracker = struct {
         free_from_decref,
     };
 
-    const OpKind = enum(u8) { alloc, incref, decref, free };
-    const OpEntry = struct {
+    /// What one recorded refcount operation did to an allocation.
+    ///
+    /// `realloc` is logged against the *old* address: the allocation still
+    /// exists, but its refcount now lives somewhere else, so readers holding
+    /// the old address must stop reading it.
+    pub const OpKind = enum(u8) { alloc, incref, decref, free, realloc };
+    /// One recorded refcount operation.
+    pub const OpEntry = struct {
         rc_addr: usize,
         kind: OpKind,
         /// For incref: the amount. For others: 0.
@@ -1038,15 +1042,63 @@ pub const DebugRefcountTracker = struct {
 
     var op_log: [max_ops]OpEntry = undefined;
     var op_count: usize = 0;
+    var overflowed: bool = false;
+    var shadow_diagnostics: bool = true;
 
     pub fn enable() void {
         active = true;
         count = 0;
         op_count = 0;
+        overflowed = false;
+        shadow_diagnostics = true;
+    }
+
+    /// Turn off reports about the shadow counts.
+    ///
+    /// The shadow model follows an allocation from the address it was born
+    /// with, through the increfs and decrefs that pass through this module. It
+    /// does not see a count that is written directly, and reallocation moves a
+    /// count to an address whose history starts empty — so a shadow count can
+    /// read low even when the program is balanced. Consumers that read only
+    /// the operation log (which records the events themselves, not a derived
+    /// count) turn these reports off rather than print anomalies they know are
+    /// artifacts.
+    pub fn setShadowDiagnostics(enabled: bool) void {
+        shadow_diagnostics = enabled;
     }
 
     pub fn disable() void {
         active = false;
+    }
+
+    pub fn isActive() bool {
+        return active;
+    }
+
+    /// Whether the address table is full. Once it is, new allocations go
+    /// unrecorded, so readers of the log cannot tell a missing entry from an
+    /// operation that never happened.
+    pub fn isSaturated() bool {
+        return count >= max_tracked;
+    }
+
+    /// The operations recorded since the last `clearLog`, oldest first.
+    ///
+    /// Callers that want to attribute operations to one region of execution
+    /// clear the log on entry and read it on exit. The log holds at most
+    /// `max_ops` entries and silently drops the rest, so `logOverflowed`
+    /// reports whether what is here is the whole story.
+    pub fn recordedOps() []const OpEntry {
+        return op_log[0..op_count];
+    }
+
+    pub fn clearLog() void {
+        op_count = 0;
+        overflowed = false;
+    }
+
+    pub fn logOverflowed() bool {
+        return overflowed;
     }
 
     fn logOp(rc_addr: usize, kind: OpKind, amount: isize, shadow_after: isize, site: Site) void {
@@ -1059,6 +1111,8 @@ pub const DebugRefcountTracker = struct {
                 .site = site,
             };
             op_count += 1;
+        } else {
+            overflowed = true;
         }
     }
 
@@ -1090,10 +1144,12 @@ pub const DebugRefcountTracker = struct {
         }
     }
 
-    /// Called from increfRcPtr
+    /// Called from increfRcPtr. Allocations born before tracking started are
+    /// not followed: their shadow count would start from an unknown baseline
+    /// and go negative on the first decref past it.
     pub fn onIncref(rc_addr: usize, amount: isize) void {
         if (!active) return;
-        if (findOrInsert(rc_addr)) |idx| {
+        if (find(rc_addr)) |idx| {
             shadow_rcs[idx] += amount;
             logOp(rc_addr, .incref, amount, shadow_rcs[idx], .incref_rc_ptr);
         }
@@ -1105,7 +1161,7 @@ pub const DebugRefcountTracker = struct {
         if (find(rc_addr)) |idx| {
             shadow_rcs[idx] -= 1;
             logOp(rc_addr, .decref, 0, shadow_rcs[idx], site);
-            if (shadow_rcs[idx] < 0) {
+            if (shadow_diagnostics and shadow_rcs[idx] < 0) {
                 debugPrint(
                     "DebugRefcountTracker: refcount underflow at rc_addr=0x{x}\n",
                     .{rc_addr},
@@ -1129,6 +1185,7 @@ pub const DebugRefcountTracker = struct {
         if (!active) return;
         if (old_rc_addr == new_rc_addr) return;
         if (find(old_rc_addr)) |idx| {
+            logOp(old_rc_addr, .realloc, 0, shadow_rcs[idx], .allocate_with_refcount);
             rc_addrs[idx] = new_rc_addr;
         }
     }
@@ -1152,6 +1209,7 @@ pub const DebugRefcountTracker = struct {
                             .incref => debugPrint("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
                             .decref => debugPrint("  decref={d}", .{op.shadow_after}),
                             .free => debugPrint("  free", .{}),
+                            .realloc => debugPrint("  realloc (moved)", .{}),
                         }
                         debugPrint(" via {s}\n", .{@tagName(op.site)});
                     }
@@ -1173,6 +1231,7 @@ pub const DebugRefcountTracker = struct {
                     .incref => debugPrint("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
                     .decref => debugPrint("  decref={d}", .{op.shadow_after}),
                     .free => debugPrint("  free", .{}),
+                    .realloc => debugPrint("  realloc (moved)", .{}),
                 }
                 debugPrint(" via {s}\n", .{@tagName(op.site)});
             }

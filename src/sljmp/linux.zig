@@ -3,11 +3,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const Impl = switch (builtin.cpu.arch) {
-    .x86_64 => X86_64,
-    .aarch64 => AArch64,
-    else => @compileError("Unsupported Linux architecture for setjmp/longjmp"),
-};
+const Impl = if (builtin.cpu.arch == .x86_64)
+    X86_64
+else if (builtin.cpu.arch == .aarch64)
+    AArch64
+else
+    @compileError("Unsupported Linux architecture for setjmp/longjmp");
 
 /// Architecture-specific buffer that stores the machine state for setjmp/longjmp.
 pub const JmpBuf = Impl.JmpBuf;

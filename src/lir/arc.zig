@@ -23,6 +23,7 @@ const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 const arc_certify = @import("arc_certify.zig");
+const arc_dismantle = @import("arc_dismantle.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -251,6 +252,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer solution.deinit();
     inserter.solution = &solution;
 
+    var dismantles = try arc_dismantle.compute(store.allocator, store, layouts, &solution);
+    defer dismantles.deinit();
+    inserter.dismantles = &dismantles;
+
     // Domains are active one proc at a time. This reusable exact map makes
     // global LocalId -> proc-dense index lookup O(1) without allocating and
     // clearing a module-wide table for every proc.
@@ -350,9 +355,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         var death_scratch = std.ArrayList(LIR.LocalId).empty;
         var transfer_position_scratch = std.ArrayList(u32).empty;
         var retain_arg_scratch = std.ArrayList(LIR.LocalId).empty;
+        var dismantle_temps = std.ArrayList(LIR.LocalId).empty;
         inserter.death_scratch = &death_scratch;
         inserter.transfer_position_scratch = &transfer_position_scratch;
         inserter.retain_arg_scratch = &retain_arg_scratch;
+        inserter.dismantle_temps = &dismantle_temps;
         var arc_plans = ArcPlans{};
         inserter.arc_plans = &arc_plans;
         inserter.next_loop_keep_id = 1;
@@ -375,11 +382,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         const emit_params_for_overrides = store.getLocalSpan(emit_args);
         for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
             const param = GuardedList.at(emit_params_for_overrides, position);
-            if (position >= 64) break;
+            const bit = arc_sig.paramBit(position) orelse break;
             if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
                 owned_param_override.set(param);
             }
-            if ((emit_sig.unique_params >> @as(u6, @intCast(position))) & 1 != 0) {
+            if ((emit_sig.unique_params & bit) != 0) {
                 unique_param_override.set(param);
             }
         }
@@ -416,6 +423,22 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         const rewritten_body = try inserter.materializeArcPlans();
         const join_points = try inserter.finishFinalJoinPoints();
         store.setProcSpecBodyAndJoinPoints(emit_proc, rewritten_body, join_points);
+
+        // Dismantle temporaries are fresh locals referenced by the emitted
+        // body; the frame must own them. They were appended to the store in
+        // ascending id order above every existing local, so concatenating
+        // keeps the frame span sorted.
+        if (dismantle_temps.items.len > 0) {
+            const emit_spec = store.getProcSpec(emit_proc);
+            const old_frame = store.getLocalSpan(emit_spec.frame_locals);
+            const old_len = GuardedList.borrowLen(old_frame);
+            var frame = try std.ArrayList(LIR.LocalId).initCapacity(store.allocator, old_len + dismantle_temps.items.len);
+            defer frame.deinit(store.allocator);
+            for (0..old_len) |i| frame.appendAssumeCapacity(GuardedList.at(old_frame, i));
+            frame.appendSliceAssumeCapacity(dismantle_temps.items);
+            const frame_locals = try store.addLocalSpan(frame.items);
+            store.getProcSpecPtr(emit_proc).frame_locals = frame_locals;
+        }
     }
 
     if (builtin.mode == .Debug) {
@@ -433,10 +456,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
 
 const VariantSelector = struct {
     source: LIR.LirProcSpecId,
-    borrowed_params: u64,
+    borrowed_params: arc_sig.ParamMask,
     ret_mode: arc_sig.Mode,
     /// Parameter positions the demand vector seeds born-unique.
-    unique_params: u64,
+    unique_params: arc_sig.ParamMask,
 };
 
 const QueuedVariant = struct {
@@ -786,6 +809,11 @@ const ReleaseDecision = union(enum) {
 /// One solver-owned linear decision. The small lists retain their capacity
 /// across fixed-point revisits; only the converged contents are consumed by
 /// materialization.
+const LowLevelSelection = struct {
+    op: LIR.LowLevel,
+    rc_effect: LIR.LowLevel.RcEffect,
+};
+
 const ArcPlanStep = struct {
     initialized: bool = false,
     stmt: LIR.CFStmtId = undefined,
@@ -797,8 +825,10 @@ const ArcPlanStep = struct {
     transfer_mask: u64 = 0,
     transfer_positions: std.ArrayList(u32) = .empty,
     transfer_single: bool = false,
+    reuse_unique: bool = false,
     skip_result_retain: bool = false,
     unique_args: u64 = 0,
+    low_level_selection: ?LowLevelSelection = null,
     retain_call_result: bool = false,
     call_callee: ?LIR.LirProcSpecId = null,
     call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
@@ -816,8 +846,10 @@ const ArcPlanStep = struct {
         self.transfer_mask = 0;
         self.transfer_positions.clearRetainingCapacity();
         self.transfer_single = false;
+        self.reuse_unique = false;
         self.skip_result_retain = false;
         self.unique_args = 0;
+        self.low_level_selection = null;
         self.retain_call_result = false;
         self.call_callee = null;
         self.call_demanded = arc_sig.RcSig.all_owned;
@@ -917,6 +949,12 @@ const Inserter = struct {
     layouts: *const layout_mod.Store,
     local_contains_refcounted: []const bool = &.{},
     solution: *const arc_solve.Solution = undefined,
+    /// Field takes solved against the ownership-neutral bodies; consulted by
+    /// statement id, so base and variant emissions share one solve.
+    dismantles: *const arc_dismantle.Dismantles = undefined,
+    /// Temporaries synthesized while dismantling containers in the proc
+    /// currently being emitted; appended to its frame locals afterward.
+    dismantle_temps: *std.ArrayList(LIR.LocalId) = undefined,
     /// Mode-specialized variant table (shared across the emission worklist).
     variants: *VariantTable = undefined,
     /// Parameter locals whose borrowed solved binding is overridden to owned
@@ -1247,7 +1285,7 @@ const Inserter = struct {
                     .on_miss = state.child_results[source_arms.len],
                 } });
             },
-            else => arcInvariant("ARC control materializer received a non-control plan"),
+            .none, .stop, .join, .jump, .terminal => arcInvariant("ARC control materializer received a non-control plan"),
         }
         try self.completeMaterializedPath(state.plan_index, tail, state.result);
     }
@@ -1342,11 +1380,14 @@ const Inserter = struct {
                 } });
             },
             .assign_call_erased => |assign| blk: {
-                next = try self.releaseLocalIfRc(assign.closure, next);
+                if (!assign.reuse_closure) next = try self.releaseLocalIfRc(assign.closure, next);
                 break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
+                    .arg_plan = assign.arg_plan,
+                    .reuse_closure = assign.reuse_closure,
+                    .reuse_source = assign.reuse_source,
                     .next = next,
                 } });
             },
@@ -1360,18 +1401,22 @@ const Inserter = struct {
                     .capture = assign.capture,
                     .capture_layout = assign.capture_layout,
                     .on_drop = assign.on_drop,
+                    .reuse = assign.reuse,
+                    .reuse_unique = step.reuse_unique,
                     .next = next,
                 } });
             },
             .assign_low_level => |assign| blk: {
-                if (assign.rc_effect.retain_args != 0) {
-                    next = try self.retainMaskedArgs(assign.args, assign.rc_effect.retain_args & ~step.transfer_mask, next);
+                const op = if (step.low_level_selection) |selection| selection.op else assign.op;
+                const rc_effect = if (step.low_level_selection) |selection| selection.rc_effect else assign.rc_effect;
+                if (rc_effect.retain_args != 0) {
+                    next = try self.retainMaskedArgs(assign.args, rc_effect.retain_args & ~step.transfer_mask, next);
                 }
-                if (assign.rc_effect.retain_result and !step.skip_result_retain) next = try self.retainLocalIfRc(assign.target, next);
+                if (rc_effect.retain_result and !step.skip_result_retain) next = try self.retainLocalIfRc(assign.target, next);
                 break :blk try self.store.addCFStmt(.{ .assign_low_level = .{
                     .target = assign.target,
-                    .op = assign.op,
-                    .rc_effect = assign.rc_effect,
+                    .op = op,
+                    .rc_effect = rc_effect,
                     .unique_args = step.unique_args,
                     .args = assign.args,
                     .interchangeable = assign.interchangeable,
@@ -1458,7 +1503,23 @@ const Inserter = struct {
                 .branch_index = marker.branch_index,
                 .next = next,
             } }),
-            else => arcInvariant("ARC solved linear plan contained a non-linear statement"),
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .incref,
+            .decref,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => arcInvariant("ARC solved linear plan contained a non-linear statement"),
         };
 
         if (step.pre_release) |release| cloned = try self.materializeReleaseDecision(release, cloned);
@@ -1562,9 +1623,19 @@ const Inserter = struct {
                                     transfer.retain_target = false;
                                 }
                             },
-                            else => transfer.release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                            .discriminant,
+                            .field,
+                            .tag_payload,
+                            .tag_payload_struct,
+                            .list_reinterpret,
+                            .nominal,
+                            => transfer.release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
                         }
                     }
+                    // A take read consumes the container's stored unit for
+                    // this field: the target still binds owned, but no
+                    // retain is paid.
+                    if (self.takeApplies(segment.cursor)) transfer.retain_target = false;
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.retain_assign_ref_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
@@ -1601,33 +1672,59 @@ const Inserter = struct {
                 .assign_call_erased => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const transfer = try self.transferForCall(&segment.owned, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
+                    var preserve_reuse_source = false;
+                    if (assign.reuse_closure) {
+                        if (assign.closure == assign.target) arcInvariant("owned erased call cannot consume and rebind the same local");
+                        const reuse_source = assign.reuse_source orelse arcInvariant("owned erased call lacked its explicit reuse ownership source");
+                        preserve_reuse_source = try self.groupUsedInPath(assign.next, reuse_source, segment.ctx.loop_keep);
+                        if (!preserve_reuse_source) _ = self.takeUnit(&segment.owned, reuse_source);
+                    }
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     try step.pre_retain.appendSlice(self.solve_allocator, transfer.args.retain_args);
-                    try step.pre_retain.append(self.solve_allocator, assign.closure);
+                    if (!assign.reuse_closure) try step.pre_retain.append(self.solve_allocator, assign.closure);
+                    if (preserve_reuse_source) try step.pre_retain.append(self.solve_allocator, assign.reuse_source.?);
                     self.death_scratch.clearRetainingCapacity();
                     try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    const singles = [_]LIR.LocalId{assign.closure};
+                    const singles = [_]LIR.LocalId{ assign.closure, assign.reuse_source orelse assign.closure };
                     try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
                     try self.copyDeathScratchToStep(step);
                     segment.cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForSingle(&segment.owned, assign.capture, assign.target, assign.next, segment.ctx.loop_keep);
+                    const transfer = try self.transferForPackedErased(&segment.owned, assign, segment.ctx.loop_keep);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
-                    const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.target };
+                    step.reuse_unique = transfer.reuse_unique;
+                    if (transfer.preserve_reuse) try step.pre_retain.append(self.solve_allocator, assign.reuse.?);
+                    const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.reuse orelse assign.target, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_low_level => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForLowLevel(&segment.owned, assign.args, assign.rc_effect, assign.target, assign.next, segment.ctx.loop_keep, true);
+                    const borrowed_variant = assign.op.arcBorrowedResultVariant();
+                    const use_borrowed = borrowed_variant != null and self.isBindingBorrowed(assign.target);
+                    const selected_op = if (use_borrowed) borrowed_variant.? else assign.op;
+                    const selected_effect = if (borrowed_variant != null) selected_op.rcEffect() else assign.rc_effect;
+                    const transfer = try self.transferForLowLevel(
+                        &segment.owned,
+                        assign.args,
+                        selected_effect,
+                        assign.target,
+                        assign.next,
+                        segment.ctx.loop_keep,
+                        true,
+                        borrowed_variant != null and !use_borrowed,
+                    );
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.preserve_consumed_args = transfer.preserve_consumed_args;
                     step.transfer_mask = transfer.transfer_mask;
                     step.skip_result_retain = self.isBindingBorrowed(assign.target);
                     step.unique_args = transfer.unique_args;
+                    if (borrowed_variant != null) {
+                        step.low_level_selection = .{ .op = selected_op, .rc_effect = selected_effect };
+                    }
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
@@ -1828,8 +1925,16 @@ const Inserter = struct {
                     try self.solveJumpContribution(tasks, segment);
                     return;
                 },
-                .runtime_error, .comptime_exhaustiveness_failed, .crash => {
+                .runtime_error, .comptime_exhaustiveness_failed => {
                     try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, null);
+                    return;
+                },
+                .crash => |crash_stmt| {
+                    const retain_value = if (crash_stmt.msg.localId()) |message|
+                        if (self.consumeAtTerminal(&segment.owned, message)) null else message
+                    else
+                        null;
+                    try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
                     return;
                 },
                 .loop_continue, .loop_break => {
@@ -1992,7 +2097,15 @@ const Inserter = struct {
                 }
                 releases = previous.releases;
             },
-            else => {},
+            .none,
+            .stop,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => {},
         }
         try self.collectReleaseDifferenceInto(&releases, owned, &summary.entry_keep);
         plan.terminal = .{ .join = .{
@@ -2012,7 +2125,15 @@ const Inserter = struct {
             const plan = self.arcPlan(plan_index);
             const terminal = switch (plan.terminal) {
                 .join => |*join| join,
-                else => arcInvariant("ARC registered join arrival plan had another terminal"),
+                .none,
+                .stop,
+                .switch_stmt,
+                .initialized_payload_switch,
+                .str_match,
+                .str_match_set,
+                .jump,
+                .terminal,
+                => arcInvariant("ARC registered join arrival plan had another terminal"),
             };
             terminal.body_reachable = summary.body_reachable;
             try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.entry_keep);
@@ -2035,7 +2156,15 @@ const Inserter = struct {
                 if (previous.stmt != stmt or previous.join_index != summary.index) arcInvariant("ARC jump plan changed structural identity");
                 releases = previous.releases;
             },
-            else => {},
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .str_match_set,
+            .terminal,
+            => {},
         }
         try self.collectReleaseDifferenceInto(&releases, owned, &summary.body_keep);
         plan.terminal = .{ .jump = .{
@@ -2052,7 +2181,15 @@ const Inserter = struct {
             const plan = self.arcPlan(plan_index);
             const terminal = switch (plan.terminal) {
                 .jump => |*jump| jump,
-                else => arcInvariant("ARC registered jump plan had another terminal"),
+                .none,
+                .stop,
+                .join,
+                .switch_stmt,
+                .initialized_payload_switch,
+                .str_match,
+                .str_match_set,
+                .terminal,
+                => arcInvariant("ARC registered jump plan had another terminal"),
             };
             try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.body_keep);
         }
@@ -2076,7 +2213,15 @@ const Inserter = struct {
                 }
                 releases = previous.releases;
             },
-            else => {},
+            .none,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => {},
         }
         try self.collectReleaseDifferenceInto(&releases, owned, &summary.common);
         plan.terminal = .{ .stop = .{
@@ -2124,7 +2269,15 @@ const Inserter = struct {
             const plan = self.arcPlan(plan_index);
             const terminal = switch (plan.terminal) {
                 .stop => |*stop| stop,
-                else => arcInvariant("ARC registered switch-stop plan had another terminal"),
+                .none,
+                .join,
+                .switch_stmt,
+                .initialized_payload_switch,
+                .str_match,
+                .str_match_set,
+                .jump,
+                .terminal,
+                => arcInvariant("ARC registered switch-stop plan had another terminal"),
             };
             try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.common);
         }
@@ -2145,7 +2298,15 @@ const Inserter = struct {
             const plan = self.arcPlan(plan_index);
             switch (plan.terminal) {
                 .switch_stmt => |*switch_plan| switch_plan.continuation_reachable = summary.reached,
-                else => arcInvariant("ARC registered switch control plan had another terminal"),
+                .none,
+                .stop,
+                .join,
+                .initialized_payload_switch,
+                .str_match,
+                .str_match_set,
+                .jump,
+                .terminal,
+                => arcInvariant("ARC registered switch control plan had another terminal"),
             }
         }
     }
@@ -2165,7 +2326,15 @@ const Inserter = struct {
                 if (previous.stmt != stmt) arcInvariant("ARC terminal plan changed structural identity");
                 releases = previous.releases;
             },
-            else => {},
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .str_match_set,
+            .jump,
+            => {},
         }
         if (keep) |kept| {
             try self.collectReleaseDifferenceInto(&releases, owned, kept);
@@ -2199,7 +2368,15 @@ const Inserter = struct {
                 branch_plans = previous.branch_plans;
                 default_plan = previous.default_plan;
             },
-            else => {
+            .none,
+            .stop,
+            .join,
+            .initialized_payload_switch,
+            .str_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => {
                 branch_plans = try self.solve_allocator.alloc(u32, branch_starts.len);
                 for (0..branch_starts.len) |index| {
                     branch_plans[index] = try self.newArcPlan(GuardedList.at(branch_starts, index).body);
@@ -2236,7 +2413,15 @@ const Inserter = struct {
                 if (previous.stmt != stmt) arcInvariant("ARC initialized-payload plan changed structural shape");
                 break :blk .{ previous.initialized_plan, previous.uninitialized_plan };
             },
-            else => .{ try self.newArcPlan(initialized_start), try self.newArcPlan(uninitialized_start) },
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .str_match,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => .{ try self.newArcPlan(initialized_start), try self.newArcPlan(uninitialized_start) },
         };
         if (self.arcPlan(children[0]).start != initialized_start or self.arcPlan(children[1]).start != uninitialized_start) {
             arcInvariant("ARC initialized-payload child plan changed its structured start");
@@ -2256,7 +2441,15 @@ const Inserter = struct {
                 if (previous.stmt != stmt) arcInvariant("ARC string-match plan changed structural shape");
                 break :blk .{ previous.match_plan, previous.miss_plan };
             },
-            else => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match_set,
+            .jump,
+            .terminal,
+            => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
         };
         if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
             arcInvariant("ARC string-match child plan changed its structured start");
@@ -2285,7 +2478,15 @@ const Inserter = struct {
                 miss_plan = previous.miss_plan;
                 retain_counts = previous.capture_retain_counts;
             },
-            else => {
+            .none,
+            .stop,
+            .join,
+            .switch_stmt,
+            .initialized_payload_switch,
+            .str_match,
+            .jump,
+            .terminal,
+            => {
                 match_plans = try self.solve_allocator.alloc(u32, arms.len);
                 retain_counts = try self.solve_allocator.alloc(u16, arms.len);
                 for (0..arms.len) |index| match_plans[index] = try self.newArcPlan(GuardedList.at(arms, index).on_match);
@@ -2916,9 +3117,44 @@ const Inserter = struct {
         return .{ .transfer_single = transfer_single, .release_old_target = release_old_target };
     }
 
+    const PackedErasedTransfer = struct {
+        transfer_single: bool,
+        preserve_reuse: bool,
+        reuse_unique: bool,
+        release_old_target: bool,
+    };
+
+    fn transferForPackedErased(
+        self: *Inserter,
+        owned: *OwnedSet,
+        assign: @FieldType(LIR.CFStmt, "assign_packed_erased_fn"),
+        loop_keep: ?LoopKeep,
+    ) ResourceError!PackedErasedTransfer {
+        var preserve_reuse = false;
+        var reuse_unique = false;
+        if (assign.reuse) |reuse| {
+            if (reuse == assign.target) arcInvariant("erased callable repack cannot reuse its result binding");
+            preserve_reuse = try self.groupUsedInPath(assign.next, reuse, loop_keep);
+            reuse_unique = !preserve_reuse and self.ownsUnit(owned, reuse) and self.isLocalUniqueHere(reuse);
+            if (assign.capture) |capture| {
+                if (self.solution.leaderOf(capture) == self.solution.leaderOf(reuse)) reuse_unique = false;
+            }
+            if (!preserve_reuse) _ = self.takeUnit(owned, reuse);
+        }
+
+        const transfer = try self.transferForSingle(owned, assign.capture, assign.target, assign.next, loop_keep);
+        return .{
+            .transfer_single = transfer.transfer_single,
+            .preserve_reuse = preserve_reuse,
+            .reuse_unique = reuse_unique,
+            .release_old_target = transfer.release_old_target,
+        };
+    }
+
     const LowLevelTransfer = struct {
-        /// Consumed positions whose group survives this statement: they pay
-        /// a retain before the op to preserve the caller's unit.
+        /// Consumed positions that pay a retain before the op, either because
+        /// their group survives or because an owned variant needs a unit from
+        /// an argument whose solved binding is borrowed.
         preserve_consumed_args: u64,
         /// Retained positions whose group dies here: their unit moves into
         /// the result instead of paying the trailing retain.
@@ -2931,8 +3167,10 @@ const Inserter = struct {
 
     /// Low-level ops: `RcEffect` masks say which positions the op consumes
     /// or retains; this decides which of those transfers move existing units
-    /// and which pay retains. `want_unique` gates the uniqueness-claim scan,
-    /// whose result only affects materialized statements.
+    /// and which pay retains. Borrowed-result variants may also retain a
+    /// borrowed input to supply the unit required by the selected owned op.
+    /// `want_unique` gates the uniqueness-claim scan, whose result only affects
+    /// materialized statements.
     fn transferForLowLevel(
         self: *Inserter,
         owned: *OwnedSet,
@@ -2942,11 +3180,24 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
         want_unique: bool,
+        supply_missing_consumed_args: bool,
     ) ResourceError!LowLevelTransfer {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
         }
-        const preserve_consumed_args = try self.preserveConsumedArgMask(args, rc_effect.consume_args, next, target, loop_keep);
+        var preserve_consumed_args = try self.preserveConsumedArgMask(args, rc_effect.consume_args, next, target, loop_keep);
+        if (supply_missing_consumed_args) {
+            const locals = self.store.getLocalSpan(args);
+            for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
+                const bit = argMaskBit(position);
+                if ((rc_effect.consume_args & bit) == 0) continue;
+                if (!self.ownsUnit(owned, GuardedList.at(locals, position))) {
+                    // The solved signature borrowed this argument. Retaining it
+                    // here supplies the unit consumed by the owned operation.
+                    preserve_consumed_args |= bit;
+                }
+            }
+        }
         const unique_args = if (want_unique)
             self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned)
         else
@@ -3276,8 +3527,8 @@ const Inserter = struct {
         proc_id: LIR.LirProcSpecId,
         position: usize,
     ) bool {
-        if (position >= 64) return false;
-        return (self.solution.uniqueSeedMaskOf(proc_id) & argMaskBit(position)) != 0;
+        const bit = arc_sig.paramBit(position) orelse return false;
+        return (self.solution.uniqueSeedMaskOf(proc_id) & bit) != 0;
     }
 
     fn callArgOwnership(
@@ -3305,17 +3556,20 @@ const Inserter = struct {
                 // post-call release into a clone preserves the same RC work
                 // while growing live code.
                 if (!self.variants.enabled) continue;
-                if (position >= 64) continue;
+                const bit = arc_sig.paramBit(position) orelse continue;
                 const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
                 const owner = self.solution.unitLocalOf(local);
                 const can_transfer = owned.contains(owner) and !used_after_call;
                 if (!can_transfer) continue;
-                const bit = @as(u64, 1) << @as(u6, @intCast(position));
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
                 const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local);
-                if (!return_borrows_param and !seeds_unique_param) continue;
+                const enables_field_take = if (callee) |direct|
+                    (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
+                else
+                    false;
+                if (!return_borrows_param and !seeds_unique_param and !enables_field_take) continue;
                 demanded.borrowed_params &= ~bit;
                 if (return_borrows_param) {
                     demanded.ret_mode = .owned;
@@ -3337,14 +3591,14 @@ const Inserter = struct {
                 // statically unique with no borrow live at the call demands
                 // a variant whose parameter is seeded born-unique, so
                 // checked ops it reaches in the body go check-free.
-                const seed_can_reach_check = if (position < 64) blk: {
+                const seed_can_reach_check = if (position < arc_sig.tracked_param_count) blk: {
                     const direct = callee orelse break :blk false;
                     break :blk self.procParamCanUseUniqueSeed(direct, position);
                 } else false;
                 if (unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local))
                 {
-                    demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
+                    demanded.unique_params |= arc_sig.paramBit(position).?;
                 }
                 owned.unset(owner);
             } else {
@@ -3386,6 +3640,8 @@ const Inserter = struct {
         const variant = try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = source_spec.args,
+            .erased_reuse_arg = source_spec.erased_reuse_arg,
+            .erased_call_args = source_spec.erased_call_args,
             .frame_locals = source_spec.frame_locals,
             .body = self.variants.original_bodies[@intFromEnum(callee)],
             .ret_layout = source_spec.ret_layout,
@@ -3762,12 +4018,14 @@ const Inserter = struct {
                 },
                 .assign_call_erased => |assign| {
                     self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.closure);
+                    if (assign.reuse_source) |reuse_source| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse_source);
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, capture);
+                    if (assign.reuse) |reuse| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -3890,12 +4148,14 @@ const Inserter = struct {
                 .ret => |ret_stmt| {
                     self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, ret_stmt.value);
                 },
+                .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, message);
+                },
                 .loop_continue,
                 .loop_break,
                 => try loop_edge_nodes.append(graph_allocator, node_index),
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .crash,
                 => {},
                 .comptime_branch_taken => |marker| {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next);
@@ -4542,8 +4802,32 @@ const Inserter = struct {
         return count;
     }
 
+    /// Whether this statement's field read is a take in the current
+    /// emission. Takes on containers solved borrowed apply only when the
+    /// variant demand vector overrides the parameter to owned.
+    fn takeApplies(self: *const Inserter, stmt: LIR.CFStmtId) bool {
+        if (self.dismantles.isTake(stmt)) return true;
+        if (self.dismantles.ownedOnlyTakeParam(stmt)) |param| {
+            return self.owned_param_override.contains(param);
+        }
+        return false;
+    }
+
+    /// The dismantle plan for this local's release in the current emission,
+    /// if it has one.
+    fn dismantleFor(self: *const Inserter, local: LIR.LocalId) ?arc_dismantle.Container {
+        if (self.dismantles.containerOf(local)) |container| return container;
+        if (self.dismantles.ownedOnlyContainerOf(local)) |container| {
+            if (self.owned_param_override.contains(local)) return container;
+        }
+        return null;
+    }
+
     fn releaseLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.localContainsRefcounted(local)) return next;
+        if (self.dismantleFor(local)) |container| {
+            return try self.dismantleContainer(local, container, next);
+        }
         const rc = self.rcHelperForLocal(.decref, local);
         return try self.store.addCFStmt(.{ .decref = .{
             .value = local,
@@ -4551,6 +4835,43 @@ const Inserter = struct {
             .atomicity = self.rcAtomicity(local),
             .next = next,
         } });
+    }
+
+    /// Release a dismantled container: its taken fields' units were consumed
+    /// by their take reads, so only the residual refcounted fields are read
+    /// into temporaries and released. The temporaries and the container's
+    /// solved arrays never meet: field layouts drive the helpers directly,
+    /// and the container's atomicity covers its stored payloads exactly as
+    /// the whole-struct helper would have.
+    fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        const atomicity = self.rcAtomicity(local);
+        var tail = next;
+        var index = container.residual.len;
+        while (index > 0) {
+            index -= 1;
+            const field = container.residual[index];
+            const rc = self.rcHelperForLayout(.decref, field.layout_idx);
+            if (self.layouts.rcHelperPlan(rc) == .noop) {
+                arcInvariant("ARC dismantle selected a noop RC helper for a refcounted residual field");
+            }
+            const temp = try self.store.addLocal(.{ .layout_idx = field.layout_idx });
+            try self.dismantle_temps.append(self.emission_allocator, temp);
+            tail = try self.store.addCFStmt(.{ .decref = .{
+                .value = temp,
+                .rc = rc,
+                .atomicity = atomicity,
+                .next = tail,
+            } });
+            tail = try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = temp,
+                .op = .{ .field = .{
+                    .source = local,
+                    .field_idx = @intCast(field.field_idx),
+                } },
+                .next = tail,
+            } });
+        }
+        return tail;
     }
 
     fn releaseMaybeInitializedLocal(self: *Inserter, condition: LIR.LocalId, condition_mask: u64, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -4584,10 +4905,10 @@ const Inserter = struct {
 
     fn rcHelperForLayout(self: *const Inserter, op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
         const layout_val = self.layouts.getLayout(layout_idx);
-        return switch (layout_val.tag) {
-            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx),
-            else => .{ .op = op, .layout_idx = layout_idx },
-        };
+        if (layout_val.tag == .closure) {
+            return self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx);
+        }
+        return .{ .op = op, .layout_idx = layout_idx };
     }
 
     fn nestedDropOp(op: layout_mod.RcOp) layout_mod.RcOp {
@@ -4692,8 +5013,10 @@ fn addCanonicalRetain(
     std.debug.assert(count > 0);
     var canonical_count = count;
     var canonical_next = next;
-    switch (store.getCFStmt(next)) {
-        .decref => |release| if (rcRetainReleasePair(.{
+    const next_stmt = store.getCFStmt(next);
+    if (next_stmt == .decref) {
+        const release = next_stmt.decref;
+        if (rcRetainReleasePair(.{
             .value = local,
             .rc = rc,
             .atomicity = atomicity,
@@ -4701,8 +5024,7 @@ fn addCanonicalRetain(
             if (count == 1) return release.next;
             canonical_count = count - 1;
             canonical_next = release.next;
-        },
-        else => {},
+        }
     }
     return try store.addCFStmt(.{ .incref = .{
         .value = local,
@@ -4936,7 +5258,7 @@ const ArcTest = struct {
     }
 
     fn crash(self: *ArcTest, message: []const u8) Allocator.Error!LIR.CFStmtId {
-        return try self.store.addCFStmt(.{ .crash = .{ .msg = try self.store.insertString(message) } });
+        return try self.store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = try self.store.insertString(message) } } });
     }
 
     fn assignI64(self: *ArcTest, target: LIR.LocalId, value: i64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
@@ -5151,7 +5473,19 @@ const ArcTest = struct {
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,
-                else => arcInvariant("ARC test fixture expected a switch_stmt on the linear path"),
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => arcInvariant("ARC test fixture expected a switch_stmt on the linear path"),
             }
         }
         arcInvariant("ARC test fixture cycled while walking to a switch_stmt");
@@ -5169,11 +5503,8 @@ const ArcTest = struct {
         var found: ?LIR.CFStmtId = null;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            switch (stmt) {
-                .join => |join_stmt| {
-                    if (join_stmt.id == join_id) found = join_stmt.body;
-                },
-                else => {},
+            if (stmt == .join) {
+                if (stmt.join.id == join_id) found = stmt.join.body;
             }
         }
         return found orelse arcInvariant("ARC test fixture has no matching join body");
@@ -5183,21 +5514,10 @@ const ArcTest = struct {
         var count: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            switch (stmt) {
-                .incref => |rc| {
-                    if (kind == .incref and rc.value == local_id) count += 1;
-                },
-                .decref => |rc| {
-                    if (kind == .decref and rc.value == local_id) count += 1;
-                },
-                .decref_if_initialized => |rc| {
-                    if (kind == .decref and rc.value == local_id) count += 1;
-                },
-                .free => |rc| {
-                    if (kind == .free and rc.value == local_id) count += 1;
-                },
-                else => {},
-            }
+            if (stmt == .incref and kind == .incref and stmt.incref.value == local_id) count += 1;
+            if (stmt == .decref and kind == .decref and stmt.decref.value == local_id) count += 1;
+            if (stmt == .decref_if_initialized and kind == .decref and stmt.decref_if_initialized.value == local_id) count += 1;
+            if (stmt == .free and kind == .free and stmt.free.value == local_id) count += 1;
         }
         return count;
     }
@@ -5208,13 +5528,16 @@ const ArcTest = struct {
         var seen: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            const found: LIR.RcAtomicity = switch (stmt) {
-                .incref => |rc| if (rc.value == local_id) rc.atomicity else continue,
-                .decref => |rc| if (rc.value == local_id) rc.atomicity else continue,
-                .decref_if_initialized => |rc| if (rc.value == local_id) rc.atomicity else continue,
-                .free => |rc| if (rc.value == local_id) rc.atomicity else continue,
-                else => continue,
-            };
+            const found: LIR.RcAtomicity = if (stmt == .incref and stmt.incref.value == local_id)
+                stmt.incref.atomicity
+            else if (stmt == .decref and stmt.decref.value == local_id)
+                stmt.decref.atomicity
+            else if (stmt == .decref_if_initialized and stmt.decref_if_initialized.value == local_id)
+                stmt.decref_if_initialized.atomicity
+            else if (stmt == .free and stmt.free.value == local_id)
+                stmt.free.atomicity
+            else
+                continue;
             seen += 1;
             try testing.expectEqual(expected, found);
         }
@@ -5225,14 +5548,58 @@ const ArcTest = struct {
         var mask: u64 = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            switch (stmt) {
-                .assign_low_level => |assign| {
-                    if (assign.target == target) mask |= assign.unique_args;
-                },
-                else => {},
+            if (stmt == .assign_low_level and stmt.assign_low_level.target == target) {
+                mask |= stmt.assign_low_level.unique_args;
             }
         }
         return mask;
+    }
+
+    fn reachableLowLevelAssign(self: *const ArcTest, target: LIR.LocalId) @FieldType(LIR.CFStmt, "assign_low_level") {
+        var cursor = self.procBody();
+        var remaining: usize = self.store.cfStmtCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (self.store.getCFStmt(cursor)) {
+                .assign_low_level => |assign| {
+                    if (assign.target == target) return assign;
+                    cursor = assign.next;
+                },
+                .incref => |rc| cursor = rc.next,
+                .decref => |rc| cursor = rc.next,
+                .decref_if_initialized => |rc| cursor = rc.next,
+                .free => |rc| cursor = rc.next,
+                .assign_ref => |assign| cursor = assign.next,
+                .assign_literal => |assign| cursor = assign.next,
+                .init_uninitialized => |uninit| cursor = uninit.next,
+                .assign_call => |assign| cursor = assign.next,
+                .assign_call_erased => |assign| cursor = assign.next,
+                .assign_packed_erased_fn => |assign| cursor = assign.next,
+                .assign_list => |assign| cursor = assign.next,
+                .assign_struct => |assign| cursor = assign.next,
+                .assign_tag => |assign| cursor = assign.next,
+                .store_struct => |assign| cursor = assign.next,
+                .store_tag => |assign| cursor = assign.next,
+                .set_local => |assign| cursor = assign.next,
+                .debug => |debug_stmt| cursor = debug_stmt.next,
+                .expect => |expect_stmt| cursor = expect_stmt.next,
+                .comptime_branch_taken => |marker| cursor = marker.next,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => arcInvariant("ARC test fixture expected a low-level op on a linear path"),
+            }
+        }
+        arcInvariant("ARC test fixture cycled while walking to a low-level op");
     }
 
     /// Like `uniqueArgsFor`, but restricted to statements reachable from one
@@ -5240,7 +5607,7 @@ const ArcTest = struct {
     /// be asserted separately.
     fn uniqueArgsInProc(self: *const ArcTest, proc_id: LIR.LirProcSpecId, target: LIR.LocalId) Allocator.Error!u64 {
         var mask: u64 = 0;
-        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.allocator);
+        var visited = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
@@ -5298,10 +5665,7 @@ const ArcTest = struct {
         var count: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            switch (stmt) {
-                .incref, .decref, .decref_if_initialized, .free => count += 1,
-                else => {},
-            }
+            if (stmt == .incref or stmt == .decref or stmt == .decref_if_initialized or stmt == .free) count += 1;
         }
         return count;
     }
@@ -5411,6 +5775,435 @@ const ArcTest = struct {
     }
 };
 
+test "ARC preserves erased callable repack reuse" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const capture = try f.local(.str);
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+    const callee_arg = try f.local(.u64);
+
+    const callback = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = try f.span(&.{callee_arg}),
+        .frame_locals = try f.span(&.{callee_arg}),
+        .body = null,
+        .ret_layout = erased_callable,
+    });
+
+    const ret = try f.ret(new_callable);
+    const new_pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = new_callable,
+        .proc = callback,
+        .capture = capture,
+        .capture_layout = .str,
+        .on_drop = .none,
+        .reuse = old_callable,
+        .next = ret,
+    } });
+    const old_pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = old_callable,
+        .proc = callback,
+        .capture = capture,
+        .capture_layout = .str,
+        .on_drop = .none,
+        .next = new_pack,
+    } });
+    const caller = try f.addProc(&.{capture}, old_pack, erased_callable);
+
+    try f.run();
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var found = false;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_packed_erased_fn => |assign| {
+                if (assign.target == new_callable) {
+                    try testing.expect(cursor != new_pack);
+                    try testing.expectEqual(old_callable, assign.reuse.?);
+                    try testing.expect(assign.reuse_unique);
+                    found = true;
+                    break;
+                }
+                cursor = assign.next;
+            },
+            .incref => |rc| cursor = rc.next,
+            .decref => |rc| cursor = rc.next,
+            .decref_if_initialized => |rc| cursor = rc.next,
+            .free => |rc| cursor = rc.next,
+            .ret => break,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .crash,
+            => return error.UnexpectedStatement,
+        }
+    }
+    try testing.expect(found);
+}
+
+test "ARC runtime-checks erased callable repack from an ordinary parameter" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+    const capture = try f.local(.u64);
+    const callee_arg = try f.local(.u64);
+
+    const callback = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = try f.span(&.{callee_arg}),
+        .frame_locals = try f.span(&.{callee_arg}),
+        .body = null,
+        .ret_layout = erased_callable,
+    });
+
+    const ret = try f.ret(new_callable);
+    const pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = new_callable,
+        .proc = callback,
+        .capture = capture,
+        .capture_layout = .u64,
+        .on_drop = .none,
+        .reuse = old_callable,
+        .next = ret,
+    } });
+    const caller = try f.addProc(&.{ old_callable, capture }, pack, erased_callable);
+
+    try f.run();
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_packed_erased_fn => |assign| {
+                try testing.expectEqual(old_callable, assign.reuse.?);
+                try testing.expect(!assign.reuse_unique);
+                return;
+            },
+            .incref => |rc| cursor = rc.next,
+            .decref => |rc| cursor = rc.next,
+            .decref_if_initialized => |rc| cursor = rc.next,
+            .free => |rc| cursor = rc.next,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.UnexpectedStatement,
+        }
+    }
+    return error.MissingPackedErasedFn;
+}
+
+test "ARC transfers erased call ownership from an explicit outer source" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const owned_callable = try f.local(erased_callable);
+    const extracted_callable = try f.local(erased_callable);
+    const next_callable = try f.local(erased_callable);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+
+    const ret = try f.ret(next_callable);
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = next_callable,
+        .closure = extracted_callable,
+        .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
+        .reuse_closure = true,
+        .reuse_source = owned_callable,
+        .next = ret,
+    } });
+    const body = try f.assignRefLocal(extracted_callable, owned_callable, call);
+    const caller = try f.addProc(&.{owned_callable}, body, erased_callable);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(owned_callable, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(owned_callable, .decref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_call_erased => |assign| {
+                try testing.expect(assign.reuse_closure);
+                try testing.expectEqual(owned_callable, assign.reuse_source.?);
+                return;
+            },
+            inline .assign_ref, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+            .init_uninitialized,
+            .assign_literal,
+            .assign_call,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.UnexpectedStatement,
+        }
+    }
+    return error.MissingErasedCall;
+}
+
+test "ARC retains an erased call reuse source that is read after the call" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const owned_callable = try f.local(erased_callable);
+    const extracted_callable = try f.local(erased_callable);
+    const next_callable = try f.local(erased_callable);
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+
+    const ret = try f.ret(next_callable);
+    const later_use = try f.expectStmt(owned_callable, ret);
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = next_callable,
+        .closure = extracted_callable,
+        .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
+        .reuse_closure = true,
+        .reuse_source = owned_callable,
+        .next = later_use,
+    } });
+    const body = try f.assignRefLocal(extracted_callable, owned_callable, call);
+    const caller = try f.addProc(&.{owned_callable}, body, erased_callable);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 1), f.countRc(owned_callable, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(owned_callable, .decref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
+
+    var saw_retain = false;
+    var saw_call = false;
+    var saw_later_use = false;
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_ref => |assign| cursor = assign.next,
+            .incref => |rc| {
+                if (rc.value == owned_callable) {
+                    try testing.expect(!saw_call);
+                    saw_retain = true;
+                }
+                cursor = rc.next;
+            },
+            .assign_call_erased => |assign| {
+                try testing.expect(saw_retain);
+                try testing.expect(assign.reuse_closure);
+                try testing.expectEqual(owned_callable, assign.reuse_source.?);
+                saw_call = true;
+                cursor = assign.next;
+            },
+            .expect => |expect_stmt| {
+                if (expect_stmt.condition == owned_callable) {
+                    try testing.expect(saw_call);
+                    saw_later_use = true;
+                }
+                cursor = expect_stmt.next;
+            },
+            .decref => |rc| {
+                if (rc.value == owned_callable) try testing.expect(saw_later_use);
+                cursor = rc.next;
+            },
+            .decref_if_initialized => |rc| {
+                if (rc.value == owned_callable) try testing.expect(saw_later_use);
+                cursor = rc.next;
+            },
+            .free => |rc| cursor = rc.next,
+            .ret => break,
+            .init_uninitialized,
+            .assign_literal,
+            .assign_call,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .crash,
+            => return error.UnexpectedStatement,
+        }
+    }
+    try testing.expect(saw_retain);
+    try testing.expect(saw_call);
+    try testing.expect(saw_later_use);
+}
+
+test "ARC retains an erased callable whose repack input is used later" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const old_callable = try f.local(erased_callable);
+    const new_callable = try f.local(erased_callable);
+    const capture = try f.local(.u64);
+    const callee_arg = try f.local(.u64);
+
+    const callback = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = try f.span(&.{callee_arg}),
+        .frame_locals = try f.span(&.{callee_arg}),
+        .body = null,
+        .ret_layout = erased_callable,
+    });
+
+    const ret = try f.ret(new_callable);
+    const later_use = try f.expectStmt(old_callable, ret);
+    const pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = new_callable,
+        .proc = callback,
+        .capture = capture,
+        .capture_layout = .u64,
+        .on_drop = .none,
+        .reuse = old_callable,
+        .next = later_use,
+    } });
+    const caller = try f.addProc(&.{ old_callable, capture }, pack, erased_callable);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 1), f.countRc(old_callable, .incref));
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_packed_erased_fn => |assign| {
+                try testing.expectEqual(old_callable, assign.reuse.?);
+                try testing.expect(!assign.reuse_unique);
+                return;
+            },
+            .incref => |rc| cursor = rc.next,
+            .decref => |rc| cursor = rc.next,
+            .decref_if_initialized => |rc| cursor = rc.next,
+            .free => |rc| cursor = rc.next,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.UnexpectedStatement,
+        }
+    }
+    return error.MissingPackedErasedFn;
+}
+
 const RcKind = enum { incref, decref, free };
 const RcStopKind = enum { ret, crash };
 
@@ -5420,10 +6213,10 @@ fn setupUnusedBinding(layout_idx: layout_mod.Idx) Allocator.Error!struct { fixtu
     const value = try f.local(layout_idx);
     const result = try f.local(.i64);
     const ret = try f.ret(result);
-    const body = switch (layout_idx) {
-        .str => try f.assignStr(value, "tmp", ret),
-        else => try f.assignList(value, &.{}, ret),
-    };
+    const body = if (layout_idx == .str)
+        try f.assignStr(value, "tmp", ret)
+    else
+        try f.assignList(value, &.{}, ret);
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
     return .{ .fixture = f, .value = value };
@@ -6268,11 +7061,11 @@ test "RC switch preserves cold default metadata" {
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
 
-    const rewritten_body = f.procBody();
-    const rewritten_switch = switch (f.store.getCFStmt(rewritten_body)) {
-        .assign_literal => |assign| f.store.getCFStmt(assign.next).switch_stmt,
-        else => arcInvariant("ARC cold-default switch test body shape changed"),
-    };
+    const rewritten_body = f.store.getCFStmt(f.procBody());
+    if (rewritten_body != .assign_literal) arcInvariant("ARC cold-default switch test body shape changed");
+    const rewritten_next = f.store.getCFStmt(rewritten_body.assign_literal.next);
+    if (rewritten_next != .switch_stmt) arcInvariant("ARC cold-default switch test body shape changed");
+    const rewritten_switch = rewritten_next.switch_stmt;
     try testing.expect(rewritten_switch.default_is_cold);
 }
 
@@ -6292,10 +7085,9 @@ test "RC direct call preserves cold metadata" {
     _ = try f.addProc(&.{}, call, .i64);
     try f.run();
 
-    const rewritten_call = switch (f.store.getCFStmt(f.procBody())) {
-        .assign_call => |assign| assign,
-        else => arcInvariant("ARC cold-call test body shape changed"),
-    };
+    const rewritten_body = f.store.getCFStmt(f.procBody());
+    if (rewritten_body != .assign_call) arcInvariant("ARC cold-call test body shape changed");
+    const rewritten_call = rewritten_body.assign_call;
     try testing.expect(rewritten_call.is_cold);
 }
 
@@ -6329,7 +7121,11 @@ test "RC join remainder starts from join entry ownership" {
 
     _ = try f.addProc(&.{}, body, f.list_i64);
     try f.run();
-    try f.expectRc(pair, 0, 1, 0);
+    // The extraction is a field take of the dying pair: the read consumes
+    // the pair's stored unit for its only refcounted field, so no whole
+    // release of the pair remains.
+    try f.expectRc(pair, 0, 0, 0);
+    try f.expectRc(extracted, 0, 0, 0);
 }
 
 test "RC join body keeps local born in remainder" {
@@ -6516,10 +7312,14 @@ test "RC borrow group member used in a join body keeps the lender across the jum
 
     _ = try f.addProc(&.{}, start, .i64);
     try f.run();
-    // The field borrow is used only inside the join body, so the pair's
+    // The field read is used only inside the join body, so the pair's
     // liveness group must carry its unit through the jump: the jump releases
-    // nothing and the pair dies after the borrow's last use in the body.
-    try f.expectRc(pair, 0, 1, 0);
+    // nothing and the pair dies after the read's last use in the body. The
+    // read is a field take, so the pair's death dismantles it — one residual
+    // release of the untaken field on a fresh temporary — instead of
+    // releasing the pair whole.
+    try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 1), f.countAllRc());
 }
 
 test "RC switch continuation merge releases branch-divergent owner at the boundary" {
@@ -7200,6 +8000,45 @@ test "uniqueness: specialized variant elides the check on a unique dying argumen
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, appended));
 }
 
+test "uniqueness: specialized body clones do not poison local births" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Both the base and specialized callee bodies bind `first`. The first
+    // checked op always returns a unique outer list, so the second op can be
+    // check-free in each body independently even though the cloned bodies
+    // deliberately share their source LocalIds.
+    const param = try f.local(f.list_i64);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const callee_ret = try f.ret(second);
+    const second_op = try f.assignLowLevel(second, &.{first}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), callee_ret);
+    const first_op = try f.assignLowLevel(first, &.{param}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), second_op);
+    const callee = try f.addProc(&.{param}, first_op, f.list_i64);
+
+    // A dying fresh argument requests the unique-parameter specialization.
+    const list = try f.local(f.list_i64);
+    const got = try f.local(f.list_i64);
+    const caller_ret = try f.ret(got);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = got,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = caller_ret,
+    } });
+    const caller_body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, caller_body, f.list_i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, first));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(callee, second));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, first));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, second));
+}
+
 test "uniqueness: without specialization the dying unique argument keeps the callee's check" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -7461,7 +8300,23 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .set_local => |a| cursor = a.next,
             .debug => |a| cursor = a.next,
             .expect => |a| cursor = a.next,
-            else => return error.NonLinearPath,
+            .store_struct,
+            .store_tag,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.NonLinearPath,
         }
     }
     return error.CyclicPath;
@@ -7508,10 +8363,12 @@ test "RC borrow: payload read consumed by a call stays owned" {
     const body = try f.assignStr(a, "a", assign_b);
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
-    // The consumed read pays one retain at the read and is then moved into
-    // the call.
-    try f.expectRc(field, 1, 0, 0);
-    try f.expectRc(pair, 0, 1, 0);
+    // The consumed read is a field take of the dying pair: it moves the
+    // pair's stored unit into the call with no retain, and the pair's death
+    // releases only the untaken field through a fresh temporary.
+    try f.expectRc(field, 0, 0, 0);
+    try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 1), f.countAllRc());
 }
 
 test "RC borrow: alias of an owned local emits no RC statements" {
@@ -7677,6 +8534,97 @@ test "RC borrow: list element read via low-level borrows the list" {
     try f.expectRc(list, 0, 1, 0);
 }
 
+test "RC borrow: read-only sublist materializes a borrowed view" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const range = try f.local(.i64);
+    const slice = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_slice = try f.expectStmt(slice, result_assign);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = slice,
+        .op = .list_sublist,
+        .rc_effect = LIR.LowLevel.list_sublist.rcEffect(),
+        .args = try f.span(&.{ list, range }),
+        .next = use_slice,
+    } });
+    const range_assign = try f.assignI64(range, 0, sublist);
+    const body = try f.assignList(list, &.{}, range_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+
+    const emitted = f.reachableLowLevelAssign(slice);
+    try testing.expectEqual(LIR.LowLevel.list_sublist_borrowed, emitted.op);
+    try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
+    try f.expectRc(slice, 0, 0, 0);
+    try f.expectRc(list, 0, 1, 0);
+}
+
+test "RC borrow: owned sublist from borrowed parameter retains one input unit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const range = try f.local(.i64);
+    const slice = try f.local(f.list_i64);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const consume_slice = try f.assignCall(call_result, &.{slice}, result_assign);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = slice,
+        .op = .list_sublist,
+        .rc_effect = LIR.LowLevel.list_sublist.rcEffect(),
+        .args = try f.span(&.{ list, range }),
+        .next = consume_slice,
+    } });
+    const body = try f.assignI64(range, 0, sublist);
+    _ = try f.addProc(&.{list}, body, .i64);
+
+    try f.run();
+
+    const emitted = f.reachableLowLevelAssign(slice);
+    try testing.expectEqual(LIR.LowLevel.list_sublist, emitted.op);
+    try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
+    try f.expectRc(list, 1, 0, 0);
+    try f.expectRc(slice, 0, 0, 0);
+}
+
+test "RC borrow: owned sublist transfers an owned input unit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const range = try f.local(.i64);
+    const slice = try f.local(f.list_i64);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const consume_slice = try f.assignCall(call_result, &.{slice}, result_assign);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = slice,
+        .op = .list_sublist,
+        .rc_effect = LIR.LowLevel.list_sublist.rcEffect(),
+        .args = try f.span(&.{ list, range }),
+        .next = consume_slice,
+    } });
+    const range_assign = try f.assignI64(range, 0, sublist);
+    const body = try f.assignList(list, &.{}, range_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+
+    const emitted = f.reachableLowLevelAssign(slice);
+    try testing.expectEqual(LIR.LowLevel.list_sublist, emitted.op);
+    try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
+    try f.expectRc(list, 0, 0, 0);
+    try f.expectRc(slice, 0, 0, 0);
+}
+
 test "RC borrow: string match view capture used read-only does not retain source" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -7770,6 +8718,71 @@ test "RC specialization: borrowed final argument does not clone for release-only
     try f.expectRc(param, 0, 0, 0);
 }
 
+test "RC signature: position 16 uses the all-owned tail" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    var params: [17]LIR.LocalId = undefined;
+    for (&params) |*param| param.* = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const body = try f.assignI64(result, 1, ret);
+    _ = try f.addProc(&params, body, .i64);
+
+    try f.run();
+
+    // Position 15 participates in inference and remains borrowed. Position
+    // 16 is outside RcSig's represented prefix and follows all-owned ARC.
+    try f.expectRc(params[15], 0, 0, 0);
+    try f.expectRc(params[16], 0, 1, 0);
+}
+
+test "RC specialization: owned-only field take demands an owned variant" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/10635: the callee's
+    // aggregate parameter solves borrowed, but an owned variant can take its
+    // nested list field instead of retaining it before the uniqueness check.
+    const param = try f.local(f.pair_list);
+    const field = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const result_assign = try f.assignI64(callee_result, 1, callee_ret);
+    const append = try f.assignLowLevel(appended, &.{ field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const field_read = try f.assignRefField(field, param, 0, elem_assign);
+    const callee = try f.addProc(&.{param}, field_read, .i64);
+
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const caller_result = try f.local(.i64);
+    const caller_ret = try f.ret(caller_result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = callee,
+        .args = try f.span(&.{pair}),
+        .next = caller_ret,
+    } });
+    const pair_assign = try f.assignStruct(pair, &.{ first, second }, call);
+    const second_assign = try f.assignList(second, &.{}, pair_assign);
+    const caller_body = try f.assignList(first, &.{}, second_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    // The caller moves the dying pair into an owned variant. The base proc
+    // retains the borrowed field once; the variant takes it without another
+    // retain, and dismantles only the pair's residual field.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 1), f.countRc(field, .incref));
+}
+
 test "RC specialization: caller body survives variant proc append" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -7822,7 +8835,27 @@ test "RC specialization: caller body survives variant proc append" {
             inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free, .comptime_branch_taken => |stmt| {
                 cursor = stmt.next;
             },
-            else => return error.ExpectedSpecializedCall,
+            .init_uninitialized,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .store_struct,
+            .store_tag,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .decref_if_initialized,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => return error.ExpectedSpecializedCall,
         }
     }
     return error.ExpectedSpecializedCall;

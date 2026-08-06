@@ -70,7 +70,7 @@ pub fn instantiateNominalBacking(
         // rigid; the template cannot reference it by name.
         switch (formal_resolved.desc.content) {
             .rigid => |rigid| try rigid_subs.put(store.gpa, rigid.name, arg),
-            else => {},
+            .flex, .alias, .structure, .err => {},
         }
     }
 
@@ -169,10 +169,6 @@ pub const Instantiator = struct {
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.
         substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
-
-        /// In this mode, rigids present in the provided map are substituted,
-        /// and any other rigids are instantiated as fresh flex variables.
-        substitute_rigids_fresh_flex: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     };
 
     /// How to instantiate polarity vars: the marker rigids (named
@@ -300,13 +296,6 @@ pub const Instantiator = struct {
                             }
                             break :blk .rigid;
                         },
-                        .substitute_rigids_fresh_flex => |rigid_subs| {
-                            if (rigid_subs.get(rigid.name)) |existing_var| {
-                                try self.var_map.put(resolved_var, existing_var);
-                                return existing_var;
-                            }
-                            break :blk .flex;
-                        },
                     }
                 };
 
@@ -330,13 +319,13 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .empty_tag_union_is_default = resolved.desc.empty_tag_union_is_default,
+                        .flags = .{ .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default },
                     },
                 );
 
                 return fresh_var;
             },
-            else => {
+            .flex, .alias, .structure, .err => {
                 // Generate the content
 
                 // Remember this substitution for recursive references
@@ -352,7 +341,7 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .empty_tag_union_is_default = resolved.desc.empty_tag_union_is_default,
+                        .flags = .{ .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default },
                     },
                 );
 

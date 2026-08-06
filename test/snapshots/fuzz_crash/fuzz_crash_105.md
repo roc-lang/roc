@@ -100,11 +100,23 @@ EndOfFile,
 		(s-type-decl
 			(header (name "A")
 				(args))
-			(ty-var (raw "a")))
+			(ty-var (raw "a"))
+			(where
+				(method (mod-of "a") (name "a")
+					(args
+						(ty (name "X")))
+					(ty-var (raw "r")))
+				(method (mod-of "a") (name "a")
+					(args)
+					(ty-var (raw "r")))))
 		(s-type-decl
 			(header (name "B")
 				(args))
-			(ty-var (raw "b")))
+			(ty-var (raw "b"))
+			(where
+				(method (mod-of "b") (name "b")
+					(args)
+					(ty-var (raw "r")))))
 		(s-type-decl
 			(header (name "C")
 				(args))
@@ -159,11 +171,11 @@ h = {
 	(defs
 		(patt (type "Error")))
 	(type_decls
-		(alias (type "A")
+		(alias (type "Error")
 			(ty-header (name "A")))
-		(alias (type "B")
+		(alias (type "Error")
 			(ty-header (name "B")))
-		(alias (type "C")
+		(alias (type "Error")
 			(ty-header (name "C"))))
 	(expressions
 		(expr (type "Error"))))

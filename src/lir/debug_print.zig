@@ -120,7 +120,12 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("call_erased l{d}(", .{@intFromEnum(s.closure)});
                     try self.writeLocals(s.args, writer);
-                    try writer.writeAll(")\n");
+                    try writer.writeByte(')');
+                    if (s.reuse_closure) try writer.writeAll(" reuse_closure");
+                    if (s.reuse_source) |reuse_source| {
+                        try writer.print(" reuse_source=l{d}", .{@intFromEnum(reuse_source)});
+                    }
+                    try writer.writeByte('\n');
                     current = s.next;
                 },
                 .assign_packed_erased_fn => |s| {
@@ -357,9 +362,12 @@ const Printer = struct {
                     try writer.print("ret l{d}\n", .{@intFromEnum(s.value)});
                     return;
                 },
-                .crash => {
+                .crash => |s| {
                     try writeIndent(indent, writer);
-                    try writer.writeAll("crash\n");
+                    switch (s.msg) {
+                        .literal => try writer.writeAll("crash\n"),
+                        .local => |local| try writer.print("crash l{d}\n", .{@intFromEnum(local)}),
+                    }
                     return;
                 },
                 .runtime_error => {
