@@ -2660,9 +2660,7 @@ pub const InstGraph = struct {
             (if (left_content.named.backing) |backing| backing.authority == .generated_private else false);
         const right_generated_private = right_content == .named and
             (if (right_content.named.backing) |backing| backing.authority == .generated_private else false);
-        if (left_generated_private != right_generated_private and
-            !self.isIteratorRepresentationTierRelation(left_content, right_content))
-        {
+        if (left_generated_private != right_generated_private) {
             Common.invariant("generated-private representation reached ordinary public/private graph unification");
         }
 
@@ -2994,16 +2992,6 @@ pub const InstGraph = struct {
                 }
             },
         }
-    }
-
-    fn isIteratorRepresentationTierRelation(self: *InstGraph, left: InstNode, right: InstNode) bool {
-        if (left != .named or right != .named) return false;
-        const left_named = left.named;
-        const right_named = right.named;
-        return switch (self.iteratorRelation(left_named, right_named)) {
-            .public_minted, .forced_dynamic => true,
-            .ordinary, .minted_join => false,
-        };
     }
 
     fn iteratorRelation(self: *InstGraph, left: InstNamed, right: InstNamed) Type.IteratorRelation {

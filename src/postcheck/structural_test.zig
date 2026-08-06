@@ -387,6 +387,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     );
     try expectContains(ordinary_unify, "unifyRootsTransitively(a, b)");
     try expectContains(ordinary_unify, "generated-private representation reached ordinary public/private graph unification");
+    try expectNotContains(ordinary_unify, "isIteratorRepresentationTierRelation");
 
     const lower_source = @embedFile("monotype/lower.zig");
     try expectNotContains(lower_source, "containsGeneratedPrivate");
