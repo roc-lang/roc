@@ -13,7 +13,9 @@ platform ""
         x64glibc: { inputs: [app] },
         arm64glibc: { inputs: [app] },
         x64musl: { inputs: [app] },
+        x64v1musl: { inputs: [app] },
         arm64musl: { inputs: [app] },
+        arm64v1musl: { inputs: [app] },
         x64win: { inputs: [app] },
         arm64win: { inputs: [app] },
     }

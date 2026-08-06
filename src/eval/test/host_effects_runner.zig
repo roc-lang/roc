@@ -24,6 +24,7 @@ const RuntimeHostEnv = eval.RuntimeHostEnv;
 const LoweredProgram = helpers.LoweredProgram;
 const Interpreter = eval.Interpreter;
 const backend = @import("backend");
+const roc_target = @import("roc_target");
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
 const collections = @import("collections");
@@ -339,7 +340,12 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         .arg_layouts = arg_layouts,
     }) catch |err| switch (err) {
         error.Crash => return runtime_env.snapshot(allocator),
-        else => return err,
+        error.ComptimeExhaustiveness,
+        error.DivisionByZero,
+        error.ExpectErr,
+        error.OutOfMemory,
+        error.RuntimeError,
+        => return err,
     };
     switch (eval_result) {
         .value => {},
@@ -365,7 +371,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             &lowered.view.layouts,
             static_strings.entries,
             .preserve,
-            .default,
+            roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
@@ -424,23 +430,23 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
         switch (expected) {
             .dbg => |msg| switch (actual) {
                 .dbg => |actual_msg| if (!std.mem.eql(u8, msg, actual_msg)) return false,
-                else => return false,
+                .expect_failed, .crashed => return false,
             },
             .dbg_contains => |fragment| switch (actual) {
                 .dbg => |actual_msg| if (std.mem.find(u8, actual_msg, fragment) == null) return false,
-                else => return false,
+                .expect_failed, .crashed => return false,
             },
             .dbg_any => switch (actual) {
                 .dbg => {},
-                else => return false,
+                .expect_failed, .crashed => return false,
             },
             .expect_failed => |msg| switch (actual) {
                 .expect_failed => |actual_msg| if (!std.mem.eql(u8, msg, actual_msg)) return false,
-                else => return false,
+                .dbg, .crashed => return false,
             },
             .crashed => |msg| switch (actual) {
                 .crashed => |actual_msg| if (!std.mem.eql(u8, msg, actual_msg)) return false,
-                else => return false,
+                .dbg, .expect_failed => return false,
             },
         }
     }

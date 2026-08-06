@@ -100,12 +100,10 @@ pub fn strBytes(value: Value) []const u8 {
 /// Interpret a boolean-typed value as true/false, tolerating the `bool_`, small
 /// integer, and two-variant tag encodings a boolean may arrive in.
 fn truthy(value: Value) bool {
-    return switch (value) {
-        .bool_ => |b| b,
-        .int => |i| i != 0,
-        .tag => |t| t.discriminant != 0,
-        else => false,
-    };
+    if (value == .bool_) return value.bool_;
+    if (value == .int) return value.int != 0;
+    if (value == .tag) return value.tag.discriminant != 0;
+    return false;
 }
 
 /// Interpret a boolean-typed value as a 0/1 byte for numeric comparison.
@@ -118,15 +116,13 @@ fn boolBit(value: Value) u8 {
 /// structural equality can materialize a boolean as `bool_` while the static
 /// type is that tag union, so tag-directed consumers tolerate both encodings.
 fn tagView(value: Value) ?TagValue {
-    return switch (value) {
-        .tag => |t| t,
-        .bool_ => |b| .{ .discriminant = @intFromBool(b), .payloads = &.{} },
-        else => null,
-    };
+    if (value == .tag) return value.tag;
+    if (value == .bool_) return .{ .discriminant = @intFromBool(value.bool_), .payloads = &.{} };
+    return null;
 }
 
 /// Per-call binding scope from `LocalId` to `Value`.
-const Frame = std.AutoHashMap(Ast.LocalId, Value);
+const Frame = collections.DenseMap(Ast.LocalId, Value);
 
 const recursion_depth_cap = 4000;
 
@@ -263,16 +259,13 @@ pub const Evaluator = struct {
         var cur = ty;
         while (true) {
             const content = self.program.types.get(cur);
-            switch (content) {
-                .named => |named| {
-                    if (named.backing) |backing| {
-                        cur = backing.ty;
-                        continue;
-                    }
-                    return content;
-                },
-                else => return content,
+            if (content == .named) {
+                if (content.named.backing) |backing| {
+                    cur = backing.ty;
+                    continue;
+                }
             }
+            return content;
         }
     }
 
@@ -281,10 +274,8 @@ pub const Evaluator = struct {
     }
 
     fn primitiveOf(self: *Evaluator, ty: Type.TypeId) ?Primitive {
-        return switch (self.structural(ty)) {
-            .primitive => |p| p,
-            else => null,
-        };
+        const content = self.structural(ty);
+        return if (content == .primitive) content.primitive else null;
     }
 
     // value helpers
@@ -333,6 +324,7 @@ pub const Evaluator = struct {
             .list => |span| return .{ .list = try self.evalExprSpan(frame, span) },
             .tuple => |span| return .{ .tuple = try self.evalExprSpan(frame, span) },
             .record => |span| return try self.evalRecord(frame, expr.ty, span),
+            .record_update => |update| return try self.evalRecordUpdate(frame, expr.ty, update),
             .capture_record => |span| return .{ .capture_record = try self.evalExprSpan(frame, span) },
             .tag => |tag| return try self.evalTag(frame, expr.ty, tag.name, tag.payloads),
             .callable => |callable| {
@@ -344,10 +336,7 @@ pub const Evaluator = struct {
             },
             .nominal => |backing_expr| {
                 const value = try self.evalExpr(frame, backing_expr);
-                return switch (self.structural(expr.ty)) {
-                    .box => try self.boxValue(value),
-                    else => value,
-                };
+                return if (self.structural(expr.ty) == .box) try self.boxValue(value) else value;
             },
             .packed_erased_fn => |packed_fn| {
                 const capture: ?*const Value = if (packed_fn.capture) |c|
@@ -363,10 +352,8 @@ pub const Evaluator = struct {
             .capture_access => |slot| return try self.evalCaptureAccess(frame, slot),
             .tuple_access => |access| {
                 const receiver = try self.evalExpr(frame, access.tuple);
-                return switch (receiver) {
-                    .tuple => |elems| elems[access.elem_index],
-                    else => self.unsupported_("tuple access on non-tuple"),
-                };
+                if (receiver != .tuple) return self.unsupported_("tuple access on non-tuple");
+                return receiver.tuple[access.elem_index];
             },
             .structural_eq => |eq| return try self.evalStructuralEq(frame, eq.lhs, eq.rhs, eq.negated),
             .structural_hash => return self.unsupported_("structural hash"),
@@ -436,10 +423,9 @@ pub const Evaluator = struct {
     }
 
     fn evalRecord(self: *Evaluator, frame: *Frame, ty: Type.TypeId, span: Ast.Span(Ast.FieldExpr)) EvalError!Value {
-        const field_types = switch (self.structural(ty)) {
-            .record => |fields| fields,
-            else => return self.unsupported_("record expression without record type"),
-        };
+        const content = self.structural(ty);
+        if (content != .record) return self.unsupported_("record expression without record type");
+        const field_types = content.record;
         const type_fields = self.program.types.fieldSpan(field_types);
         const out = self.alloc().alloc(Value, type_fields.len) catch return error.OutOfMemory;
         const field_exprs = self.program.fieldExprSpan(span);
@@ -453,6 +439,28 @@ pub const Evaluator = struct {
                     break field_expr.value;
                 }
             } else return self.unsupported_("record field not found in record expression");
+            out[i] = try self.evalExpr(frame, value_expr);
+        }
+        return .{ .record = out };
+    }
+
+    fn evalRecordUpdate(self: *Evaluator, frame: *Frame, ty: Type.TypeId, update: Ast.RecordUpdate) EvalError!Value {
+        const content = self.structural(ty);
+        if (content != .record) return self.unsupported_("record update without record type");
+        const field_types = content.record;
+        const base_value = try self.evalExpr(frame, update.base);
+        if (base_value != .record) return self.unsupported_("record update base without record value");
+        const base_fields = base_value.record;
+        const type_fields = self.program.types.fieldSpan(field_types);
+        if (base_fields.len != type_fields.len) return self.unsupported_("record update base arity differs from record type");
+        const out = self.alloc().dupe(Value, base_fields) catch return error.OutOfMemory;
+        const update_fields = self.program.fieldExprSpan(update.fields);
+        for (0..type_fields.len) |i| {
+            const type_field = GuardedList.at(type_fields, i);
+            const value_expr = for (0..update_fields.len) |update_index| {
+                const field = GuardedList.at(update_fields, update_index);
+                if (self.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
+            } else continue;
             out[i] = try self.evalExpr(frame, value_expr);
         }
         return .{ .record = out };
@@ -486,10 +494,9 @@ pub const Evaluator = struct {
     }
 
     fn tagIndex(self: *Evaluator, ty: Type.TypeId, name: Type.names.TagNameId) ?usize {
-        const tags = switch (self.structural(ty)) {
-            .tag_union => |span| span,
-            else => return null,
-        };
+        const content = self.structural(ty);
+        if (content != .tag_union) return null;
+        const tags = content.tag_union;
         const tag_slice = self.program.types.tagSpan(tags);
         for (0..tag_slice.len) |i| {
             const tag = GuardedList.at(tag_slice, i);
@@ -499,10 +506,9 @@ pub const Evaluator = struct {
     }
 
     fn tagIndexByText(self: *Evaluator, ty: Type.TypeId, text: []const u8) ?usize {
-        const tags = switch (self.structural(ty)) {
-            .tag_union => |span| span,
-            else => return null,
-        };
+        const content = self.structural(ty);
+        if (content != .tag_union) return null;
+        const tags = content.tag_union;
         const tag_slice = self.program.types.tagSpan(tags);
         for (0..tag_slice.len) |i| {
             const tag = GuardedList.at(tag_slice, i);
@@ -523,24 +529,20 @@ pub const Evaluator = struct {
 
     fn evalFieldAccess(self: *Evaluator, frame: *Frame, receiver: Ast.ExprId, field: Type.names.RecordFieldNameId) EvalError!Value {
         const value = try self.evalExpr(frame, receiver);
-        const type_fields = switch (self.structural(self.exprType(receiver))) {
-            .record => |fields| self.program.types.fieldSpan(fields),
-            else => return self.unsupported_("field access on non-record"),
-        };
+        const content = self.structural(self.exprType(receiver));
+        if (content != .record) return self.unsupported_("field access on non-record");
+        const type_fields = self.program.types.fieldSpan(content.record);
         const index = self.recordFieldIndex(type_fields, field) orelse
             return self.unsupported_("field access field not found");
-        return switch (value) {
-            .record => |elems| elems[index],
-            else => self.unsupported_("field access on non-record value"),
-        };
+        if (value != .record) return self.unsupported_("field access on non-record value");
+        return value.record[index];
     }
 
     fn evalCaptureAccess(self: *Evaluator, frame: *Frame, slot: Ast.CaptureSlot) EvalError!Value {
         const value = try self.evalExpr(frame, slot.record);
-        const capture_fields = switch (self.structural(self.exprType(slot.record))) {
-            .capture_record => |span| self.program.types.captureFieldSpan(span),
-            else => return self.unsupported_("capture access on non-capture-record"),
-        };
+        const content = self.structural(self.exprType(slot.record));
+        if (content != .capture_record) return self.unsupported_("capture access on non-capture-record");
+        const capture_fields = self.program.types.captureFieldSpan(content.capture_record);
         var index: ?usize = null;
         for (0..capture_fields.len) |i| {
             if (std.meta.eql(GuardedList.at(capture_fields, i).symbol, slot.symbol)) {
@@ -549,10 +551,8 @@ pub const Evaluator = struct {
             }
         }
         const resolved = index orelse return self.unsupported_("capture symbol not found");
-        return switch (value) {
-            .capture_record => |elems| elems[resolved],
-            else => self.unsupported_("capture access on non-capture-record value"),
-        };
+        if (value != .capture_record) return self.unsupported_("capture access on non-capture-record value");
+        return value.capture_record[resolved];
     }
 
     // calls
@@ -568,10 +568,8 @@ pub const Evaluator = struct {
 
     fn evalErasedCall(self: *Evaluator, frame: *Frame, call: Ast.ErasedCall) EvalError!Value {
         const callee = try self.evalExpr(frame, call.callee);
-        const erased = switch (callee) {
-            .erased_fn => |e| e,
-            else => return self.unsupported_("indirect call on non-erased value"),
-        };
+        if (callee != .erased_fn) return self.unsupported_("indirect call on non-erased value");
+        const erased = callee.erased_fn;
         const args = try self.evalExprSpan(frame, call.args);
 
         const target_fn = self.program.getFn(erased.target);
@@ -607,7 +605,13 @@ pub const Evaluator = struct {
 
         return self.evalExpr(&frame, body) catch |err| switch (err) {
             error.Returned => self.return_value,
-            else => err,
+            error.OutOfMemory,
+            error.Unsupported,
+            error.Aborted,
+            error.Broke,
+            error.Continued,
+            error.Jumped,
+            => |unhandled| unhandled,
         };
     }
 
@@ -625,6 +629,10 @@ pub const Evaluator = struct {
         for (0..branch_slice.len) |i| {
             const branch = GuardedList.at(branch_slice, i);
             if (!try self.bindPattern(frame, branch.pat, scrutinee)) continue;
+            const bindings = self.program.stmtSpan(branch.bindings);
+            for (0..bindings.len) |binding_index| {
+                try self.evalStmt(frame, GuardedList.at(bindings, binding_index));
+            }
             if (branch.guard) |guard_expr| {
                 const guard = try self.evalExpr(frame, guard_expr);
                 if (!truthy(guard)) continue;
@@ -713,7 +721,12 @@ pub const Evaluator = struct {
                     }
                     continue;
                 },
-                else => return err,
+                error.OutOfMemory,
+                error.Unsupported,
+                error.Aborted,
+                error.Returned,
+                error.Jumped,
+                => |unhandled| return unhandled,
             };
             return result;
         }
@@ -733,7 +746,13 @@ pub const Evaluator = struct {
                     next_expr = join_point.body;
                     continue;
                 },
-                else => return err,
+                error.OutOfMemory,
+                error.Unsupported,
+                error.Aborted,
+                error.Returned,
+                error.Broke,
+                error.Continued,
+                => |unhandled| return unhandled,
             };
             return result;
         }
@@ -741,12 +760,14 @@ pub const Evaluator = struct {
 
     fn evalInitializedPayload(self: *Evaluator, frame: *Frame, switch_: Ast.InitializedPayloadSwitch) EvalError!Value {
         const cond = try self.evalExpr(frame, switch_.cond);
-        const cond_bits: u64 = switch (cond) {
-            .bool_ => |b| @intFromBool(b),
-            .tag => |t| t.discriminant,
-            .int => |i| @truncate(@as(u128, @bitCast(i))),
-            else => return self.unsupported_("if-initialized-payload condition is not int or bool"),
-        };
+        const cond_bits: u64 = if (cond == .bool_)
+            @intFromBool(cond.bool_)
+        else if (cond == .tag)
+            cond.tag.discriminant
+        else if (cond == .int)
+            @truncate(@as(u128, @bitCast(cond.int)))
+        else
+            return self.unsupported_("if-initialized-payload condition is not int or bool");
         if ((cond_bits & switch_.cond_mask) != 0) {
             return self.evalExpr(frame, switch_.initialized);
         }
@@ -755,10 +776,8 @@ pub const Evaluator = struct {
 
     fn evalTrySequence(self: *Evaluator, frame: *Frame, result_ty: Type.TypeId, seq: Ast.TrySequence) EvalError!Value {
         const scrutinee = try self.evalExpr(frame, seq.try_expr);
-        const tag = switch (scrutinee) {
-            .tag => |t| t,
-            else => return self.unsupported_("try sequence on non-tag value"),
-        };
+        if (scrutinee != .tag) return self.unsupported_("try sequence on non-tag value");
+        const tag = scrutinee.tag;
         const try_ty = self.exprType(seq.try_expr);
         const ok_index = self.tagIndexByText(try_ty, "Ok") orelse return self.unsupported_("try sequence Ok tag not found");
         const err_index = self.tagIndexByText(try_ty, "Err") orelse return self.unsupported_("try sequence Err tag not found");
@@ -782,25 +801,20 @@ pub const Evaluator = struct {
 
     fn evalTryRecordSequence(self: *Evaluator, frame: *Frame, result_ty: Type.TypeId, seq: Ast.TryRecordSequence) EvalError!Value {
         const scrutinee = try self.evalExpr(frame, seq.try_expr);
-        const tag = switch (scrutinee) {
-            .tag => |t| t,
-            else => return self.unsupported_("try record sequence on non-tag value"),
-        };
+        if (scrutinee != .tag) return self.unsupported_("try record sequence on non-tag value");
+        const tag = scrutinee.tag;
         const try_ty = self.exprType(seq.try_expr);
         const ok_index = self.tagIndexByText(try_ty, "Ok") orelse return self.unsupported_("try record Ok tag not found");
         const err_index = self.tagIndexByText(try_ty, "Err") orelse return self.unsupported_("try record Err tag not found");
 
         if (tag.discriminant == ok_index) {
             if (tag.payloads.len != 1) return self.unsupported_("try record Ok payload arity");
-            const record = switch (tag.payloads[0]) {
-                .record => |elems| elems,
-                else => return self.unsupported_("try record Ok payload not a record"),
-            };
+            if (tag.payloads[0] != .record) return self.unsupported_("try record Ok payload not a record");
+            const record = tag.payloads[0].record;
             const payload_ty = self.okPayloadType(try_ty, ok_index) orelse return self.unsupported_("try record Ok payload type");
-            const record_fields = switch (self.structural(payload_ty)) {
-                .record => |fields| self.program.types.fieldSpan(fields),
-                else => return self.unsupported_("try record Ok payload type not a record"),
-            };
+            const payload_content = self.structural(payload_ty);
+            if (payload_content != .record) return self.unsupported_("try record Ok payload type not a record");
+            const record_fields = self.program.types.fieldSpan(payload_content.record);
             const value_idx = self.recordFieldIndex(record_fields, seq.value_field) orelse return self.unsupported_("try record value field");
             const rest_idx = self.recordFieldIndex(record_fields, seq.rest_field) orelse return self.unsupported_("try record rest field");
             if (!try self.bindLocal(frame, seq.value_local, record[value_idx])) return self.runtimeErrorAbort();
@@ -814,10 +828,9 @@ pub const Evaluator = struct {
     }
 
     fn okPayloadType(self: *Evaluator, tag_ty: Type.TypeId, ok_index: usize) ?Type.TypeId {
-        const tags = switch (self.structural(tag_ty)) {
-            .tag_union => |span| span,
-            else => return null,
-        };
+        const content = self.structural(tag_ty);
+        if (content != .tag_union) return null;
+        const tags = content.tag_union;
         const tag_slice = self.program.types.tagSpan(tags);
         const payloads = GuardedList.at(tag_slice, ok_index).payloads;
         if (payloads.len != 1) return null;
@@ -843,10 +856,8 @@ pub const Evaluator = struct {
             },
             .record => |span| return try self.matchRecordPattern(frame, pat.ty, span, value),
             .tuple => |span| {
-                const elems = switch (value) {
-                    .tuple => |e| e,
-                    else => return self.unsupported_("tuple pattern on non-tuple value"),
-                };
+                if (value != .tuple) return self.unsupported_("tuple pattern on non-tuple value");
+                const elems = value.tuple;
                 const pats = self.program.patSpan(span);
                 if (pats.len != elems.len) return false;
                 for (0..pats.len) |i| {
@@ -867,10 +878,8 @@ pub const Evaluator = struct {
                 return true;
             },
             .callable => |callable_pat| {
-                const callable = switch (value) {
-                    .callable => |c| c,
-                    else => return self.unsupported_("callable pattern on non-callable value"),
-                };
+                if (value != .callable) return self.unsupported_("callable pattern on non-callable value");
+                const callable = value.callable;
                 if (!self.sameVariant(callable.variant, callable_pat.variant)) return false;
                 if (callable_pat.payload) |payload_pat| {
                     const payload = callable.payload orelse return false;
@@ -879,13 +888,10 @@ pub const Evaluator = struct {
                 return true;
             },
             .nominal => |inner| {
-                const inner_value = switch (self.structural(pat.ty)) {
-                    .box => switch (value) {
-                        .box => |cell| cell.*,
-                        else => return self.unsupported_("nominal box pattern on non-box value"),
-                    },
-                    else => value,
-                };
+                const inner_value = if (self.structural(pat.ty) == .box) blk: {
+                    if (value != .box) return self.unsupported_("nominal box pattern on non-box value");
+                    break :blk value.box.*;
+                } else value;
                 return self.bindPattern(frame, inner, inner_value);
             },
             .int_lit => |int_value| {
@@ -895,10 +901,10 @@ pub const Evaluator = struct {
                     .u128 => @bitCast(@as(u128, @bitCast(int_value.bytes))),
                 };
                 const expected = self.canonicalInt(prim, raw);
-                return switch (expected) {
-                    .bool_ => |b| truthy(value) == b,
-                    else => value == .int and value.int == expected.int,
-                };
+                return if (expected == .bool_)
+                    truthy(value) == expected.bool_
+                else
+                    value == .int and value.int == expected.int;
             },
             .dec_lit => |d| return value == .dec and value.dec == d.num,
             .frac_f32_lit => |f| return value == .float32 and value.float32 == f,
@@ -909,14 +915,11 @@ pub const Evaluator = struct {
     }
 
     fn matchRecordPattern(self: *Evaluator, frame: *Frame, ty: Type.TypeId, span: Ast.Span(Ast.RecordDestruct), value: Value) EvalError!bool {
-        const elems = switch (value) {
-            .record => |e| e,
-            else => return self.unsupported_("record pattern on non-record value"),
-        };
-        const type_fields = switch (self.structural(ty)) {
-            .record => |fields| self.program.types.fieldSpan(fields),
-            else => return self.unsupported_("record pattern without record type"),
-        };
+        if (value != .record) return self.unsupported_("record pattern on non-record value");
+        const elems = value.record;
+        const content = self.structural(ty);
+        if (content != .record) return self.unsupported_("record pattern without record type");
+        const type_fields = self.program.types.fieldSpan(content.record);
         const destructs = self.program.recordDestructSpan(span);
         for (0..destructs.len) |i| {
             const destruct = GuardedList.at(destructs, i);
@@ -927,10 +930,8 @@ pub const Evaluator = struct {
     }
 
     fn matchListPattern(self: *Evaluator, frame: *Frame, list_pat: Ast.ListPattern, value: Value) EvalError!bool {
-        const elems = switch (value) {
-            .list => |e| e,
-            else => return self.unsupported_("list pattern on non-list value"),
-        };
+        if (value != .list) return self.unsupported_("list pattern on non-list value");
+        const elems = value.list;
         const pats = self.program.patSpan(list_pat.patterns);
         const fixed = pats.len;
         const n = elems.len;
@@ -957,10 +958,8 @@ pub const Evaluator = struct {
     }
 
     fn matchStrPattern(self: *Evaluator, frame: *Frame, str_pat: Ast.StrPattern, value: Value) EvalError!bool {
-        const source = switch (value) {
-            .str => |s| s,
-            else => return self.unsupported_("string pattern on non-string value"),
-        };
+        if (value != .str) return self.unsupported_("string pattern on non-string value");
+        const source = value.str;
         const prefix = self.program.stringLiteralText(str_pat.prefix);
         if (!LIR.strMatchPrefixMatches(source, prefix)) return false;
 
@@ -1100,7 +1099,7 @@ pub const Evaluator = struct {
             .f32 => lhs.float32 == rhs.float32,
             .f64 => lhs.float64 == rhs.float64,
             .dec => lhs.dec == rhs.dec,
-            else => lhs.int == rhs.int,
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => lhs.int == rhs.int,
         };
     }
 
@@ -1118,7 +1117,7 @@ pub const Evaluator = struct {
                 break :blk makeInt(T, typed);
             },
             .bool => .{ .bool_ = bits != 0 },
-            else => .{ .int = bits },
+            .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .{ .int = bits },
         };
     }
 
@@ -1305,6 +1304,7 @@ pub const Evaluator = struct {
             .list_with_capacity,
             .list_drop_at,
             .list_sublist,
+            .list_sublist_borrowed,
             .list_set,
             .list_replace_unsafe,
             .list_swap,
@@ -1320,22 +1320,14 @@ pub const Evaluator = struct {
             .list_release_excess_capacity,
             .list_split_first,
             .list_split_last,
+            .list_map_prepare_reuse,
             .list_map_can_reuse,
             => self.evalListOp(op, args, arg_types, result_ty),
 
             .box_box => self.boxValue(args[0]),
-            .box_unbox => switch (args[0]) {
-                .box => |cell| cell.*,
-                else => self.unsupported_("box_unbox on non-box value"),
-            },
-            .box_prepare_update => switch (args[0]) {
-                .box => |cell| self.boxValue(cell.*),
-                else => self.unsupported_("box_prepare_update on non-box value"),
-            },
-            .erased_capture_load => switch (args[0]) {
-                .box => |cell| cell.*,
-                else => args[0],
-            },
+            .box_unbox => if (args[0] == .box) args[0].box.* else self.unsupported_("box_unbox on non-box value"),
+            .box_prepare_update => if (args[0] == .box) self.boxValue(args[0].box.*) else self.unsupported_("box_prepare_update on non-box value"),
+            .erased_capture_load => if (args[0] == .box) args[0].box.* else args[0],
 
             .u8_from_str,
             .i8_from_str,
@@ -1356,7 +1348,290 @@ pub const Evaluator = struct {
             .dict_pseudo_seed => self.canonicalInt(self.primitiveOf(result_ty) orelse .u64, 0),
             .crash => self.crashAbort(args[0].str),
 
-            inline else => |op_tag| self.evalConversionOrUnsupported(op_tag, args, arg_types, result_ty),
+            inline .str_get_utf8_byte_unsafe,
+            .str_substring_unsafe,
+            .list_map_cast_unsafe,
+            .list_map_extract_unsafe,
+            .list_map_write_unsafe,
+            .hasher_finish,
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_u128,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            .hasher_write_i128,
+            .hasher_write_f32,
+            .hasher_write_f64,
+            .hasher_write_dec,
+            .hasher_write_bytes,
+            .hasher_write_str,
+            .crypto_sha256_hash_bytes,
+            .crypto_sha256_hasher_empty,
+            .crypto_sha256_hasher_write,
+            .crypto_sha256_hasher_finish,
+            .crypto_blake3_hash_bytes,
+            .crypto_blake3_hasher_empty,
+            .crypto_blake3_hasher_write,
+            .crypto_blake3_hasher_finish,
+            .dec_to_attos,
+            .dec_from_attos,
+            .u8_to_i8_wrap,
+            .u8_to_i8_try,
+            .u8_to_i16,
+            .u8_to_i32,
+            .u8_to_i64,
+            .u8_to_i128,
+            .u8_to_u16,
+            .u8_to_u32,
+            .u8_to_u64,
+            .u8_to_u128,
+            .u8_to_f32,
+            .u8_to_f64,
+            .u8_to_dec,
+            .i8_to_i16,
+            .i8_to_i32,
+            .i8_to_i64,
+            .i8_to_i128,
+            .i8_to_u8_wrap,
+            .i8_to_u8_try,
+            .i8_to_u16_wrap,
+            .i8_to_u16_try,
+            .i8_to_u32_wrap,
+            .i8_to_u32_try,
+            .i8_to_u64_wrap,
+            .i8_to_u64_try,
+            .i8_to_u128_wrap,
+            .i8_to_u128_try,
+            .i8_to_f32,
+            .i8_to_f64,
+            .i8_to_dec,
+            .u16_to_i8_wrap,
+            .u16_to_i8_try,
+            .u16_to_i16_wrap,
+            .u16_to_i16_try,
+            .u16_to_i32,
+            .u16_to_i64,
+            .u16_to_i128,
+            .u16_to_u8_wrap,
+            .u16_to_u8_try,
+            .u16_to_u32,
+            .u16_to_u64,
+            .u16_to_u128,
+            .u16_to_f32,
+            .u16_to_f64,
+            .u16_to_dec,
+            .i16_to_i8_wrap,
+            .i16_to_i8_try,
+            .i16_to_i32,
+            .i16_to_i64,
+            .i16_to_i128,
+            .i16_to_u8_wrap,
+            .i16_to_u8_try,
+            .i16_to_u16_wrap,
+            .i16_to_u16_try,
+            .i16_to_u32_wrap,
+            .i16_to_u32_try,
+            .i16_to_u64_wrap,
+            .i16_to_u64_try,
+            .i16_to_u128_wrap,
+            .i16_to_u128_try,
+            .i16_to_f32,
+            .i16_to_f64,
+            .i16_to_dec,
+            .u32_to_i8_wrap,
+            .u32_to_i8_try,
+            .u32_to_i16_wrap,
+            .u32_to_i16_try,
+            .u32_to_i32_wrap,
+            .u32_to_i32_try,
+            .u32_to_i64,
+            .u32_to_i128,
+            .u32_to_u8_wrap,
+            .u32_to_u8_try,
+            .u32_to_u16_wrap,
+            .u32_to_u16_try,
+            .u32_to_u64,
+            .u32_to_u128,
+            .u32_to_f32,
+            .u32_to_f64,
+            .u32_to_dec,
+            .i32_to_i8_wrap,
+            .i32_to_i8_try,
+            .i32_to_i16_wrap,
+            .i32_to_i16_try,
+            .i32_to_i64,
+            .i32_to_i128,
+            .i32_to_u8_wrap,
+            .i32_to_u8_try,
+            .i32_to_u16_wrap,
+            .i32_to_u16_try,
+            .i32_to_u32_wrap,
+            .i32_to_u32_try,
+            .i32_to_u64_wrap,
+            .i32_to_u64_try,
+            .i32_to_u128_wrap,
+            .i32_to_u128_try,
+            .i32_to_f32,
+            .i32_to_f64,
+            .i32_to_dec,
+            .u64_to_i8_wrap,
+            .u64_to_i8_try,
+            .u64_to_i16_wrap,
+            .u64_to_i16_try,
+            .u64_to_i32_wrap,
+            .u64_to_i32_try,
+            .u64_to_i64_wrap,
+            .u64_to_i64_try,
+            .u64_to_i128,
+            .u64_to_u8_wrap,
+            .u64_to_u8_try,
+            .u64_to_u16_wrap,
+            .u64_to_u16_try,
+            .u64_to_u32_wrap,
+            .u64_to_u32_try,
+            .u64_to_u128,
+            .u64_to_f32,
+            .u64_to_f64,
+            .u64_to_dec,
+            .i64_to_i8_wrap,
+            .i64_to_i8_try,
+            .i64_to_i16_wrap,
+            .i64_to_i16_try,
+            .i64_to_i32_wrap,
+            .i64_to_i32_try,
+            .i64_to_i128,
+            .i64_to_u8_wrap,
+            .i64_to_u8_try,
+            .i64_to_u16_wrap,
+            .i64_to_u16_try,
+            .i64_to_u32_wrap,
+            .i64_to_u32_try,
+            .i64_to_u64_wrap,
+            .i64_to_u64_try,
+            .i64_to_u128_wrap,
+            .i64_to_u128_try,
+            .i64_to_f32,
+            .i64_to_f64,
+            .i64_to_dec,
+            .u128_to_i8_wrap,
+            .u128_to_i8_try,
+            .u128_to_i16_wrap,
+            .u128_to_i16_try,
+            .u128_to_i32_wrap,
+            .u128_to_i32_try,
+            .u128_to_i64_wrap,
+            .u128_to_i64_try,
+            .u128_to_i128_wrap,
+            .u128_to_i128_try,
+            .u128_to_u8_wrap,
+            .u128_to_u8_try,
+            .u128_to_u16_wrap,
+            .u128_to_u16_try,
+            .u128_to_u32_wrap,
+            .u128_to_u32_try,
+            .u128_to_u64_wrap,
+            .u128_to_u64_try,
+            .u128_to_f32,
+            .u128_to_f64,
+            .u128_to_dec_try_unsafe,
+            .i128_to_i8_wrap,
+            .i128_to_i8_try,
+            .i128_to_i16_wrap,
+            .i128_to_i16_try,
+            .i128_to_i32_wrap,
+            .i128_to_i32_try,
+            .i128_to_i64_wrap,
+            .i128_to_i64_try,
+            .i128_to_u8_wrap,
+            .i128_to_u8_try,
+            .i128_to_u16_wrap,
+            .i128_to_u16_try,
+            .i128_to_u32_wrap,
+            .i128_to_u32_try,
+            .i128_to_u64_wrap,
+            .i128_to_u64_try,
+            .i128_to_u128_wrap,
+            .i128_to_u128_try,
+            .i128_to_f32,
+            .i128_to_f64,
+            .i128_to_dec_try_unsafe,
+            .f32_to_i8_trunc,
+            .f32_to_i8_try_unsafe,
+            .f32_to_i16_trunc,
+            .f32_to_i16_try_unsafe,
+            .f32_to_i32_trunc,
+            .f32_to_i32_try_unsafe,
+            .f32_to_i64_trunc,
+            .f32_to_i64_try_unsafe,
+            .f32_to_i128_trunc,
+            .f32_to_i128_try_unsafe,
+            .f32_to_u8_trunc,
+            .f32_to_u8_try_unsafe,
+            .f32_to_u16_trunc,
+            .f32_to_u16_try_unsafe,
+            .f32_to_u32_trunc,
+            .f32_to_u32_try_unsafe,
+            .f32_to_u64_trunc,
+            .f32_to_u64_try_unsafe,
+            .f32_to_u128_trunc,
+            .f32_to_u128_try_unsafe,
+            .f32_to_f64,
+            .f64_to_i8_trunc,
+            .f64_to_i8_try_unsafe,
+            .f64_to_i16_trunc,
+            .f64_to_i16_try_unsafe,
+            .f64_to_i32_trunc,
+            .f64_to_i32_try_unsafe,
+            .f64_to_i64_trunc,
+            .f64_to_i64_try_unsafe,
+            .f64_to_i128_trunc,
+            .f64_to_i128_try_unsafe,
+            .f64_to_u8_trunc,
+            .f64_to_u8_try_unsafe,
+            .f64_to_u16_trunc,
+            .f64_to_u16_try_unsafe,
+            .f64_to_u32_trunc,
+            .f64_to_u32_try_unsafe,
+            .f64_to_u64_trunc,
+            .f64_to_u64_try_unsafe,
+            .f64_to_u128_trunc,
+            .f64_to_u128_try_unsafe,
+            .f64_to_f32_wrap,
+            .f64_to_f32_try_unsafe,
+            .dec_to_i8_trunc,
+            .dec_to_i8_try_unsafe,
+            .dec_to_i16_trunc,
+            .dec_to_i16_try_unsafe,
+            .dec_to_i32_trunc,
+            .dec_to_i32_try_unsafe,
+            .dec_to_i64_trunc,
+            .dec_to_i64_try_unsafe,
+            .dec_to_i128_trunc,
+            .dec_to_i128_try_unsafe,
+            .dec_to_u8_trunc,
+            .dec_to_u8_try_unsafe,
+            .dec_to_u16_trunc,
+            .dec_to_u16_try_unsafe,
+            .dec_to_u32_trunc,
+            .dec_to_u32_try_unsafe,
+            .dec_to_u64_trunc,
+            .dec_to_u64_try_unsafe,
+            .dec_to_u128_trunc,
+            .dec_to_u128_try_unsafe,
+            .dec_to_f32_wrap,
+            .dec_to_f32_try_unsafe,
+            .dec_to_f64,
+            .ptr_alloca,
+            .box_alloc_zeroed,
+            .ptr_store,
+            .ptr_load,
+            .ptr_cast,
+            => |op_tag| self.evalConversionOrUnsupported(op_tag, args, arg_types, result_ty),
         };
     }
 
@@ -1437,7 +1712,7 @@ pub const Evaluator = struct {
                 };
                 break :blk self.canonicalInt(result_prim, bitsOf(T, result));
             },
-            else => self.unsupported_("wrapping arithmetic on non-integer type"),
+            .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("wrapping arithmetic on non-integer type"),
         };
     }
 
@@ -1451,7 +1726,7 @@ pub const Evaluator = struct {
             .f32 => self.floatArith(f32, op, args[0], rhs),
             .f64 => self.floatArith(f64, op, args[0], rhs),
             .dec => self.decArith(op, args[0], rhs),
-            else => self.unsupported_("arithmetic on non-numeric type"),
+            .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("arithmetic on non-numeric type"),
         };
     }
 
@@ -1540,7 +1815,10 @@ pub const Evaluator = struct {
                 return .{ .dec = result.value.num };
             },
             .negate => return .{ .dec = -%a },
-            .abs => return .{ .dec = if (a < 0) -%a else a },
+            .abs => {
+                if (a == std.math.minInt(i128)) return self.crashAbort("Decimal absolute value overflow!");
+                return .{ .dec = if (a < 0) -a else a };
+            },
             .abs_diff => return .{ .dec = if (a > b) a -% b else b -% a },
             .div => return .{ .dec = try self.decDiv(a, b) },
             .div_trunc => return .{ .dec = decTrunc(try self.decDiv(a, b)) },
@@ -1563,26 +1841,20 @@ pub const Evaluator = struct {
         if (a == 0) return 0;
 
         const one = RocDec.one_point_zero_i128;
-        const max_i128: u128 = @intCast(std.math.maxInt(i128));
         const is_negative = (a < 0) != (b < 0);
         const numerator = absU128(a);
-        if (numerator > max_i128) {
-            if (b == one) return a;
-            return self.crashAbort("Decimal division overflow in numerator!");
-        }
-
         const denominator = absU128(b);
-        if (denominator > max_i128) {
-            if (a == one) return b;
-            return self.crashAbort("Decimal division overflow in denominator!");
-        }
 
         const scaled: u256 = @as(u256, numerator) * @as(u256, @intCast(one));
         const quotient: u256 = scaled / @as(u256, denominator);
-        if (quotient > @as(u256, max_i128)) return self.crashAbort("Decimal division overflow!");
+        const limit: u256 = if (is_negative)
+            @as(u256, 1) << 127
+        else
+            @as(u256, @intCast(std.math.maxInt(i128)));
+        if (quotient > limit) return self.crashAbort("Decimal division overflow!");
 
-        const magnitude: i128 = @intCast(quotient);
-        return if (is_negative) -magnitude else magnitude;
+        const magnitude: u128 = @intCast(quotient);
+        return if (is_negative) @bitCast(0 -% magnitude) else @intCast(magnitude);
     }
 
     // transcendental / rounding
@@ -1595,7 +1867,7 @@ pub const Evaluator = struct {
             .f32 => return .{ .float32 = floatMath1(f32, args[0].float32, op) },
             .f64 => return .{ .float64 = floatMath1(f64, args[0].float64, op) },
             .dec => return self.unsupported_("dec transcendental op"),
-            else => return self.unsupported_("integer transcendental op"),
+            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("integer transcendental op"),
         }
     }
 
@@ -1630,7 +1902,7 @@ pub const Evaluator = struct {
             .f32 => return .{ .float32 = builtins.float_math_f32.pow(args[0].float32, args[1].float32) },
             .f64 => return .{ .float64 = builtins.float_math_f64.pow(args[0].float64, args[1].float64) },
             .dec => return self.unsupported_("dec transcendental op"),
-            else => return self.unsupported_("integer pow op"),
+            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("integer pow op"),
         }
     }
 
@@ -1653,7 +1925,7 @@ pub const Evaluator = struct {
                 .round => return .{ .dec = decRound(args[0].dec) },
                 .floor, .ceiling => return self.unsupported_("dec floor or ceiling op"),
             },
-            else => return self.unsupported_("integer round op"),
+            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("integer round op"),
         }
     }
 
@@ -1678,7 +1950,7 @@ pub const Evaluator = struct {
                 };
                 break :blk makeInt(T, res);
             },
-            else => self.unsupported_("bitwise on non-integer type"),
+            .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("bitwise on non-integer type"),
         };
     }
 
@@ -1689,7 +1961,7 @@ pub const Evaluator = struct {
         const amount: u8 = @truncate(@as(u128, @bitCast(args[1].int)));
         return switch (prim) {
             inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| makeInt(intType(p), shiftOp(intType(p), readAs(intType(p), args[0]), amount, op)),
-            else => self.unsupported_("shift on non-integer type"),
+            .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("shift on non-integer type"),
         };
     }
 
@@ -1726,7 +1998,7 @@ pub const Evaluator = struct {
                 };
                 break :blk makeInt(u8, count);
             },
-            else => self.unsupported_("bit-count on non-integer type"),
+            .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("bit-count on non-integer type"),
         };
     }
 
@@ -1740,16 +2012,14 @@ pub const Evaluator = struct {
             .i32x4 => .i32x4,
             .u64x2 => .u64x2,
             .i64x2 => .i64x2,
-            else => null,
+            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => null,
         };
     }
 
     fn valueBits(value: Value) error{UnsupportedValue}!u128 {
-        return switch (value) {
-            .int => |int| @bitCast(int),
-            .bool_ => |boolean| @intFromBool(boolean),
-            else => error.UnsupportedValue,
-        };
+        if (value == .int) return @bitCast(value.int);
+        if (value == .bool_) return @intFromBool(value.bool_);
+        return error.UnsupportedValue;
     }
 
     fn evalSimd(
@@ -1784,10 +2054,8 @@ pub const Evaluator = struct {
     /// the width; the bounds check already happened in the Roc wrapper.
     fn evalNumFromLeBytes(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
         const prim = self.primitiveOf(result_ty) orelse return self.unsupported_("from_le_bytes result without primitive type");
-        const bytes = switch (args[0]) {
-            .list => |list| list,
-            else => return self.unsupported_("from_le_bytes from non-list value"),
-        };
+        if (args[0] != .list) return self.unsupported_("from_le_bytes from non-list value");
+        const bytes = args[0].list;
         const index: usize = @intCast(valueBits(args[1]) catch return self.unsupported_("from_le_bytes index without integer bits"));
         return switch (prim) {
             inline .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
@@ -1799,17 +2067,15 @@ pub const Evaluator = struct {
                 }
                 break :blk makeInt(T, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(value))));
             },
-            else => self.unsupported_("from_le_bytes on non-multi-byte-integer type"),
+            .bool, .str, .u8, .i8, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("from_le_bytes on non-multi-byte-integer type"),
         };
     }
 
     fn evalSimdLoad(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
         const result_prim = self.primitiveOf(result_ty) orelse return self.unsupported_("SIMD load result without primitive type");
         if (simdKindForPrimitive(result_prim) == null) return self.unsupported_("SIMD load result without vector type");
-        const bytes = switch (args[0]) {
-            .list => |list| list,
-            else => return self.unsupported_("SIMD load from non-list value"),
-        };
+        if (args[0] != .list) return self.unsupported_("SIMD load from non-list value");
+        const bytes = args[0].list;
         const index: usize = @intCast(valueBits(args[1]) catch return self.unsupported_("SIMD load index without integer bits"));
         var bits: u128 = 0;
         for (0..16) |i| {
@@ -1820,10 +2086,8 @@ pub const Evaluator = struct {
     }
 
     fn evalSimdStore(self: *Evaluator, args: []const Value) EvalError!Value {
-        const source = switch (args[1]) {
-            .list => |list| list,
-            else => return self.unsupported_("SIMD store into non-list value"),
-        };
+        if (args[1] != .list) return self.unsupported_("SIMD store into non-list value");
+        const source = args[1].list;
         const result = self.alloc().dupe(Value, source) catch return error.OutOfMemory;
         const bits = valueBits(args[0]) catch return self.unsupported_("SIMD store value without integer bits");
         const index: usize = @intCast(valueBits(args[2]) catch return self.unsupported_("SIMD store index without integer bits"));
@@ -1835,10 +2099,8 @@ pub const Evaluator = struct {
     }
 
     fn evalSimdAppend(self: *Evaluator, args: []const Value) EvalError!Value {
-        const source = switch (args[1]) {
-            .list => |list| list,
-            else => return self.unsupported_("SIMD append to non-list value"),
-        };
+        if (args[1] != .list) return self.unsupported_("SIMD append to non-list value");
+        const source = args[1].list;
         const result = self.alloc().alloc(Value, source.len + 16) catch return error.OutOfMemory;
         @memcpy(result[0..source.len], source);
         const bits = valueBits(args[0]) catch return self.unsupported_("SIMD append value without integer bits");
@@ -1919,8 +2181,41 @@ pub const Evaluator = struct {
     // string ops
 
     fn evalStrOp(self: *Evaluator, op: base.LowLevel, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
+        const StrOp = enum {
+            str_is_eq,
+            str_concat,
+            str_contains,
+            str_starts_with,
+            str_ends_with,
+            str_caseless_ascii_equals,
+            str_count_utf8_bytes,
+            str_with_capacity,
+            str_reserve,
+            str_release_excess_capacity,
+            str_repeat,
+            str_drop_prefix,
+            str_drop_suffix,
+            str_with_ascii_lowercased,
+            str_with_ascii_uppercased,
+            str_trim,
+            str_trim_start,
+            str_trim_end,
+            str_to_utf8,
+            str_split_on,
+            str_join_with,
+            str_inspect,
+            str_drop_prefix_caseless_ascii,
+            str_split_first,
+            str_split_last,
+            str_from_utf8,
+            str_from_utf8_lossy,
+            str_is_eq_static_small,
+            str_static_small_word_eq,
+            str_static_small_word_caseless_eq,
+        };
+        const str_op = std.meta.stringToEnum(StrOp, @tagName(op)) orelse return self.unsupported_("string op");
         const arena = self.alloc();
-        switch (op) {
+        switch (str_op) {
             .str_is_eq => return .{ .bool_ = std.mem.eql(u8, args[0].str, args[1].str) },
             .str_concat => {
                 const out = arena.alloc(u8, args[0].str.len + args[1].str.len) catch return error.OutOfMemory;
@@ -1986,7 +2281,6 @@ pub const Evaluator = struct {
             .str_static_small_word_eq,
             .str_static_small_word_caseless_eq,
             => return self.unsupported_("static small string dispatch op"),
-            else => return self.unsupported_("string op"),
         }
     }
 
@@ -2114,10 +2408,9 @@ pub const Evaluator = struct {
     /// Build a record value placing each `(name, value)` into the storage slot
     /// its name occupies in `result_ty`'s field span.
     fn buildNamedRecord(self: *Evaluator, result_ty: Type.TypeId, fields: []const NamedField) EvalError!Value {
-        const type_fields = switch (self.structural(result_ty)) {
-            .record => |span| self.program.types.fieldSpan(span),
-            else => return self.unsupported_("expected record result type"),
-        };
+        const content = self.structural(result_ty);
+        if (content != .record) return self.unsupported_("expected record result type");
+        const type_fields = self.program.types.fieldSpan(content.record);
         if (type_fields.len != fields.len) return self.unsupported_("record result field count mismatch");
         const out = self.alloc().alloc(Value, type_fields.len) catch return error.OutOfMemory;
         for (0..type_fields.len) |i| {
@@ -2138,8 +2431,36 @@ pub const Evaluator = struct {
     // list ops
 
     fn evalListOp(self: *Evaluator, op: base.LowLevel, args: []const Value, arg_types: []const Type.TypeId, result_ty: Type.TypeId) EvalError!Value {
+        const ListOp = enum {
+            list_len,
+            list_get_unsafe,
+            list_append_unsafe,
+            list_prepend,
+            list_concat,
+            list_with_capacity,
+            list_reserve,
+            list_release_excess_capacity,
+            list_reverse,
+            list_drop_first,
+            list_drop_last,
+            list_take_first,
+            list_take_last,
+            list_drop_at,
+            list_sublist,
+            list_sublist_borrowed,
+            list_set,
+            list_swap,
+            list_replace_unsafe,
+            list_first,
+            list_last,
+            list_split_first,
+            list_split_last,
+            list_map_prepare_reuse,
+            list_map_can_reuse,
+        };
+        const list_op = std.meta.stringToEnum(ListOp, @tagName(op)) orelse return self.unsupported_("list op");
         const arena = self.alloc();
-        switch (op) {
+        switch (list_op) {
             .list_len => return self.canonicalInt(.u64, @intCast(args[0].list.len)),
             .list_get_unsafe => {
                 const index = readInt(u64, args[1]);
@@ -2200,15 +2521,14 @@ pub const Evaluator = struct {
                 @memcpy(out[di..], list[di + 1 ..]);
                 return .{ .list = out };
             },
-            .list_sublist => {
+            .list_sublist, .list_sublist_borrowed => {
                 const list = args[0].list;
                 const record = args[1].record;
                 // The sublist parameter record carries `start` and `len` fields;
                 // resolve each by name within the record argument's type.
-                const record_fields = switch (self.structural(arg_types[1])) {
-                    .record => |span| self.program.types.fieldSpan(span),
-                    else => return self.unsupported_("list_sublist parameter is not a record"),
-                };
+                const content = self.structural(arg_types[1]);
+                if (content != .record) return self.unsupported_("list_sublist parameter is not a record");
+                const record_fields = self.program.types.fieldSpan(content.record);
                 const start_idx = self.recordFieldIndexByText(record_fields, "start") orelse return self.unsupported_("list_sublist start field");
                 const len_idx = self.recordFieldIndexByText(record_fields, "len") orelse return self.unsupported_("list_sublist len field");
                 return self.sublist(list, @intCast(readInt(u64, record[start_idx])), @intCast(readInt(u64, record[len_idx])));
@@ -2237,15 +2557,12 @@ pub const Evaluator = struct {
             .list_last => return try self.listFirstLast(result_ty, args[0].list, false),
             .list_split_first => return try self.listSplit(result_ty, args[0].list, true),
             .list_split_last => return try self.listSplit(result_ty, args[0].list, false),
+            .list_map_prepare_reuse => return args[0],
             .list_map_can_reuse => {
                 // In-place map reuse is disabled on the compared compile.
                 const prim = self.primitiveOf(result_ty) orelse .u8;
-                return switch (prim) {
-                    .bool => .{ .bool_ = false },
-                    else => self.canonicalInt(prim, 0),
-                };
+                return if (prim == .bool) .{ .bool_ = false } else self.canonicalInt(prim, 0);
             },
-            else => return self.unsupported_("list op"),
         }
     }
 
@@ -2279,18 +2596,14 @@ pub const Evaluator = struct {
     /// Build a two-field record whose list-typed field gets `list_value` and
     /// whose other field gets `elem_value`, identified by field type.
     fn buildListElemRecord(self: *Evaluator, record_ty: Type.TypeId, list_value: Value, elem_value: Value) EvalError!Value {
-        const type_fields = switch (self.structural(record_ty)) {
-            .record => |span| self.program.types.fieldSpan(span),
-            else => return self.unsupported_("expected record result type"),
-        };
+        const content = self.structural(record_ty);
+        if (content != .record) return self.unsupported_("expected record result type");
+        const type_fields = self.program.types.fieldSpan(content.record);
         if (type_fields.len != 2) return self.unsupported_("expected two-field record result");
         const out = self.alloc().alloc(Value, 2) catch return error.OutOfMemory;
         for (0..2) |i| {
             const field_ty = GuardedList.at(type_fields, i).ty;
-            out[i] = switch (self.structural(field_ty)) {
-                .list => list_value,
-                else => elem_value,
-            };
+            out[i] = if (self.structural(field_ty) == .list) list_value else elem_value;
         }
         return .{ .record = out };
     }
@@ -2326,10 +2639,9 @@ pub const Evaluator = struct {
     /// payload (typically a zero-arg error tag), not a bare unit, so downstream
     /// pattern matching on that payload succeeds.
     fn zeroPayloadsForTag(self: *Evaluator, tag_ty: Type.TypeId, index: usize) EvalError![]const Value {
-        const tags = switch (self.structural(tag_ty)) {
-            .tag_union => |span| span,
-            else => return &.{},
-        };
+        const content = self.structural(tag_ty);
+        if (content != .tag_union) return &.{};
+        const tags = content.tag_union;
         const tag_slice = self.program.types.tagSpan(tags);
         const payload_tys = self.program.types.span(GuardedList.at(tag_slice, index).payloads);
         const out = self.alloc().alloc(Value, payload_tys.len) catch return error.OutOfMemory;
@@ -2349,7 +2661,7 @@ pub const Evaluator = struct {
                 .f32 => .{ .float32 = 0 },
                 .f64 => .{ .float64 = 0 },
                 .dec => .{ .dec = 0 },
-                else => self.canonicalInt(p, 0),
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.canonicalInt(p, 0),
             },
             .zst, .erased_capture_ptr => return .unit,
             .list => return .{ .list = &.{} },
@@ -2425,7 +2737,7 @@ pub const Evaluator = struct {
                         const fits = intFitsPrim(dst, value.int);
                         break :blk self.buildTryRecord(result_ty, fits, if (fits) self.canonicalInt(dst, value.int) else self.zeroValue(dst));
                     },
-                    else => self.unsupported_("unexpected int-to-int conversion kind"),
+                    .trunc, .try_unsafe => self.unsupported_("unexpected int-to-int conversion kind"),
                 },
                 .float => floatValueOf(dst, intToFloat(if (dst == .f32) f32 else f64, src, value)),
                 .dec => switch (kind) {
@@ -2434,7 +2746,7 @@ pub const Evaluator = struct {
                         const maybe = intToDecTry(src, value);
                         break :blk self.buildTryRecord(result_ty, maybe != null, .{ .dec = maybe orelse 0 });
                     },
-                    else => self.unsupported_("unexpected int-to-dec conversion kind"),
+                    .wrap, .try_, .trunc => self.unsupported_("unexpected int-to-dec conversion kind"),
                 },
             },
             .float => switch (comptime primCategory(dst)) {
@@ -2447,7 +2759,7 @@ pub const Evaluator = struct {
                             const maybe = floatToIntTryPrim(F, dst, fv);
                             break :inner self.buildTryRecord(result_ty, maybe != null, if (maybe) |m| self.canonicalInt(dst, m) else self.zeroValue(dst));
                         },
-                        else => self.unsupported_("unexpected float-to-int conversion kind"),
+                        .plain, .wrap, .try_ => self.unsupported_("unexpected float-to-int conversion kind"),
                     };
                 },
                 .float => blk: {
@@ -2459,7 +2771,7 @@ pub const Evaluator = struct {
                             const casted: f64 = if (in_range) @floatCast(sv) else 0;
                             break :inner self.buildTryRecord(result_ty, in_range, floatValueOf(dst, casted));
                         },
-                        else => self.unsupported_("unexpected float-to-float conversion kind"),
+                        .try_, .trunc => self.unsupported_("unexpected float-to-float conversion kind"),
                     };
                 },
                 .dec => self.unsupported_("unexpected float-to-dec conversion"),
@@ -2471,7 +2783,7 @@ pub const Evaluator = struct {
                         const maybe = decToIntTry(dst, value.dec);
                         break :blk self.buildTryRecord(result_ty, maybe != null, if (maybe) |m| self.canonicalInt(dst, m) else self.zeroValue(dst));
                     },
-                    else => self.unsupported_("unexpected dec-to-int conversion kind"),
+                    .plain, .wrap, .try_ => self.unsupported_("unexpected dec-to-int conversion kind"),
                 },
                 .float => switch (kind) {
                     .plain, .wrap => if (dst == .f32)
@@ -2482,7 +2794,7 @@ pub const Evaluator = struct {
                         const maybe = builtins.dec.toF32Try(.{ .num = value.dec });
                         break :blk self.buildTryRecord(result_ty, maybe != null, .{ .float32 = maybe orelse 0 });
                     },
-                    else => self.unsupported_("unexpected dec-to-float conversion kind"),
+                    .try_, .trunc => self.unsupported_("unexpected dec-to-float conversion kind"),
                 },
                 .dec => self.unsupported_("unexpected dec-to-dec conversion"),
             },
@@ -2504,11 +2816,10 @@ pub const Evaluator = struct {
         // A checked conversion result is bit-identical whether the front end
         // typed it as a `{ value, is_ok }` record or a `Result` tag union: the
         // `is_ok` flag is the Ok/Err discriminant. Build whichever the type says.
-        const type_fields = switch (self.structural(result_ty)) {
-            .record => |span| self.program.types.fieldSpan(span),
-            .tag_union => return self.buildResultTag(result_ty, ok, value),
-            else => return self.unsupported_("expected try-record result type"),
-        };
+        const content = self.structural(result_ty);
+        if (content == .tag_union) return self.buildResultTag(result_ty, ok, value);
+        if (content != .record) return self.unsupported_("expected try-record result type");
+        const type_fields = self.program.types.fieldSpan(content.record);
         if (type_fields.len != 2) return self.unsupported_("expected two-field try record");
         const success_index = self.recordFieldIndexByText(type_fields, "success") orelse
             return self.unsupported_("unsafe conversion record omitted success field");
@@ -2617,7 +2928,7 @@ fn intType(comptime prim: Primitive) type {
         .i64 => i64,
         .u128 => u128,
         .i128 => i128,
-        else => @compileError("intType requires an integer primitive"),
+        .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @compileError("intType requires an integer primitive"),
     };
 }
 
@@ -2666,7 +2977,7 @@ fn primCategory(comptime prim: Primitive) PrimCategory {
         .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => .int,
         .f32, .f64 => .float,
         .dec => .dec,
-        else => @compileError("primCategory requires a numeric primitive"),
+        .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @compileError("primCategory requires a numeric primitive"),
     };
 }
 
@@ -2674,7 +2985,7 @@ fn floatValueOf(comptime prim: Primitive, x: anytype) Value {
     return switch (prim) {
         .f32 => .{ .float32 = @floatCast(x) },
         .f64 => .{ .float64 = @floatCast(x) },
-        else => @compileError("floatValueOf requires a float primitive"),
+        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @compileError("floatValueOf requires a float primitive"),
     };
 }
 
@@ -2847,7 +3158,7 @@ fn primTypeName(comptime prim: Primitive) []const u8 {
         .i64 => "I64",
         .u128 => "U128",
         .i128 => "I128",
-        else => @compileError("primTypeName requires an integer primitive"),
+        .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @compileError("primTypeName requires an integer primitive"),
     };
 }
 
@@ -2884,7 +3195,7 @@ fn parseConversion(comptime name: []const u8) ?Evaluator.ConvSpec {
 fn isNumericPrimitive(prim: Primitive) bool {
     return switch (prim) {
         .bool, .str => false,
-        else => true,
+        .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
     };
 }
 

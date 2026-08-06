@@ -664,6 +664,7 @@ pub const MappedProgramView = struct {
         }
         for (self.branches) |branch| {
             if (!self.patRefInBounds(branch.pat)) return false;
+            if (!self.stmtIdSpanInBounds(branch.bindings)) return false;
             if (branch.guard) |guard| {
                 if (!self.exprRefInBounds(guard)) return false;
             }
@@ -777,6 +778,7 @@ pub const MappedProgramView = struct {
                 self.exprRefInBounds(candidate.runtime_expr),
             .list, .tuple => |span| self.exprIdSpanInBounds(span),
             .record => |span| self.fieldExprSpanInBounds(span),
+            .record_update => |update| self.exprRefInBounds(update.base) and self.fieldExprSpanInBounds(update.fields),
             .tag => |tag| self.exprIdSpanInBounds(tag.payloads),
             .nominal => |expr| self.exprRefInBounds(expr),
             .let_ => |let_| self.patRefInBounds(let_.bind) and
@@ -968,28 +970,25 @@ pub const MappedProgramView = struct {
         }
 
         for (self.exprs) |expr| {
-            switch (expr.data) {
-                .call_proc => |call| switch (call.callee) {
+            if (expr.data == .call_proc) {
+                const call = expr.data.call_proc;
+                switch (call.callee) {
                     .func => |slot| switch (slot) {
                         .local => |fn_id| {
                             const raw_fn = @intFromEnum(fn_id);
                             if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
                             const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
                             if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
-                            switch (self.types.get(self.fns[raw_fn].source.mono_fn_ty)) {
-                                .func => |func| {
-                                    if (func.args.len != call.args.len) return .local_call_arity_mismatch;
-                                },
-                                else => return .local_fn_type_not_function,
-                            }
+                            const fn_ty = self.types.get(self.fns[raw_fn].source.mono_fn_ty);
+                            if (fn_ty != .func) return .local_fn_type_not_function;
+                            if (fn_ty.func.args.len != call.args.len) return .local_call_arity_mismatch;
                         },
                         .imported => |imported| {
                             if (@intFromEnum(imported) >= self.imported_fns.len) return .imported_fn_out_of_bounds;
                         },
                     },
                     .lifted => return .lifted_fn_before_lifting,
-                },
-                else => {},
+                }
             }
         }
         return null;
@@ -1004,13 +1003,10 @@ pub const MappedProgramView = struct {
         if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
         const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
         if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
-        return switch (self.types.get(self.fns[raw_fn].source.mono_fn_ty)) {
-            .func => |func| {
-                if (func.args.len != args.len) return .local_fn_definition_arity_mismatch;
-                return null;
-            },
-            else => .local_fn_type_not_function,
-        };
+        const fn_ty = self.types.get(self.fns[raw_fn].source.mono_fn_ty);
+        if (fn_ty != .func) return .local_fn_type_not_function;
+        if (fn_ty.func.args.len != args.len) return .local_fn_definition_arity_mismatch;
+        return null;
     }
 };
 

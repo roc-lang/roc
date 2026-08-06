@@ -5,6 +5,56 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
+const PlatformOs = enum { windows, linux, macos, ios, tvos, watchos, freebsd, openbsd, netbsd, dragonfly, other };
+
+fn classifyPlatformOs(os: std.Target.Os.Tag) PlatformOs {
+    return switch (os) {
+        .windows => .windows,
+        .linux => .linux,
+        .macos => .macos,
+        .ios => .ios,
+        .tvos => .tvos,
+        .watchos => .watchos,
+        .freebsd => .freebsd,
+        .openbsd => .openbsd,
+        .netbsd => .netbsd,
+        .dragonfly => .dragonfly,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .driverkit,
+        .maccatalyst,
+        .visionos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .other,
+    };
+}
+
 /// Platform detection
 pub const is_windows = builtin.target.os.tag == .windows;
 
@@ -113,8 +163,15 @@ pub const windows = if (is_windows) struct {
     };
 } else struct {};
 
-/// POSIX shared memory functions
-pub const posix = if (!is_windows) struct {
+/// Linux performs every shared-memory operation through raw kernel syscalls
+/// rather than through libc. Executables that link no libc at all still map,
+/// protect, and unmap the compiler's shared-memory images: the default
+/// platform's freestanding runtime is one such executable, and so is any
+/// process that embeds the machine-code shim without a libc of its own.
+const linux = std.os.linux;
+
+/// POSIX shared memory functions, for the platforms that reach them through libc.
+pub const posix = if (!is_windows and builtin.os.tag != .linux) struct {
     // Note: mmap returns MAP_FAILED ((void*)-1) on error, NOT NULL
     // So we declare it as non-optional and check against MAP_FAILED
     pub extern "c" fn mmap(
@@ -154,16 +211,31 @@ pub const SharedMemoryError = error{
     OutOfMemory,
 };
 
+/// Errors raised while querying the system page size.
+pub const PageSizeError = error{ PageSizeQueryFailed, UnsupportedPlatform };
+
 /// Get the system's page size at runtime
-pub fn getSystemPageSize() error{ PageSizeQueryFailed, UnsupportedPlatform }!usize {
-    const page_size: usize = switch (builtin.os.tag) {
+pub fn getSystemPageSize() PageSizeError!usize {
+    const page_size: usize = switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => blk: {
             var system_info: windows.SYSTEM_INFO = undefined;
             windows.GetSystemInfo(&system_info);
             break :blk @intCast(system_info.dwPageSize);
         },
         .linux => blk: {
-            const result = std.os.linux.getauxval(std.elf.AT_PAGESZ);
+            // Not `std.os.linux.getauxval`: with libc linked that reads
+            // `std.os.linux.elf_aux_maybe`, which only Zig's own `_start`
+            // assigns, so in the `roc` binary (link_libc = true, libc owns
+            // `_start`) it answers 0 and this silently settles for the 4096
+            // below on every host -- including the 16K- and 64K-page aarch64
+            // kernels where that is the wrong answer. libc read the auxiliary
+            // vector during its own startup, so ask it instead. The fallback
+            // stays for the libc-free shim children, which have no auxiliary
+            // vector of their own to read; see `FdInfo.page_size`.
+            const result: usize = if (comptime builtin.link_libc)
+                @intCast(std.c.getauxval(std.elf.AT_PAGESZ))
+            else
+                std.os.linux.getauxval(std.elf.AT_PAGESZ);
             break :blk if (result != 0) result else 4096;
         },
         .macos, .ios, .tvos, .watchos => blk: {
@@ -180,7 +252,7 @@ pub fn getSystemPageSize() error{ PageSizeQueryFailed, UnsupportedPlatform }!usi
             if (result <= 0) return error.PageSizeQueryFailed;
             break :blk @intCast(result);
         },
-        else => return error.UnsupportedPlatform,
+        .other => return error.UnsupportedPlatform,
     };
 
     // Ensure page_size is a power of 2 (required for alignForward)
@@ -189,7 +261,7 @@ pub fn getSystemPageSize() error{ PageSizeQueryFailed, UnsupportedPlatform }!usi
 
 /// Create a new anonymous shared memory mapping
 pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => {
             // Handle sizes larger than 4GB properly
             const size_high: windows.DWORD = if (size > std.math.maxInt(u32))
@@ -227,27 +299,27 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
         },
         .linux => {
             // Use memfd_create for anonymous shared memory on Linux
-            const fd_raw = std.os.linux.memfd_create("roc_shm", std.os.linux.MFD.CLOEXEC);
+            const fd_raw = linux.memfd_create("roc_shm", linux.MFD.CLOEXEC);
             const fd = std.math.cast(std.posix.fd_t, fd_raw) orelse return error.MemfdCreateFailed;
 
             // Set the size of the shared memory
-            if (std.c.ftruncate(fd, @intCast(size)) != 0) {
-                _ = std.c.close(fd);
+            if (linux.errno(linux.ftruncate(fd, @intCast(size))) != .SUCCESS) {
+                _ = linux.close(fd);
                 return error.FtruncateFailed;
             }
 
             return fd;
         },
         .macos, .freebsd, .openbsd, .netbsd => return createPosixShmMapping(io, size),
-        else => return error.UnsupportedPlatform,
+        .ios, .tvos, .watchos, .dragonfly, .other => return error.UnsupportedPlatform,
     }
 }
 
 /// Create shared memory whose pages can later be marked executable.
 pub fn createExecutableMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
-    return switch (builtin.os.tag) {
+    return switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .macos => createUnlinkedTempFileMapping(io, size),
-        else => createMapping(io, size),
+        .windows, .linux, .ios, .tvos, .watchos, .freebsd, .openbsd, .netbsd, .dragonfly, .other => createMapping(io, size),
     };
 }
 
@@ -314,7 +386,7 @@ fn createPosixShmMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
 
 /// Open an existing named shared memory mapping
 pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryError!Handle {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => {
             const wide_name = std.unicode.utf8ToUtf16LeAllocZ(allocator, name) catch {
                 return error.OutOfMemory;
@@ -356,7 +428,7 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
             // Use the coordination file approach instead
             return error.UnsupportedPlatform;
         },
-        else => return error.UnsupportedPlatform,
+        .ios, .tvos, .watchos, .dragonfly, .other => return error.UnsupportedPlatform,
     }
 }
 
@@ -376,7 +448,7 @@ fn mapMemoryWithLogging(
     base_addr: ?*anyopaque,
     log_failure: bool,
 ) SharedMemoryError!*anyopaque {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => {
             const ptr = if (base_addr) |addr|
                 windows.MapViewOfFileEx(
@@ -406,7 +478,25 @@ fn mapMemoryWithLogging(
 
             return ptr.?;
         },
-        .linux, .macos, .freebsd, .openbsd, .netbsd => {
+        .linux => {
+            const rc = linux.mmap(
+                @ptrCast(base_addr),
+                size,
+                .{ .READ = true, .WRITE = true },
+                .{ .TYPE = .SHARED },
+                handle,
+                0,
+            );
+            const errno = linux.errno(rc);
+            if (errno != .SUCCESS) {
+                if (log_failure) {
+                    std.log.err("Linux: Failed to map shared memory (size: {}, fd: {}, errno: {t})", .{ size, handle, errno });
+                }
+                return error.MmapFailed;
+            }
+            return @ptrFromInt(rc);
+        },
+        .macos, .freebsd, .openbsd, .netbsd => {
             const ptr = posix.mmap(
                 base_addr,
                 size,
@@ -425,7 +515,7 @@ fn mapMemoryWithLogging(
             }
             return ptr;
         },
-        else => return error.UnsupportedPlatform,
+        .ios, .tvos, .watchos, .dragonfly, .other => return error.UnsupportedPlatform,
     }
 }
 
@@ -451,8 +541,16 @@ pub fn protectMappedMemory(
 ) MemoryProtectError!void {
     if (len == 0) return;
 
-    switch (builtin.os.tag) {
-        .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
+        .linux => {
+            const prot: linux.PROT = switch (protection) {
+                .read_write => .{ .READ = true, .WRITE = true },
+                .read_only => .{ .READ = true },
+                .read_execute => .{ .READ = true, .EXEC = true },
+            };
+            if (linux.errno(linux.mprotect(ptr, len, prot)) != .SUCCESS) return error.MprotectFailed;
+        },
+        .macos, .ios, .tvos, .watchos, .freebsd, .openbsd, .netbsd => {
             const prot: std.posix.PROT = switch (protection) {
                 .read_write => .{ .READ = true, .WRITE = true },
                 .read_only => .{ .READ = true },
@@ -471,34 +569,40 @@ pub fn protectMappedMemory(
                 return error.VirtualProtectFailed;
             }
         },
-        else => return error.UnsupportedPlatform,
+        .dragonfly, .other => return error.UnsupportedPlatform,
     }
 }
 
 /// Unmap shared memory from the process address space
 pub fn unmapMemory(ptr: *anyopaque, size: usize) void {
-    if (comptime is_windows) {
-        unmapWindowsMemory(ptr);
-    } else {
-        unmapPosixMemory(ptr, size);
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
+        .windows => unmapWindowsMemory(ptr),
+        .linux => unmapLinuxMemory(ptr, size),
+        .macos, .ios, .tvos, .watchos, .freebsd, .openbsd, .netbsd, .dragonfly, .other => unmapPosixMemory(ptr, size),
     }
 }
 
 fn unmapWindowsMemory(ptr: *anyopaque) void {
-    if (comptime is_windows) {
-        _ = windows.UnmapViewOfFile(ptr);
+    _ = windows.UnmapViewOfFile(ptr);
+}
+
+fn unmapLinuxMemory(ptr: *anyopaque, size: usize) void {
+    const errno = linux.errno(linux.munmap(@ptrCast(ptr), size));
+    if (errno != .SUCCESS) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("munmap failed with errno {t}", .{errno});
+        }
+        unreachable;
     }
 }
 
 fn unmapPosixMemory(ptr: *anyopaque, size: usize) void {
-    if (comptime !is_windows) {
-        const rc = posix.munmap(ptr, size);
-        if (rc != 0) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("munmap failed with errno {d}", .{std.c._errno().*});
-            }
-            unreachable;
+    const rc = posix.munmap(ptr, size);
+    if (rc != 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("munmap failed with errno {d}", .{std.c._errno().*});
         }
+        unreachable;
     }
 }
 
@@ -507,32 +611,39 @@ fn unmapPosixMemory(ptr: *anyopaque, size: usize) void {
 /// On POSIX: closes the file descriptor
 /// Note: Child processes on Windows should NOT close inherited handles
 pub fn closeHandle(handle: Handle, is_owner: bool) void {
-    if (comptime is_windows) {
-        closeWindowsHandle(handle, is_owner);
-    } else {
-        closePosixHandle(handle);
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
+        .windows => closeWindowsHandle(handle, is_owner),
+        .linux => closeLinuxHandle(handle),
+        .macos, .ios, .tvos, .watchos, .freebsd, .openbsd, .netbsd, .dragonfly, .other => closePosixHandle(handle),
     }
 }
 
 fn closeWindowsHandle(handle: Handle, is_owner: bool) void {
-    if (comptime is_windows) {
-        // On Windows, only the owner should close the handle
-        // Inherited handles belong to the parent process
-        if (is_owner) {
-            _ = windows.CloseHandle(handle);
+    // On Windows, only the owner should close the handle
+    // Inherited handles belong to the parent process
+    if (is_owner) {
+        _ = windows.CloseHandle(handle);
+    }
+}
+
+fn closeLinuxHandle(handle: Handle) void {
+    // POSIX always closes the fd
+    const errno = linux.errno(linux.close(handle));
+    if (errno != .SUCCESS) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("close failed with errno {t}", .{errno});
         }
+        unreachable;
     }
 }
 
 fn closePosixHandle(handle: Handle) void {
-    if (comptime !is_windows) {
-        // POSIX always closes the fd
-        const rc = posix.close(handle);
-        if (rc != 0) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("close failed with errno {d}", .{std.c._errno().*});
-            }
-            unreachable;
+    // POSIX always closes the fd
+    const rc = posix.close(handle);
+    if (rc != 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("close failed with errno {d}", .{std.c._errno().*});
         }
+        unreachable;
     }
 }

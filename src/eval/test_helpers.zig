@@ -77,6 +77,11 @@ pub const TestHelperError = Allocator.Error || std.Thread.SpawnError || std.DynL
     InvalidHandle,
     WindowsSDKNotFound,
     CompilationFailed,
+    NoBitcodeModules,
+    UnsupportedLlvmTriple,
+    MissingBuiltinBitcode,
+    LlvmModuleVerificationFailed,
+    LlvmObjectEmitFailed,
     BitcodeParseError,
     ModuleLinkFailed,
     TempFileError,
@@ -214,7 +219,7 @@ const AvailableImport = struct {
 fn importStatementIdx(env: *const ModuleEnv, module_name: []const u8) ?CIR.Statement.Idx {
     switch (env.module_kind) {
         .type_module => {},
-        else => return null,
+        .default_app, .app, .package, .platform, .hosted, .module, .malformed => return null,
     }
     const type_ident = env.common.findIdent(module_name) orelse return null;
     const type_node_idx = env.getExposedTypeNodeIndexById(type_ident) orelse return null;
@@ -389,6 +394,56 @@ pub const BoolRootModule = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     roots: []const BoolRoot,
+};
+
+/// Timings for JIT-compiling and running boolean test roots with the dev backend.
+pub const DevBoolRootTimingSnapshot = struct {
+    static_strings_ns: u64 = 0,
+    codegen_setup_ns: u64 = 0,
+    procedure_codegen_ns: u64 = 0,
+    entrypoint_codegen_ns: u64 = 0,
+    executable_memory_ns: u64 = 0,
+    root_execution_ns: u64 = 0,
+};
+
+/// Mutable timing collector for one dev-backend boolean-root evaluation batch.
+pub const DevBoolRootTiming = struct {
+    std_io: std.Io,
+    snapshot_value: DevBoolRootTimingSnapshot = .{},
+
+    const Phase = enum {
+        static_strings,
+        codegen_setup,
+        procedure_codegen,
+        entrypoint_codegen,
+        executable_memory,
+        root_execution,
+    };
+
+    pub fn init(std_io: std.Io) DevBoolRootTiming {
+        return .{ .std_io = std_io };
+    }
+
+    pub fn snapshot(self: *const DevBoolRootTiming) DevBoolRootTimingSnapshot {
+        return self.snapshot_value;
+    }
+
+    fn start(self: *const DevBoolRootTiming) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    fn finish(self: *DevBoolRootTiming, started_ns: i96, phase: Phase) void {
+        const finished_ns = std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+        const elapsed_ns: u64 = @intCast(@max(0, finished_ns - started_ns));
+        switch (phase) {
+            .static_strings => self.snapshot_value.static_strings_ns += elapsed_ns,
+            .codegen_setup => self.snapshot_value.codegen_setup_ns += elapsed_ns,
+            .procedure_codegen => self.snapshot_value.procedure_codegen_ns += elapsed_ns,
+            .entrypoint_codegen => self.snapshot_value.entrypoint_codegen_ns += elapsed_ns,
+            .executable_memory => self.snapshot_value.executable_memory_ns += elapsed_ns,
+            .root_execution => self.snapshot_value.root_execution_ns += elapsed_ns,
+        }
+    }
 };
 
 /// Per-call mutable observation state passed to optimized test entrypoints.
@@ -2320,19 +2375,37 @@ pub fn devEvalBoolRoots(
     layouts: *const LayoutStore,
     roots: []const BoolRoot,
 ) TestHelperError![]BoolRootEvalResult {
+    return devEvalBoolRootsWithTiming(allocator, store, layouts, roots, null);
+}
+
+/// JIT-compile and run boolean roots while accumulating detailed dev-backend timings.
+pub fn devEvalBoolRootsWithTiming(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    roots: []const BoolRoot,
+    timing: ?*DevBoolRootTiming,
+) TestHelperError![]BoolRootEvalResult {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
+        const static_strings_started_ns = if (timing) |timings| timings.start() else 0;
         var static_strings = try backend.StaticStringData.build(
             allocator,
             store,
             backend.dev.LirCodeGenMod.host_lir_codegen_target,
         );
         defer static_strings.deinit();
+        if (timing) |timings| timings.finish(static_strings_started_ns, .static_strings);
 
-        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve, .default);
+        const codegen_setup_started_ns = if (timing) |timings| timings.start() else 0;
+        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve, roc_target.host_cpu.level());
         defer codegen.deinit();
+        if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
+
+        const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
         try codegen.compileAllProcSpecs(store.getProcSpecs());
+        if (timing) |timings| timings.finish(procedure_codegen_started_ns, .procedure_codegen);
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
@@ -2342,20 +2415,31 @@ pub fn devEvalBoolRoots(
         errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
 
         for (roots, 0..) |root, i| {
+            const entrypoint_codegen_started_ns = if (timing) |timings| timings.start() else 0;
             const entrypoint = try codegen.generateEntrypointWrapper(
                 root.symbol_name,
                 root.proc,
                 root.arg_layouts,
                 root.ret_layout,
             );
+            if (timing) |timings| timings.finish(entrypoint_codegen_started_ns, .entrypoint_codegen);
+
+            const executable_memory_started_ns = if (timing) |timings| timings.start() else 0;
             var executable = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
                 codegen.getGeneratedCode(),
                 entrypoint.offset,
                 codegen.getUnwindFunctions(),
             );
-            defer executable.deinit();
+            if (timing) |timings| timings.finish(executable_memory_started_ns, .executable_memory);
+            defer {
+                const executable_deinit_started_ns = if (timing) |timings| timings.start() else 0;
+                executable.deinit();
+                if (timing) |timings| timings.finish(executable_deinit_started_ns, .executable_memory);
+            }
 
+            const root_execution_started_ns = if (timing) |timings| timings.start() else 0;
             results[i] = try runExecutableBoolRoot(allocator, layouts, &executable, root, &runtime_env);
+            if (timing) |timings| timings.finish(root_execution_started_ns, .root_execution);
             result_len += 1;
         }
 
@@ -2380,7 +2464,9 @@ const OwnedLlvmCompileOptions = struct {
 
 fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsize, opt: LlvmTestOpt) TestHelperError!OwnedLlvmCompileOptions {
     const llvm_compile = @import("llvm_compile");
-    const native_roc_target = roc_target.RocTarget.detectNative();
+    // This code is compiled to run in this process, so the CPU floor is the
+    // one this machine executes rather than the native target's default.
+    const native_roc_target = roc_target.host_cpu.nativeTarget();
     const resolved_target = std.zig.system.resolveTargetQuery(std.Options.debug_io, native_roc_target.llvmTargetQuery()) catch
         return error.UnsupportedTarget;
     const cpu = try allocator.dupeZ(u8, roc_target.llvmCpuName(resolved_target));

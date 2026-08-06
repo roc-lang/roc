@@ -56,7 +56,9 @@ pub const ComptimeCondition = types.ComptimeCondition;
 // Type declaration errors
 pub const TypeApplyArityMismatch = types.TypeApplyArityMismatch;
 pub const RecursiveAlias = types.RecursiveAlias;
-pub const UnsupportedAliasWhereClause = types.UnsupportedAliasWhereClause;
+pub const NotAWhereAlias = types.NotAWhereAlias;
+pub const WhereAliasInTypePosition = types.WhereAliasInTypePosition;
+pub const RecursiveWhereAlias = types.RecursiveWhereAlias;
 pub const WhereClauseReceiverNotIntroduced = types.WhereClauseReceiverNotIntroduced;
 
 // Nominal type errors
@@ -71,6 +73,7 @@ pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const HostBoundaryOpenRow = types.HostBoundaryOpenRow;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
+pub const AssociatedItemNotFound = types.AssociatedItemNotFound;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
 pub const EffectfulExpect = types.EffectfulExpect;

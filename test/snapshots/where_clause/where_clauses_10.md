@@ -14,20 +14,18 @@ decode_things # After member name
 				[a.Decode]
 ~~~
 # EXPECTED
-UNSUPPORTED WHERE CLAUSE - where_clauses_10.md:7:6:7:14
+UNDECLARED TYPE - where_clauses_10.md:7:7:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
 
-┌──────────────────────────┐
-│ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax Decode is not ──────────┐
-└┬─────────────────────────┘  supported.                                      │
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Decode` is not declared in this scope. ────────┐
+└┬────────────────┘                                                           │
  │                                                                            │
  │  [a.Decode]                                                                │
- │   ‾‾‾‾‾‾‾‾                                                                 │
- └─────────────────────────────────────────────────── where_clauses_10.md:7:6 ┘
+ │    ‾‾‾‾‾‾‾                                                                 │
+ └─────────────────────────────────────────────────── where_clauses_10.md:7:7 ┘
 
-    This syntax was used for abilities, which have been removed from Roc. Use
-    method constraints like `where [a.methodName(args) -> ret]` instead.
 
 
 ┌──────────────────────────┐
@@ -74,7 +72,8 @@ EndOfFile,
 					(ty (name "List"))
 					(ty-var (raw "a"))))
 			(where
-				(alias (mod-of "a") (name "Decode"))))))
+				(alias (mod-of "a")
+					(ty (name "Decode")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -101,7 +100,9 @@ decode_things # After member name
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "a"))))
 			(where
-				(alias (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "Decode")))))
+				(alias
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-malformed)))))
 	(s-import (mod "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false)))))
@@ -110,7 +111,7 @@ decode_things # After member name
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(List(U8)) -> List(a)")))
+		(patt (type "List(List(U8)) -> List(Error)")))
 	(expressions
-		(expr (type "List(List(U8)) -> List(a)"))))
+		(expr (type "List(List(U8)) -> List(Error)"))))
 ~~~

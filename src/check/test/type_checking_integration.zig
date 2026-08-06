@@ -4191,10 +4191,7 @@ fn expectReadUninitializedVarDiagnostics(test_env: *TestEnv, expected_count: usi
     try testing.expectEqual(expected_count, diagnostics.len);
 
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .read_uninitialized_var => {},
-            else => return error.TestUnexpectedResult,
-        }
+        if (diagnostic != .read_uninitialized_var) return error.TestUnexpectedResult;
 
         var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name);
         defer report.deinit();

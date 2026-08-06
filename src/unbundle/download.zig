@@ -223,8 +223,32 @@ fn downloadToFile(
 
         // Try to create file with exclusive flag (fails if file already exists)
         var file = dir.createFile(io, filename, .{ .exclusive = true }) catch |err| switch (err) {
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileNotFound,
+            error.FileTooBig,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => return error.FileError,
             error.PathAlreadyExists => continue, // Retry with new random suffix
-            else => return error.FileError,
         };
         var file_closed = false;
         errdefer {
@@ -282,8 +306,13 @@ fn initProxiesFromEnv(client: *std.http.Client, arena: Allocator) DownloadError!
         environ_map.put(name, value_slice) catch return error.OutOfMemory;
     }
     client.initDefaultProxies(arena, &environ_map) catch |err| switch (err) {
+        error.InvalidFormat,
+        error.InvalidHostName,
+        error.InvalidPort,
+        error.UnexpectedCharacter,
+        error.UriMissingHost,
+        => return error.InvalidProxyUrl,
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.InvalidProxyUrl,
     };
 }
 

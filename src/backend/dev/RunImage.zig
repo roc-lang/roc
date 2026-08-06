@@ -95,14 +95,7 @@ pub const RelocationRecord = extern struct {
     _padding: [7]u8 = [_]u8{0} ** 7,
 
     pub fn relocationKind(self: RelocationRecord) ImageError!RelocationKind {
-        return switch (self.kind) {
-            @intFromEnum(RelocationKind.linked_function) => .linked_function,
-            @intFromEnum(RelocationKind.linked_data_abs64) => .linked_data_abs64,
-            @intFromEnum(RelocationKind.linked_data_rel32) => .linked_data_rel32,
-            @intFromEnum(RelocationKind.linked_data_page21) => .linked_data_page21,
-            @intFromEnum(RelocationKind.linked_data_pageoff12) => .linked_data_pageoff12,
-            else => error.InvalidDevRunImage,
-        };
+        return std.enums.fromInt(RelocationKind, self.kind) orelse error.InvalidDevRunImage;
     }
 };
 
@@ -137,11 +130,7 @@ pub const DataRelocationRecord = extern struct {
     _padding: [7]u8 = [_]u8{0} ** 7,
 
     pub fn targetKind(self: DataRelocationRecord) ImageError!StaticDataTargetKind {
-        return switch (self.target_kind) {
-            @intFromEnum(StaticDataTargetKind.address) => .address,
-            @intFromEnum(StaticDataTargetKind.function_pointer) => .function_pointer,
-            else => error.InvalidDevRunImage,
-        };
+        return std.enums.fromInt(StaticDataTargetKind, self.target_kind) orelse error.InvalidDevRunImage;
     }
 };
 

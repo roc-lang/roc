@@ -26,7 +26,8 @@ pub fn handler(comptime ServerType: type) type {
 
             var params = protocol.SemanticTokensParams.fromJson(self.allocator, params_value) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => return try ServerType.sendError(self, id, .invalid_params, "invalid semanticTokens params"),
+                error.InvalidParams,
+                => return try ServerType.sendError(self, id, .invalid_params, "invalid semanticTokens params"),
             };
             defer params.deinit(self.allocator);
 
@@ -51,7 +52,33 @@ pub fn handler(comptime ServerType: type) type {
                 // cross-module enrichment, but a genuine OOM must surface.
                 const abs_path: ?[:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    else => null,
+                    error.AccessDenied,
+                    error.AntivirusInterference,
+                    error.BadPathName,
+                    error.Canceled,
+                    error.DeviceBusy,
+                    error.FileBusy,
+                    error.FileNotFound,
+                    error.FileSystem,
+                    error.FileTooBig,
+                    error.InputOutput,
+                    error.IsDir,
+                    error.NameTooLong,
+                    error.NetworkNotFound,
+                    error.NoDevice,
+                    error.NoSpaceLeft,
+                    error.NotDir,
+                    error.OperationUnsupported,
+                    error.PathAlreadyExists,
+                    error.PermissionDenied,
+                    error.PipeBusy,
+                    error.ProcessFdQuotaExceeded,
+                    error.SymLinkLoop,
+                    error.SystemFdQuotaExceeded,
+                    error.SystemResources,
+                    error.Unexpected,
+                    error.UnrecognizedVolume,
+                    => null,
                 };
                 if (abs_path) |ap| {
                     defer self.allocator.free(ap);

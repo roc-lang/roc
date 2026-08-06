@@ -11,6 +11,23 @@ const Report = reporting.Report;
 
 const Allocator = std.mem.Allocator;
 
+/// The kind of declaration a diagnostic is reported against, so its message can
+/// name what the user actually wrote.
+pub const DeclaredTypeKind = enum(u8) {
+    alias,
+    @"opaque",
+    where_alias,
+
+    /// The noun to use when describing this declaration to the user.
+    pub fn label(self: DeclaredTypeKind) []const u8 {
+        return switch (self) {
+            .alias => "alias",
+            .@"opaque" => "opaque type",
+            .where_alias => "where alias",
+        };
+    }
+};
+
 /// Different types of diagnostic errors
 pub const Diagnostic = union(enum) {
     not_implemented: struct {
@@ -137,6 +154,12 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     where_clause_not_allowed_in_type_decl: struct {
+        region: Region,
+    },
+    /// A where alias declaration constrains exactly its receiver, so a clause
+    /// written against another type variable has no home.
+    where_alias_constraint_not_on_receiver: struct {
+        receiver_name: Ident.Idx,
         region: Region,
     },
     open_ext_not_allowed_in_type_decl: struct {
@@ -338,7 +361,7 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     underscore_in_type_declaration: struct {
-        is_alias: bool,
+        declared: DeclaredTypeKind,
         region: Region,
     },
     unused_type_var_name: struct {
@@ -404,6 +427,7 @@ pub const Diagnostic = union(enum) {
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
+            .read_uninitialized_var => |d| d.region,
             .self_referential_definition => |d| d.region,
             .circular_value_definition => |d| d.region,
             .local_reference_before_definition => |d| d.region,
@@ -422,9 +446,11 @@ pub const Diagnostic = union(enum) {
             .if_condition_not_canonicalized => |d| d.region,
             .if_then_not_canonicalized => |d| d.region,
             .if_else_not_canonicalized => |d| d.region,
+            .if_expr_without_else => |d| d.region,
             .malformed_type_annotation => |d| d.region,
             .malformed_where_clause => |d| d.region,
             .where_clause_not_allowed_in_type_decl => |d| d.region,
+            .where_alias_constraint_not_on_receiver => |d| d.region,
             .open_ext_not_allowed_in_type_decl => |d| d.region,
             .unnamed_field_not_allowed_in_structural_record => |d| d.region,
             .var_across_function_boundary => |d| d.region,
@@ -444,12 +470,14 @@ pub const Diagnostic = union(enum) {
             .module_not_imported => |d| d.region,
             .nested_type_not_found => |d| d.region,
             .nested_value_not_found => |d| d.region,
+            .record_builder_map2_not_found => |d| d.region,
             .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
             .type_alias_but_needed_nominal => |d| d.region,
             .crash_expects_string => |d| d.region,
             .type_module_missing_matching_type => |d| d.region,
+            .type_module_has_alias_not_nominal => |d| d.region,
             .default_app_missing_main => |d| d.region,
             .default_app_wrong_arity => |d| d.region,
             .cannot_import_default_app => |d| d.region,
@@ -468,7 +496,6 @@ pub const Diagnostic = union(enum) {
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
             .duplicate_tag => |d| d.duplicate_region,
-            .invalid_single_quote => |d| d.region,
             .empty_tuple => |d| d.region,
             .f64_pattern_literal => |d| d.region,
             .unused_type_var_name => |d| d.region,

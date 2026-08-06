@@ -10,50 +10,32 @@ const completion_context = @import("lsp").completion;
 test "completion context detects after_value_dot for lowercase identifier" {
     const source = "main = my_var.";
     const context = completion_context.detectCompletionContext(source, 0, 14);
-    switch (context) {
-        .after_value_dot => |access| {
-            try std.testing.expectEqualStrings("my_var", access.access_chain);
-        },
-        else => return error.TestUnexpectedResult,
-    }
+    if (std.meta.activeTag(context) != .after_value_dot) return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("my_var", context.after_value_dot.access_chain);
 }
 
 test "completion context detects after_module_dot for uppercase identifier" {
     const source = "main = Str.";
     const context = completion_context.detectCompletionContext(source, 0, 11);
-    switch (context) {
-        .after_module_dot => |module_name| {
-            try std.testing.expectEqualStrings("Str", module_name);
-        },
-        else => return error.TestUnexpectedResult,
-    }
+    if (std.meta.activeTag(context) != .after_module_dot) return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Str", context.after_module_dot);
 }
 
 test "completion context detects after_receiver_dot for chained call" {
     const source = "main = val.func().";
     const context = completion_context.detectCompletionContext(source, 0, 18);
-    switch (context) {
-        .after_receiver_dot => |info| {
-            try std.testing.expectEqual(@as(u32, 17), info.dot_offset);
-        },
-        else => return error.TestUnexpectedResult,
-    }
+    if (std.meta.activeTag(context) != .after_receiver_dot) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 17), context.after_receiver_dot.dot_offset);
 }
 
 test "completion context detects expression context" {
     const source = "main = ";
     const context = completion_context.detectCompletionContext(source, 0, 7);
-    switch (context) {
-        .expression => {},
-        else => return error.TestUnexpectedResult,
-    }
+    if (std.meta.activeTag(context) != .expression) return error.TestUnexpectedResult;
 }
 
 test "completion context detects after_colon for type annotation" {
     const source = "foo : ";
     const context = completion_context.detectCompletionContext(source, 0, 6);
-    switch (context) {
-        .after_colon => {},
-        else => return error.TestUnexpectedResult,
-    }
+    if (std.meta.activeTag(context) != .after_colon) return error.TestUnexpectedResult;
 }

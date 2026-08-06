@@ -89,6 +89,47 @@ are two distinct identities even when their declaring modules are
 byte-identical, and no deduplication, specialization, or merging step may
 collapse two externally-bound identities into one.
 
+### Dense IDs and structural keys
+
+Compiler-owned identity domains prefer dense, store-local integer IDs. The
+producer that owns an append-only table assigns its IDs densely from zero, or
+provides an explicit bijection to a dense ordinal when the ID's raw bits encode
+multiple disjoint namespaces. An identity with this contract is named `...Id`.
+The integer value of an `Id` is meaningful only in the scope of its owning
+store; it is not a stable serialization, object-file, or cross-process
+identity unless that store and its mapping are carried across the same
+boundary.
+
+Per-ID data is a parallel column on the owning store, or a
+`collections.DenseMap` when the column is dynamic or scoped. A short-lived
+scope over a larger ID domain uses a paged, reusable, epoch-based, or explicitly
+remapped dense column so that clearing and iteration remain proportional to the
+live scope. `DenseMap`'s sparse pages contain only ID-to-dense-position rows;
+its values occupy a compact live-entry column, so opening a sparse page never
+initializes a page of potentially large values. The size of the owning ID domain
+is not a reason to hash an ID. Direct columns avoid hashing, table growth,
+repeated key storage, allocator traffic, and duplicate per-consumer indexing
+work.
+
+The suffix `...Key` is reserved for structural or composite identity for which
+a dense owner-relative ID cannot preserve the required identity. Examples
+include identities which must remain stable before or across serialization,
+cache, object-file, or process boundaries where no owning ID table accompanies
+them. Prefer assigning or interning a dense `Id` at the producer boundary and
+passing that ID downstream. Use a `Key` only when such a dense ID cannot work,
+not merely to avoid maintaining the owning table, and never rename an `Id` to
+`Key` merely to permit hashing.
+
+The Zig source lint in `ci/zig_lints.zig` rejects a `HashMap` whose first type
+argument is named `...Id` (including qualified and multiline type names). This
+lint makes the naming contract mechanically useful: hashing an ID hides
+unnecessary work and often means that multiple consumers are rebuilding an
+index already represented by the producer's dense domain. Replace such a map
+with an owning-store column or `collections.DenseMap`. If the key genuinely
+requires structural identity, name it `...Key` only after establishing why a
+dense ID cannot represent it; changing the name solely to silence the lint
+violates this invariant.
+
 Backends do not reason about reference counting. They lower and execute the
 explicit LIR `incref`, `decref`, and `free` statements emitted before backend
 code generation. Each explicit RC statement carries the concrete RC helper
@@ -461,6 +502,28 @@ declaration marked valid always has an error-free checked template, and
 encountering malformed template data for one is an invariant violation.
 `CheckedTypeStore` construction and public-API dependency collection both omit
 nominal declarations that checking explicitly marked invalid.
+
+### Associated Item Lookup Through Aliases
+
+Canonicalization resolves ordinary nominal associated items whose declaration
+is already known, but it does not interpret an alias annotation to rediscover
+the nominal owner. A lookup through a local or imported alias is explicit CIR
+carrying the alias declaration and requested item. Checking follows the solved
+alias backing to its terminal nominal, resolves that nominal's owner by module
+content identity, and performs the exact owner-and-item method lookup. It then
+replaces the source node with the exact target module identity, type node, and
+definition. Alias traversal has no source-text reconstruction or fixed hop
+limit; invalid and cyclic aliases must already resolve to the checker error
+type.
+
+The checker memoizes this resolution by alias declaration type variable and
+item, while each use still instantiates the selected method scheme separately.
+`CheckedBodyPayloadCopier.copyExprData` treats any unresolved associated lookup
+as an invariant violation. For a resolved target reached through a re-export,
+checked module data stores the exact imported procedure or imported constant
+identity selected by checking. `buildImportedTemplateClosure` and
+`collectPublicApiDependencies` receive defining checked module data explicitly
+when no lexical import exists.
 
 ### Compile-Time Evaluation And Static Storage
 
@@ -1731,12 +1794,14 @@ declarations also produce source diagnostics.
 A platform requirement's for-clause alias is a binder over an app-supplied
 type: the requirement's `Model` IS the app's `Model` by the for-clause's own
 definition, so identity provenance follows meaning provenance. After the
-requirement surface is checked, copied occurrences of a platform-root-owned
-for-clause alias resolve to the app's own type declaration (the checker
-redirects those solved vars, cited as
-`RedirectRule.for_clause_alias_identity`). Nothing in the app's checked
-output needs the platform root's checked module as a type owner, which is
-what lets an app build's platform root defer its checked-module output.
+requirement surface is checked, the checker supplies each platform alias's
+explicit `(origin module, source declaration)` key and backing identity root as
+source substitutions while copying each requirement into the app store. The
+copier resolves every declaration-owned alias occurrence and every recorded
+identity slot directly to the app's own type declaration; no copied
+platform-owned alias enters the solved app graph. Nothing in the app's checked
+output needs the platform root's checked module as a type owner, which is what
+lets an app build's platform root defer its checked-module output.
 
 The platform root's checked module is output exactly once per build:
 relation-bearing at finalization when an app root is paired (keyed by the
@@ -2140,6 +2205,17 @@ Checked diagnostics include warning severity: a literal (number or string)
 defaulted at a generalization boundary that narrows the definition's inferred
 type reports `LITERAL DEFAULTED` as a warning, not an error, worded per
 literal kind.
+
+A where alias (`a.Sortable : where [...]`) is a source-level abbreviation for a
+set of method constraints, not a type. Its declaration solves to its receiver: a
+rigid variable carrying the constraints it names. A signature that references
+one instantiates those constraints onto its own type variable, substituting the
+declaration's receiver and parameters by name, so the resulting constraint set
+is indistinguishable from one written out clause by clause. Nothing downstream
+of checking sees a where alias. Because a rigid variable's constraint set is
+fixed by the annotation that introduces it, a where alias constrains only its
+receiver; canonicalization rejects a constraint written against a parameter
+rather than emitting one that could never reach the applied argument.
 
 The checked module outputs normalized dispatch plans. A dispatch plan is a
 checked record, not lowered code:
@@ -3293,10 +3369,6 @@ site to any family below must classify it here.
 
 - `widenTryConditionForExpectedReturn` — policy: Hosted Try Question
   Widening (above).
-- `resolveForClauseAliasOccurrences` — policy: for-clause alias identity
-  (see Platform/App Relation): copied occurrences of a platform
-  requirement's for-clause alias resolve to the app's own type declaration,
-  because the alias is a binder over the app-supplied type.
 - `markErroneousBranchWithExpected` — mechanism: diagnostic recovery. The
   expression already has a reported error; its var is redirected to a fresh
   var unified with the expected return so checking can continue past it.
@@ -3630,11 +3702,31 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-Each specialization owns an instantiation graph: union-find nodes with explicit
-row-extension links, created by instantiating checked types on first touch. A
-context-free callee body never joins the caller's graph. Instead CheckedModule
-stores a complete specialization-interface relation table for every procedure
-template. Its records explicitly name checked equalities,
+Each independently sealed specialization group owns an instantiation graph:
+union-find nodes with explicit row-extension links, created by instantiating
+checked types on first touch. An ordinary procedure body begins a group by
+itself. The root producer may explicitly mark adjacent procedure-template roots
+as one shared group so a callee request proven equivalent under the complete
+graph-local specialization identity is reused before a second root replays that
+request. Test plans select this grouping; ordinary build and platform roots are
+independently sealed. Every root still uses a fresh instantiation scope, owns
+its own body and durable specialization record, and contributes its own checked
+relations; sharing the graph never authorizes importing a checked node from
+another scope. The reuse key includes callable family, method scope, checked
+source-function key, exact evidence topology, lexical context, and the exact
+function request interface. A different or still-unproven request remains
+independent.
+
+Instantiation graph node ids are dense, append-only indexes for the lifetime of
+the graph. Per-node optional attributes such as a row root's current extension
+and a generated-private request's source interface are therefore dense parallel
+columns, not hash tables keyed by node id. Union-find redirects may change which
+node is a class root, but they never renumber a node; root-owned columns are
+updated explicitly when a union moves that ownership.
+
+A context-free callee body never joins the caller group's graph. Instead
+CheckedModule stores a complete specialization-interface relation table for
+every procedure template. Its records explicitly name checked equalities,
 procedure/result relations, ordinary call interfaces and direct targets, and
 generalized local-procedure uses. A generalized scope also records its exact
 checked scheme root, so evidence paths are replayed against the same callable
@@ -3651,12 +3743,17 @@ BodyDraft data, are intentionally absent from durable specialization evidence, a
 must be attached when the real dispatch call lowers; declaration-only replay
 evidence can never be consumed by body emission.
 
-Within the specialization, each body instantiation context caches nodes by `(checked
-module id, checked type id)`. The address is the checked identity of the type
+Within the specialization, each body instantiation context has an exact fresh
+scope identity, owns one checked module id, and caches nodes by checked type id
+inside that `(scope id, checked module id)` context. The module id is an
+invariant of the context rather than a repeated hash-map key; entering another
+checked module creates another context before any type id from that module is
+looked up. The resulting address is still the exact checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
-source name, runtime layout, object symbol, or generated procedure id. Nodes
-begin unresolved. As relations are produced, explicit evidence from checked
-data unifies those nodes:
+source name, runtime layout, object symbol, or generated procedure id. A child
+that needs independent generic cells receives a new scope identity; copying
+cells into that scope is explicit. Nodes begin unresolved. As relations are
+produced, explicit evidence from checked data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -3758,6 +3855,30 @@ strings, deriving names, inspecting layouts, or using incidental expression
 shape. It must also not attach a contextual monotype to a checked expression id
 as if that checked expression were a reusable runtime value.
 
+Type-only instantiation state is separate from operational body-lowering state.
+Creating a fresh checked-type instance swaps only its exact scope, checked-node
+cache, and nominal declaration-scope stack; it does not construct a parallel
+body-lowering context. Type-only instantiation contexts do not materialize
+module-sized body tables.
+The dense checked-binder-to-draft-local table is allocated only when a body
+actually installs its first binding. Checked string literals are shared under
+the exact `(draft owner, checked module id, checked literal id)` address, so
+child and call contexts lowering the same retained body neither allocate
+parallel literal tables nor append duplicate draft literals. A draft value is
+never reused across body owners: suppressing one owner must suppress all of the
+content referenced only by that owner. Generated strings remain ordinary
+distinct draft entries because they have no checked literal identity.
+
+Checked roots explicitly record whether their graph contains identity
+variables, but closure does not authorize reuse across instantiation scopes.
+Specialization relations may still refine representation-bearing nominal
+backings below a closed public type. Every checked graph therefore instantiates
+fresh relation-production cells in its exact scope. Immutable `TypeId` imports
+are reserved for types explicitly completed by an earlier Monotype stage.
+Function roots and their components remain scope-local request-interface
+identities even when the complete checked graph is closed, so distinct
+callable requests never merge their relation-production identity.
+
 This distinction matters most for lambdas and closures. Expression-position
 functions are checked templates. Lowering a lambda or closure at an expected
 function type creates or reuses a nested Monotype function specialization keyed
@@ -3812,6 +3933,12 @@ snapshot cache and a subsequent inspection allocates a fresh snapshot rather
 than refilling an observed `TypeId`. The draft retains the graph node, not the
 snapshot id, and final sealing allocates fresh durable ids. Consequently no
 durable `TypeId` can change shape after a consumer has seen it.
+
+Snapshot invalidation is logically immediate but may be physically coalesced.
+A relation mutation marks the complete active-snapshot cache stale; the next
+inspection clears it once before performing any lookup. Multiple mutations with
+no intervening inspection therefore do not repeatedly clear the same cache, and
+no inspection may consume an entry produced before the most recent mutation.
 
 Interface-replay memo lookup has one narrower inspection operation. It may
 materialize an unresolved request as an immutable provisional scratch view,
@@ -3989,6 +4116,7 @@ const ExprData = union(enum) {
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
+    record_update: struct { base: ExprId, fields: Span(FieldExpr) },
     tag: TagExpr,
     nominal: ExprId,
 
@@ -4027,6 +4155,21 @@ const LambdaExpr = struct {
     source: FnTemplate,
 };
 ```
+
+`record` is a complete constructor: its field span contains every field in the
+expression type. `record_update` preserves the evaluated base and exactly the
+explicitly updated fields until LIR construction. This distinction is required
+while a Monotype solve group is open: the result type can gain fields from later
+constraints, so enumerating the current type shape and expanding an update at
+that point would permanently omit fields that the final closed type contains.
+Lambda Solved relates the base to the update result and checks each explicit
+field against the final record type. Direct LIR lowering evaluates the base
+once, reads all unchanged fields before evaluating update expressions, and
+writes the final fields in committed runtime order. A `record_update` may carry
+a structural, alias, or nominal record result type directly; unlike `record`,
+`tuple`, and `tag`, it is a base-preserving transformation rather than a fresh
+structural constructor that must be wrapped to construct a nominal value. No
+later stage reconstructs the base or missing fields from source syntax.
 
 `LoopExpr.params` and `LoopExpr.initial` have the same length. Each initial
 value has the type of the corresponding parameter. Every `continue_` reached
@@ -4070,6 +4213,12 @@ receives distinct identities at the producer boundary. Lifting and specializatio
 must join capture slots and operands only by that explicit post-check identity;
 they never recover identity from binder, symbol, type, source text, or runtime
 representation.
+
+`CaptureId`'s raw bits reserve disjoint source-authored, check-generated, and
+lift-generated namespaces; the raw integer is therefore not itself a dense
+array offset. ID-keyed columns use the explicit `(index, namespace)` dense
+ordinal supplied by `CaptureId`, which interleaves the three namespaces without
+hashing or allocating across their reserved high-bit gaps.
 
 Draft body ownership is equally strict. A copied lexical binder map may expose
 an enclosing value to a nested function, but a source binding pattern always
@@ -4253,7 +4402,12 @@ const MonoTypeNode = extern struct {
 The mutable instantiation graph may use union-find, row-extension links, and
 work queues while solving one specialization's interface and body relations.
 Its final output is an immutable `TypeId` in `MonoTypeStore`. After that point,
-the type node is never refilled.
+the type node is never refilled. Recursive groups may reserve type ids before
+their contents are available, but those slots are unavailable construction
+state: digest lookup and freezing are forbidden until every reserved slot has
+been filled. Filling a reserved slot completes a new immutable node; it does
+not mutate any older node, so cached digests for unrelated existing types
+remain valid.
 Rows are normalized once, with field and tag names in explicit sorted order,
 and the type digest is stored beside the node when the node is interned. Parent
 digests are computed from child digests, so structurally growing records and
@@ -4559,13 +4713,31 @@ its plan:
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
-Checking records `checked_error` by the raw static-dispatch constraint function
-variable that owns the rejected edge. Rejection is not encoded by changing the
-constraint callable, its return, the dispatcher, or any operand to an erroneous
-type: those solver variables can be shared with independently valid producers.
-`EvidencePass.buildIndexes` loads `ModuleEnv.rejected_static_dispatches`; each
-static-dispatch plan lookup checks this map before resolving its receiver and
-must not infer rejection by inspecting a callable result type.
+Checking records `checked_error` on the equivalence class of the static-dispatch
+constraint function variable that owns the rejected edge, as the descriptor
+metadata bit `Descriptor.static_dispatch_rejected`. Rejection is not encoded by
+changing the constraint callable, its return, the dispatcher, or any operand to
+an erroneous type: those solver variables can be shared with independently valid
+producers. The marker is metadata about the class, not content, so `Store.union_`
+carries it across a merge and `Store.poisonOnMismatch` preserves it when it
+replaces content with `err`. A merge rejects the result if either side was
+rejected: two constraint callables only unify when they are the same function
+type carrying the same dispatch edge, so an edge checking rejected for one of
+them is rejected for every site that shares it.
+Instantiation and cross-module copies mint fresh, unrejected classes: a fresh
+edge is checked on its own terms.
+
+A raw variable index cannot carry this. Two dispatch sites record different raw
+variables for what unification later proves is one constraint callable, and a
+union-find root is not stable across later merges, so a raw-keyed set answers
+"rejected" for whichever occurrence happened to be recorded and misses every
+other member of the same class. `Check.markStaticDispatchFnRejected` sets the
+class bit and appends one durable `ModuleEnv.rejected_static_dispatches` record
+per newly rejected class; `Check.init` rehydrates those records onto their
+classes so re-checking an env already carrying them behaves like a fresh check.
+Every static-dispatch plan lookup — in the checker and in `EvidencePass` —
+asks the class before resolving its receiver, and must not infer rejection by
+inspecting a callable result type.
 
 An independently reported checking error may make a plan's receiver itself
 erroneous even when checking accepted that plan's dispatch (for example, a
@@ -4653,6 +4825,27 @@ defaultable arithmetic operators default to `Dec`, quote and interpolation
 literals default to `Str`, and every requirement on such a var resolves against
 the default owner during checking. Structural-capable requirements on other
 unpinnable vars resolve structurally; the rest are statically unreachable.
+
+Generalized rank is not evidence that an edge can pin a constrained var. A
+body-required `where` constraint may remain unresolved only while its receiver
+is in an explicit pinning frontier: reachable from a callable's exported
+arguments or result, from a lambda parameter whose call is still outside the
+checked body, or from an open literal whose deterministic defaulting pass will
+select the owner. Result-position pinning applies to generalized schemes whose
+body is evaluated per specialization; an already-evaluated, non-generalized
+value cannot gain an owner from a later use. A receiver that occurs only in a
+body-local result discarded directly or through local aliases is not in that
+frontier and is therefore statically unreachable during checking.
+
+A generalized constrained function instantiation is also an explicit pinning
+frontier for receivers reachable from that function's argument positions. This
+rule follows the instantiated function type recorded at the use; it does not
+infer reachability from generalized rank. It preserves nested generalized
+helpers whose temporary scheme copy is absent from an enclosing root, while a
+result-only receiver must still escape through the enclosing scheme interface.
+This frontier applies only when every receiver constraint is a copied `where`
+contract; any concrete-use constraint on the same receiver requires resolution
+at the current call.
 
 **Compiler-generated edges.** Structural derivations and builtin helpers call
 methods on component types with no checked instantiation record. For these,
@@ -5160,6 +5353,7 @@ const ExprData = union(enum) {
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
+    record_update: struct { base: ExprId, fields: Span(FieldExpr) },
     tag: TagExpr,
     nominal: ExprId,
 
@@ -5468,6 +5662,18 @@ its last arm as the switch default (a single-variant union emits no dispatch at
 all); open matches keep the `comptime_exhaustiveness_failed` / `runtime_error`
 terminal.
 
+Named record-rest binders are derived values, not durable pattern decisions.
+Monotype pattern lowering removes the rest binder from the record pattern,
+captures that exact record occurrence in a compiler-generated local, and
+constructs the remainder record explicitly from the solved field cells. When
+the guard uses the remainder, the match branch owns an irrefutable statement
+span that runs after the structural pattern succeeds and before the guard; its
+locals remain in scope for the branch body. A remainder used only by the body
+is an ordinary body-local statement. The decision-tree emitter assigns all
+successful pattern locals before lowering the branch statement span, so later
+stages consume this ordering directly; no source record-rest pattern survives
+Monotype lowering.
+
 **The sharing invariant.** Monotype is a DAG: an expression id referenced from
 multiple positions is re-lowered at each reference, so downstream control
 sharing must go through typed lifted join points or LIR join points, never
@@ -5699,6 +5905,16 @@ generates constraints per statement:
   borrow arg 0); the result's mode is then solved like a payload read, with
   the lifetime constraint tied to those args. Ops whose results never alias
   a retained arg produce fresh owned results as today.
+  A low-level operation may also declare one explicit ARC-only borrowed-result
+  variant. Neutral LIR retains the ordinary source operation, but constraint
+  generation uses the borrowed variant's `RcEffect`. After modes solve, an
+  actually borrowed result materializes the borrowed operation and its effect;
+  an owned result materializes the ordinary consuming operation and its
+  effect. If the ordinary operation needs to consume an argument whose solved
+  binding is borrowed, ARC emits one retain immediately before the operation
+  to supply that consumed unit. Every post-ARC statement therefore contains
+  the exact concrete operation and effect the backend executes. The variant
+  mapping is static low-level-op data, and only ARC may select from it.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
@@ -5758,8 +5974,10 @@ before solving and never weakened:
 - hosted procs: every refcounted arg owned by the host, result owned. This
   keeps the LirImage And Hosted Functions contract unchanged.
 - erased-callable procs (`ProcAbi.erased_callable`): all-owned, as above.
-- low-level ops: their `RcEffect` is the signature; it is explicit static
-  data on the op, never inferred.
+- low-level ops: each concrete operation's `RcEffect` is its signature; it is
+  explicit static data on the op, never inferred. An ARC-only borrowed-result
+  variant is likewise an explicit operation and signature, selected only by
+  the ARC rule above.
 
 ### Interprocedural Solving
 
@@ -5858,8 +6076,10 @@ plans when keep/common states change. Once the fixed point converges, direct
 call demands are mapped to final variants and every reachable plan is complete.
 
 Each plan records every concrete move/retain/release decision and call-variant
-or uniqueness choice. Materialization receives neither ownership state nor
-liveness and only follows completed plans to rebuild statement chains:
+or uniqueness choice. For a low-level operation with an ARC-only borrowed
+variant, the plan also records the selected concrete operation and `RcEffect`.
+Materialization receives neither ownership state nor liveness and only follows
+completed plans to rebuild statement chains:
 
 - borrowed occurrence: no statements.
 - owned occurrence that is not the final occurrence on its path: `incref`
@@ -6320,13 +6540,25 @@ that disagree on either would make a later free reconstruct the wrong
 allocation pointer.
 
 The decision has a compile-time half and a runtime half. `List.map`'s body
-in Builtin.roc matches on the `list_map_can_reuse` primitive, whose runtime
-meaning is "uniquely owned and not a seamless slice" — a slice's buffer
-points into the middle of an allocation whose header bookkeeping covers the
-whole allocation, so a unique slice still copies. At direct LIR lowering,
-where layouts exist, the primitive lowers to a constant 0 whenever the
-layouts are not interchangeable (or the optimization is off), so the
-runtime check never runs for a pair it could corrupt.
+in Builtin.roc first calls the consuming `list_map_prepare_reuse` primitive,
+then matches on `list_map_can_reuse` for the returned list. The prepare
+primitive is an ownership-only identity: its LIR `RcEffect` consumes the input
+list and declares that the result aliases that consumed ownership unit, while
+its runtime implementation only copies the list handle. This forces ARC to
+preserve every later use before the transfer. The subsequent reuse query can
+therefore observe the refcount only after all live ownership units are present;
+leaving the query on the original, unconsumed argument would allow ARC to move
+a preservation retain after that observation and incorrectly report a shared
+buffer as unique.
+
+The runtime meaning of `list_map_can_reuse` is "uniquely owned and not a
+seamless slice" — a slice's buffer points into the middle of an allocation
+whose header bookkeeping covers the whole allocation, so a unique slice still
+copies. At direct LIR lowering, where layouts exist, the primitive lowers to a
+constant 0 whenever the layouts are not interchangeable (or the optimization
+is off), so the runtime check never runs for a pair it could corrupt.
+Target-independent LIR carries this eligibility for both pointer widths and
+each backend resolves the bit for its target.
 
 The in-place branch itself is dropped before it reaches LIR whenever the
 item layouts are not interchangeable or the optimization is disabled
@@ -6455,6 +6687,16 @@ the fresh allocation path and decrefs the transferred reference; uniqueness
 affects only whether allocation can be avoided, never the ownership contract.
 Capture bytes needed to construct the result are snapshotted before an in-place
 overwrite.
+
+The packed arguments are one fixed-arity struct whose fields remain in source
+parameter order and use each runtime representation's natural alignment. The
+struct size is rounded up to its maximum field alignment. Post-check lowering
+computes and interns the exact field offsets, size, and alignment as an erased
+call argument plan. Every erased call and erased-callable procedure names such
+a plan, and LIR certification verifies that the plan exactly matches the call
+arguments or explicit procedure parameters. Backends consume these offsets
+directly for both packing and unpacking; they must not reorder arguments, round
+individual fields to backend-private slots, or reconstruct the plan.
 
 The direct LIR builder carries the current return destination while recursively
 lowering the selected aggregate or tag payload. That producer-authored context,
@@ -7065,6 +7307,16 @@ and generated glue must document it for platform authors.
 
 ## Build Outputs And The Targets Header
 
+The `check`, `build`, `run`, and `test` command family resolves its final process
+status only after completing all requested independent work. Any check-phase
+error makes the final status 1. Otherwise, warnings make the final status 2 and
+a clean check leaves status 0 unless the command's own result requires failure.
+Checking diagnostics do not prevent `roc build` from writing its requested
+output, and they do not prevent `roc test` from running independent test roots.
+One-shot build pipelines return the linked output path and explicit checking
+diagnostic counts to command orchestration; code generation and linking do not
+decide process status.
+
 A platform's `targets:` header section declares, per target, both the link
 inputs and the output kind the build produces. The application author never
 chooses the output kind; `roc build` produces what the platform declares for
@@ -7636,11 +7888,11 @@ Instead, each (architecture, OS) target has a static floor:
   multiply is required for competitive CRC-32. As of 2026 this floor covers
   ~95% of the consumer installed base and 100% of what Windows 11 supports;
   RHEL 10 already requires v3.
-- **AArch64:** ARMv8.2-class with the crypto extension — Cortex-A76 /
-  Neoverse-N1 (2018) and later. Covers every Apple Silicon Mac, every
-  Windows-on-ARM machine, every major ARM cloud chip (Graviton2+, Ampere,
-  Cobalt, Axion), and Raspberry Pi 5. Excludes Raspberry Pi 3/4 (their
-  cores lack the crypto extension carrying `pmull`).
+- **AArch64:** Armv8.0-A plus AES and DotProd. This names exactly the two
+  extensions the builtins lower to instead of selecting a CPU model that would
+  pull in unrelated architecture revisions. It covers every Apple Silicon Mac,
+  every major ARM cloud chip, and Raspberry Pi 5. Raspberry Pi 3/4 lack these
+  extensions.
 - **wasm:** the `simd128` feature (universally shipped in engines since
   2021; the wasm backend already assumes it). wasm has no carryless
   multiply and no AES instructions, so those two operations get slower —
@@ -7648,9 +7900,43 @@ Instead, each (architecture, OS) target has a static floor:
 
 Under these floors both native architectures guarantee the same capability
 set: full 128-bit integer SIMD, a one-instruction byte shuffle, carryless
-multiply, and AES rounds. Floors only ever affect speed, never results, so
-adding a more conservative x64 variant target later would not violate
-anything.
+multiply, and AES rounds. Floors only ever affect speed, never results.
+
+Each `RocTarget` has one `CpuContract` in `src/target/mod.zig`. Its architecture
+baseline and explicit instruction features are the sole source for both the
+LLVM target query and runtime host compatibility. A named LLVM CPU model may
+supply scheduling information, but all model features outside that contract
+are explicitly disabled, so choosing a platform host and choosing instructions
+cannot drift apart. `host_cpu.zig` maps the contract's features to CPUID or OS
+feature queries, and a compile-time equality check rejects any detector mapping
+that does not cover the contract exactly.
+
+Every target for which Roc raises the architecture floor has a `v1` twin. On
+x86-64, `x64v1*` means the psABI x86-64-v1 floor (SSE2 and no later
+extensions). On AArch64, `arm64v1*` means Armv8.0-A; Apple Silicon has no v1
+twin because every supported Mac already implements the macOS floor. On wasm,
+`wasm32v1` means the WebAssembly 1.0 core instruction set without simd128.
+Operations unavailable at v1 use exact alternate instruction sequences or the
+target-independent builtin implementation; the source-level result is
+unchanged.
+
+A default-level target and its v1 twin are separate platform target names with
+separate host inputs. A compiler must never link the default target's host into
+a v1 application or reinterpret an old default-target host as baseline: either
+would silently reintroduce instructions above the promised floor. Platform
+authors that support both levels build and declare both entries explicitly.
+
+For build or execution without an explicit `--target`, the CLI detects the CPU
+features of the machine running the compiler and considers targets in platform
+declaration order. A native target is eligible only when every feature in its
+static instruction-set floor is present; LLVM scheduling and tuning flags are
+not hardware capabilities and do not participate. Wasm remains eligible for
+build regardless of host CPU. The default `roc` command additionally requires
+`output: Exe`. If the platform declares only a native target whose CPU floor
+the host does not meet, selection reports the missing v1 target before code
+generation or execution. An explicit `roc build --target` remains a
+cross-compilation request and does not require the selected CPU features to be
+present on the machine invoking the CLI.
 
 ### Type design
 
@@ -7924,10 +8210,10 @@ The generic `dot_pairs_saturated` lowering widens unsigned and signed bytes to
 32-bit lanes, multiplies and pairwise-adds at that width, clamps to signed
 16-bit bounds, and narrows only after saturation; no intermediate 16-bit sum
 is permitted to wrap.
-`src/target/mod.zig` is the single authority for the LLVM target query, CPU
-name, and feature delta. Linked builds, optimized tests, and LLVM evaluation
-therefore all compile under the same x86-64-v3 plus AES/PCLMULQDQ, AArch64, or
-wasm simd128 floor.
+`src/target/mod.zig` is the single authority for the CPU contract, LLVM target
+query, CPU name, and feature delta. Linked builds, optimized tests, LLVM
+evaluation, and platform host selection therefore consume the same x86-64-v3
+plus AES/PCLMULQDQ, AArch64, or wasm simd128 floor.
 
 The former pure-Roc `{ bits : U128 }` implementations live only in the SIMD
 test oracle. They define each operation lane by lane without depending on the

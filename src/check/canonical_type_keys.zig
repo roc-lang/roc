@@ -185,7 +185,7 @@ const Builder = struct {
         // The checker explicitly records when it closes an otherwise
         // unresolved identity to `[]`. Encode the surviving union-find root so
         // every reference to that identity shares one checked type digest.
-        if (resolved.desc.empty_tag_union_is_default) {
+        if (resolved.desc.flags.empty_tag_union_is_default) {
             try self.writeIdentityVariable(
                 root,
                 resolved.desc.rank,
@@ -196,26 +196,26 @@ const Builder = struct {
             return;
         }
 
-        switch (resolved.desc.content) {
-            .flex => |flex| {
-                if (self.require_concrete) {
-                    if (self.flexLiteralDefaultKind(flex)) |kind| {
-                        self.writeLiteralDefault(kind);
-                        return;
-                    }
-                    invariantViolation("concrete canonical type key requested for unsolved flex type variable");
+        const content_tag = std.meta.activeTag(resolved.desc.content);
+        if (content_tag == .flex) {
+            const flex = resolved.desc.content.flex;
+            if (self.require_concrete) {
+                if (self.flexLiteralDefaultKind(flex)) |kind| {
+                    self.writeLiteralDefault(kind);
+                    return;
                 }
-                try self.writeIdentityVariable(root, resolved.desc.rank, "flex", flex.name, flex.constraints);
-                return;
-            },
-            .rigid => |rigid| {
-                if (self.require_concrete) {
-                    invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
-                }
-                try self.writeIdentityVariable(root, resolved.desc.rank, "rigid", rigid.name, rigid.constraints);
-                return;
-            },
-            else => {},
+                invariantViolation("concrete canonical type key requested for unsolved flex type variable");
+            }
+            try self.writeIdentityVariable(root, resolved.desc.rank, "flex", flex.name, flex.constraints);
+            return;
+        }
+        if (content_tag == .rigid) {
+            const rigid = resolved.desc.content.rigid;
+            if (self.require_concrete) {
+                invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
+            }
+            try self.writeIdentityVariable(root, resolved.desc.rank, "rigid", rigid.name, rigid.constraints);
+            return;
         }
 
         if (varSlot(self.active.items, root)) |slot| {
@@ -452,24 +452,24 @@ const Builder = struct {
             if (varSlot(self.active.items, root) != null) break;
             if (varSlot(seen.items, root) != null) break;
             try seen.append(self.allocator, root);
-            switch (resolved.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .empty_record => {
-                        tail = null;
-                        break;
-                    },
-                    .record => |record| {
-                        try self.appendRecordFieldsForKey(&fields, record.fields);
-                        tail = record.ext;
-                    },
-                    .record_unbound => |record_fields| {
-                        try self.appendRecordFieldsForKey(&fields, record_fields);
-                        tail = null;
-                    },
-                    else => break,
-                },
-                else => break,
+            const content = resolved.desc.content;
+            if (std.meta.activeTag(content) != .structure) break;
+            const flat = content.structure;
+            const flat_tag = std.meta.activeTag(flat);
+            if (flat_tag == .empty_record) {
+                tail = null;
+                break;
             }
+            if (flat_tag == .record) {
+                try self.appendRecordFieldsForKey(&fields, flat.record.fields);
+                tail = flat.record.ext;
+                continue;
+            }
+            if (flat_tag == .record_unbound) {
+                try self.appendRecordFieldsForKey(&fields, flat.record_unbound);
+                tail = null;
+            }
+            break;
         }
 
         std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
@@ -506,24 +506,24 @@ const Builder = struct {
             if (varSlot(self.active.items, root) != null) break;
             if (varSlot(seen.items, root) != null) break;
             try seen.append(self.allocator, root);
-            switch (resolved.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .empty_record => {
-                        tail = null;
-                        break;
-                    },
-                    .record => |record| {
-                        try self.appendRecordFieldsForKey(&fields, record.fields);
-                        tail = record.ext;
-                    },
-                    .record_unbound => |record_fields| {
-                        try self.appendRecordFieldsForKey(&fields, record_fields);
-                        tail = null;
-                    },
-                    else => break,
-                },
-                else => break,
+            const content = resolved.desc.content;
+            if (std.meta.activeTag(content) != .structure) break;
+            const flat = content.structure;
+            const flat_tag = std.meta.activeTag(flat);
+            if (flat_tag == .empty_record) {
+                tail = null;
+                break;
             }
+            if (flat_tag == .record) {
+                try self.appendRecordFieldsForKey(&fields, flat.record.fields);
+                tail = flat.record.ext;
+                continue;
+            }
+            if (flat_tag == .record_unbound) {
+                try self.appendRecordFieldsForKey(&fields, flat.record_unbound);
+                tail = null;
+            }
+            break;
         }
 
         std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
@@ -582,20 +582,20 @@ const Builder = struct {
             if (varSlot(self.active.items, root) != null) break;
             if (varSlot(seen.items, root) != null) break;
             try seen.append(self.allocator, root);
-            switch (resolved.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .empty_tag_union => {
-                        tail = null;
-                        break;
-                    },
-                    .tag_union => |tag_union| {
-                        try self.appendTagsForKey(&tags, tag_union.tags);
-                        tail = tag_union.ext;
-                    },
-                    else => break,
-                },
-                else => break,
+            const content = resolved.desc.content;
+            if (std.meta.activeTag(content) != .structure) break;
+            const flat = content.structure;
+            const flat_tag = std.meta.activeTag(flat);
+            if (flat_tag == .empty_tag_union) {
+                tail = null;
+                break;
             }
+            if (flat_tag == .tag_union) {
+                try self.appendTagsForKey(&tags, flat.tag_union.tags);
+                tail = flat.tag_union.ext;
+                continue;
+            }
+            break;
         }
 
         std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);

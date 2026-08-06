@@ -23,6 +23,7 @@
 //! `out` with an explicit destination store instead of building a temporary.
 
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -71,7 +72,7 @@ const ReturnSlotPass = struct {
 
         var work = std.ArrayList(CFStmtId).empty;
         defer work.deinit(self.store.allocator);
-        var visited = std.AutoHashMap(CFStmtId, void).init(self.store.allocator);
+        var visited = collections.DenseMap(CFStmtId, void).init(self.store.allocator);
         defer visited.deinit();
 
         try work.append(self.store.allocator, body);
@@ -85,10 +86,9 @@ const ReturnSlotPass = struct {
     }
 
     fn rewriteAt(self: *ReturnSlotPass, proc_body: CFStmtId, call_stmt_id: CFStmtId) ResourceError!bool {
-        const call_stmt = switch (self.store.getCFStmt(call_stmt_id)) {
-            .assign_call => |s| s,
-            else => return false,
-        };
+        const call_stmt_node = self.store.getCFStmt(call_stmt_id);
+        if (call_stmt_node != .assign_call) return false;
+        const call_stmt = call_stmt_node.assign_call;
 
         const result_layout = self.store.getLocal(call_stmt.target).layout_idx;
         if (!self.returnSlotEligible(result_layout)) return false;
@@ -102,10 +102,9 @@ const ReturnSlotPass = struct {
         const stored_alias = try body_clone.forwardLocalAliasChainInto(self.store, self.store.allocator, call_stmt.target, call_stmt.next, &chain);
         const stored_value = stored_alias.value;
         const store_stmt_id = stored_alias.next;
-        const store_stmt = switch (self.store.getCFStmt(store_stmt_id)) {
-            .assign_low_level => |s| s,
-            else => return false,
-        };
+        const store_stmt_node = self.store.getCFStmt(store_stmt_id);
+        if (store_stmt_node != .assign_low_level) return false;
+        const store_stmt = store_stmt_node.assign_low_level;
         if (store_stmt.op != .ptr_store) return false;
         if (self.store.getLocal(store_stmt.target).layout_idx != .zst) return false;
 
@@ -270,17 +269,14 @@ const ReturnSlotRewriter = struct {
     }
 
     pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, stmt: LIR.CFStmt) ResourceError!?CFStmtId {
-        switch (stmt) {
-            .assign_struct => |s| {
-                if (cloner.directReturnOf(s.next, s.target)) return try self.cloneStructReturn(cloner, s);
-                return null;
-            },
-            .assign_tag => |s| {
-                if (cloner.directReturnOf(s.next, s.target)) return try self.cloneTagReturn(cloner, s);
-                return null;
-            },
-            else => return null,
+        if (stmt == .assign_struct) {
+            const s = stmt.assign_struct;
+            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneStructReturn(cloner, s);
+        } else if (stmt == .assign_tag) {
+            const s = stmt.assign_tag;
+            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneTagReturn(cloner, s);
         }
+        return null;
     }
 
     fn cloneStructReturn(self: *ReturnSlotRewriter, cloner: anytype, s: anytype) ResourceError!CFStmtId {

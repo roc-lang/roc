@@ -312,7 +312,7 @@ pub fn wasFreedInWindow(rc_addr: usize) bool {
             .free, .realloc => gone = true,
             // An address handed back out by a later allocation is live again.
             .alloc => gone = false,
-            else => {},
+            .incref, .decref => {},
         }
     }
     return gone;

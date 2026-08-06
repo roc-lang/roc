@@ -672,7 +672,24 @@ pub fn unbundleStream(
     while (true) {
         const maybe_entry = tar_iterator.next() catch |err| switch (err) {
             error.EndOfStream => break,
-            else => {
+            error.InvalidCharacter,
+            error.OutOfMemory,
+            error.Overflow,
+            error.PaxInvalidAttributeEnd,
+            error.PaxNullInKeyword,
+            error.PaxNullInValue,
+            error.PaxSizeAttrOverflow,
+            error.ReadFailed,
+            error.StreamTooLong,
+            error.TarHeader,
+            error.TarHeaderChksum,
+            error.TarHeadersTooBig,
+            error.TarInsufficientBuffer,
+            error.TarNumericValueNegative,
+            error.TarNumericValueTooBig,
+            error.TarUnsupportedHeader,
+            error.UnexpectedEndOfStream,
+            => {
                 if (decompress_reader.limitExceeded()) return error.ExpandedSizeLimitExceeded;
                 return error.InvalidTarHeader;
             },

@@ -152,16 +152,43 @@ pub fn bundle(
     // Process files one at a time
     while (try file_path_iter.next()) |file_path| {
         const file = base_dir.openFile(io, file_path, .{}) catch |err| switch (err) {
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileTooBig,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => return error.FileOpenFailed,
             error.FileNotFound => return error.FileNotFound,
             error.AccessDenied => return error.AccessDenied,
             error.IsDir => return error.IsDir,
-            else => return error.FileOpenFailed,
         };
         defer file.close(io);
 
         const stat = file.stat(io) catch |err| switch (err) {
+            error.AccessDenied,
+            error.Canceled,
+            error.PermissionDenied,
+            error.Streaming,
+            error.Unexpected,
+            => return error.FileStatFailed,
             error.SystemResources => return error.SystemResources,
-            else => return error.FileStatFailed,
         };
 
         const file_size = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
@@ -615,11 +642,28 @@ pub fn unbundleStream(
     // Process each file in the archive - streaming directly from decompression
     while (true) {
         const file = tar_iter.next() catch |err| switch (err) {
+            error.InvalidCharacter,
+            error.OutOfMemory,
+            error.Overflow,
+            error.PaxInvalidAttributeEnd,
+            error.PaxNullInKeyword,
+            error.PaxNullInValue,
+            error.PaxSizeAttrOverflow,
+            error.ReadFailed,
+            error.StreamTooLong,
+            error.TarHeader,
+            error.TarHeaderChksum,
+            error.TarHeadersTooBig,
+            error.TarInsufficientBuffer,
+            error.TarNumericValueNegative,
+            error.TarNumericValueTooBig,
+            error.TarUnsupportedHeader,
+            error.UnexpectedEndOfStream,
+            => return error.InvalidTarHeader,
             error.EndOfStream => break,
             // Any other error means the tar archive is corrupted or malformed.
             // We don't try to recover because partial extraction could leave
             // the system in an inconsistent state.
-            else => return error.InvalidTarHeader,
         };
 
         if (file == null) break;
@@ -642,9 +686,45 @@ pub fn unbundleStream(
 
                 extract_writer.streamFile(tar_file.name, &tar_file_reader.interface, tar_file_size) catch |err| {
                     switch (err) {
+                        error.AccessDenied,
+                        error.AntivirusInterference,
+                        error.BadPathName,
+                        error.BrokenPipe,
+                        error.Canceled,
+                        error.DeviceBusy,
+                        error.DiskQuota,
+                        error.EndOfStream,
+                        error.FileBusy,
+                        error.FileLocksUnsupported,
+                        error.FileNotFound,
+                        error.FileTooBig,
+                        error.InputOutput,
+                        error.IsDir,
+                        error.LinkQuotaExceeded,
+                        error.LockViolation,
+                        error.NameTooLong,
+                        error.NetworkNotFound,
+                        error.NoDataExtracted,
+                        error.NoDevice,
+                        error.NoSpaceLeft,
+                        error.NotDir,
+                        error.NotOpenForWriting,
+                        error.OutOfMemory,
+                        error.PathAlreadyExists,
+                        error.PermissionDenied,
+                        error.PipeBusy,
+                        error.ProcessFdQuotaExceeded,
+                        error.ReadOnlyFileSystem,
+                        error.Streaming,
+                        error.SymLinkLoop,
+                        error.SystemFdQuotaExceeded,
+                        error.SystemResources,
+                        error.Unexpected,
+                        error.WouldBlock,
+                        error.WriteFailed,
+                        => return error.FileWriteFailed,
                         error.UnexpectedEndOfStream => return error.UnexpectedEndOfStream,
                         error.ReadFailed => return error.ReadFailed,
-                        else => return error.FileWriteFailed,
                     }
                 };
             },
@@ -653,7 +733,7 @@ pub fn unbundleStream(
                     return error.DirectoryCreateFailed;
                 };
             },
-            else => {
+            .sym_link => {
                 // Skip other file types (symlinks, etc.)
                 // std.tar automatically handles skipping the content for us
             },

@@ -10,6 +10,56 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
+const CacheOs = enum { windows, macos, other };
+
+fn cacheOs(os: std.Target.Os.Tag) CacheOs {
+    return switch (os) {
+        .windows => .windows,
+        .macos => .macos,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .linux,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .freebsd,
+        .netbsd,
+        .openbsd,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .other,
+    };
+}
+
 /// Cache configuration constants
 pub const Constants = struct {
     /// Default cache directory name
@@ -63,36 +113,40 @@ pub const Constants = struct {
     /// 37: Nested procedure sites declare their producer-authored evidence source.
     /// 38: Platform provides entries include their exact platform-local definition.
     /// 39: ModuleEnv stores exact top-level demand dependencies.
-    /// 40: ModuleEnv carries pristine scheme snapshots; checked schemes carry a snapshot root and binder range.
-    /// 41: ModuleEnv carries dense positional scheme-use sites; checked store carries published instantiation sites.
-    /// 42: scheme snapshots carry their root var; checked schemes carry owner + captured binders; scheme keys encode binder/free.
-    /// 43: checked store carries a scheme owner index and residual-variable dispositions.
-    /// 44: procedure bindings carry their source scheme's dense id for postcheck scheme resolution.
-    /// 45: checked store carries a consuming-side imported-scheme table (projected defining scheme root + binders).
-    /// 46: published instantiation sites carry an evidence-vector reference into the plan table's evidence refs.
-    /// 47: residual-variable dispositions cover every function argument and nested-function position, not only scheme root and return.
-    /// 48: Monotype specialization records carry a parallel FinalSpecId identity and the spec cache gained FinalSpecId component/relocation sections (spec cache FORMAT_VERSION 10).
-    /// 49: published instantiation sites carry the checked expression id of their
+    /// 41: Encoding protocol names containers by Roc shape: list, tuple, record, dict.
+    /// 42: Checked modules store explicitly rejected static-dispatch obligations.
+    /// 43: Checked type stores persist representatives and structural union ranks.
+    /// 45: Where-clause owners persist rooted annotation ownership semantics.
+    /// 46: Where alias declarations are their own statement kind.
+    /// 47: Type descriptors carry the static-dispatch rejection marker.
+    /// 48: Source imports retain parser-owned bindings and type-module owners
+    ///     instead of reconstructing them from normalized module identities.
+    /// 49: Associated lookups retain exact alias-resolution targets in CIR.
+    /// 50: ModuleEnv carries pristine scheme snapshots; checked schemes carry a snapshot root and binder range.
+    /// 51: ModuleEnv carries dense positional scheme-use sites; checked store carries published instantiation sites.
+    /// 52: scheme snapshots carry their root var; checked schemes carry owner + captured binders; scheme keys encode binder/free.
+    /// 53: checked store carries a scheme owner index and residual-variable dispositions.
+    /// 54: procedure bindings carry their source scheme's dense id for postcheck scheme resolution.
+    /// 55: checked store carries a consuming-side imported-scheme table (projected defining scheme root + binders).
+    /// 56: published instantiation sites carry an evidence-vector reference into the plan table's evidence refs.
+    /// 57: residual-variable dispositions cover every function argument and nested-function position, not only scheme root and return.
+    /// 58: Monotype specialization records carry a parallel FinalSpecId identity and the spec cache gained FinalSpecId component/relocation sections (spec cache FORMAT_VERSION 10).
+    /// 59: published instantiation sites carry the checked expression id of their
     ///     CIR use node, so a consumer reading a frozen artifact names an edge by
     ///     its use rather than by the instantiated root.
-    /// 50: checked procedure templates carry their owning scheme's dense id, and a
+    /// 60: checked procedure templates carry their owning scheme's dense id, and a
     ///     scheme's captured-binder closure covers the enclosing binders its body
     ///     reaches rather than only those its root reaches.
-    /// 51: an instantiation site whose use instantiated an annotated definition's
+    /// 61: an instantiation site whose use instantiated an annotated definition's
     ///     annotation pre-declaration is published under that definition's own
     ///     scheme owner node, so one definition has one scheme owner identity.
-    /// 52: a residual whose `uninhabited` disposition a resolved dispatch target's
+    /// 62: a residual whose `uninhabited` disposition a resolved dispatch target's
     ///     own signature contradicts is published `contextual` at that signature's
     ///     type instead.
-    /// 53: a specialized static-dispatch plan callable keeps the identity every
+    /// 63: a specialized static-dispatch plan callable keeps the identity every
     ///     variable the target's signature does not substitute already had,
     ///     instead of reserving a fresh root the artifact names nowhere.
-    /// 54: the encoding protocol names containers by Roc shape: list, tuple,
-    ///     record, dict.
-    /// 55: checked modules store explicitly rejected static-dispatch obligations.
-    /// 56: checked type stores persist representatives and structural union ranks.
-    /// 57: where-clause owners persist rooted annotation ownership semantics.
-    pub const CACHE_VERSION = 58;
+    pub const CACHE_VERSION = 63;
 };
 
 /// Configuration for the Roc cache system.
@@ -134,9 +188,9 @@ pub const CacheConfig = struct {
                 error.EnvironmentVariableMissing => {},
             }
             // Fall back to platform defaults
-            const home_env = switch (builtin.target.os.tag) {
+            const home_env = switch (cacheOs(builtin.target.os.tag)) {
                 .windows => "APPDATA",
-                else => "HOME",
+                .macos, .other => "HOME",
             };
 
             const home_dir = self.roc_ctx.getEnvVar(home_env, allocator) catch |home_err| switch (home_err) {
@@ -145,11 +199,10 @@ pub const CacheConfig = struct {
             };
             defer allocator.free(home_dir);
 
-            const cache_path = switch (builtin.target.os.tag) {
-                .linux => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
+            const cache_path = switch (cacheOs(builtin.target.os.tag)) {
                 .macos => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, "Library", "Caches", getCacheDirName() }),
                 .windows => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, getCacheDirName() }),
-                else => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
+                .other => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
             };
 
             return cache_path;
@@ -285,20 +338,20 @@ pub const CacheStats = struct {
 /// Get the platform-specific cache directory name.
 /// Returns "roc" on Unix and "Roc" on Windows (matches Rust implementation).
 pub fn getCacheDirName() []const u8 {
-    return switch (builtin.target.os.tag) {
+    return switch (cacheOs(builtin.target.os.tag)) {
         .windows => "Roc",
-        else => "roc",
+        .macos, .other => "roc",
     };
 }
 
 /// Get the temporary directory for runtime executables.
 /// This is in the system temp dir, not the persistent cache.
 pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
-    const temp_base = switch (builtin.target.os.tag) {
+    const temp_base = switch (cacheOs(builtin.target.os.tag)) {
         .windows => roc_ctx.getEnvVar("TEMP", allocator) catch
             roc_ctx.getEnvVar("TMP", allocator) catch
             try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        else => roc_ctx.getEnvVar("TMPDIR", allocator) catch
+        .macos, .other => roc_ctx.getEnvVar("TMPDIR", allocator) catch
             try allocator.dupe(u8, "/tmp"),
     };
     defer allocator.free(temp_base);

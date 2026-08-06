@@ -1,6 +1,7 @@
 //! Regression coverage for platform-provided boxed model update wrappers.
 
 const std = @import("std");
+const collections = @import("collections");
 const layout = @import("layout");
 const lir = @import("lir");
 const GuardedList = lir.LirStore.GuardedList;
@@ -21,7 +22,7 @@ fn expectBoxPrepareUpdate(store: *const lir.LirStore, _: *const layout.Store) ha
 
         var work = std.ArrayList(lir.LIR.CFStmtId).empty;
         defer work.deinit(std.testing.allocator);
-        var visited = std.AutoHashMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
+        var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
         defer visited.deinit();
 
         try work.append(std.testing.allocator, body);

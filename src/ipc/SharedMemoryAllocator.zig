@@ -71,7 +71,7 @@ page_size: usize,
 const Handle = platform.Handle;
 
 /// Get the system's page size at runtime
-pub fn getSystemPageSize() error{ PageSizeQueryFailed, UnsupportedPlatform }!usize {
+pub fn getSystemPageSize() platform.PageSizeError!usize {
     return platform.getSystemPageSize();
 }
 
@@ -203,8 +203,18 @@ fn createWithMinSizeKind(
             return shm;
         } else |err| {
             const size_related = switch (err) {
+                error.CreateFileMappingFailed,
+                error.InvalidHandle,
+                error.MapViewOfFileFailed,
+                error.MemfdCreateFailed,
+                error.OpenFileMappingFailed,
+                error.ShmOpenFailed,
+                error.ShmUnlinkFailed,
+                error.TempFileOpenFailed,
+                error.TempFileUnlinkFailed,
+                error.UnsupportedPlatform,
+                => false,
                 error.MmapFailed, error.FtruncateFailed, error.OutOfMemory => true,
-                else => false,
             };
             if (!size_related or current_size <= aligned_min) return err;
 
@@ -275,14 +285,14 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
 /// Creates a SharedMemoryAllocator from coordination info.
 /// This is a convenience method for child processes that reads coordination info
 /// and creates the allocator in one step.
-pub fn fromCoordination(gpa: std.mem.Allocator, io: std.Io, page_size: usize) (coordination.CoordinationError || platform.SharedMemoryError)!SharedMemoryAllocator {
+pub fn fromCoordination(gpa: std.mem.Allocator, io: std.Io) (coordination.CoordinationError || platform.SharedMemoryError)!SharedMemoryAllocator {
     // Read coordination info
     var fd_info = try coordination.readFdInfo(gpa, io);
     defer fd_info.deinit(gpa);
 
     // Parse the handle and create the allocator
     const handle = try coordination.parseHandle(fd_info.fd_str);
-    return fromFd(handle, fd_info.size, page_size);
+    return fromFd(handle, fd_info.size, fd_info.page_size);
 }
 
 /// Creates a SharedMemoryAllocator from an existing file descriptor.

@@ -825,10 +825,7 @@ fn expectOnlyComptimeConditionWarnings(test_env: *TestEnv, expected_count: usize
 
     try std.testing.expectEqual(expected_count, test_env.checker.problems.problems.items.len);
     for (test_env.checker.problems.problems.items) |problem| {
-        switch (problem) {
-            .comptime_condition => {},
-            else => return error.TestUnexpectedResult,
-        }
+        if (problem != .comptime_condition) return error.TestUnexpectedResult;
     }
 }
 
@@ -850,6 +847,9 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_match => count += 1,
             .e_lookup_local,
             .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_str_segment,
             .e_bytes_literal,

@@ -25,6 +25,7 @@ pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
+pub const DeclaredTypeKind = @import("Diagnostic.zig").DeclaredTypeKind;
 
 /// Indices of builtin type declarations within the Builtin module.
 /// Generated at build time into typed static data embedded in the compiler.
@@ -348,26 +349,22 @@ pub const Def = struct {
         // This prevents crashes from cross-module node index issues
         const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
         const pattern_node = cir.store.nodes.get(pattern_node_idx);
-        const is_valid_pattern = switch (pattern_node.tag) {
-            .pattern_identifier,
-            .pattern_as,
-            .pattern_applied_tag,
-            .pattern_nominal,
-            .pattern_nominal_external,
-            .pattern_record_destructure,
-            .pattern_list,
-            .pattern_tuple,
-            .pattern_num_literal,
-            .pattern_dec_literal,
-            .pattern_f32_literal,
-            .pattern_f64_literal,
-            .pattern_small_dec_literal,
-            .pattern_str_literal,
-            .pattern_str_interpolation,
-            .pattern_underscore,
-            => true,
-            else => false,
-        };
+        const is_valid_pattern = pattern_node.tag == .pattern_identifier or
+            pattern_node.tag == .pattern_as or
+            pattern_node.tag == .pattern_applied_tag or
+            pattern_node.tag == .pattern_nominal or
+            pattern_node.tag == .pattern_nominal_external or
+            pattern_node.tag == .pattern_record_destructure or
+            pattern_node.tag == .pattern_list or
+            pattern_node.tag == .pattern_tuple or
+            pattern_node.tag == .pattern_num_literal or
+            pattern_node.tag == .pattern_dec_literal or
+            pattern_node.tag == .pattern_f32_literal or
+            pattern_node.tag == .pattern_f64_literal or
+            pattern_node.tag == .pattern_small_dec_literal or
+            pattern_node.tag == .pattern_str_literal or
+            pattern_node.tag == .pattern_str_interpolation or
+            pattern_node.tag == .pattern_underscore;
 
         if (is_valid_pattern) {
             try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
@@ -441,6 +438,12 @@ pub const WhereClause = union(enum) {
     pub const Span = extern struct {
         span: base.DataSpan,
         owners: Owner.Span,
+
+        /// A declaration with no constraints at all.
+        pub const empty = Span{
+            .span = base.DataSpan.empty(),
+            .owners = .{ .span = base.DataSpan.empty() },
+        };
     };
 
     w_method: struct {
@@ -450,9 +453,14 @@ pub const WhereClause = union(enum) {
         ret: TypeAnno.Idx,
         effectful: bool,
     },
+    /// Applies every constraint named by a where alias to `var_`.
+    ///
+    /// `alias` is the resolved reference to the where alias declaration — a
+    /// `lookup` when the alias takes no arguments and an `apply` when it does —
+    /// so the checker never has to re-resolve the name.
     w_alias: struct {
         var_: TypeAnno.Idx,
-        alias_name: base.Ident.Idx,
+        alias: TypeAnno.Idx,
     },
     w_malformed: struct {
         diagnostic: Diagnostic.Idx,
@@ -500,12 +508,9 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                try cir.store.getTypeAnno(alias.var_).pushToSExprTree(cir, tree, alias.var_);
-
-                const alias_name_str = cir.getIdent(alias.alias_name);
-                try tree.pushStringPair("name", alias_name_str);
-
                 const attrs = tree.beginNode();
+                try cir.store.getTypeAnno(alias.var_).pushToSExprTree(cir, tree, alias.var_);
+                try cir.store.getTypeAnno(alias.alias).pushToSExprTree(cir, tree, alias.alias);
                 try tree.endNode(begin, attrs);
             },
             .w_malformed => {
@@ -1186,27 +1191,23 @@ pub const Report = reporting.Report;
 
 /// Checks if a type is castable for index type conversions
 pub fn isCastable(comptime T: type) bool {
-    return switch (T) {
-        Expr.Idx,
-        Pattern.Idx,
-        Statement.Idx,
-        TypeAnno.Idx,
-        Def.Idx,
-        TypeHeader.Idx,
-        RecordField.Idx,
-        Pattern.RecordDestruct.Idx,
-        Expr.IfBranch.Idx,
-        Expr.Match.Branch.Idx,
-        WhereClause.Idx,
-        Annotation.Idx,
-        TypeAnno.RecordField.Idx,
-        ExposedItem.Idx,
-        Expr.Match.BranchPattern.Idx,
-        Node.Idx,
-        TypeVar,
-        => true,
-        else => false,
-    };
+    return T == Expr.Idx or
+        T == Pattern.Idx or
+        T == Statement.Idx or
+        T == TypeAnno.Idx or
+        T == Def.Idx or
+        T == TypeHeader.Idx or
+        T == RecordField.Idx or
+        T == Pattern.RecordDestruct.Idx or
+        T == Expr.IfBranch.Idx or
+        T == Expr.Match.Branch.Idx or
+        T == WhereClause.Idx or
+        T == Annotation.Idx or
+        T == TypeAnno.RecordField.Idx or
+        T == ExposedItem.Idx or
+        T == Expr.Match.BranchPattern.Idx or
+        T == Node.Idx or
+        T == TypeVar;
 }
 
 /// Safely casts between compatible index types

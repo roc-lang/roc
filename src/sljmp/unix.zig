@@ -3,10 +3,10 @@
 const builtin = @import("builtin");
 
 /// Platform-specific jmp_buf size.
-pub const JmpBuf = switch (builtin.os.tag) {
-    .macos => [48]c_int,
-    else => @compileError("Unsupported OS for jmp_buf"),
-};
+pub const JmpBuf = if (builtin.os.tag == .macos)
+    [48]c_int
+else
+    @compileError("Unsupported OS for jmp_buf");
 
 /// Whether to use underscore-prefixed names.
 /// macOS _setjmp/_longjmp don't save signal masks.

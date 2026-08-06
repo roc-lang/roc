@@ -9,6 +9,7 @@
 //! prove rewrite soundness, and the frame-local deduplication helpers.
 
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -58,18 +59,17 @@ fn forwardLocalAliasChainImpl(
     var value = source;
     var current = first_stmt;
     while (true) {
-        const stmt = switch (store.getCFStmt(current)) {
-            .assign_ref => |s| s,
-            else => return .{ .value = value, .next = current },
-        };
-        switch (stmt.op) {
-            .local => |local| if (local == value and store.getLocal(stmt.target).layout_idx == store.getLocal(value).layout_idx) {
+        const stmt_node = store.getCFStmt(current);
+        if (stmt_node != .assign_ref) return .{ .value = value, .next = current };
+        const stmt = stmt_node.assign_ref;
+        if (stmt.op == .local) {
+            const local = stmt.op.local;
+            if (local == value and store.getLocal(stmt.target).layout_idx == store.getLocal(value).layout_idx) {
                 if (chain) |list| try list.append(allocator, stmt.target);
                 value = stmt.target;
                 current = stmt.next;
                 continue;
-            },
-            else => {},
+            }
         }
         return .{ .value = value, .next = current };
     }
@@ -175,7 +175,7 @@ pub fn countReachableReads(store: *LirStore, body: CFStmtId) Allocator.Error!Rea
 
     var work = std.ArrayList(CFStmtId).empty;
     defer work.deinit(store.allocator);
-    var visited = std.AutoHashMap(CFStmtId, void).init(store.allocator);
+    var visited = collections.DenseMap(CFStmtId, void).init(store.allocator);
     defer visited.deinit();
 
     try work.append(store.allocator, body);
@@ -316,7 +316,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         rewriter: Rewriter,
         /// Old-local index to cloned-local, `null` until first mapped.
         local_map: []?LocalId,
-        stmt_map: std.AutoHashMap(CFStmtId, CFStmtId),
+        stmt_map: collections.DenseMap(CFStmtId, CFStmtId),
         /// Every local created by this clone, in creation order.
         new_locals: std.ArrayList(LocalId),
 
@@ -328,7 +328,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .store = store,
                 .rewriter = rewriter,
                 .local_map = local_map,
-                .stmt_map = std.AutoHashMap(CFStmtId, CFStmtId).init(store.allocator),
+                .stmt_map = collections.DenseMap(CFStmtId, CFStmtId).init(store.allocator),
                 .new_locals = .empty,
             };
         }
@@ -389,6 +389,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .closure = try self.mapLocal(s.closure),
                     .args = try self.mapLocalSpan(s.args),
+                    .arg_plan = s.arg_plan,
                     .reuse_closure = s.reuse_closure,
                     .reuse_source = try self.mapMaybeLocal(s.reuse_source),
                     .next = try self.cloneStmt(s.next),
@@ -538,10 +539,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// True when `next` is a `ret` of exactly `value`, marking a direct
         /// constructor/concat return the rewriter may fuse into its tail.
         pub fn directReturnOf(self: *const Self, next: CFStmtId, value: LocalId) bool {
-            return switch (self.store.getCFStmt(next)) {
-                .ret => |ret_stmt| ret_stmt.value == value,
-                else => false,
-            };
+            const stmt = self.store.getCFStmt(next);
+            return stmt == .ret and stmt.ret.value == value;
         }
 
         fn cloneSwitch(self: *Self, s: anytype) Allocator.Error!CFStmtId {

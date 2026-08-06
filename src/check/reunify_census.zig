@@ -104,6 +104,7 @@ var site_without_snapshot_nested = std.atomic.Value(u64).init(0);
 var site_without_snapshot_dispatch = std.atomic.Value(u64).init(0);
 /// Identity vars the snapshot's rank filter excludes from a scheme's binder
 /// list, by what they are. A rigid is a declared parameter of the signature.
+var executable_root_reaches_error = std.atomic.Value(u64).init(0);
 var snapshot_binder_skipped_rigid = std.atomic.Value(u64).init(0);
 var snapshot_binder_skipped_flex = std.atomic.Value(u64).init(0);
 var snapshot_binder_skipped_other = std.atomic.Value(u64).init(0);
@@ -377,6 +378,14 @@ pub fn recordDispatchEdgeIntroExpr(present: bool, literal_when_absent: bool) voi
 /// Record one dense shared in-group instantiation site (reunify.md 7.2, Slice 2b),
 /// recorded before its scheme generalized.
 /// Record one identity var the snapshot binder capture skipped for its rank.
+/// One executable root that reaches an error type, which happens exactly when
+/// checking reported type errors for the program being built.
+pub fn recordExecutableRootReachesError() void {
+    if (comptime !enabled) return;
+    if (!active()) return;
+    _ = executable_root_reaches_error.fetchAdd(1, .monotonic);
+}
+
 pub fn recordSnapshotBinderSkippedRigid() void {
     if (comptime !enabled) return;
     _ = snapshot_binder_skipped_rigid.fetchAdd(1, .monotonic);
@@ -784,6 +793,7 @@ pub fn dumpAppend() void {
     sink.print("site_without_snapshot_value_use={d}\n", .{site_without_snapshot_value_use.load(.monotonic)});
     sink.print("site_without_snapshot_nested={d}\n", .{site_without_snapshot_nested.load(.monotonic)});
     sink.print("site_without_snapshot_dispatch={d}\n", .{site_without_snapshot_dispatch.load(.monotonic)});
+    sink.print("executable_root_reaches_error={d}\n", .{executable_root_reaches_error.load(.monotonic)});
     sink.print("snapshot_binder_skipped_rigid={d}\n", .{snapshot_binder_skipped_rigid.load(.monotonic)});
     sink.print("snapshot_binder_skipped_flex={d}\n", .{snapshot_binder_skipped_flex.load(.monotonic)});
     sink.print("snapshot_binder_skipped_other={d}\n", .{snapshot_binder_skipped_other.load(.monotonic)});

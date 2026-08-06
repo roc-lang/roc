@@ -4169,10 +4169,11 @@ Builtin :: [].{
 		## ```
 		map : List(a), (a -> b) -> List(b)
 		map = |list, transform| {
-			match list_map_can_reuse(list, transform) {
+			prepared_list = list_map_prepare_reuse(list)
+			match list_map_can_reuse(prepared_list, transform) {
 				1 => {
-					len = list.len()
-					var $out = list_map_cast_unsafe(list)
+					len = prepared_list.len()
+					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
 					while $index < len {
 						item = list_map_extract_unsafe($out, $index)
@@ -4182,8 +4183,8 @@ Builtin :: [].{
 					$out
 				}
 				_ => {
-					var $new_list = List.with_capacity(list.len())
-					for item in list {
+					var $new_list = List.with_capacity(prepared_list.len())
+					for item in prepared_list {
 						$new_list = list_append_unsafe($new_list, transform(item))
 					}
 					$new_list
@@ -14266,7 +14267,9 @@ Builtin :: [].{
 			to_f64 : I128 -> F64
 
 			## Convert an [I128] to a [Dec], returning `Err(OutOfRange)` if the
-			## integer value does not fit in [Dec]'s fixed-point range.
+			## integer value does not fit in [Dec]'s fixed-point range. See
+			## [Dec.from_attos] to read an [I128] already scaled by 10^18, matching
+			## [Dec]'s internal representation.
 			to_dec_try : I128 -> Try(Dec, [OutOfRange])
 			to_dec_try = |num| out_of_range_try(i128_to_dec_try_unsafe(num))
 
@@ -14331,6 +14334,26 @@ Builtin :: [].{
 			## decimal places.
 			tau : Dec
 			tau = 6.283185307179586476
+
+			## Convert a [Dec] to a count of attos (units of 10^-18). This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.to_attos(1.5) == 1500000000000000000
+			##
+			## expect Dec.to_attos(Dec.highest) == I128.highest
+			## ```
+			to_attos : Dec -> I128
+
+			## Convert a count of attos (units of 10^-18) to a [Dec]. This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.from_attos(1500000000000000000) == 1.5
+			##
+			## expect Dec.from_attos(Dec.to_attos(-0.25)) == -0.25
+			## ```
+			from_attos : I128 -> Dec
 
 			## Convert a [Dec] to its decimal string representation.
 			## ```roc
@@ -14456,7 +14479,8 @@ Builtin :: [].{
 			## ```
 			negate : Dec -> Dec
 
-			## Return the absolute value of a [Dec].
+			## Return the absolute value of a [Dec]. Crashes on [Dec.lowest], since
+			## its positive magnitude does not fit in a [Dec].
 			## ```roc
 			## expect Dec.abs(3.5) == 3.5
 			##
@@ -14666,210 +14690,210 @@ Builtin :: [].{
 			## expect Dec.round_to_i8_try(3.4) == Ok(3)
 			## ```
 			round_to_i8_try : Dec -> Try(I8, [OutOfRange])
-			round_to_i8_try = |self| Dec.to_i8_try(dec_round_to_whole(self))
+			round_to_i8_try = |self| I128.to_i8_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i16_try(3.4) == Ok(3)
 			## ```
 			round_to_i16_try : Dec -> Try(I16, [OutOfRange])
-			round_to_i16_try = |self| Dec.to_i16_try(dec_round_to_whole(self))
+			round_to_i16_try = |self| I128.to_i16_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
 			round_to_i32_try : Dec -> Try(I32, [OutOfRange])
-			round_to_i32_try = |self| Dec.to_i32_try(dec_round_to_whole(self))
+			round_to_i32_try = |self| I128.to_i32_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i64_try(7.2) == Ok(7)
 			## ```
 			round_to_i64_try : Dec -> Try(I64, [OutOfRange])
-			round_to_i64_try = |self| Dec.to_i64_try(dec_round_to_whole(self))
+			round_to_i64_try = |self| I128.to_i64_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i128_try(7.2) == Ok(7)
 			## ```
 			round_to_i128_try : Dec -> Try(I128, [OutOfRange])
-			round_to_i128_try = |self| Dec.to_i128_try(dec_round_to_whole(self))
+			round_to_i128_try = |self| Ok(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u8_try(3.4) == Ok(3)
 			## ```
 			round_to_u8_try : Dec -> Try(U8, [OutOfRange])
-			round_to_u8_try = |self| Dec.to_u8_try(dec_round_to_whole(self))
+			round_to_u8_try = |self| I128.to_u8_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u16_try(3.4) == Ok(3)
 			## ```
 			round_to_u16_try : Dec -> Try(U16, [OutOfRange])
-			round_to_u16_try = |self| Dec.to_u16_try(dec_round_to_whole(self))
+			round_to_u16_try = |self| I128.to_u16_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u32_try(7.2) == Ok(7)
 			## ```
 			round_to_u32_try : Dec -> Try(U32, [OutOfRange])
-			round_to_u32_try = |self| Dec.to_u32_try(dec_round_to_whole(self))
+			round_to_u32_try = |self| I128.to_u32_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u64_try(7.2) == Ok(7)
 			## ```
 			round_to_u64_try : Dec -> Try(U64, [OutOfRange])
-			round_to_u64_try = |self| Dec.to_u64_try(dec_round_to_whole(self))
+			round_to_u64_try = |self| I128.to_u64_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u128_try(7.2) == Ok(7)
 			## ```
 			round_to_u128_try : Dec -> Try(U128, [OutOfRange])
-			round_to_u128_try = |self| Dec.to_u128_try(dec_round_to_whole(self))
+			round_to_u128_try = |self| I128.to_u128_try(dec_round_to_i128(self))
 
 			## Round a [Dec] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
 			floor_to_i8_try : Dec -> Try(I8, [OutOfRange])
-			floor_to_i8_try = |self| Dec.to_i8_try(dec_floor_to_whole(self))
+			floor_to_i8_try = |self| I128.to_i8_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
 			floor_to_i16_try : Dec -> Try(I16, [OutOfRange])
-			floor_to_i16_try = |self| Dec.to_i16_try(dec_floor_to_whole(self))
+			floor_to_i16_try = |self| I128.to_i16_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i32_try(3.8) == Ok(3)
 			## ```
 			floor_to_i32_try : Dec -> Try(I32, [OutOfRange])
-			floor_to_i32_try = |self| Dec.to_i32_try(dec_floor_to_whole(self))
+			floor_to_i32_try = |self| I128.to_i32_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i64_try(3.8) == Ok(3)
 			## ```
 			floor_to_i64_try : Dec -> Try(I64, [OutOfRange])
-			floor_to_i64_try = |self| Dec.to_i64_try(dec_floor_to_whole(self))
+			floor_to_i64_try = |self| I128.to_i64_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i128_try(3.8) == Ok(3)
 			## ```
 			floor_to_i128_try : Dec -> Try(I128, [OutOfRange])
-			floor_to_i128_try = |self| Dec.to_i128_try(dec_floor_to_whole(self))
+			floor_to_i128_try = |self| Ok(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u8_try(3.8) == Ok(3)
 			## ```
 			floor_to_u8_try : Dec -> Try(U8, [OutOfRange])
-			floor_to_u8_try = |self| Dec.to_u8_try(dec_floor_to_whole(self))
+			floor_to_u8_try = |self| I128.to_u8_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u16_try(3.8) == Ok(3)
 			## ```
 			floor_to_u16_try : Dec -> Try(U16, [OutOfRange])
-			floor_to_u16_try = |self| Dec.to_u16_try(dec_floor_to_whole(self))
+			floor_to_u16_try = |self| I128.to_u16_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u32_try(3.8) == Ok(3)
 			## ```
 			floor_to_u32_try : Dec -> Try(U32, [OutOfRange])
-			floor_to_u32_try = |self| Dec.to_u32_try(dec_floor_to_whole(self))
+			floor_to_u32_try = |self| I128.to_u32_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u64_try(3.8) == Ok(3)
 			## ```
 			floor_to_u64_try : Dec -> Try(U64, [OutOfRange])
-			floor_to_u64_try = |self| Dec.to_u64_try(dec_floor_to_whole(self))
+			floor_to_u64_try = |self| I128.to_u64_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u128_try(3.8) == Ok(3)
 			## ```
 			floor_to_u128_try : Dec -> Try(U128, [OutOfRange])
-			floor_to_u128_try = |self| Dec.to_u128_try(dec_floor_to_whole(self))
+			floor_to_u128_try = |self| I128.to_u128_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
 			ceiling_to_i8_try : Dec -> Try(I8, [OutOfRange])
-			ceiling_to_i8_try = |self| Dec.to_i8_try(dec_ceiling_to_whole(self))
+			ceiling_to_i8_try = |self| I128.to_i8_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
 			ceiling_to_i16_try : Dec -> Try(I16, [OutOfRange])
-			ceiling_to_i16_try = |self| Dec.to_i16_try(dec_ceiling_to_whole(self))
+			ceiling_to_i16_try = |self| I128.to_i16_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
 			ceiling_to_i32_try : Dec -> Try(I32, [OutOfRange])
-			ceiling_to_i32_try = |self| Dec.to_i32_try(dec_ceiling_to_whole(self))
+			ceiling_to_i32_try = |self| I128.to_i32_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
 			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange])
-			ceiling_to_i64_try = |self| Dec.to_i64_try(dec_ceiling_to_whole(self))
+			ceiling_to_i64_try = |self| I128.to_i64_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
 			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange])
-			ceiling_to_i128_try = |self| Dec.to_i128_try(dec_ceiling_to_whole(self))
+			ceiling_to_i128_try = |self| Ok(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
 			ceiling_to_u8_try : Dec -> Try(U8, [OutOfRange])
-			ceiling_to_u8_try = |self| Dec.to_u8_try(dec_ceiling_to_whole(self))
+			ceiling_to_u8_try = |self| I128.to_u8_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
 			ceiling_to_u16_try : Dec -> Try(U16, [OutOfRange])
-			ceiling_to_u16_try = |self| Dec.to_u16_try(dec_ceiling_to_whole(self))
+			ceiling_to_u16_try = |self| I128.to_u16_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
 			ceiling_to_u32_try : Dec -> Try(U32, [OutOfRange])
-			ceiling_to_u32_try = |self| Dec.to_u32_try(dec_ceiling_to_whole(self))
+			ceiling_to_u32_try = |self| I128.to_u32_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
 			ceiling_to_u64_try : Dec -> Try(U64, [OutOfRange])
-			ceiling_to_u64_try = |self| Dec.to_u64_try(dec_ceiling_to_whole(self))
+			ceiling_to_u64_try = |self| I128.to_u64_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
 			ceiling_to_u128_try : Dec -> Try(U128, [OutOfRange])
-			ceiling_to_u128_try = |self| Dec.to_u128_try(dec_ceiling_to_whole(self))
+			ceiling_to_u128_try = |self| I128.to_u128_try(dec_ceiling_to_i128(self))
 
 			## Build a [Dec] from a list of base-10 digits, most significant
 			## first. Each item of the list must be a digit in the range `0`
@@ -15008,7 +15032,8 @@ Builtin :: [].{
 
 			## Convert a [Dec] to an [I128]. The fractional part is truncated
 			## toward zero. The entire integer part of any [Dec] fits in an
-			## [I128], so no wrapping occurs in practice.
+			## [I128], so no wrapping occurs in practice. See [Dec.to_attos] to get
+			## the exact value (scaled by 10^18) instead.
 			## ```roc
 			## expect Dec.to_i128_wrap(42.5) == 42
 			## ```
@@ -15016,7 +15041,8 @@ Builtin :: [].{
 
 			## Convert a [Dec] to an [I128], returning `Err(OutOfRange)` if the
 			## integer part does not fit. The fractional part is truncated toward
-			## zero.
+			## zero. See [Dec.to_attos] to get the exact value (scaled by 10^18)
+			## instead.
 			## ```roc
 			## expect Dec.to_i128_try(42.5) == Ok(42)
 			## ```
@@ -21687,34 +21713,34 @@ out_of_range_try = |answer|
 		Err(OutOfRange)
 	}
 
-dec_round_to_whole : Dec -> Dec
-dec_round_to_whole = |self| {
-	truncated = Dec.div_trunc_by(self, 1.0)
-	remainder = self - truncated
-	if remainder >= 0.5 {
-		truncated + 1.0
-	} else if remainder <= -0.5 {
-		truncated - 1.0
+dec_attos_per_whole : I128
+dec_attos_per_whole = 1000000000000000000
+
+dec_round_to_i128 : Dec -> I128
+dec_round_to_i128 = |self| {
+	attos = Dec.to_attos(self)
+	truncated = I128.div_trunc_by(attos, dec_attos_per_whole)
+	remainder = I128.rem_by(attos, dec_attos_per_whole)
+	if remainder >= 500000000000000000 {
+		truncated + 1
+	} else if remainder <= -500000000000000000 {
+		truncated - 1
 	} else {
 		truncated
 	}
 }
+
+dec_floor_to_i128 : Dec -> I128
+dec_floor_to_i128 = |self| I128.div_floor_by(Dec.to_attos(self), dec_attos_per_whole)
+
+dec_ceiling_to_i128 : Dec -> I128
+dec_ceiling_to_i128 = |self| I128.div_ceil_by(Dec.to_attos(self), dec_attos_per_whole)
 
 dec_floor_to_whole : Dec -> Dec
 dec_floor_to_whole = |self| {
 	truncated = Dec.div_trunc_by(self, 1.0)
 	if self < truncated {
 		truncated - 1.0
-	} else {
-		truncated
-	}
-}
-
-dec_ceiling_to_whole : Dec -> Dec
-dec_ceiling_to_whole = |self| {
-	truncated = Dec.div_trunc_by(self, 1.0)
-	if self > truncated {
-		truncated + 1.0
 	} else {
 		truncated
 	}
@@ -22571,8 +22597,12 @@ str_drop_first_bytes_unsafe = |s, count| {
 	}
 }
 
+# Implemented by the compiler. Moves the input list's ownership into the
+# returned list before List.map tests whether it can reuse the allocation.
+list_map_prepare_reuse : List(input) -> List(input)
+
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
-# the input list's allocation for its output: the input and output item
+# the prepared list's allocation for its output: the input and output item
 # layouts are interchangeable, and at runtime the list is uniquely owned and
 # not a seamless slice. Lowered to a constant 0 when the layouts are not
 # interchangeable, which lets lowering drop the in-place branch entirely.

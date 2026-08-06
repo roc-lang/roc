@@ -48,6 +48,9 @@ pub const RootRequestSet = struct {
     /// Restore eligible stored constants as internal readonly static values.
     include_internal_static_data: bool = false,
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
+    /// Explicitly select whether adjacent procedure-template roots share one
+    /// Monotype instantiation graph.
+    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
@@ -77,6 +80,10 @@ pub const TargetConfig = struct {
     /// so a differential harness can execute the Debug verifier's materialized
     /// Lambda Mono program. The slot receives a value only in Debug builds.
     debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
+    /// Receives the expression count of the lifted program handed to lambda-set
+    /// solving. Every later post-check stage walks that program in full, so the
+    /// count is the size measure a growth regression shows up in.
+    lifted_expr_count_out: ?*usize = null,
     /// Optional timing accumulator for the checked-to-LIR pipeline.
     timing: ?*Timing = null,
 };
@@ -534,6 +541,8 @@ pub fn lowerCheckedModulesToLir(
         if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
     }
 
+    if (target.lifted_expr_count_out) |slot| slot.* = lifted.exprCount();
+
     const lambda_solve_started_ns = if (target.timing) |timing| timing.start() else 0;
     const lifted_input = lifted;
     lifted_owned = false;
@@ -648,6 +657,7 @@ fn rootRequests(
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
         .test_plan_metadata = roots.test_plan_metadata,
+        .procedure_template_root_grouping = roots.procedure_template_root_grouping,
     };
 }
 
@@ -689,11 +699,8 @@ pub fn selectPlatformEntrypointRoots(
     errdefer selected.deinit(allocator);
 
     for (requests) |request| {
-        switch (request.kind) {
-            .provided_export,
-            .platform_required_binding,
-            => try selected.append(allocator, request),
-            else => {},
+        if (request.kind == .provided_export or request.kind == .platform_required_binding) {
+            try selected.append(allocator, request);
         }
     }
 

@@ -1,6 +1,7 @@
 //! Structural LIR tests for post-check wrapper inlining.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 const eval = @import("eval");
@@ -157,6 +158,9 @@ const LowerMonotypeOptions = struct {
     specialization_cache: MonoLower.SpecializationCacheControl = .{},
     loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
+    diagnostics: ?*MonoLower.Diagnostics = null,
+    root_selection: enum { all, test_expects } = .all,
+    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -181,17 +185,33 @@ fn lowerMonotypeModuleWithOptions(
         view_index += 1;
     }
 
+    var selected_test_roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    defer selected_test_roots.deinit(allocator);
+    const root_requests = switch (options.root_selection) {
+        .all => resources.checked_artifact.root_requests.requests,
+        .test_expects => blk: {
+            for (resources.checked_artifact.root_requests.requests) |request| {
+                if (request.kind == .test_expect) try selected_test_roots.append(allocator, request);
+            }
+            break :blk selected_test_roots.items;
+        },
+    };
+
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{
+            .requests = root_requests,
+            .procedure_template_root_grouping = options.procedure_template_root_grouping,
+        },
         .{
             .specialization_cache = options.specialization_cache,
             .loaded_specialization_shards = options.loaded_specialization_shards,
             .specialization_counters = options.specialization_counters,
+            .diagnostics = options.diagnostics,
         },
     );
     errdefer mono.deinit();
@@ -509,17 +529,17 @@ fn expectSpecsCoveredByCachedOrLoaded(
 fn isUnaryPrimitiveFnSpec(view: MonoAst.ProgramView, record: MonoAst.SpecRecord, primitive: MonoType.Primitive) bool {
     const func = switch (view.types.get(record.solved_fn_ty)) {
         .func => |func| func,
-        else => return false,
+        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => return false,
     };
     const args = view.types.span(func.args);
     if (args.len != 1) return false;
     const arg_matches = switch (view.types.get(args[0])) {
         .primitive => |arg| arg == primitive,
-        else => false,
+        .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
     };
     const ret_matches = switch (view.types.get(func.ret)) {
         .primitive => |ret| ret == primitive,
-        else => false,
+        .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
     };
     return arg_matches and ret_matches;
 }
@@ -583,7 +603,12 @@ fn runLoweredWithHostEvents(
         .arg_layouts = arg_layouts,
     }) catch |err| switch (err) {
         error.Crash => return runtime_env.snapshot(allocator),
-        else => return err,
+        error.ComptimeExhaustiveness,
+        error.DivisionByZero,
+        error.ExpectErr,
+        error.OutOfMemory,
+        error.RuntimeError,
+        => return err,
     };
     switch (result) {
         .value => {},
@@ -606,7 +631,7 @@ fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) Te
     for (expected, run.events) |expected_event, actual_event| {
         switch (actual_event) {
             .dbg => |msg| try std.testing.expectEqualStrings(expected_event, msg),
-            else => return error.TestUnexpectedResult,
+            .expect_failed, .crashed => return error.TestUnexpectedResult,
         }
     }
 }
@@ -622,7 +647,38 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
         switch (stmt) {
             .debug => counts.debug += 1,
             .expect => counts.expect += 1,
-            else => {},
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => {},
         }
     }
     return counts;
@@ -1087,7 +1143,7 @@ fn collectAssignCallProcs(
     defer work.deinit(allocator);
     try work.append(allocator, body);
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |stmt_id| {
@@ -1247,7 +1303,7 @@ fn reachableIterCollectShape(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |proc_id| {
@@ -1273,7 +1329,7 @@ fn reachableProcShapeCount(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var count: usize = 0;
@@ -1408,6 +1464,10 @@ fn markReachableLiftedExpr(
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |i| {
                 const branch = GuardedList.at(branches, i);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    markReachableLiftedStmt(program, GuardedList.at(bindings, binding_index), reachable);
+                }
                 if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
                 markReachableLiftedExpr(program, branch.body, reachable);
             }
@@ -1628,7 +1688,14 @@ fn expectRootTargetHasCalls(
 fn nestedSite(def: postcheck.Monotype.Ast.NestedDef) ?postcheck.Monotype.Ast.NestedFn {
     return switch (def.fn_def.fn_def) {
         .nested => |site| site,
-        else => null,
+        .local_template,
+        .imported_template,
+        .local_hosted,
+        .imported_hosted,
+        .checked_generated,
+        .parser_runtime,
+        .encoder_for_runtime,
+        => null,
     };
 }
 
@@ -1841,6 +1908,37 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .nominal_backing_reuses = 1,
         .nominal_backing_instantiations = 86,
     });
+}
+
+test "test roots share template work only when explicitly grouped" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\expect identity(1) == 1
+        \\expect identity(2) == 2
+        \\
+        \\main = 0
+    ;
+
+    var isolated_diagnostics = MonoLower.Diagnostics{};
+    var isolated = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &isolated_diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer isolated.deinit(allocator);
+
+    var shared_diagnostics = MonoLower.Diagnostics{};
+    var shared = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &shared_diagnostics,
+        .root_selection = .test_expects,
+        .procedure_template_root_grouping = .shared_adjacent,
+    });
+    defer shared.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 0), isolated_diagnostics.body.cross_root_template_reuses);
+    try std.testing.expect(shared_diagnostics.body.cross_root_template_reuses > 0);
 }
 
 test "issue 10529 open Try chain with named local callback stays bounded" {
@@ -2289,7 +2387,7 @@ test "differently ordered source record rows produce normalized monotype rows" {
     for (type_view.types) |content| {
         const span = switch (content) {
             .record => |fields| fields,
-            else => continue,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => continue,
         };
         const fields = type_view.fieldSpan(span);
         if (fields.len != 2) continue;
@@ -3316,15 +3414,15 @@ fn expectOptimizedHostEvents(
         switch (expected_event) {
             .dbg => |expected_msg| switch (actual_event) {
                 .dbg => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
-                else => return error.TestUnexpectedResult,
+                .expect_failed, .crashed => return error.TestUnexpectedResult,
             },
             .expect_failed => switch (actual_event) {
                 .expect_failed => {},
-                else => return error.TestUnexpectedResult,
+                .dbg, .crashed => return error.TestUnexpectedResult,
             },
             .crashed => |expected_msg| switch (actual_event) {
                 .crashed => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
-                else => return error.TestUnexpectedResult,
+                .dbg, .expect_failed => return error.TestUnexpectedResult,
             },
         }
     }
@@ -3346,7 +3444,7 @@ fn collectLirResultProcShape(
     defer work.deinit(allocator);
     try work.append(allocator, body);
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |stmt_id| {
@@ -3372,22 +3470,19 @@ fn collectLirResultProcShape(
             },
             .assign_low_level => |stmt| {
                 shape.low_level_count += 1;
-                switch (stmt.op) {
-                    .list_len => shape.list_len_count += 1,
-                    .list_get_unsafe => shape.list_get_unsafe_count += 1,
-                    .list_with_capacity => shape.list_with_capacity_count += 1,
-                    .list_append_unsafe => shape.list_append_unsafe_count += 1,
-                    .list_reserve => shape.list_reserve_count += 1,
-                    .str_count_utf8_bytes => shape.str_count_utf8_bytes_count += 1,
-                    .str_concat => shape.str_concat_count += 1,
-                    .box_box => shape.box_box_count += 1,
-                    .box_unbox => shape.box_unbox_count += 1,
-                    .box_prepare_update => shape.box_prepare_update_count += 1,
-                    .ptr_cast => shape.ptr_cast_count += 1,
-                    .ptr_load => shape.ptr_load_count += 1,
-                    .ptr_store => shape.ptr_store_count += 1,
-                    else => {},
-                }
+                if (stmt.op == .list_len) shape.list_len_count += 1;
+                if (stmt.op == .list_get_unsafe) shape.list_get_unsafe_count += 1;
+                if (stmt.op == .list_with_capacity) shape.list_with_capacity_count += 1;
+                if (stmt.op == .list_append_unsafe) shape.list_append_unsafe_count += 1;
+                if (stmt.op == .list_reserve) shape.list_reserve_count += 1;
+                if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
+                if (stmt.op == .str_concat) shape.str_concat_count += 1;
+                if (stmt.op == .box_box) shape.box_box_count += 1;
+                if (stmt.op == .box_unbox) shape.box_unbox_count += 1;
+                if (stmt.op == .box_prepare_update) shape.box_prepare_update_count += 1;
+                if (stmt.op == .ptr_cast) shape.ptr_cast_count += 1;
+                if (stmt.op == .ptr_load) shape.ptr_load_count += 1;
+                if (stmt.op == .ptr_store) shape.ptr_store_count += 1;
                 try work.append(allocator, stmt.next);
             },
             .assign_list => |stmt| try work.append(allocator, stmt.next),
@@ -3488,7 +3583,7 @@ fn reachableProcDebugName(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |proc_id| {
@@ -3515,7 +3610,7 @@ fn reachableProcShapeFieldTotal(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var total: usize = 0;
@@ -3683,6 +3778,18 @@ fn expectEscapingIterChainAllocatesNothing(source: []const u8) TestError!void {
     var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
     defer optimized.deinit(allocator);
     try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+}
+
+test "issue 10348 nominal declaration with unbound annotation does not panic" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : {}
+        \\main = {}
+        \\M := { f : I }
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
 }
 
 test "iter alloc static: iterator returned from a function is zero-alloc" {
@@ -3930,7 +4037,7 @@ fn reachableReturnSlotProcCount(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var count: usize = 0;
@@ -3946,10 +4053,7 @@ fn reachableReturnSlotProcCount(
             );
             if (first_arg_layout.tag != .ptr) break :candidate;
             const result_layout = lowered.lir_result.layouts.getLayout(first_arg_layout.getIdx());
-            switch (result_layout.tag) {
-                .struct_, .tag_union => {},
-                else => break :candidate,
-            }
+            if (result_layout.tag != .struct_ and result_layout.tag != .tag_union) break :candidate;
             const shape = try collectProcShape(allocator, lowered, proc_id);
             if (shape.ptr_store_count != 0 or shape.store_struct_count != 0 or shape.store_tag_count != 0) count += 1;
         }
@@ -5981,17 +6085,13 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     // nested tuple after specialization means the substituted aggregate leaked
     // into the scalar slot.
     for (lifted.exprsView()) |expr| {
-        const items = switch (expr.data) {
-            .tuple => |items| items,
-            else => continue,
-        };
+        if (std.meta.activeTag(expr.data) != .tuple) continue;
+        const items = expr.data.tuple;
         const tuple_items = lifted.exprSpan(items);
         for (0..tuple_items.len) |index| {
             const item = GuardedList.at(tuple_items, index);
-            switch (lifted.getExpr(item).data) {
-                .tuple => return error.SubstitutedAggregateLeakedIntoScalar,
-                else => {},
-            }
+            if (std.meta.activeTag(lifted.getExpr(item).data) == .tuple)
+                return error.SubstitutedAggregateLeakedIntoScalar;
         }
     }
 }
@@ -6170,19 +6270,19 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
 
     var non_procedure_ref: ?check.CheckedArtifact.ResolvedValueRefId = null;
-    for (artifact.resolved_value_refs.records, 0..) |record, i| switch (record.ref) {
-        .local_proc,
-        .top_level_proc,
-        .imported_proc,
-        .hosted_proc,
-        .platform_required_proc,
-        .promoted_top_level_proc,
-        => {},
-        else => {
+    for (artifact.resolved_value_refs.records, 0..) |record, i| {
+        const ref_tag = std.meta.activeTag(record.ref);
+        if (ref_tag != .local_proc and
+            ref_tag != .top_level_proc and
+            ref_tag != .imported_proc and
+            ref_tag != .hosted_proc and
+            ref_tag != .platform_required_proc and
+            ref_tag != .promoted_top_level_proc)
+        {
             non_procedure_ref = @enumFromInt(i);
             break;
-        },
-    };
+        }
+    }
     const invalid_procedure_ref = non_procedure_ref orelse return error.TestUnexpectedResult;
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = invalid_procedure_ref;
     failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
@@ -6268,13 +6368,10 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
 
     var removed: ?check.CheckedArtifact.CheckedExprId = null;
     for (resources.checked_artifact.checked_bodies.stored_exprs.items) |*expr| {
-        switch (expr.data) {
-            .dispatch_call => |maybe_plan| if (maybe_plan != null) {
-                expr.data = .{ .dispatch_call = null };
-                removed = expr.id;
-                break;
-            },
-            else => {},
+        if (std.meta.activeTag(expr.data) == .dispatch_call and expr.data.dispatch_call != null) {
+            expr.data = .{ .dispatch_call = null };
+            removed = expr.id;
+            break;
         }
     }
     try std.testing.expect(removed != null);
@@ -6304,7 +6401,12 @@ test "dispatch evidence boundary validator names the method of a dangling eviden
                 corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
                 break;
             },
-            else => {},
+            .direct_pending,
+            .evidence_dependent,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => {},
         }
     }
     try std.testing.expect(corrupted_method != null);
@@ -6749,7 +6851,7 @@ fn recordFieldReadCounts(
     const proc = store.getProcSpec(proc_id);
     const body = proc.body orelse return .{ .before_first_call = 0, .total = 0 };
 
-    var aliases = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var aliases = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer aliases.deinit();
     try aliases.put(record, {});
 
@@ -6773,7 +6875,12 @@ fn recordFieldReadCounts(
                         try total.put(ref.field_idx, {});
                         if (!seen_call) try before.put(ref.field_idx, {});
                     },
-                    else => {},
+                    .discriminant,
+                    .tag_payload,
+                    .tag_payload_struct,
+                    .list_reinterpret,
+                    .nominal,
+                    => {},
                 }
                 cursor = stmt.next;
             },
@@ -6788,7 +6895,20 @@ fn recordFieldReadCounts(
             inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
-            else => break,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => break,
         }
     }
     return .{ .before_first_call = before.count(), .total = total.count() };
@@ -6854,9 +6974,9 @@ fn fieldReadRetainCount(
     const proc = store.getProcSpec(proc_id);
     const body = proc.body orelse return 0;
 
-    var read_targets = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var read_targets = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer read_targets.deinit();
-    var retained = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var retained = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer retained.deinit();
     var visited = std.AutoHashMap(u32, void).init(allocator);
     defer visited.deinit();
@@ -6879,7 +6999,12 @@ fn fieldReadRetainCount(
                         .local => |src| if (read_targets.contains(src)) {
                             try read_targets.put(stmt.target, {});
                         },
-                        else => {},
+                        .discriminant,
+                        .tag_payload,
+                        .tag_payload_struct,
+                        .list_reinterpret,
+                        .nominal,
+                        => {},
                     }
                     try stack.append(allocator, stmt.next);
                 },
@@ -6919,7 +7044,15 @@ fn fieldReadRetainCount(
                     try stack.append(allocator, stmt.body);
                     try stack.append(allocator, stmt.remainder);
                 },
-                else => {},
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .loop_continue,
+                .loop_break,
+                .jump,
+                .ret,
+                .crash,
+                => {},
             }
         }
     }
@@ -7253,6 +7386,124 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
 
     _ = lowerModule(allocator, source, .wrappers) catch |err| switch (err) {
         error.TypeCheckError, error.ParseError => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.BuiltinArtifactVersionMismatch,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptArtifact,
+        error.CorruptBuiltinArtifact,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingCallable,
+        error.MissingDbgRoot,
+        error.MissingDynamicLinkingInformation,
+        error.MissingIterCollectWorker,
+        error.MissingProcSpec,
+        error.MissingRootProcedure,
+        error.MissingSpecializedWorker,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.OutOfMemory,
+        error.PageSizeQueryFailed,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.StaleEmbeddedBuiltins,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => return err,
     };
+}
+
+test "issue 10409 duplicate top-level value defs do not panic constant root lookup" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : {}
+        \\main = {}
+        \\x = ()
+        \\x = 0
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
 }

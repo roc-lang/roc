@@ -236,7 +236,7 @@ fn buildRocApp(
                 return error.RocBuildFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("roc build for {s} terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                 roc_file,
                 build_result.term,
@@ -480,22 +480,49 @@ fn buildExpectedStdout(allocator: std.mem.Allocator, value: u64) TestError![]u8 
 
 fn nativeRunnableTargetName() ?[]const u8 {
     return switch (builtin.os.tag) {
-        .macos => switch (builtin.cpu.arch) {
-            .x86_64 => "x64mac",
-            .aarch64 => "arm64mac",
-            else => null,
-        },
-        .linux => switch (builtin.cpu.arch) {
-            .x86_64 => "x64musl",
-            .aarch64 => "arm64musl",
-            else => null,
-        },
-        .windows => switch (builtin.cpu.arch) {
-            .x86_64 => "x64win",
-            .aarch64 => "arm64win",
-            else => null,
-        },
-        else => null,
+        .macos => if (builtin.cpu.arch == .x86_64) "x64mac" else if (builtin.cpu.arch == .aarch64) "arm64mac" else null,
+        .linux => if (builtin.cpu.arch == .x86_64) "x64musl" else if (builtin.cpu.arch == .aarch64) "arm64musl" else null,
+        .windows => if (builtin.cpu.arch == .x86_64) "x64win" else if (builtin.cpu.arch == .aarch64) "arm64win" else null,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => null,
     };
 }
 
@@ -518,7 +545,7 @@ fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const 
                 return error.JsonDecoderFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("json parser terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                 result.term,
                 result.stdout,
@@ -551,7 +578,7 @@ fn runJsonDecoderAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []c
                 return error.JsonDecoderFailed;
             }
         },
-        else => {
+        .signal, .stopped, .unknown => {
             std.debug.print("json parser terminated unexpectedly for invalid UTF-8: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                 result.term,
                 result.stdout,

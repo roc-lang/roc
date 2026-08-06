@@ -527,7 +527,10 @@ jobs:
           # entries on the full build configuration, so the valgrind build
           # (-Dvalgrind=true, musl target, ReleaseFast) hashes to different
           # entries than any other job's and cannot pick up stale artifacts.
-          command: git clean -fdx -e .zig-cache && zig build -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+          # Keep large ReleaseFast Zig compiler processes from overlapping and
+          # exhausting the hosted runner's memory. This lane builds several
+          # artifacts that individually peak at multiple GiB under valgrind.
+          command: git clean -fdx -e .zig-cache && zig build -j1 -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
           retry_count: 3
 
       - name: install valgrind

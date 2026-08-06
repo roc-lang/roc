@@ -3,6 +3,7 @@ const std = @import("std");
 
 pub const builtin_registry = @import("builtin_registry.zig");
 pub const compiler_rt_128 = @import("compiler_rt_128.zig");
+pub const decimal_parse = @import("decimal_parse.zig");
 pub const native_runtime_libcalls = @import("native_runtime_libcalls.zig");
 pub const host_abi = @import("host_abi.zig");
 pub const shim_symbols = @import("shim_symbols.zig");
@@ -26,6 +27,7 @@ test "builtins tests" {
     std.testing.refAllDecls(@import("builtin_registry.zig"));
     std.testing.refAllDecls(@import("crypto.zig"));
     std.testing.refAllDecls(@import("dec.zig"));
+    std.testing.refAllDecls(@import("decimal_parse.zig"));
     std.testing.refAllDecls(@import("dev_wrappers.zig"));
     std.testing.refAllDecls(@import("erased_callable.zig"));
     std.testing.refAllDecls(@import("float_bits.zig"));

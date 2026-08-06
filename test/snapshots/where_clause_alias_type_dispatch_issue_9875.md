@@ -140,8 +140,7 @@ main = ThingAlias.from_u64(41).value() + 1
 				(e-dispatch-call (method "value") (constraint-fn-var 274)
 					(receiver
 						(e-call (constraint-fn-var 273)
-							(e-lookup-local
-								(p-assign (ident "where_clause_alias_type_dispatch_issue_9875.Thing.from_u64")))
+							(e-lookup-associated-resolved (source "ThingAlias.from_u64") (target-mod "where_clause_alias_type_dispatch_issue_9875") (target-node "15") (target-def "15"))
 							(e-num (value "41"))))
 					(args)))
 			(args

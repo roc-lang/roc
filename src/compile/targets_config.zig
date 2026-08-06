@@ -148,7 +148,7 @@ fn freeLinkSpec(allocator: Allocator, spec: TargetLinkSpec) void {
     if (spec.wasm) |wasm| wasm.deinit(allocator);
     for (spec.items) |item| switch (item) {
         .file_path => |fp| allocator.free(fp),
-        else => {},
+        .app, .win_gui => {},
     };
     allocator.free(spec.items);
 }
@@ -321,10 +321,8 @@ pub const TargetsConfig = struct {
         const header = store.getHeader(file.header);
 
         // Only platform headers have targets
-        const platform = switch (header) {
-            .platform => |p| p,
-            else => return null,
-        };
+        if (header != .platform) return null;
+        const platform = header.platform;
 
         // If no targets section, return null
         const targets_section_idx = platform.targets orelse return null;
@@ -379,7 +377,7 @@ pub const TargetsConfig = struct {
     fn clearTargetFiles(allocator: Allocator, link_items: *std.array_list.Managed(LinkItem)) void {
         for (link_items.items) |item| switch (item) {
             .file_path => |fp| allocator.free(fp),
-            else => {},
+            .app, .win_gui => {},
         };
         link_items.clearRetainingCapacity();
     }
@@ -404,13 +402,10 @@ pub const TargetsConfig = struct {
         }
 
         for (store.targetConfigValueSlice(values)) |value_idx| {
-            switch (store.getTargetConfigValue(value_idx)) {
-                .string_literal => |maybe_tok| {
-                    const name = maybe_tok orelse continue;
-                    try exports.append(try allocator.dupe(u8, ast.resolve(name)));
-                },
-                else => {},
-            }
+            const value = store.getTargetConfigValue(value_idx);
+            if (value != .string_literal) continue;
+            const name = value.string_literal orelse continue;
+            try exports.append(try allocator.dupe(u8, ast.resolve(name)));
         }
         wasm.exports = try exports.toOwnedSlice();
     }
@@ -426,10 +421,8 @@ pub const TargetsConfig = struct {
     }
 
     fn targetConfigIdentToken(value: parse.AST.TargetConfigValue) ?parse.tokenize.Token.Idx {
-        return switch (value) {
-            .ident => |ident| ident,
-            else => null,
-        };
+        if (value == .ident) return value.ident;
+        return null;
     }
 
     fn parseUnsignedToken(allocator: Allocator, ast: anytype, tok: parse.tokenize.Token.Idx) Allocator.Error!?usize {
@@ -448,10 +441,9 @@ pub const TargetsConfig = struct {
         ast: anytype,
         value_idx: parse.AST.TargetConfigValue.Idx,
     ) Allocator.Error!?usize {
-        return switch (store.getTargetConfigValue(value_idx)) {
-            .int_literal => |tok| try parseUnsignedToken(allocator, ast, tok),
-            else => null,
-        };
+        const value = store.getTargetConfigValue(value_idx);
+        if (value == .int_literal) return try parseUnsignedToken(allocator, ast, value.int_literal);
+        return null;
     }
 
     fn parseWasmImportMemoryValue(
@@ -459,10 +451,9 @@ pub const TargetsConfig = struct {
         ast: anytype,
         value_idx: parse.AST.TargetConfigValue.Idx,
     ) ?WasmImportMemory {
-        return switch (store.getTargetConfigValue(value_idx)) {
-            .tag_literal => |tok| WasmImportMemory.fromTagName(ast.resolve(tok)),
-            else => null,
-        };
+        const value = store.getTargetConfigValue(value_idx);
+        if (value == .tag_literal) return WasmImportMemory.fromTagName(ast.resolve(value.tag_literal));
+        return null;
     }
 
     fn parseWasmConfig(
@@ -484,20 +475,14 @@ pub const TargetsConfig = struct {
             const value = store.getTargetConfigValue(entry.value);
 
             if (std.mem.eql(u8, name, "inputs")) {
-                switch (value) {
-                    .files => |files| {
-                        clearTargetFiles(allocator, link_items);
-                        try appendTargetFiles(allocator, store, ast, files, link_items);
-                    },
-                    else => {},
+                if (value == .files) {
+                    clearTargetFiles(allocator, link_items);
+                    try appendTargetFiles(allocator, store, ast, value.files, link_items);
                 }
             } else if (std.mem.eql(u8, name, "exports")) {
-                switch (value) {
-                    .list => |values| {
-                        try replaceWasmExports(allocator, store, ast, values, &wasm);
-                        has_wasm_config = true;
-                    },
-                    else => {},
+                if (value == .list) {
+                    try replaceWasmExports(allocator, store, ast, value.list, &wasm);
+                    has_wasm_config = true;
                 }
             } else if (std.mem.eql(u8, name, "import_memory")) {
                 if (parseWasmImportMemoryValue(store, ast, entry.value)) |import_memory| {
@@ -560,13 +545,11 @@ pub const TargetsConfig = struct {
             const entry = store.getTargetConfigEntry(entry_idx);
             const name = ast.resolve(entry.name);
             if (std.mem.eql(u8, name, "output")) {
-                switch (store.getTargetConfigValue(entry.value)) {
-                    .tag_literal => |tok| {
-                        if (OutputKind.fromTagName(ast.resolve(tok))) |kind| {
-                            return kind;
-                        }
-                    },
-                    else => {},
+                const value = store.getTargetConfigValue(entry.value);
+                if (value == .tag_literal) {
+                    if (OutputKind.fromTagName(ast.resolve(value.tag_literal))) |kind| {
+                        return kind;
+                    }
                 }
             }
         }
@@ -599,7 +582,7 @@ pub const TargetsConfig = struct {
             errdefer {
                 for (link_items.items) |item| switch (item) {
                     .file_path => |fp| allocator.free(fp),
-                    else => {},
+                    .app, .win_gui => {},
                 };
                 link_items.deinit();
             }
@@ -810,14 +793,10 @@ fn topLevelConstNode(
 }
 
 fn constWasmImportMemory(checked_module: *const checked.CheckedModuleArtifact, node: checked.ConstNodeId) ?WasmImportMemory {
-    return switch (checked_module.const_store.get(node)) {
-        .nominal => |nominal| constWasmImportMemory(checked_module, nominal.backing),
-        .tag => |tag| blk: {
-            if (tag.payloads.len != 0) break :blk null;
-            break :blk WasmImportMemory.fromTagName(tag.tag_name);
-        },
-        else => null,
-    };
+    const value = checked_module.const_store.get(node);
+    if (value == .nominal) return constWasmImportMemory(checked_module, value.nominal.backing);
+    if (value != .tag or value.tag.payloads.len != 0) return null;
+    return WasmImportMemory.fromTagName(value.tag.tag_name);
 }
 
 fn constUnsigned(
@@ -825,14 +804,11 @@ fn constUnsigned(
     node: checked.ConstNodeId,
     reason: *TargetConfigResolveReason,
 ) ?usize {
-    return switch (checked_module.const_store.get(node)) {
-        .nominal => |nominal| constUnsigned(checked_module, nominal.backing, reason),
-        .scalar => |scalar| scalarUnsigned(scalar, reason),
-        else => blk: {
-            reason.* = .expected_unsigned_integer;
-            break :blk null;
-        },
-    };
+    const value = checked_module.const_store.get(node);
+    if (value == .nominal) return constUnsigned(checked_module, value.nominal.backing, reason);
+    if (value == .scalar) return scalarUnsigned(value.scalar, reason);
+    reason.* = .expected_unsigned_integer;
+    return null;
 }
 
 fn scalarUnsigned(scalar: checked.ConstScalar, reason: *TargetConfigResolveReason) ?usize {
@@ -1129,17 +1105,14 @@ test "validateDeclaredTargetFilesExist checks selected target files" {
     defer wasm_validation.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), wasm_validation.issues.len);
-    switch (wasm_validation.issues[0]) {
-        .missing_target_file => |issue| {
-            try testing.expectEqual(RocTarget.wasm32, issue.target);
-            try testing.expectEqual(OutputKind.shared, issue.output);
-            try testing.expectEqualStrings("host.wasm", issue.file_path);
-            const expected_path = try std.fs.path.join(allocator, &.{ platform_dir, "targets", "wasm32", "host.wasm" });
-            defer allocator.free(expected_path);
-            try testing.expectEqualStrings(expected_path, issue.expected_full_path);
-        },
-        else => return error.UnexpectedResult,
-    }
+    try testing.expect(wasm_validation.issues[0] == .missing_target_file);
+    const missing_file = wasm_validation.issues[0].missing_target_file;
+    try testing.expectEqual(RocTarget.wasm32, missing_file.target);
+    try testing.expectEqual(OutputKind.shared, missing_file.output);
+    try testing.expectEqualStrings("host.wasm", missing_file.file_path);
+    const expected_path = try std.fs.path.join(allocator, &.{ platform_dir, "targets", "wasm32", "host.wasm" });
+    defer allocator.free(expected_path);
+    try testing.expectEqualStrings(expected_path, missing_file.expected_full_path);
 }
 
 test "validateDeclaredTargetFilesExist uses default targets directory" {
@@ -1165,11 +1138,8 @@ test "validateDeclaredTargetFilesExist uses default targets directory" {
     defer validation.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), validation.issues.len);
-    switch (validation.issues[0]) {
-        .missing_inputs_directory => |issue| {
-            try testing.expectEqualStrings("targets", issue.inputs_dir);
-            try testing.expect(std.mem.endsWith(u8, issue.expected_path, "targets"));
-        },
-        else => return error.UnexpectedResult,
-    }
+    try testing.expect(validation.issues[0] == .missing_inputs_directory);
+    const missing_dir = validation.issues[0].missing_inputs_directory;
+    try testing.expectEqualStrings("targets", missing_dir.inputs_dir);
+    try testing.expect(std.mem.endsWith(u8, missing_dir.expected_path, "targets"));
 }

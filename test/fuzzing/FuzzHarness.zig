@@ -74,12 +74,9 @@ pub fn assertNoBlockingReports(
             if (debug) {
                 std.debug.print("{s}: {s} ({s})\n", .{ mod.abs_path, report.title, @tagName(report.severity) });
             }
-            switch (report.severity) {
-                .runtime_error, .fatal => {
-                    blocking_report_title = report.title;
-                    break;
-                },
-                else => {},
+            if (report.severity == .runtime_error or report.severity == .fatal) {
+                blocking_report_title = report.title;
+                break;
             }
         }
         if (blocking_report_title != null) break;

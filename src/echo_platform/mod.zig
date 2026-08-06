@@ -66,6 +66,10 @@ pub const build_platform_main_source =
     \\        arm64v1musl: { inputs: [app] },
     \\        x64v1glibc: { inputs: [app] },
     \\        arm64v1glibc: { inputs: [app] },
+    \\        x64freebsd: { inputs: [app] },
+    \\        x64netbsd: { inputs: [app] },
+    \\        x64v1freebsd: { inputs: [app] },
+    \\        x64v1netbsd: { inputs: [app] },
     \\    }
     \\
     \\import Echo
@@ -96,9 +100,11 @@ pub const build_c_platform_main_source =
     \\        arm64mac: { inputs: [app] },
     \\        x64win: { inputs: [app] },
     \\        arm64win: { inputs: [app] },
+    \\        x64openbsd: { inputs: [app] },
     \\        x64v1mac: { inputs: [app] },
     \\        x64v1win: { inputs: [app] },
     \\        arm64v1win: { inputs: [app] },
+    \\        x64v1openbsd: { inputs: [app] },
     \\    }
     \\
     \\import Echo
@@ -212,7 +218,22 @@ fn handleStdoutError(err: std.Io.File.Writer.Error) noreturn {
     } else {
         switch (err) {
             error.BrokenPipe => std.process.exit(0),
-            else => {
+            error.AccessDenied,
+            error.Canceled,
+            error.DeviceBusy,
+            error.DiskQuota,
+            error.FileBusy,
+            error.FileTooBig,
+            error.InputOutput,
+            error.LockViolation,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotOpenForWriting,
+            error.PermissionDenied,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => {
                 std.debug.print("echo!: stdout write failed: {}\n", .{err});
                 std.process.exit(1);
             },

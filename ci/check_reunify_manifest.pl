@@ -62,6 +62,7 @@ my $RSLOG = 'src/postcheck/reunify_shadow/logical_identity.zig';
 my $RSHAD = 'src/postcheck/reunify_shadow/shadow.zig';
 my $DTRAN = 'src/postcheck/monotype/direct_translate.zig';
 my $RMIRR = 'src/postcheck/monotype/representation_mirror.zig';
+my $PCMOD = 'src/postcheck/mod.zig';
 my $FSID  = 'src/postcheck/monotype/final_spec_id.zig';
 my $SREH  = 'src/postcheck/monotype/spec_rehearsal.zig';
 my $MTYPE = 'src/postcheck/monotype/type.zig';
@@ -77,7 +78,7 @@ my @categories = (
             # representation-mirror unit test fixture builds a real graph to
             # exercise the shadow; it deletes with the shadow at the flip.
             { label => 'InstGraph.create(', re => qr/InstGraph\.create\(/,
-              counts => { $SOLVE => 38, $LOWER => 17, $RMIRR => 1 } },
+              counts => { $SOLVE => 39, $LOWER => 18, $RMIRR => 1 } },
             { label => 'InstVariable.row(', re => qr/InstVariable\.row\(/,
               counts => { $SOLVE => 16, $LOWER => 3 } },
         ],
@@ -110,8 +111,10 @@ my @categories = (
             # `relateOpaqueInterfacePair`, `relateOpaqueChild`,
             # `unifyRowWithEmpty`), reached only while executing a relation a
             # $LOWER site already named. They delete with the unifier.
+            # $PCMOD's single hit is a structural test asserting that the
+            # string does NOT appear in the process source, not a call.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 39, $RMIRR => 2 } },
+              counts => { $SOLVE => 21, $LOWER => 39, $RMIRR => 2, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
@@ -149,7 +152,7 @@ my @categories = (
         exempt  => [],
         patterns => [
             { label => 'measureUnifySite', re => qr/\bmeasureUnifySite\b/,
-              counts => { $LOWER => 43, $SREH => 1 } },
+              counts => { $LOWER => 42, $SREH => 1 } },
             { label => 'noteUnifySite', re => qr/\bnoteUnifySite\b/,
               counts => { $LOWER => 13 } },
             { label => 'noteUnifyConstruction', re => qr/\bnoteUnifyConstruction\b/,
@@ -174,7 +177,7 @@ my @categories = (
         exempt  => [],
         patterns => [
             { label => 'importMono', re => qr/\bimportMono\b/,
-              counts => { $SOLVE => 15, $LOWER => 23 } },
+              counts => { $SOLVE => 15, $LOWER => 22 } },
         ],
     },
     {
@@ -244,9 +247,9 @@ my @categories = (
             { label => 'transparentAliasBacking', re => qr/\btransparentAliasBacking\b/,
               counts => { $LS => 4, $LOWER => 5 } },
             { label => 'mergeLambdaSets', re => qr/\bmergeLambdaSets\b/,
-              counts => { $LS => 8 } },
+              counts => { $LS => 6 } },
             { label => 'unifyCaptures', re => qr/\bunifyCaptures\b/,
-              counts => { $LS => 5 } },
+              counts => { $LS => 1 } },
             { label => 'markErasedCallablesReachedByType', re => qr/\bmarkErasedCallablesReachedByType\b/,
               counts => { $LS => 10 } },
             { label => 'markErasedCallablesReachedByTypeInner', re => qr/\bmarkErasedCallablesReachedByTypeInner\b/,
@@ -256,9 +259,9 @@ my @categories = (
             { label => 'structuralBackingForNamed', re => qr/\bstructuralBackingForNamed\b/,
               counts => { $LS => 2 } },
             { label => 'active_unifications', re => qr/\bactive_unifications\b/,
-              counts => { $LS => 7 } },
+              counts => { $LS => 8 } },
             { label => 'forall', re => qr/\bforall\b/,
-              counts => { $LS => 11, $LSTY => 1, $SLL => 2, $LMLOW => 1 } },
+              counts => { $LS => 12, $LSTY => 1, $SLL => 2, $LMLOW => 7 } },
         ],
     },
     {

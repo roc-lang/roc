@@ -33,19 +33,19 @@ fn expectMatch(
 }
 
 fn finalExpr(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
-    return switch (test_env.getCanonicalExpr(expr_idx)) {
-        .e_block => |block| block.final_expr,
-        else => expr_idx,
-    };
+    const expr = test_env.getCanonicalExpr(expr_idx);
+    return if (std.meta.activeTag(expr) == .e_block) expr.e_block.final_expr else expr_idx;
 }
 
 fn lambdaBodyFinalExpr(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) TrySuffixTestError!CIR.Expr.Idx {
     const expr = test_env.getCanonicalExpr(expr_idx);
-    const lambda_idx = switch (expr) {
-        .e_lambda => expr_idx,
-        .e_closure => |closure| closure.lambda_idx,
-        else => return error.ExpectedLambda,
-    };
+    const tag = std.meta.activeTag(expr);
+    const lambda_idx = if (tag == .e_lambda)
+        expr_idx
+    else if (tag == .e_closure)
+        expr.e_closure.lambda_idx
+    else
+        return error.ExpectedLambda;
 
     const lambda = test_env.getCanonicalExpr(lambda_idx);
     try testing.expectEqual(.e_lambda, std.meta.activeTag(lambda));
@@ -80,11 +80,13 @@ fn expectTryTagPattern(
     expected_tag: []const u8,
 ) TrySuffixTestError!void {
     const pattern = test_env.module_env.store.getPattern(pattern_idx);
-    const backing_pattern_idx = switch (pattern) {
-        .nominal => |nominal| nominal.backing_pattern,
-        .nominal_external => |nominal| nominal.backing_pattern,
-        else => return error.ExpectedNominalTryPattern,
-    };
+    const tag = std.meta.activeTag(pattern);
+    const backing_pattern_idx = if (tag == .nominal)
+        pattern.nominal.backing_pattern
+    else if (tag == .nominal_external)
+        pattern.nominal_external.backing_pattern
+    else
+        return error.ExpectedNominalTryPattern;
 
     const backing_pattern = test_env.module_env.store.getPattern(backing_pattern_idx);
     try testing.expectEqual(.applied_tag, std.meta.activeTag(backing_pattern));
@@ -97,11 +99,13 @@ fn expectTryTagExpr(
     expected_tag: []const u8,
 ) TrySuffixTestError!void {
     const expr = test_env.getCanonicalExpr(expr_idx);
-    const backing_expr_idx = switch (expr) {
-        .e_nominal => |nominal| nominal.backing_expr,
-        .e_nominal_external => |nominal| nominal.backing_expr,
-        else => return error.ExpectedNominalTryExpr,
-    };
+    const tag = std.meta.activeTag(expr);
+    const backing_expr_idx = if (tag == .e_nominal)
+        expr.e_nominal.backing_expr
+    else if (tag == .e_nominal_external)
+        expr.e_nominal_external.backing_expr
+    else
+        return error.ExpectedNominalTryExpr;
 
     const backing_expr = test_env.getCanonicalExpr(backing_expr_idx);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));

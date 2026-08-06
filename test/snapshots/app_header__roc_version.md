@@ -5,7 +5,7 @@ type=header
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../main.roc", roc: "nightly-2026-July-31-123c5d7" }
+app [main!] { pf: platform "../main.roc", roc: "nightly-2026-08-05-24f0b47" }
 ~~~
 # EXPECTED
 NIL
@@ -18,7 +18,7 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(app (roc-version "nightly-2026-July-31-123c5d7")
+(app (roc-version "nightly-2026-08-05-24f0b47")
 	(provides
 		(exposed-lower-ident
 			(text "main!")))
@@ -31,7 +31,7 @@ EndOfFile,
 				(e-string-part (raw "../main.roc"))))
 		(record-field (name "roc")
 			(e-string
-				(e-string-part (raw "nightly-2026-July-31-123c5d7"))))))
+				(e-string-part (raw "nightly-2026-08-05-24f0b47"))))))
 ~~~
 # FORMATTED
 ~~~roc

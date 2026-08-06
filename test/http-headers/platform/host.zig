@@ -14,6 +14,56 @@ const listen_backlog = 16;
 const stdout_fd: c_int = 1;
 const stderr_fd: c_int = 2;
 
+const PlatformOs = enum { linux, macos, windows, other };
+
+fn classifyPlatformOs(os: std.Target.Os.Tag) PlatformOs {
+    return switch (os) {
+        .linux => .linux,
+        .macos => .macos,
+        .windows => .windows,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .other,
+    };
+}
+
 const ParseError = error{
     IncompleteHeaders,
     InvalidUtf8,
@@ -118,7 +168,7 @@ comptime {
         .crashed = &hostCrashed,
     });
 
-    switch (builtin.os.tag) {
+    switch (classifyPlatformOs(builtin.os.tag)) {
         .linux => {
             if (builtin.cpu.arch == .x86_64) {
                 @export(&linuxStartX86_64, .{ .name = "_start" });
@@ -137,7 +187,7 @@ comptime {
                 @export(&windows_ws2_32_directive, .{ .name = "windows_ws2_32_directive" });
             }
         },
-        else => {},
+        .other => {},
     }
 }
 
@@ -297,7 +347,15 @@ fn receiveRequest(fd: Socket, buffer: *[request_buffer_size]u8) ServerError!Pars
 
         const head = parseHead(buffer[0..total]) catch |err| switch (err) {
             error.IncompleteHeaders => continue,
-            else => |e| return e,
+            error.InvalidUtf8,
+            error.BadRequestLine,
+            error.BadProtocol,
+            error.BadHeader,
+            error.BadContentLength,
+            error.DuplicateContentLength,
+            error.RequestTooLarge,
+            error.ConnectionClosed,
+            => |e| return e,
         };
 
         if (head.body_len > max_body_len) return error.RequestTooLarge;
@@ -481,18 +539,18 @@ fn asciiLower(byte: u8) u8 {
 }
 
 fn platformInit() ServerError!void {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .windows => try windows.startup(),
         .linux, .macos => {},
-        else => return error.UnsupportedOperatingSystem,
+        .other => return error.UnsupportedOperatingSystem,
     }
 }
 
-const Socket = switch (builtin.os.tag) {
+const Socket = switch (classifyPlatformOs(builtin.os.tag)) {
     .linux => i32,
     .macos => c_int,
     .windows => windows.SOCKET,
-    else => c_int,
+    .other => c_int,
 };
 
 const Listener = struct {
@@ -501,40 +559,40 @@ const Listener = struct {
 };
 
 fn listenLoopback() ServerError!Listener {
-    return switch (builtin.os.tag) {
+    return switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .linux => linux.listenLoopback(),
         .macos => darwin.listenLoopback(),
         .windows => windows.listenLoopback(),
-        else => error.UnsupportedOperatingSystem,
+        .other => error.UnsupportedOperatingSystem,
     };
 }
 
 fn acceptSocket(fd: Socket) ServerError!Socket {
-    return switch (builtin.os.tag) {
+    return switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .linux => linux.acceptSocket(fd),
         .macos => darwin.acceptSocket(fd),
         .windows => windows.acceptSocket(fd),
-        else => error.UnsupportedOperatingSystem,
+        .other => error.UnsupportedOperatingSystem,
     };
 }
 
 fn recvSocket(fd: Socket, buffer: []u8) ServerError!usize {
-    return switch (builtin.os.tag) {
+    return switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .linux => linux.recvSocket(fd, buffer),
         .macos => darwin.recvSocket(fd, buffer),
         .windows => windows.recvSocket(fd, buffer),
-        else => error.UnsupportedOperatingSystem,
+        .other => error.UnsupportedOperatingSystem,
     };
 }
 
 fn sendAll(fd: Socket, bytes: []const u8) ServerError!void {
     var sent: usize = 0;
     while (sent < bytes.len) {
-        const n = switch (builtin.os.tag) {
+        const n = switch (comptime classifyPlatformOs(builtin.os.tag)) {
             .linux => try linux.sendSocket(fd, bytes[sent..]),
             .macos => try darwin.sendSocket(fd, bytes[sent..]),
             .windows => try windows.sendSocket(fd, bytes[sent..]),
-            else => return error.UnsupportedOperatingSystem,
+            .other => return error.UnsupportedOperatingSystem,
         };
         if (n == 0) return error.SendFailed;
         sent += n;
@@ -542,11 +600,11 @@ fn sendAll(fd: Socket, bytes: []const u8) ServerError!void {
 }
 
 fn closeSocket(fd: Socket) void {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .linux => linux.closeSocket(fd),
         .macos => darwin.closeSocket(fd),
         .windows => windows.closeSocket(fd),
-        else => {},
+        .other => {},
     }
 }
 
@@ -559,20 +617,20 @@ fn rawWriteStderr(bytes: []const u8) void {
 }
 
 fn rawWrite(fd: c_int, bytes: []const u8) void {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .linux => linux.rawWrite(fd, bytes),
         .macos => darwin.rawWrite(fd, bytes),
         .windows => windows.rawWrite(fd, bytes),
-        else => {},
+        .other => {},
     }
 }
 
 fn abortProcess() noreturn {
-    switch (builtin.os.tag) {
+    switch (comptime classifyPlatformOs(builtin.os.tag)) {
         .linux => linux.exitGroup(134),
         .macos => darwin.abort(),
         .windows => windows.exitProcess(134),
-        else => @trap(),
+        .other => @trap(),
     }
 }
 
