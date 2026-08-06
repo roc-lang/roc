@@ -2161,6 +2161,14 @@ fn finishConstRoot(
     root_type: ?check.ConstStore.ConstTypeId,
 ) void {
     if (root.kind != .constant and root.kind != .hoisted_constant) return;
+    // A const whose checked type still contains identity variables denotes a
+    // scheme (tier-2 generalization quantifies annotation type variables,
+    // including the implicit row extensions polarity opening mints), so one
+    // stored ground representation cannot serve its uses: a use may
+    // instantiate the scheme at a wider row than the value was produced at.
+    // Leave such templates on the eval path, where every distinct requested
+    // monotype specializes the value at its own representation.
+    if (module.checked_types.rootContainsIdentityVariables(root.checked_type)) return;
     const node = switch (payload) {
         .const_node => |id| id,
         .pending,
