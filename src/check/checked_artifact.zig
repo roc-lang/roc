@@ -14451,8 +14451,21 @@ fn graphParticipatingDef(by_def: []const bool, def_idx: CIR.Def.Idx) bool {
 
 const ExactGraphProducerAnalysis = struct {
     const ExprState = enum(u8) { unknown, visiting, no, yes };
+    const ProjectionStep = union(enum) {
+        record_field: canonical.RecordFieldLabelId,
+        tuple_item: u32,
+        tag_arg: struct {
+            name: canonical.TagLabelId,
+            index: u32,
+        },
+        nominal_backing,
+        list_item: u32,
+        list_rest: u32,
+    };
     const BinderValue = struct {
         expr: CheckedExprId,
+        projection_start: u32,
+        projection_len: u32,
         next: ?u32,
     };
     const TemplateDependency = struct {
@@ -14470,7 +14483,9 @@ const ExactGraphProducerAnalysis = struct {
     expr_states: []ExprState,
     binder_value_heads: []?u32,
     binder_values: std.ArrayList(BinderValue),
+    projection_steps: std.ArrayList(ProjectionStep),
     dependency_heads: []?u32,
+    dependency_caller_by_callee: []?canonical.CheckedProcedureTemplateId,
     dependencies: std.ArrayList(TemplateDependency),
     current_template: canonical.CheckedProcedureTemplateId = @enumFromInt(0),
     saw_evidence_dependency: bool = false,
@@ -14493,6 +14508,9 @@ const ExactGraphProducerAnalysis = struct {
         const dependency_heads = try allocator.alloc(?u32, templates.templates.len);
         errdefer allocator.free(dependency_heads);
         @memset(dependency_heads, null);
+        const dependency_caller_by_callee = try allocator.alloc(?canonical.CheckedProcedureTemplateId, templates.templates.len);
+        errdefer allocator.free(dependency_caller_by_callee);
+        @memset(dependency_caller_by_callee, null);
         var self = ExactGraphProducerAnalysis{
             .allocator = allocator,
             .artifact_key = artifact_key,
@@ -14504,10 +14522,13 @@ const ExactGraphProducerAnalysis = struct {
             .expr_states = expr_states,
             .binder_value_heads = binder_value_heads,
             .binder_values = .empty,
+            .projection_steps = .empty,
             .dependency_heads = dependency_heads,
+            .dependency_caller_by_callee = dependency_caller_by_callee,
             .dependencies = .empty,
         };
         errdefer self.binder_values.deinit(allocator);
+        errdefer self.projection_steps.deinit(allocator);
         errdefer self.dependencies.deinit(allocator);
         try self.indexBinderValues();
         return self;
@@ -14515,7 +14536,9 @@ const ExactGraphProducerAnalysis = struct {
 
     fn deinit(self: *ExactGraphProducerAnalysis) void {
         self.dependencies.deinit(self.allocator);
+        self.allocator.free(self.dependency_caller_by_callee);
         self.allocator.free(self.dependency_heads);
+        self.projection_steps.deinit(self.allocator);
         self.binder_values.deinit(self.allocator);
         self.allocator.free(self.binder_value_heads);
         self.allocator.free(self.expr_states);
@@ -14523,14 +14546,16 @@ const ExactGraphProducerAnalysis = struct {
     }
 
     fn indexBinderValues(self: *ExactGraphProducerAnalysis) Allocator.Error!void {
+        var projection = std.ArrayList(ProjectionStep).empty;
+        defer projection.deinit(self.allocator);
         for (0..self.bodies.statementCount()) |raw_statement| {
             const statement = self.bodies.statement(@enumFromInt(@as(u32, @intCast(raw_statement))));
             switch (statement.data) {
-                .decl => |decl| try self.indexPatternValue(decl.pattern, decl.expr),
-                .var_ => |decl| try self.indexPatternValue(decl.pattern, decl.expr),
+                .decl => |decl| try self.indexPatternValue(decl.pattern, decl.expr, &projection),
+                .var_ => |decl| try self.indexPatternValue(decl.pattern, decl.expr, &projection),
                 .reassign => |reassign| {
-                    try self.indexPatternValue(reassign.pattern, reassign.expr);
-                    for (reassign.reassigned_binders) |binder| try self.addBinderValue(binder, reassign.expr);
+                    try self.indexPatternValue(reassign.pattern, reassign.expr, &projection);
+                    for (reassign.reassigned_binders) |binder| try self.addBinderValue(binder, reassign.expr, &.{});
                 },
                 .pending,
                 .var_uninitialized,
@@ -14554,41 +14579,122 @@ const ExactGraphProducerAnalysis = struct {
                 => {},
             }
         }
+
+        // Match binders receive the exact projected cell selected from the
+        // scrutinee. Alternative-pattern binders are copied onto the checked
+        // representative used by lookups in the shared branch body.
+        for (0..self.bodies.exprCount()) |raw_expr| {
+            const expr = self.bodies.expr(@enumFromInt(@as(u32, @intCast(raw_expr))));
+            if (expr.data != .match_) continue;
+            const match = expr.data.match_;
+            for (match.branches) |branch| {
+                for (branch.patternsSlice(self.bodies)) |branch_pattern| {
+                    projection.clearRetainingCapacity();
+                    try self.indexPatternValue(branch_pattern.pattern, match.cond, &projection);
+                    for (branch_pattern.binderRemapsSlice(self.bodies)) |remap| {
+                        try self.copyBinderValues(remap.candidate_binder, remap.representative_binder);
+                    }
+                }
+            }
+        }
     }
 
-    fn addBinderValue(self: *ExactGraphProducerAnalysis, binder: PatternBinderId, expr: CheckedExprId) Allocator.Error!void {
+    fn addBinderValue(
+        self: *ExactGraphProducerAnalysis,
+        binder: PatternBinderId,
+        expr: CheckedExprId,
+        projection: []const ProjectionStep,
+    ) Allocator.Error!void {
         const raw = @intFromEnum(binder);
         if (raw >= self.binder_value_heads.len) {
             return checkedArtifactInvariant("exact producer analysis referenced a missing pattern binder", .{});
         }
+        const projection_start: u32 = @intCast(self.projection_steps.items.len);
+        try self.projection_steps.appendSlice(self.allocator, projection);
         const edge: u32 = @intCast(self.binder_values.items.len);
         try self.binder_values.append(self.allocator, .{
             .expr = expr,
+            .projection_start = projection_start,
+            .projection_len = @intCast(projection.len),
             .next = self.binder_value_heads[raw],
         });
         self.binder_value_heads[raw] = edge;
     }
 
-    fn indexPatternValue(self: *ExactGraphProducerAnalysis, pattern_id: CheckedPatternId, expr: CheckedExprId) Allocator.Error!void {
+    fn copyBinderValues(
+        self: *ExactGraphProducerAnalysis,
+        source: PatternBinderId,
+        destination: PatternBinderId,
+    ) Allocator.Error!void {
+        if (source == destination) return;
+        if (@intFromEnum(source) >= self.binder_value_heads.len or
+            @intFromEnum(destination) >= self.binder_value_heads.len)
+        {
+            return checkedArtifactInvariant("exact producer analysis copied a missing pattern binder", .{});
+        }
+        var current = self.binder_value_heads[@intFromEnum(source)];
+        while (current) |edge| {
+            const value = self.binder_values.items[edge];
+            try self.projection_steps.ensureUnusedCapacity(self.allocator, value.projection_len);
+            const projection = self.projection_steps.items[value.projection_start..][0..value.projection_len];
+            try self.addBinderValue(destination, value.expr, projection);
+            current = value.next;
+        }
+    }
+
+    fn indexPatternValue(
+        self: *ExactGraphProducerAnalysis,
+        pattern_id: CheckedPatternId,
+        expr: CheckedExprId,
+        projection: *std.ArrayList(ProjectionStep),
+    ) Allocator.Error!void {
         const pattern = self.bodies.pattern(pattern_id);
         switch (pattern.data) {
-            .assign => |binder| try self.addBinderValue(binder, expr),
+            .assign => |binder| try self.addBinderValue(binder, expr, projection.items),
             .as => |as_| {
-                try self.addBinderValue(as_.binder, expr);
-                try self.indexPatternValue(as_.pattern, expr);
+                try self.addBinderValue(as_.binder, expr, projection.items);
+                try self.indexPatternValue(as_.pattern, expr, projection);
             },
-            .applied_tag => |tag| for (tag.args) |arg| try self.indexPatternValue(arg, expr),
-            .nominal => |nominal| try self.indexPatternValue(nominal.backing_pattern, expr),
+            .applied_tag => |tag| for (tag.args, 0..) |arg, index| {
+                try projection.append(self.allocator, .{ .tag_arg = .{ .name = tag.name, .index = @intCast(index) } });
+                defer _ = projection.pop();
+                try self.indexPatternValue(arg, expr, projection);
+            },
+            .nominal => |nominal| {
+                try projection.append(self.allocator, .nominal_backing);
+                defer _ = projection.pop();
+                try self.indexPatternValue(nominal.backing_pattern, expr, projection);
+            },
             .record_destructure => |fields| for (fields) |field| switch (field.kind) {
-                .required, .sub_pattern, .rest => |child| try self.indexPatternValue(child, expr),
+                .required, .sub_pattern => |child| {
+                    try projection.append(self.allocator, .{ .record_field = field.label });
+                    defer _ = projection.pop();
+                    try self.indexPatternValue(child, expr, projection);
+                },
+                // A record-rest pattern produces a new record assembled from
+                // several possible fields. Until checked output publishes
+                // that complete field set, retain the conservative root fact.
+                .rest => |child| try self.indexPatternValue(child, expr, projection),
             },
             .list => |list| {
-                for (list.patterns) |child| try self.indexPatternValue(child, expr);
-                if (list.rest) |rest| if (rest.pattern) |child| try self.indexPatternValue(child, expr);
+                for (list.patterns, 0..) |child, index| {
+                    try projection.append(self.allocator, .{ .list_item = @intCast(index) });
+                    defer _ = projection.pop();
+                    try self.indexPatternValue(child, expr, projection);
+                }
+                if (list.rest) |rest| if (rest.pattern) |child| {
+                    try projection.append(self.allocator, .{ .list_rest = rest.index });
+                    defer _ = projection.pop();
+                    try self.indexPatternValue(child, expr, projection);
+                };
             },
-            .tuple => |items| for (items) |child| try self.indexPatternValue(child, expr),
+            .tuple => |items| for (items, 0..) |child, index| {
+                try projection.append(self.allocator, .{ .tuple_item = @intCast(index) });
+                defer _ = projection.pop();
+                try self.indexPatternValue(child, expr, projection);
+            },
             .str_interpolation => |interpolation| for (interpolation.steps) |step| {
-                if (step.capture) |child| try self.indexPatternValue(child, expr);
+                if (step.capture) |child| try self.indexPatternValue(child, expr, projection);
             },
             .pending,
             .numeral_literal,
@@ -14601,7 +14707,6 @@ const ExactGraphProducerAnalysis = struct {
 
     fn analyze(self: *ExactGraphProducerAnalysis) Allocator.Error!void {
         for (self.templates.templates, 0..) |*template, raw_template| {
-            @memset(self.expr_states, .unknown);
             self.current_template = @enumFromInt(@as(u32, @intCast(raw_template)));
             self.saw_evidence_dependency = false;
             const produces = switch (template.body) {
@@ -14660,6 +14765,8 @@ const ExactGraphProducerAnalysis = struct {
         if (raw_callee >= self.dependency_heads.len) {
             return checkedArtifactInvariant("exact result flow referenced a missing procedure template", .{});
         }
+        if (self.dependency_caller_by_callee[raw_callee] == self.current_template) return;
+        self.dependency_caller_by_callee[raw_callee] = self.current_template;
         const edge: u32 = @intCast(self.dependencies.items.len);
         try self.dependencies.append(self.allocator, .{
             .caller = self.current_template,
@@ -14685,7 +14792,45 @@ const ExactGraphProducerAnalysis = struct {
                 break :blk false;
             },
             .block => |block| try self.callableExprProduces(block.final_expr),
-            else => false,
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .list,
+            .empty_list,
+            .tuple,
+            .call,
+            .record,
+            .empty_record,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => false,
         };
     }
 
@@ -14697,7 +14842,17 @@ const ExactGraphProducerAnalysis = struct {
             .local_proc => |local| try self.callableExprProduces(local.expr),
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |procedure| try self.procedureUseProduces(procedure),
             .platform_required_proc => |required| try self.procedureUseProduces(required.procedure),
-            else => false,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            => false,
         };
     }
 
@@ -14822,10 +14977,124 @@ const ExactGraphProducerAnalysis = struct {
         var current = self.binder_value_heads[raw];
         while (current) |edge| {
             const value = self.binder_values.items[edge];
-            if (try self.exprProduces(value.expr)) return true;
+            const projection = self.projection_steps.items[value.projection_start..][0..value.projection_len];
+            if (try self.exprProjectionProduces(value.expr, projection)) return true;
             current = value.next;
         }
         return false;
+    }
+
+    fn exprProjectionProduces(
+        self: *ExactGraphProducerAnalysis,
+        expr_id: CheckedExprId,
+        projection: []const ProjectionStep,
+    ) Allocator.Error!bool {
+        if (projection.len == 0) return self.exprProduces(expr_id);
+        return self.exprProjectionStepProduces(expr_id, projection[0], projection[1..]);
+    }
+
+    fn exprProjectionStepProduces(
+        self: *ExactGraphProducerAnalysis,
+        expr_id: CheckedExprId,
+        step: ProjectionStep,
+        rest: []const ProjectionStep,
+    ) Allocator.Error!bool {
+        const expr = self.bodies.expr(expr_id);
+        return switch (expr.data) {
+            .record => |record| if (step == .record_field) blk: {
+                for (record.fields) |field| {
+                    if (field.label == step.record_field) break :blk try self.exprProjectionProduces(field.value, rest);
+                }
+                if (record.ext) |ext| break :blk try self.exprProjectionStepProduces(ext, step, rest);
+                break :blk false;
+            } else try self.exprProduces(expr_id),
+            .tuple => |items| if (step == .tuple_item and step.tuple_item < items.len)
+                try self.exprProjectionProduces(items[step.tuple_item], rest)
+            else
+                try self.exprProduces(expr_id),
+            .tag => |tag| if (step == .tag_arg and
+                step.tag_arg.name == tag.name and
+                step.tag_arg.index < tag.args.len)
+                try self.exprProjectionProduces(tag.args[step.tag_arg.index], rest)
+            else
+                try self.exprProduces(expr_id),
+            .nominal => |nominal| if (step == .nominal_backing)
+                try self.exprProjectionProduces(nominal.backing_expr, rest)
+            else
+                try self.exprProduces(expr_id),
+            .list => |items| switch (step) {
+                .list_item => |index| if (index < items.len)
+                    try self.exprProjectionProduces(items[index], rest)
+                else
+                    false,
+                .list_rest => |start| blk: {
+                    if (start >= items.len) break :blk false;
+                    // A whole rest value contains every remaining item. A
+                    // further projection is uncommon and remains conservative
+                    // until checked list-pattern output publishes its shape.
+                    for (items[start..]) |item| {
+                        if (try self.exprProduces(item)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .record_field, .tuple_item, .tag_arg, .nominal_backing => try self.exprProduces(expr_id),
+            },
+            .if_ => |if_| blk: {
+                for (if_.branches) |branch| {
+                    if (try self.exprProjectionStepProduces(branch.body, step, rest)) break :blk true;
+                }
+                break :blk try self.exprProjectionStepProduces(if_.final_else, step, rest);
+            },
+            .match_ => |match_| blk: {
+                for (match_.branches) |branch| {
+                    if (try self.exprProjectionStepProduces(branch.value, step, rest)) break :blk true;
+                }
+                break :blk false;
+            },
+            .block => |block| try self.exprProjectionStepProduces(block.final_expr, step, rest),
+            .dbg, .expect => |child| try self.exprProjectionStepProduces(child, step, rest),
+            .expect_err => |expect_err| try self.exprProjectionStepProduces(expect_err.expr, step, rest),
+            .return_ => |return_| try self.exprProjectionStepProduces(return_.expr, step, rest),
+            // Calls, parameters, and other opaque producers currently publish
+            // a whole-result fact. Retaining it here is conservative; direct
+            // constructors and projections above avoid marking unrelated
+            // siblings in the common local cases.
+            .call,
+            .dispatch_call,
+            .interpolation,
+            .type_dispatch_call,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .field_access,
+            .tuple_access,
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .runtime_error,
+            .crash,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => try self.exprProduces(expr_id),
+        };
     }
 
     fn lookupProduces(self: *ExactGraphProducerAnalysis, maybe_ref: ?ResolvedValueRefId) Allocator.Error!bool {
@@ -14840,7 +15109,19 @@ const ExactGraphProducerAnalysis = struct {
             // caller's exact argument cell.
             .local_param => true,
             .local_value, .local_mutable_version, .pattern_binder => |local| try self.binderProduces(local.binder),
-            else => false,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => false,
         };
     }
 
@@ -14849,9 +15130,74 @@ const ExactGraphProducerAnalysis = struct {
             .return_ => |return_| try self.exprProduces(return_.expr),
             .expr => |expr| switch (self.bodies.expr(expr).data) {
                 .return_ => |return_| try self.exprProduces(return_.expr),
-                else => false,
+                .pending,
+                .numeral,
+                .str_from_quote,
+                .str_segment,
+                .str,
+                .bytes_literal,
+                .lookup_local,
+                .lookup_external,
+                .lookup_required,
+                .list,
+                .empty_list,
+                .tuple,
+                .match_,
+                .if_,
+                .call,
+                .record,
+                .empty_record,
+                .block,
+                .tag,
+                .nominal,
+                .zero_argument_tag,
+                .closure,
+                .lambda,
+                .binop,
+                .unary_minus,
+                .unary_not,
+                .field_access,
+                .dispatch_call,
+                .interpolation,
+                .structural_eq,
+                .structural_hash,
+                .method_eq,
+                .type_dispatch_call,
+                .tuple_access,
+                .runtime_error,
+                .crash,
+                .dbg,
+                .expect_err,
+                .expect,
+                .ellipsis,
+                .anno_only,
+                .break_,
+                .for_,
+                .hosted_lambda,
+                .run_low_level,
+                => false,
             },
-            else => false,
+            .pending,
+            .decl,
+            .var_,
+            .var_uninitialized,
+            .reassign,
+            .crash,
+            .dbg,
+            .expect,
+            .for_,
+            .while_,
+            .infinite_loop,
+            .breakable_loop,
+            .break_,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => false,
         };
     }
 
@@ -14872,7 +15218,17 @@ const ExactGraphProducerAnalysis = struct {
                     .local_proc => |local| try self.callableExprProduces(local.expr),
                     .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |procedure| try self.procedureUseProduces(procedure),
                     .platform_required_proc => |required| try self.procedureUseProduces(required.procedure),
-                    else => false,
+                    .local_param,
+                    .local_value,
+                    .local_mutable_version,
+                    .pattern_binder,
+                    .selected_hoisted_const,
+                    .top_level_const,
+                    .imported_const,
+                    .platform_required_declaration,
+                    .platform_required_checked_error,
+                    .platform_required_const,
+                    => false,
                 };
             } else try self.callableExprProduces(call.func),
             .dispatch_call => |plan| try self.dispatchPlanProduces(plan),
@@ -14912,8 +15268,16 @@ const ExactGraphProducerAnalysis = struct {
                 for (block.statements) |statement| if (try self.statementReturnsProduced(statement)) break :blk true;
                 break :blk false;
             },
-            .field_access => |field| try self.exprProduces(field.receiver),
-            .tuple_access => |tuple| try self.exprProduces(tuple.tuple),
+            .field_access => |field| try self.exprProjectionStepProduces(
+                field.receiver,
+                .{ .record_field = field.field_name },
+                &.{},
+            ),
+            .tuple_access => |tuple| try self.exprProjectionStepProduces(
+                tuple.tuple,
+                .{ .tuple_item = tuple.elem_index },
+                &.{},
+            ),
             .dbg, .expect => |child| try self.exprProduces(child),
             .expect_err => |expect_err| try self.exprProduces(expect_err.expr),
             .return_ => |return_| try self.exprProduces(return_.expr),
@@ -14980,7 +15344,18 @@ fn recordExactResultFlowFacts(
             required.procedure.produces_exact_graph = analysis.procedureUseProducesFinal(required.procedure);
             required.procedure.exact_graph_from_evidence = analysis.procedureUseDependsOnEvidence(required.procedure);
         },
-        else => {},
+        .local_param,
+        .local_value,
+        .local_mutable_version,
+        .pattern_binder,
+        .local_proc,
+        .selected_hoisted_const,
+        .top_level_const,
+        .imported_const,
+        .platform_required_declaration,
+        .platform_required_checked_error,
+        .platform_required_const,
+        => {},
     };
     for (method_registry.entries) |*entry| switch (entry.target.kind) {
         .procedure => |*procedure| {
@@ -15351,11 +15726,7 @@ const LocalPatternRoleIndex = struct {
                 const expr = module.expr(@enumFromInt(node_idx));
                 if (expr.data != .e_lambda) unreachable;
                 for (module.slicePatterns(expr.data.e_lambda.args)) |arg| {
-                    const raw_pattern = @intFromEnum(arg);
-                    if (raw_pattern >= node_count) {
-                        checkedArtifactInvariant("checked artifact invariant violated: lambda argument pattern is out of range", .{});
-                    }
-                    lambda_args[raw_pattern] = true;
+                    markLambdaArgumentPattern(module, lambda_args, arg);
                 }
             }
         }
@@ -15366,6 +15737,59 @@ const LocalPatternRoleIndex = struct {
             .lambda_args = lambda_args,
             .statement_roles = statement_roles,
         };
+    }
+
+    fn markLambdaArgumentPattern(
+        module: TypedCIR.Module,
+        lambda_args: []bool,
+        pattern_idx: CIR.Pattern.Idx,
+    ) void {
+        const raw_pattern = @intFromEnum(pattern_idx);
+        if (raw_pattern >= lambda_args.len) {
+            checkedArtifactInvariant("checked artifact invariant violated: lambda argument pattern is out of range", .{});
+        }
+        lambda_args[raw_pattern] = true;
+
+        switch (module.pattern(pattern_idx).data) {
+            .as => |as| markLambdaArgumentPattern(module, lambda_args, as.pattern),
+            .applied_tag => |tag| for (module.slicePatterns(tag.args)) |child| {
+                markLambdaArgumentPattern(module, lambda_args, child);
+            },
+            .nominal => |nominal| markLambdaArgumentPattern(module, lambda_args, nominal.backing_pattern),
+            .nominal_external => |nominal| markLambdaArgumentPattern(module, lambda_args, nominal.backing_pattern),
+            .record_destructure => |record| for (module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                markLambdaArgumentPattern(module, lambda_args, module.getRecordDestruct(destruct_idx).kind.toPatternIdx());
+            },
+            .list => |list| {
+                for (module.slicePatterns(list.patterns)) |child| {
+                    markLambdaArgumentPattern(module, lambda_args, child);
+                }
+                if (list.rest_info) |rest| if (rest.pattern) |child| {
+                    markLambdaArgumentPattern(module, lambda_args, child);
+                };
+            },
+            .tuple => |tuple| for (module.slicePatterns(tuple.patterns)) |child| {
+                markLambdaArgumentPattern(module, lambda_args, child);
+            },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| markLambdaArgumentPattern(module, lambda_args, capture);
+                }
+            },
+            .assign,
+            .num_literal,
+            .num_from_numeral_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
     }
 
     fn putStatementRole(

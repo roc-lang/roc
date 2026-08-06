@@ -3343,7 +3343,12 @@ const Builder = struct {
         }
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
-        const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
+        const lowered = try body_ctx.lowerTemplateBodyAtNode(
+            template_ref,
+            template,
+            root_node,
+            signature_relation,
+        );
         const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
@@ -3786,7 +3791,12 @@ const Builder = struct {
         // The request is the exact runtime function type owned by this
         // specialization; the checked root supplies substitution data only.
         const body_fn_node = request_fn_node;
-        const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, body_fn_node);
+        const lowered = try body_ctx.lowerTemplateBodyAtNode(
+            template_ref,
+            template,
+            body_fn_node,
+            signature_relation,
+        );
         const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
             lowered.ret,
@@ -15709,6 +15719,7 @@ const BodyContext = struct {
         template_ref: names.ProcTemplate,
         template: checked.CheckedProcedureTemplate,
         fn_node: NodeId,
+        signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!LoweredTemplateBody {
         var timing_scope = ProcedureTimingScope.begin(self.builder.timing, .body_lowering);
         defer timing_scope.end();
@@ -15726,14 +15737,30 @@ const BodyContext = struct {
                 const body = self.view.bodies.body(body_id);
                 const root = self.view.bodies.expr(body.root_expr);
                 break :blk switch (root.data) {
-                    .lambda => |lambda| try self.lowerLambdaTemplateAtNode(body.root_expr, lambda, fn_node),
+                    .lambda => |lambda| try self.lowerLambdaTemplateAtNodeWithReturnRelation(
+                        body.root_expr,
+                        lambda,
+                        fn_node,
+                        if (signature_relation == .exact_graph)
+                            .exact_producer
+                        else
+                            try self.functionRequestReturnRelation(fn_node),
+                    ),
                     .closure => |closure| closure_blk: {
                         if (closure.captures.len != 0) {
                             Common.invariant("checked procedure template root closure had captures");
                         }
                         const lambda_expr = self.view.bodies.expr(closure.lambda);
                         if (lambda_expr.data != .lambda) Common.invariant("checked procedure template root closure did not point at a lambda");
-                        break :closure_blk try self.lowerLambdaTemplateAtNode(closure.lambda, lambda_expr.data.lambda, fn_node);
+                        break :closure_blk try self.lowerLambdaTemplateAtNodeWithReturnRelation(
+                            closure.lambda,
+                            lambda_expr.data.lambda,
+                            fn_node,
+                            if (signature_relation == .exact_graph)
+                                .exact_producer
+                            else
+                                try self.functionRequestReturnRelation(fn_node),
+                        );
                     },
                     .hosted_lambda => Common.invariant("hosted lambda template must lower through hosted metadata, not source lambda body"),
                     .pending,
@@ -16357,6 +16384,21 @@ const BodyContext = struct {
         lambda: anytype,
         fn_node: NodeId,
     ) Allocator.Error!LoweredTemplateBody {
+        return try self.lowerLambdaTemplateAtNodeWithReturnRelation(
+            lambda_id,
+            lambda,
+            fn_node,
+            try self.functionRequestReturnRelation(fn_node),
+        );
+    }
+
+    fn lowerLambdaTemplateAtNodeWithReturnRelation(
+        self: *BodyContext,
+        lambda_id: checked.CheckedExprId,
+        lambda: anytype,
+        fn_node: NodeId,
+        ret_destination_relation: ControlFlowDestinationRelation,
+    ) Allocator.Error!LoweredTemplateBody {
         const fn_nodes = try self.graph.functionNodes(fn_node);
         if (fn_nodes.args.len != lambda.args.len) Common.invariant("lambda template arity differs from concrete function type");
 
@@ -16366,7 +16408,7 @@ const BodyContext = struct {
             fn_nodes.args,
             lambda.body,
             DraftTypeCell.fromGraphNode(fn_nodes.ret),
-            try self.functionRequestReturnRelation(fn_node),
+            ret_destination_relation,
         );
         return .{
             .args = lowered.args,
@@ -24836,10 +24878,12 @@ const BodyContext = struct {
             if (self.resolvedTargetIsStrInspect(target)) {
                 const args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
                 if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
+                fn_node = try call_ctx.producedCallableNode(fn_node, args);
                 const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
+                const completed_fn = try self.graph.functionNodes(try self.draftFnSlotTypeNode(callee, fn_node));
                 const captures = try self.directCallCaptureSpan(target);
                 return .{
-                    .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
+                    .ret_ty = DraftTypeCell.fromGraphNode(completed_fn.ret),
                     .data = .{ .call_proc = .{
                         .callee = .{ .func = callee },
                         .args = args,
@@ -24848,13 +24892,14 @@ const BodyContext = struct {
                     } },
                 };
             }
+            const lowered_args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
+            fn_node = try call_ctx.producedCallableNode(fn_node, lowered_args);
             const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
             const callee_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
             const callee_fn_nodes = try self.graph.functionNodes(callee_fn_node);
             if (callee_fn_nodes.args.len != fn_nodes.args.len) {
                 Common.invariant("completed direct-call specialization changed argument arity");
             }
-            const lowered_args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
             const captures = try self.directCallCaptureSpan(target);
             return .{
                 .ret_ty = DraftTypeCell.fromGraphNode(callee_fn_nodes.ret),
@@ -29516,7 +29561,7 @@ const BodyContext = struct {
     /// actually produced. The checked callable remains the source contract,
     /// but it cannot stand in for an exact generated representation carried by
     /// one of the lowered operands.
-    fn producedDispatchCallableNode(
+    fn producedCallableNode(
         self: *BodyContext,
         checked_callable_node: NodeId,
         lowered_args: DraftSpan(DraftExprId),
@@ -33957,7 +34002,7 @@ const BodyContext = struct {
             fn_nodes.args,
             pre_lowered,
         );
-        const produced_callable_node = try arg_ctx.producedDispatchCallableNode(callable_node, args);
+        const produced_callable_node = try arg_ctx.producedCallableNode(callable_node, args);
         const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNode(
@@ -33985,7 +34030,7 @@ const BodyContext = struct {
             fn_nodes.args,
             pre_lowered,
         );
-        const produced_callable_node = try arg_ctx.producedDispatchCallableNode(callable_node, args);
+        const produced_callable_node = try arg_ctx.producedCallableNode(callable_node, args);
         const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeDirectAtNode(

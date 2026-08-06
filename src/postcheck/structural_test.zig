@@ -555,7 +555,8 @@ test "Monotype does not attach durable request types as active snapshots" {
     const solve_source = @embedFile("monotype/solve.zig");
     try expectNotContains(lower_source, ".addMonoView(");
     try expectNotContains(solve_source, "pub fn addMonoView");
-    try expectContains(lower_source, "lowerTemplateBodyAtNode(template_ref, template, root_node)");
+    try expectContains(lower_source, "const lowered = try body_ctx.lowerTemplateBodyAtNode(");
+    try expectContains(lower_source, "signature_relation,");
     try expectContains(lower_source, "lowerStrInspectIntrinsicAtNode(fn_nodes, ret_cell)");
 }
 

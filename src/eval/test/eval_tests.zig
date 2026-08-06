@@ -3936,6 +3936,37 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: match destructure preserves an exact iterator field",
+        .source_kind = .module,
+        .source =
+        \\select_iter : { iterator : Iter(I64), ignored : Str } -> Iter(I64)
+        \\select_iter = |record|
+        \\    match record {
+        \\        { iterator, ignored: _ } => iterator
+        \\    }
+        \\
+        \\main = {
+        \\    selected = select_iter({ iterator: [1.I64, 2, 3].iter(), ignored: "drop" })
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: parameter destructure preserves an exact iterator field",
+        .source_kind = .module,
+        .source =
+        \\select_iter : { iterator : Iter(I64), ignored : Str } -> Iter(I64)
+        \\select_iter = |{ iterator, ignored: _ }| iterator
+        \\
+        \\main = {
+        \\    selected = select_iter({ iterator: [1.I64, 2, 3].iter(), ignored: "drop" })
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: generic procedure passes through exact iterator",
         .source_kind = .module,
         .source =

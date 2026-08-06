@@ -2636,6 +2636,16 @@ substitution. In particular, a compiler-generated interpolation iterator enters
 original checked-public callable argument and ask the callee to reconstruct or
 repair the representation.
 
+This producer-first order applies to ordinary direct calls as well as static
+dispatch. Preparing checked relations is not completion: a record, tuple, tag,
+list, call, or projection argument can still replace its checked destination
+with a distinct exact output cell while it lowers. Callee specialization starts
+only after those argument expressions have completed, and reuses the already
+lowered operands in the emitted call. An `exact_graph` procedure signature also
+drives its body through graph-cell lowering even when the outer checked return
+cell initially equals the request; otherwise a compound return would be sealed
+before its exact children were known.
+
 Checked procedure data records exact result flow explicitly. The
 `produces_exact_graph` column means that evaluating the procedure can return a
 representation created by its body or return a caller-supplied exact argument,
@@ -2648,6 +2658,16 @@ do not ask whether any type contains a generated nominal. Checked body output
 collects direct result flow and dense procedure dependencies in one pass, then
 propagates the two facts with a reverse-call work queue. It must not repeatedly
 rescan procedure bodies until a fixed point is reached.
+
+The direct-flow pass retains exact projections for record fields, tuple items,
+tag payloads, nominal backings, list items, and pattern binders. Selecting one
+ordinary sibling from a compound value does not make the procedure an exact
+producer merely because a different sibling can carry an exact representation.
+Match alternatives remap their projected binder cells onto the checked branch
+representative, and every binder nested inside a lambda argument pattern is a
+parameter source. The pass initializes its dense expression state once for the
+module; it does not clear a module-sized column per template. Multiple calls
+from one template to the same callee publish one propagation edge.
 
 A procedure with exact result flow finishes its body in the requesting
 Monotype graph before that graph is sealed. This is required because the body,
@@ -2703,6 +2723,13 @@ continuation so the values never join. A growing recursive edge selects the
 declared finite fixed-point representation. These are deterministic runtime
 representation decisions over already-valid checked values, never post-check
 type validation.
+
+An exact destination request is not itself such a meeting point. If the request
+already carries one generated-private identity and the current producer returns
+a different identity, directed substitution relates only their public semantic
+arguments and keeps the producer root. It neither merges the private roots nor
+chooses a common representation. Equal complete identities may be deduplicated;
+different identities can meet only at the explicit join described above.
 
 After Monotype seals an exact produced type, Monotype Lifted, Lambda Solved,
 LIR, ARC, and every backend consume that exact type and its layout. They do not

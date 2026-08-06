@@ -1849,7 +1849,21 @@ pub const InstGraph = struct {
         }
 
         if (isGeneratedPrivateRootContent(public_content) and isGeneratedPrivateRootContent(private_content)) {
-            try self.unify(public_node, private_node);
+            if (self.sameExactGeneratedPrivateIdentity(public_content.named, private_content.named)) {
+                try self.unify(public_node, private_node);
+            } else {
+                // A destination request can itself carry an earlier exact
+                // identity. The current producer remains authoritative: bind
+                // only the public semantic arguments and keep the two private
+                // roots distinct. Choosing a common runtime representation is
+                // reserved for an explicit control-flow or recursion join.
+                if (public_content.named.args.len != private_content.named.args.len) {
+                    Common.invariant("generated-private request and producer had different public argument arities");
+                }
+                for (public_content.named.args, private_content.named.args) |public_arg, private_arg| {
+                    try self.relateOpaqueChild(public_arg, private_arg, pending);
+                }
+            }
             return;
         }
         switch (private_content) {
@@ -3056,6 +3070,46 @@ pub const InstGraph = struct {
             return .ordinary;
         }
         return Type.iteratorRelation(left, right);
+    }
+
+    /// Directed request-to-produced substitution may deduplicate two copies of
+    /// one exact private identity, but it is not a representation join. Graph-
+    /// local producers compare their complete construction inputs; imported
+    /// producers compare the stable identity already sealed into their type
+    /// definitions. A local unfinished identity cannot equal an imported
+    /// finished identity inside the active graph.
+    fn sameExactGeneratedPrivateIdentity(self: *InstGraph, left: InstNamed, right: InstNamed) bool {
+        const left_is_iterator = left.def.iterator_representation != .none;
+        const right_is_iterator = right.def.iterator_representation != .none;
+        if (left.kind != right.kind or
+            left.def.module != right.def.module or
+            left.def.type_name != right.def.type_name or
+            left.def.source_decl != right.def.source_decl or
+            left.def.iterator_representation != right.def.iterator_representation or
+            left.def.iterator_kind != right.def.iterator_kind or
+            !self.sameNamedArgs(left.args, right.args))
+        {
+            return false;
+        }
+        if (!left_is_iterator and !right_is_iterator) {
+            return optionalInstDigestEql(left.def.generated, right.def.generated);
+        }
+        if (left_is_iterator != right_is_iterator) return false;
+
+        if (left.generated_iterator) |left_generated| {
+            const right_generated = right.generated_iterator orelse return false;
+            if (!optionalInstDigestEql(left_generated.callable_evidence, right_generated.callable_evidence) or
+                left_generated.components.len != right_generated.components.len)
+            {
+                return false;
+            }
+            for (left_generated.components, right_generated.components) |left_component, right_component| {
+                if (self.find(left_component) != self.find(right_component)) return false;
+            }
+            return true;
+        }
+        if (right.generated_iterator != null) return false;
+        return optionalInstDigestEql(left.def.generated, right.def.generated);
     }
 
     /// A named type met a structurally different type. Aliases are transparent
@@ -6118,7 +6172,7 @@ test "opaque iterator relation resolves unresolved public variable to imported g
     try std.testing.expect(graph.sameClass(retained.args[0], item));
 }
 
-test "opaque interface relation delegates nested private iterator requests to unification" {
+test "opaque interface relation deduplicates only identical generated-private iterator requests" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6186,6 +6240,32 @@ test "opaque interface relation delegates nested private iterator requests to un
     try std.testing.expect(graph.sameClass(left_iter, right_iter));
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(left_iter).named.backing.?.authority);
     try std.testing.expectEqual(Type.IteratorRepresentation.minted, graph.content(left_iter).named.def.iterator_representation);
+
+    const distinct_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const distinct_iter = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .generated = .{ .bytes = [_]u8{0x75} ** 32 },
+            .iterator_representation = .minted,
+            .iterator_kind = .concat,
+            .iterator_depth = 2,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{distinct_item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+
+    _ = try graph.applyProducedTypeToRequest(left_iter, distinct_iter);
+
+    try std.testing.expect(!graph.sameClass(left_iter, distinct_iter));
+    try std.testing.expect(graph.sameClass(item, distinct_item));
 }
 
 test "opaque relation materializes unresolved public named shell from request" {
