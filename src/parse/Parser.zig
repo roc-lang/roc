@@ -276,7 +276,7 @@ const ExprParentKind = enum(u16) {
     expr_match_guard = 0x0f6b,
     expr_match_body = 0xe148,
     expr_dbg = 0x68b5,
-    expr_crash_statement = 0x23a1,
+    expr_crash = 0x23a1,
     expr_return = 0xf86e,
     expr_for_list = 0xb739,
     expr_for_body = 0x247c,
@@ -1406,8 +1406,8 @@ const roc_version_key = "roc";
 
 /// Find the optional `roc: "<version>"` entry in a header's dependency record.
 ///
-/// The entry stays in the record alongside the real dependencies — the same way
-/// an app's platform entry does — so that comment attachment and formatting of
+/// The entry stays in the record alongside the real dependencies—the same way
+/// an app's platform entry does—so that comment attachment and formatting of
 /// the record need no special cases. What this returns is which of those fields
 /// pins the compiler version, so that later phases can tell it apart from a
 /// dependency without re-deriving the rule from field names.
@@ -3575,9 +3575,8 @@ fn runExprStatementKernel(
                 }
                 if (tok == .KwCrash) {
                     const start = self.pos;
-                    try self.pushDiagnostic(.crash_statement_in_expr_position, .{ .start = start, .end = start + 1 });
                     self.advance();
-                    try open_syntax.pushExpr(open_allocator, .expr_crash_statement, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    try open_syntax.pushExpr(open_allocator, .expr_crash, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
@@ -4208,10 +4207,13 @@ fn runExprStatementKernel(
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
                     },
-                    .expr_crash_statement => {
-                        const state = open_syntax.popExprPayload(.expr_crash_statement, ExprAfterExprState);
+                    .expr_crash => {
+                        const state = open_syntax.popExprPayload(.expr_crash, ExprAfterExprState);
                         last_expr = null;
-                        const expr = try self.store.addMalformed(AST.Expr.Idx, .crash_statement_in_expr_position, .{ .start = state.start, .end = self.pos });
+                        const expr = try self.store.addExpr(.{ .crash = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .expr = completed,
+                        } });
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
                     },
@@ -6225,7 +6227,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .pattern_tag_args_next;
                     }
                     if (self.peek() == .Dot and self.peekN(1) == .NoSpaceOpenRound) {
-                        // `Type.(pattern)` — nominal-value destructure, the inverse
+                        // `Type.(pattern)`—nominal-value destructure, the inverse
                         // of `Type.(value)` construction. Parse the backing
                         // pattern(s) just like tag args, flagged as backing_value.
                         self.advance(); // `.`

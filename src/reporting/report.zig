@@ -50,14 +50,14 @@ fn titleContainsIgnoreCase(title: []const u8, needle: []const u8) bool {
 ///   - title case outside backticks: every non-minor word begins with a capital
 ///     letter (or a digit), every word contains only alphanumeric characters,
 ///     except for `UTF-` prefixed words such as `UTF-8`, and the title has at
-///     least one lowercase letter (so it reads as `Title Case`, not `ALL CAPS`
-///     — the box/HTML/LSP renderers shout it back to ALL CAPS, while markdown
+///     least one lowercase letter (so it reads as `Title Case`, not `ALL CAPS`—
+///     the box/HTML/LSP renderers shout it back to ALL CAPS, while markdown
 ///     keeps the authored case);
 ///   - allowed to contain backticked inline code spans, whose contents must be
 ///     non-empty and trimmed, but are not title-cased;
 ///   - free of the word "comptime", which is a Zig term, not a Roc one, and so
 ///     must never reach user-facing text;
-///   - free of any pairing of "annotation" with "need" or "miss" — Roc never
+///   - free of any pairing of "annotation" with "need" or "miss"—Roc never
 ///     tells users they must annotate their types (see the panic below).
 fn isTrimmed(text: []const u8) bool {
     return std.mem.eql(u8, text, std.mem.trim(u8, text, " \t\r\n"));

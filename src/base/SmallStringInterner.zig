@@ -93,7 +93,7 @@ const Index = InternedBytes.Index(Policy);
 
 /// Id encoding for the shared `InternedBytes`: the public `Idx` IS the byte
 /// offset of a null-terminated string in `bytes`, and is stored directly in each
-/// hash-table cell (`Idx.unused` == 0 marks an empty slot — offset 0 is the reserved
+/// hash-table cell (`Idx.unused` == 0 marks an empty slot—offset 0 is the reserved
 /// leading byte, so it never names a real entry).
 const Policy = struct {
     pub const Id = Idx;
@@ -244,7 +244,7 @@ pub fn lookup(self: *const SmallStringInterner, string: []const u8) ?Idx {
 
 /// Whether `idx` refers to an entry within this interner's data. Offset 0 is the
 /// reserved "unused" sentinel, and any offset at or beyond the bytes buffer was
-/// never produced by this interner — so an Idx from another store fails this.
+/// never produced by this interner—so an Idx from another store fails this.
 pub fn isInBounds(self: *const SmallStringInterner, idx: Idx) bool {
     const offset = @intFromEnum(idx);
     return offset != 0 and offset < self.bytes.items.items.len;

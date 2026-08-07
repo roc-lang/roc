@@ -16,7 +16,7 @@ const Allocator = std.mem.Allocator;
 ///
 /// - `.savepoint_only` (production): rollback trusts the savepoint's undo trail
 ///   alone. The copy, the cross-check assert, and the savepoint's copy field are
-///   all compiled away — zero code, zero state.
+///   all compiled away—zero code, zero state.
 /// - `.clone_crosscheck` (test builds): the full-copy cross-check is compiled
 ///   in, and a test can opt an individual savepoint into it via
 ///   `createSavepointVerifying`. Savepoints created the normal way still copy
@@ -319,7 +319,7 @@ pub const Store = struct {
     /// `rollbackToSavepoint`. Captures the rollback-only state: trail position
     /// and the append-only list lengths to rewind to (and, under the
     /// clone cross-check, a full store copy to compare against). The
-    /// slot/desc baselines are not here — they live on the store as
+    /// slot/desc baselines are not here—they live on the store as
     /// `savepoint_baseline_*` because they are also the per-write journaling
     /// threshold.
     pub const Savepoint = struct {
@@ -384,7 +384,7 @@ pub const Store = struct {
 
     /// Test-only variant of `createSavepoint` that additionally copies the whole
     /// store, so the matching `rollbackToSavepoint` asserts the trail restored
-    /// every piece of union-find state byte-for-byte — i.e. that the savepoint
+    /// every piece of union-find state byte-for-byte—i.e. that the savepoint
     /// trail is behaviorally identical to fully copying the store and restoring
     /// the copy.
     /// Only available when the clone cross-check is compiled in (test builds).
@@ -421,7 +421,7 @@ pub const Store = struct {
         return savepoint;
     }
 
-    /// Close a savepoint KEEPING everything done since it was created — the
+    /// Close a savepoint KEEPING everything done since it was created—the
     /// counterpart to `rollbackToSavepoint` for a speculation that succeeded
     /// and is committed in place. The journaled undo entries are dead weight
     /// once nothing will replay them, so the trails shrink back to their
@@ -755,10 +755,10 @@ pub const Store = struct {
     /// site must name the rule it operates under, and every member here must be
     /// one of:
     ///
-    ///   (i)  diagnostic recovery on an already-reported error — the redirect
+    ///   (i)  diagnostic recovery on an already-reported error—the redirect
     ///        cannot change which programs typecheck or which plans are output
     ///        for error-free programs; or
-    ///   (ii) a language/pipeline rule declared in design.md — the member's doc
+    ///   (ii) a language/pipeline rule declared in design.md—the member's doc
     ///        comment names the design.md section that declares it, and the rule
     ///        has tests pinning both its accepted and its rejected side.
     ///
@@ -1135,7 +1135,7 @@ pub const Store = struct {
     /// Get an iterator over static-dispatch constraints for the given range.
     /// Use this instead of sliceStaticDispatchConstraints when the iteration
     /// may append to the constraint store (e.g., instantiation/copy during a
-    /// candidate probe) — a held slice would dangle on reallocation.
+    /// candidate probe)—a held slice would dangle on reallocation.
     pub fn iterStaticDispatchConstraints(self: *const Self, range: StaticDispatchConstraint.SafeList.Range) StaticDispatchConstraint.SafeList.Iterator {
         return self.static_dispatch_constraints.iterRange(range);
     }
@@ -1195,7 +1195,7 @@ pub const Store = struct {
 
     /// Whether this nominal application's declaration is known invalid
     /// (malformed backing or invalid recursion). Applications whose
-    /// declaration cannot be resolved (no source declaration — possible only
+    /// declaration cannot be resolved (no source declaration—possible only
     /// for hand-constructed types in tests) count as valid.
     pub fn nominalDeclIsInvalid(self: *const Self, nominal: NominalType) bool {
         const decl_idx = self.lookupNominalDecl(nominal) orelse return false;
@@ -2211,7 +2211,7 @@ test "createSavepointVerifying cross-checks a probe-unify against a full copy" {
 
     // A probe brackets a trial unification it always discards. The verifying
     // savepoint copies the store up front; on rollback its internal cross-check
-    // asserts the trail put the store back byte-for-byte — exactly as if we had
+    // asserts the trail put the store back byte-for-byte—exactly as if we had
     // restored the full copy.
     var sp = try store.createSavepointVerifying();
     const c = try store.fresh();

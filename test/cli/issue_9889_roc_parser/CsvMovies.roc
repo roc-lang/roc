@@ -1,4 +1,4 @@
-# Regression fixture for https://github.com/roc-lang/roc/issues/9890 —
+# Regression fixture for https://github.com/roc-lang/roc/issues/9890—
 # roc-parser's examples/csv-movies.roc crashed in monotype lowering after
 # PR #9873 ("checked direct call result type differed from its expected
 # Monotype type"). See Numbers.roc for the vendoring provenance.

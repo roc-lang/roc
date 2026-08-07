@@ -11,8 +11,8 @@ reach:
    callbacks and their exact C-ABI signatures, `host_abi.zig:108-141`)
    is re-emitted as string literals by `src/glue/src/ZigGlue.roc:1561-1568`,
    `RustGlue.roc:924-956`, and `CGlue.roc:897-914`. The bare
-   `extern_host` symbols (`host_abi.zig:62-69`) — whose doc comment
-   claims they are "written down in exactly one place" — are re-emitted
+   `extern_host` symbols (`host_abi.zig:62-69`)—whose doc comment
+   claims they are "written down in exactly one place"—are re-emitted
    by `ZigGlue.roc:2017-2022` and `RustGlue.roc:2304, 2402`. RocStr and
    RocList struct definitions are re-emitted by all three templates
    (`ZigGlue.roc:1768, 501-613`; `CGlue.roc:890-892`, size-assert
@@ -22,16 +22,16 @@ reach:
 2. **The glue platform's Roc↔Zig struct mirrors.**
    `src/glue/platform/host.zig:352-413` hand-mirrors eight Roc types
    from `src/glue/platform/*.roc` as `extern struct`s, relying on
-   comments like "Field order matches …roc as compiled by Roc" — i.e.
+   comments like "Field order matches …roc as compiled by Roc"—i.e.
    on a human preserving alphabetical field order. A renamed or added
    Roc field silently reorders the ABI and the host reads garbage. The
    `roc_make_glue` entrypoint symbol is spelled in three files
    (`platform/main.roc:37`, `platform/host.zig:423`,
    `glue.zig:337, 479`).
 3. **The shim symbol names.** The strings bridging compiled code to the
-   shims — `"roc_shim_get_ops"`, `"roc_entrypoint"`,
+   shims—`"roc_shim_get_ops"`, `"roc_entrypoint"`,
    `"roc_entrypoint_from_image"`, `"roc_shim_hosted_fns"`,
-   `"roc_shim_hosted_count"` — are raw literals on both sides:
+   `"roc_shim_hosted_count"`—are raw literals on both sides:
    emission in `src/backend/llvm/MonoLlvmCodeGen.zig:469-500, 1594,
    1640, 1645` versus definition in `src/machine_code_shim/main.zig:750-754`,
    `src/interpreter_shim/main.zig:213-231`, and
@@ -51,14 +51,14 @@ the `0x524F4353` header magic as a bare literal instead of the
 
 ## Background
 
-The Zig-internal side of this boundary is healthy — the shims, eval,
+The Zig-internal side of this boundary is healthy—the shims, eval,
 and backends all import `builtins.host_abi`; the dev `RunImage` format
 is consumed by the machine-code shim via direct import
 (`machine_code_shim/main.zig:31`); and the hot-reload IPC protocol is
 single-defined with a `@compileError` size guard
 (`src/ipc/hot_reload.zig`). The one properly enforced *mirror* is
 `src/default_platform/roc_str_view.zig`, locked by the test at
-`src/builtins/str.zig:5026-5045` — the model for every mirror below
+`src/builtins/str.zig:5026-5045`—the model for every mirror below
 that cannot share code. The glue templates target three foreign
 languages, so true unification is impossible there; the achievable end
 state is that every mirror is either generated or lock-tested, and
@@ -66,18 +66,18 @@ every symbol name exists in exactly one Zig constant.
 
 ## Evidence
 
-- `src/builtins/host_abi.zig:55-61` — the "exactly one place" comment,
+- `src/builtins/host_abi.zig:55-61`—the "exactly one place" comment,
   contradicted by the template emissions cited above.
-- `src/glue/platform/host.zig:388-398` — "Field order matches
+- `src/glue/platform/host.zig:388-398`—"Field order matches
   src/glue/platform/…roc as compiled by Roc" comments as the only
   enforcement.
-- `grep -rn '"roc_shim_get_ops"' src/` — two independent spellings,
+- `grep -rn '"roc_shim_get_ops"' src/`—two independent spellings,
   emitter and definer, no shared const.
 - `test/alloc-count/platform/host.zig:24-83` vs
   `test/archive/platform/host.zig:26-67` vs
-  `test/dylib/platform/host.zig:27-68` — near-identical allocator
+  `test/dylib/platform/host.zig:27-68`—near-identical allocator
   bodies.
-- `src/glue/README.md:164` — the only current template check is "the
+- `src/glue/README.md:164`—the only current template check is "the
   generated Zig compiles."
 
 ## Solution design
@@ -92,7 +92,7 @@ every symbol name exists in exactly one Zig constant.
    step runs glue, compiles the generated Zig platform code, and
    comptime-asserts its `RocHost`/`RocStr`/`RocList` layouts
    (size, alignment, field offsets, callback signatures) against the
-   imported `builtins` definitions — the `roc_str_view` pattern
+   imported `builtins` definitions—the `roc_str_view` pattern
    applied at the template boundary. For C and Rust output, extend the
    existing `ROC_STATIC_ASSERT` emission to field offsets, and add a
    CI check that compiles the generated C against a header derived
@@ -143,7 +143,7 @@ a user's generated host.
 
 ### Performance ideal
 
-Neutral at runtime — these are build-time/test-time structures. Glue
+Neutral at runtime—these are build-time/test-time structures. Glue
 generation output is byte-identical for unchanged inputs (diff the
 generated files for the test platforms before/after).
 
@@ -160,9 +160,9 @@ generated files for the test platforms before/after).
 
 ## Related projects
 
-- [runtime-representation-single-sourcing.md](runtime-representation-single-sourcing.md)
-  — the same builtins structs restated inside the compiler's backends;
+- [runtime-representation-single-sourcing.md](runtime-representation-single-sourcing.md)—
+  the same builtins structs restated inside the compiler's backends;
   this project covers their restatements outside the compiler.
-- [../small/hosted-extern-declared-abi.md](../small/hosted-extern-declared-abi.md)
-  — the type-level half of the host contract; this project is the
+- [../small/hosted-extern-declared-abi.md](../small/hosted-extern-declared-abi.md)—
+  the type-level half of the host contract; this project is the
   symbol/layout half.

@@ -19,8 +19,8 @@ import pf.Stdout
 # effectful: under dependency-ordered def checking, `run!`/`f1`/`f2` are
 # checked before `main!`, and a pure `run!()` would be recognized as a
 # compile-time-known match value (an UNCONDITIONAL CONDITION warning, which
-# makes `roc build` exit nonzero). The regression shape — nested lambda,
-# forward-referenced defs with `Try(_, _)` annotations, two `?`s — is
+# makes `roc build` exit nonzero). The regression shape—nested lambda,
+# forward-referenced defs with `Try(_, _)` annotations, two `?`s—is
 # unchanged.
 main! = || {
     match run!() {

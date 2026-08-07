@@ -123,7 +123,7 @@ export fn roc_run_app(n: i64) callconv(.c) i64 {
 // land in the shared library's export table. COFF has no such notion: a static
 // library built from `export fn` carries no `dllexport` intent, so the symbol
 // would be dropped from the DLL. Emit the `.drectve /EXPORT:` directive that
-// `__declspec(dllexport)` would — `roc build` reads it back out of the host and
+// `__declspec(dllexport)` would—`roc build` reads it back out of the host and
 // forwards `/export:roc_run_app` to the linker. Any host that exposes a C API
 // from a Windows shared library must declare its exports this way.
 comptime {

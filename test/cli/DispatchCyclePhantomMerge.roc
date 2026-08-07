@@ -4,7 +4,7 @@
 # so ping's group is checked first; its dispatch obligation on Counter.step is
 # discovered at ping's generalization boundary, Counter.step's group is checked
 # in a nested frame there, and its back-reference to the suspended `ping` links
-# monomorphically — the groups merge and infer together.
+# monomorphically—the groups merge and infer together.
 Counter := [Mk(U64)].{
     step = |c, k| match c {
         Counter.Mk(n) => if k == 0 { n } else { ping(c, k - 1) }

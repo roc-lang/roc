@@ -15,7 +15,7 @@ On Linux arm64, install the required libraries:
 sudo apt install libdw-dev libcurl4-openssl-dev
 ```
 
-No extra dependencies are needed on macOS — kcov is built from source by the Zig build system.
+No extra dependencies are needed on macOS—kcov is built from source by the Zig build system.
 
 ## Quick Start
 
@@ -25,7 +25,7 @@ From the repo root:
 # Full run: build kcov, run all eval tests under instrumentation, print summary
 python3 CONTRIBUTING/eval_coverage.py
 
-# Takes a while — eval tests run single-threaded under kcov.
+# Takes a while—eval tests run single-threaded under kcov.
 # Once done, reuse the cached data for fast queries:
 python3 CONTRIBUTING/eval_coverage.py --use-last-run
 ```
@@ -51,7 +51,7 @@ StackValue.zig                        76.49%      527     689        162
 ...
 ```
 
-### Lines — uncovered source with context
+### Lines—uncovered source with context
 
 ```bash
 python3 CONTRIBUTING/eval_coverage.py --use-last-run --format lines --file interpreter
@@ -60,7 +60,7 @@ python3 CONTRIBUTING/eval_coverage.py --use-last-run --format lines --file inter
 Shows the actual uncovered source code, marked with `>`, with surrounding context:
 
 ```
-## interpreter.zig — 50.03% covered (4775 uncovered lines)
+## interpreter.zig—50.03% covered (4775 uncovered lines)
 
 ### Lines 119-120 (uncovered)
    116 |                 i -= 1;
@@ -75,7 +75,7 @@ Shows the actual uncovered source code, marked with `>`, with surrounding contex
 
 Use `--context N` to control how many lines of surrounding context to show (default: 2).
 
-### JSON — structured data
+### JSON—structured data
 
 ```bash
 python3 CONTRIBUTING/eval_coverage.py --use-last-run --format json
@@ -132,12 +132,12 @@ The typical workflow:
    python3 CONTRIBUTING/eval_coverage.py
    ```
 
-2. **Identify gaps** — look at the summary to find files with low coverage, then drill into the uncovered lines:
+2. **Identify gaps**—look at the summary to find files with low coverage, then drill into the uncovered lines:
    ```bash
    python3 CONTRIBUTING/eval_coverage.py --use-last-run --format lines --file interpreter --context 5
    ```
 
-3. **Write eval tests** that exercise the uncovered code paths. Eval tests are defined in `src/eval/test/eval_tests.zig` — each entry is a small Roc expression with an expected result:
+3. **Write eval tests** that exercise the uncovered code paths. Eval tests are defined in `src/eval/test/eval_tests.zig`—each entry is a small Roc expression with an expected result:
 
    ```zig
    .{ .name = "str: hello", .source = "\"hello\"", .expected = .{ .str_val = "hello" } },
@@ -145,7 +145,7 @@ The typical workflow:
 
    Available expected types include `.dec_val`, `.bool_val`, `.str_val`, `.f32_val`, `.f64_val`, `.i64_val`, `.u8_val`, `.u64_val`, `.inspect_str` (Str.inspect output), and `.problem` (for compile errors).
 
-   The builtins and syntax available for test expressions are defined in `src/build/roc/Builtin.roc`. This is the source of truth for what modules (Str, List, Bool, Num, etc.) and functions are implemented — check it to know what you can call in test source expressions.
+   The builtins and syntax available for test expressions are defined in `src/build/roc/Builtin.roc`. This is the source of truth for what modules (Str, List, Bool, Num, etc.) and functions are implemented—check it to know what you can call in test source expressions.
 
 4. **Re-run coverage** to verify your new tests hit the target lines:
    ```bash
@@ -157,13 +157,13 @@ The typical workflow:
 Tests can skip specific backends using the `skip` field:
 
 ```zig
-// Skip interpreter and wasm — only runs on dev backend
+// Skip interpreter and wasm—only runs on dev backend
 .{ .name = "dev only: U32 literal", .source = "15.U32",
    .expected = .{ .inspect_str = "15" },
    .skip = .{ .interpreter = true, .wasm = true } },
 ```
 
-A test with *any* skip reports as **SKIP** rather than PASS, even if the non-skipped backends pass. This keeps partial backend coverage visible — the goal is every backend passing every test.
+A test with *any* skip reports as **SKIP** rather than PASS, even if the non-skipped backends pass. This keeps partial backend coverage visible—the goal is every backend passing every test.
 
 In coverage mode, only the interpreter backend runs. Tests that skip the interpreter (e.g. `skip = .{ .interpreter = true }`) will always report as SKIP and won't contribute to interpreter coverage. The 110 skipped tests in a typical run are mostly dev-only tests that exercise features the interpreter doesn't support yet.
 
@@ -173,13 +173,13 @@ Under the hood, `zig build run-coverage-eval` does the following:
 
 1. Builds kcov from source (a lazy Zig dependency)
 2. On macOS, codesigns kcov for `task_for_pid` access
-3. Builds `eval-coverage-runner` — a separate binary compiled with `-Dcoverage=true`
+3. Builds `eval-coverage-runner`—a separate binary compiled with `-Dcoverage=true`
 4. Runs: `kcov --include-pattern=/src/eval/ kcov-output/eval eval-coverage-runner`
 
 The `coverage=true` build option is a comptime flag that:
-- **DCEs the dev and wasm backends** — they're never compiled, so the build is faster
-- **Disables fork isolation** — eval runs in-process so kcov can trace it
-- **Forces single-threaded execution** — required for accurate coverage
+- **DCEs the dev and wasm backends**—they're never compiled, so the build is faster
+- **Disables fork isolation**—eval runs in-process so kcov can trace it
+- **Forces single-threaded execution**—required for accurate coverage
 
 The kcov output (JSON and HTML) lands in `kcov-output/eval/eval-coverage-runner/`.
 

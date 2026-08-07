@@ -101,7 +101,7 @@ test "structural order tie-breaks by name within each sort-key band" {
 
 test "structural order places a pointer between 4- and 8-byte alignment" {
     // A pointer field sorts after align-8 scalars and before align-4 scalars,
-    // regardless of target — the property that makes field order target-independent.
+    // regardless of target—the property that makes field order target-independent.
     const fields = [_]StructuralField{
         .{ .sort_key = .align_4, .name = "a" }, // U32
         .{ .sort_key = .pointer, .name = "b" }, // a pointer (Box/List/Str/...)

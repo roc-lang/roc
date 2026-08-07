@@ -529,8 +529,8 @@ const MethodLookup = struct {
 /// One resolved dispatch requirement supplied to a specialization: either a
 /// concrete method target (with the target's own requirements resolved in
 /// `nested`) or a compiler-derived structural implementation. Fully
-/// materialized at the requesting call edge — checked `constraint(k)` refs are
-/// substituted from the requester's own evidence there — so a specialization's
+/// materialized at the requesting call edge—checked `constraint(k)` refs are
+/// substituted from the requester's own evidence there—so a specialization's
 /// vector is self-contained (dictionary passing evaluated at compile time).
 const SpecEvidence = union(enum) {
     target: *const SpecEvidenceTarget,
@@ -603,6 +603,14 @@ const EvidenceChain = struct {
     vector: []const SpecEvidence = &.{},
     parent: ?*const EvidenceChain = null,
 
+    fn atScope(self: *const EvidenceChain, scope: EvidenceScope) ?EvidenceChain {
+        var chain: ?*const EvidenceChain = self;
+        while (chain) |frame| : (chain = frame.parent) {
+            if (EvidenceScope.eql(frame.scope, scope)) return frame.*;
+        }
+        return null;
+    }
+
     fn at(self: *const EvidenceChain, ref: static_dispatch.EvidenceChainIndex) ?SpecEvidence {
         var chain: *const EvidenceChain = self;
         var depth = ref.depth;
@@ -623,12 +631,12 @@ fn rootEvidence(owner: names.ProcTemplate, vector: []const SpecEvidence) Evidenc
 
 fn enterEvidenceScope(
     builder: *Builder,
-    lexical_parent: EvidenceChain,
+    evidence: EvidenceChain,
     scope_id: checked.DispatchScopeId,
     checked_expr: checked.CheckedExprId,
     vector: []const SpecEvidence,
 ) Allocator.Error!EvidenceChain {
-    const owner = lexical_parent.scope.owner;
+    const owner = evidence.scope.owner;
     const view = builder.moduleForDigest(names.procTemplateModuleDigest(owner));
     const raw_scope = @intFromEnum(scope_id);
     if (raw_scope >= view.templates.dispatch_scopes.len) {
@@ -652,11 +660,12 @@ fn enterEvidenceScope(
         .{ .generalized = parent }
     else
         .root;
-    if (!names.procedureTemplateRefEql(lexical_parent.scope.owner, owner) or
-        !std.meta.eql(lexical_parent.scope.lexical, expected_parent))
-    {
-        Common.invariant("local procedure evidence scope did not receive its checked lexical parent");
-    }
+    // A local use may come from a sibling scope. Its checked declaration
+    // parent, not the use-site head, owns the enclosing evidence depths.
+    const lexical_parent = evidence.atScope(.{
+        .owner = owner,
+        .lexical = expected_parent,
+    }) orelse Common.invariant("local procedure evidence omitted its checked lexical parent");
     const parent = try builder.evidence_arena.allocator().create(EvidenceChain);
     parent.* = lexical_parent;
     return .{
@@ -2352,7 +2361,7 @@ const Builder = struct {
     /// The comparison is the authoritative structural one, not a type digest. A
     /// digest encodes a cycle by the position it closes at, so a recursive
     /// nominal reached through differently shared nodes digests differently
-    /// while describing one runtime type — and a hosted argument is exactly
+    /// while describing one runtime type—and a hosted argument is exactly
     /// where that happens, since the declared lowering and the request build
     /// their graphs separately. test/fx/host_boxed_fn_boundary.roc passes a
     /// recursive nominal to a hosted function and covers that case.
@@ -2460,7 +2469,7 @@ const Builder = struct {
     ///
     /// The host was compiled against the declared signature. An extern emitted
     /// at any other type reads the host's return value at a layout the host
-    /// never wrote — the app sees `Err` where the host returned `Ok` — and
+    /// never wrote—the app sees `Err` where the host returned `Ok`—and
     /// nothing downstream can tell that apart from a genuine `Err`. So this is
     /// a producer-side stop, in release builds as well as debug ones: whatever
     /// upstream stage widened, narrowed, or re-represented the request, its
@@ -4819,7 +4828,7 @@ const Builder = struct {
         // unnamed field is encountered while walking the declared field rows.
         // Padding types come from the lookup, which for an instantiated nominal
         // (box-payload capability) carries the *instance's* substituted padding
-        // types — so a type-parameterized padding field (`_ : a`) reserves the
+        // types—so a type-parameterized padding field (`_ : a`) reserves the
         // instantiated size, exactly like a named field of the same type.
         const padding_types = lookup.padding_field_tys;
         const padding_view = lookup.view;
@@ -13225,7 +13234,7 @@ const BodyContext = struct {
     }
 
     /// A `.node` proof leaf, or null when the node provably can never finalize
-    /// as uninhabited — such a proof could never hold, so omitting it keeps
+    /// as uninhabited—such a proof could never hold, so omitting it keeps
     /// proofs and demand-guard frames down to the guards that can actually
     /// exempt something.
     fn maybeNodeImpossibilityProof(self: *BodyContext, node: NodeId) Allocator.Error!?RuntimeImpossibilityProofId {
@@ -18719,8 +18728,9 @@ const BodyContext = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
+            .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
             .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
-            .const_node, .expect => Common.invariant("callable eval binding root did not output a callable value"),
+            .expect => Common.invariant("callable eval binding root output an expect payload"),
         };
     }
 
@@ -26742,8 +26752,8 @@ const BodyContext = struct {
 
     /// The lexical-context bindings a local procedure captures at its
     /// declaration, deduplicated by CaptureId (first entry wins). Every
-    /// consumer of a declaration context — capture entry guards, fn-def
-    /// capture spans, and direct-call capture operands — derives from this one
+    /// consumer of a declaration context—capture entry guards, fn-def
+    /// capture spans, and direct-call capture operands—derives from this one
     /// walk so they agree on count and order. Caller owns the returned slice.
     fn localProcCaptureBindings(
         self: *BodyContext,
@@ -31943,7 +31953,7 @@ const BodyContext = struct {
         // `dispatchTarget` raises the "dispatch plan had no method owner" invariant
         // when the receiver never grounded to a concrete owner and the result mode
         // is not a structural dispatch. That is only reachable inside a bare
-        // polymorphic function value never called at a concrete type — e.g.
+        // polymorphic function value never called at a concrete type—e.g.
         // evaluating `run` itself for `run : a -> a where [a.go : a -> a]`.
         // Checking classified such dispatches (`unreachable_dispatch`, or a
         // `checked_error` for reported missing methods); both emit an ordinary
@@ -32409,7 +32419,7 @@ const BodyContext = struct {
         };
     }
 
-    /// Produce a numeric literal's constant — the ONE place in the compiler
+    /// Produce a numeric literal's constant—the ONE place in the compiler
     /// that turns a literal's exact digits into a bit pattern, always for
     /// the instantiated Monotype primitive. A custom numeric target keeps its
     /// real user-defined `from_numeral` dispatch call instead.
@@ -32461,7 +32471,7 @@ const BodyContext = struct {
         }
     }
 
-    /// A numeric literal's scalar constant at a builtin numeric primitive —
+    /// A numeric literal's scalar constant at a builtin numeric primitive—
     /// the payload both the expression and pattern lowerers map into their
     /// own IR node flavor.
     const NumeralScalarBits = union(enum) {
@@ -32472,7 +32482,7 @@ const BodyContext = struct {
     };
 
     /// The literal's bit pattern at a builtin primitive, from its exact
-    /// digits — the ONE place that turns digits into bits: integers by limb
+    /// digits—the ONE place that turns digits into bits: integers by limb
     /// assembly with a fit check, Dec by exact scale shift, floats by
     /// correctly-rounded decimal→binary conversion (total: out-of-range
     /// rounds toward ±inf). Null when an integer or Dec target cannot
@@ -45285,15 +45295,10 @@ const BodyContext = struct {
             },
         };
 
-        var chain: ?*const EvidenceChain = &self.evidence;
-        while (chain) |frame| : (chain = frame.parent) {
-            if (names.procedureTemplateRefEql(frame.scope.owner, self.owner_template) and
-                std.meta.eql(frame.scope.lexical, wanted))
-            {
-                return frame.*;
-            }
-        }
-        Common.invariant("restored local procedure evidence omitted its checked lexical parent");
+        return self.evidence.atScope(.{
+            .owner = self.owner_template,
+            .lexical = wanted,
+        }) orelse Common.invariant("restored local procedure evidence omitted its checked lexical parent");
     }
 
     fn localProcBinder(self: *BodyContext, pattern_id: checked.CheckedPatternId) checked.PatternBinderId {

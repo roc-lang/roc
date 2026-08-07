@@ -238,7 +238,7 @@ fn verifyActiveCaptureInvariants(program: *const Ast.Program, graph: *const Capt
 /// stores and can leave replaced expressions behind; `recomputeCaptures` checks
 /// the active capture graph instead. Both checks fail at the mutation boundary
 /// instead of surfacing as a confusing crash five stages later. Compiled out
-/// entirely in release builds — release cost is zero.
+/// entirely in release builds—release cost is zero.
 ///
 /// It checks, per function and per `fn_ref`/`call_proc` site:
 ///   - every capture slot's local carries a CaptureId, and the slot's type
@@ -899,7 +899,8 @@ const Lifter = struct {
         defer self.allocator.free(operands);
         for (0..slots.len) |index| {
             const slot = GuardedList.at(slots, index);
-            const id = slotCaptureId(self.output, slot);
+            const slot_local = self.output.getLocal(slot.local);
+            const id = slot_local.checked_capture_id orelse slotCaptureId(self.output, slot);
             const value = explicitCaptureValueForSlot(self.output, explicit, slot) orelse
                 try self.output.addExpr(.{ .ty = slot.ty, .data = .{ .local = slot.local } });
             operands[index] = .{ .id = id, .value = value };
@@ -942,61 +943,37 @@ fn allocateCaptureTable(allocator: Allocator, count: usize) Allocator.Error![]st
     return captures;
 }
 
-/// Find the existing operand value that supplies capture `slot`.
+/// Find the lift-boundary operand explicitly keyed to capture `slot`.
 ///
-/// An operand carries two identities: the value's own CaptureId (when its value
-/// is a plain local that carries one) and the operand's declared `id` (set when
-/// the operand was built to fill a specific target slot). They agree for a
-/// pass-through capture, but diverge in two ways this join must both handle:
-///
-///   - A value-local whose CaptureId equals `id` is the exact supply for the
-///     slot and wins outright. This also overrides a stale declared id: when
-///     spec_constr substitutes an operand's value with a local of a different
-///     capture but leaves the declared id unchanged, the value's current
-///     identity is authoritative.
-///
-///   - Otherwise the operand's declared id names the slot it fills, even when
-///     its value-local carries a different CaptureId. spec_constr routes a
-///     value-local into a slot its own binding does not name — e.g. a
-///     destructured successor `rest` passed as the next iterator's inner-state
-///     capture — and only the declared id records which slot that is. A
-///     value-local with no CaptureId, and a genuinely explicit (non-local)
-///     value, are likewise keyed solely by the declared id.
-///
-///   - Producer-authored operands may declare the slot's checked capture
-///     identity before a post-lift rewrite gives that slot a fresh runtime
-///     CaptureId. The runtime slot id above is still the final ABI key; the
-///     checked id names the same checked binding at older operand sites.
-///
-/// An exact value-CaptureId match always takes precedence over a declared-id
-/// match; a declared-id match is used only when no exact match exists.
+/// Source-authored/check-generated operand keys are provisional and join to the
+/// slot's checked identity. Lift-generated keys already name the lifted slot
+/// and join directly to its runtime identity. The key's namespace makes this
+/// distinction explicit; the operand value remains opaque.
 fn operandValueForSlot(program: *const Ast.Program, existing: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
-    const id = slotCaptureId(program, slot);
-    const checked_id = program.getLocal(slot.local).checked_capture_id;
-    var fallback_by_runtime_id: ?Ast.ExprId = null;
-    var fallback_by_checked_id: ?Ast.ExprId = null;
+    const slot_local = program.getLocal(slot.local);
+    const lifted_id = slotCaptureId(program, slot);
+    var value: ?Ast.ExprId = null;
     for (0..existing.len) |index| {
         const operand = GuardedList.at(existing, index);
-        if (operand.id == id and fallback_by_runtime_id == null) {
-            fallback_by_runtime_id = operand.value;
-        } else if (checked_id != null and operand.id == checked_id.? and fallback_by_checked_id == null) {
-            fallback_by_checked_id = operand.value;
-        }
-        const data = program.getExpr(operand.value).data;
-        if (data == .local) {
-            if (program.getLocal(data.local).capture_id) |value_id| {
-                if (value_id == id) return operand.value;
-            }
+        const matches = if (operand.id.isLiftGenerated())
+            operand.id == lifted_id
+        else if (slot_local.checked_capture_id) |checked_id|
+            operand.id == checked_id
+        else
+            operand.id == lifted_id;
+        if (matches) {
+            if (value != null) Common.invariant("capture operands declared one key more than once");
+            value = operand.value;
         }
     }
-    return fallback_by_runtime_id orelse fallback_by_checked_id;
+    return value;
 }
 
 /// Recompute a function reference / direct call's keyed capture operand span so it
 /// matches `slots` (the target's canonically-sorted capture slots) exactly, in
 /// the same order. Each operand's value is preserved from the node's existing
-/// operands (keyed by CaptureId) when present — this keeps explicit non-local
-/// values supplied at checked closure creation and const-fn restore — otherwise
+/// operands (keyed by CaptureId) when present—this keeps explicit non-local
+/// values supplied at checked closure creation and const-fn restore—otherwise
 /// it is an implicit read of the slot's local at the reference site.
 fn rebuildCaptureOperandSpan(
     program: *Ast.Program,
@@ -1028,7 +1005,6 @@ fn rebuildCaptureOperandSpan(
             const data = program.getExpr(candidate).data;
             if (data != .local) break :blk candidate;
             const candidate_local = data.local;
-            if (program.getLocal(candidate_local).capture_id != id) break :blk candidate;
             const active = (try bound.bindingFor(program, candidate_local)) orelse break :blk candidate;
             if (active == candidate_local) break :blk candidate;
             break :blk try program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
@@ -1094,23 +1070,23 @@ fn sortCaptureSlots(program: *const Ast.Program, items: []Ast.TypedLocal) void {
     }
 }
 
-/// Find the operand value supplied for `id` among explicit pre-lift capture
-/// operands, keyed by the CaptureId of each operand's local.
+/// Find the operand value supplied for `slot` among explicit pre-lift capture
+/// operands. Both sides use the lift boundary's single provisional-key rule.
 fn explicitCaptureValueForSlot(program: *const Ast.Program, explicit: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
-    const runtime_id = slotCaptureId(program, slot);
-    const checked_id = program.getLocal(slot.local).checked_capture_id;
-    var checked_match: ?Ast.ExprId = null;
+    const slot_local = program.getLocal(slot.local);
+    const slot_id = slot_local.checked_capture_id orelse slotCaptureId(program, slot);
+    var value: ?Ast.ExprId = null;
     for (0..explicit.len) |index| {
         const capture = GuardedList.at(explicit, index);
         const local = program.getLocal(capture.local);
-        const capture_id = local.capture_id orelse
-            Common.invariant("pre-lift capture operand local had no CaptureId");
-        if (capture_id == runtime_id) return capture.value;
-        if (checked_id != null and local.checked_capture_id == checked_id and checked_match == null) {
-            checked_match = capture.value;
+        const capture_id = local.checked_capture_id orelse local.capture_id orelse
+            Common.invariant("pre-lift capture operand local had no capture identity");
+        if (capture_id == slot_id) {
+            if (value != null) Common.invariant("pre-lift function captures declared one provisional key more than once");
+            value = capture.value;
         }
     }
-    return checked_match;
+    return value;
 }
 
 /// Whether an explicit pre-lift capture operand supplies the target slot.
@@ -1671,8 +1647,7 @@ const CaptureGraphEdge = struct {
     target: Ast.FnId,
     scope: ?CaptureScopeId,
     site: CaptureEdgeSite,
-    exact_supplies: std.ArrayList(CaptureSupply) = .empty,
-    declared_supplies: std.ArrayList(CaptureSupply) = .empty,
+    supplies: std.ArrayList(CaptureSupply) = .empty,
     active: bool = false,
 };
 
@@ -1894,18 +1869,12 @@ const CaptureDependencyGraph = struct {
 
     fn edgeSupply(self: *const CaptureDependencyGraph, edge_id: CaptureEdgeId, capture: Ast.TypedLocal) ?CaptureSupply {
         const edge = self.edges.items[@intFromEnum(edge_id)];
-        const runtime_id = slotCaptureId(self.program, capture);
-        if (findSupply(edge.exact_supplies.items, runtime_id)) |supply| return supply;
-        if (findSupply(edge.declared_supplies.items, runtime_id)) |supply| return supply;
-        // Producer-authored pre-lift operands and pre-recompute lifted
-        // operands may declare the slot's checked capture identity; operands
-        // rebuilt after lifting declare the runtime slot id checked above.
-        // Both are exact keys for their authoring convention.
-        const checked_id = self.program.getLocal(capture.local).checked_capture_id;
-        if (checked_id) |id| {
-            if (findSupply(edge.declared_supplies.items, id)) |supply| return supply;
-        }
-        return null;
+        const local = self.program.getLocal(capture.local);
+        const id = if (self.lifter != null)
+            local.checked_capture_id orelse slotCaptureId(self.program, capture)
+        else
+            slotCaptureId(self.program, capture);
+        return findSupply(edge.supplies.items, id);
     }
 
     fn applyCaptureToEdge(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId, capture: Ast.TypedLocal) Allocator.Error!void {
@@ -1945,12 +1914,10 @@ const CaptureDependencyGraph = struct {
 
     fn resolvedOperandValue(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId, slot: Ast.TypedLocal) Allocator.Error!Ast.ExprId {
         const edge = self.edges.items[@intFromEnum(edge_id)];
-        const id = slotCaptureId(self.program, slot);
         if (self.edgeSupply(edge_id, slot)) |supply| {
             const data = self.program.getExpr(supply.value).data;
             if (data != .local) return supply.value;
             const candidate_local = data.local;
-            if (self.program.getLocal(candidate_local).capture_id != id) return supply.value;
             const active = (try self.scopeBindingFor(edge.scope, candidate_local)) orelse return supply.value;
             if (active == candidate_local) return supply.value;
             return try self.program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
@@ -2121,23 +2088,16 @@ const CaptureGraphBuilder = struct {
         });
     }
 
-    fn hasSupplyId(supplies: []const CaptureSupply, id: checked.CaptureId) bool {
-        for (supplies) |supply| if (supply.id == id) return true;
-        return false;
-    }
-
     fn finishEdge(
         self: *CaptureGraphBuilder,
         parent: CaptureNodeId,
         target: Ast.FnId,
         site: CaptureEdgeSite,
-        exact_supplies: *std.ArrayList(CaptureSupply),
-        declared_supplies: *std.ArrayList(CaptureSupply),
+        supplies: *std.ArrayList(CaptureSupply),
     ) Allocator.Error!void {
-        std.sort.pdq(CaptureSupply, exact_supplies.items, {}, CaptureDependencyGraph.supplyLessThan);
-        std.sort.pdq(CaptureSupply, declared_supplies.items, {}, CaptureDependencyGraph.supplyLessThan);
-        if (declared_supplies.items.len > 1) {
-            for (declared_supplies.items[1..], declared_supplies.items[0 .. declared_supplies.items.len - 1]) |current, previous| {
+        std.sort.pdq(CaptureSupply, supplies.items, {}, CaptureDependencyGraph.supplyLessThan);
+        if (supplies.items.len > 1) {
+            for (supplies.items[1..], supplies.items[0 .. supplies.items.len - 1]) |current, previous| {
                 if (current.id == previous.id) Common.invariant("capture edge declared one CaptureId more than once");
             }
         }
@@ -2147,11 +2107,9 @@ const CaptureGraphBuilder = struct {
             .target = target,
             .scope = self.current_scope,
             .site = site,
-            .exact_supplies = exact_supplies.*,
-            .declared_supplies = declared_supplies.*,
+            .supplies = supplies.*,
         });
-        exact_supplies.* = .empty;
-        declared_supplies.* = .empty;
+        supplies.* = .empty;
         try self.graph.nodes.items[@intFromEnum(parent)].edges.append(self.graph.allocator, edge_id);
     }
 
@@ -2162,36 +2120,22 @@ const CaptureGraphBuilder = struct {
         site: CaptureEdgeSite,
         span: Ast.Span(Ast.CaptureOperand),
     ) Allocator.Error!void {
-        var exact: std.ArrayList(CaptureSupply) = .empty;
-        errdefer exact.deinit(self.graph.allocator);
-        var declared: std.ArrayList(CaptureSupply) = .empty;
-        errdefer declared.deinit(self.graph.allocator);
+        var supplies: std.ArrayList(CaptureSupply) = .empty;
+        errdefer supplies.deinit(self.graph.allocator);
         const operands = self.graph.program.captureOperandSpan(span);
         for (0..operands.len) |index| {
             const operand = GuardedList.at(operands, index);
             const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
             try self.collectExpr(operand.value, child);
             const supply = CaptureSupply{ .id = operand.id, .value = operand.value, .node = child };
-            if (!hasSupplyId(declared.items, operand.id)) {
-                try declared.append(self.graph.allocator, supply);
-            }
-            const data = self.graph.program.getExpr(operand.value).data;
-            if (data == .local) {
-                if (self.graph.program.getLocal(data.local).capture_id) |id| {
-                    if (!hasSupplyId(exact.items, id)) {
-                        try exact.append(self.graph.allocator, .{ .id = id, .value = operand.value, .node = child });
-                    }
-                }
-            }
+            try supplies.append(self.graph.allocator, supply);
         }
-        try self.finishEdge(parent, target, site, &exact, &declared);
+        try self.finishEdge(parent, target, site, &supplies);
     }
 
     fn addFnDefEdge(self: *CaptureGraphBuilder, parent: CaptureNodeId, target: Ast.FnId, span: Ast.Span(Ast.FnDefCapture)) Allocator.Error!void {
-        var exact: std.ArrayList(CaptureSupply) = .empty;
-        errdefer exact.deinit(self.graph.allocator);
-        var declared: std.ArrayList(CaptureSupply) = .empty;
-        errdefer declared.deinit(self.graph.allocator);
+        var supplies: std.ArrayList(CaptureSupply) = .empty;
+        errdefer supplies.deinit(self.graph.allocator);
         const captures = self.graph.program.fnDefCaptureSpan(span);
         for (0..captures.len) |index| {
             const capture = GuardedList.at(captures, index);
@@ -2201,19 +2145,9 @@ const CaptureGraphBuilder = struct {
             const declared_id = capture_local.checked_capture_id orelse runtime_id;
             const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
             try self.collectExpr(capture.value, child);
-            if (!hasSupplyId(declared.items, declared_id)) {
-                try declared.append(self.graph.allocator, .{ .id = declared_id, .value = capture.value, .node = child });
-            }
-            const data = self.graph.program.getExpr(capture.value).data;
-            if (data == .local) {
-                if (self.graph.program.getLocal(data.local).capture_id) |value_id| {
-                    if (!hasSupplyId(exact.items, value_id)) {
-                        try exact.append(self.graph.allocator, .{ .id = value_id, .value = capture.value, .node = child });
-                    }
-                }
-            }
+            try supplies.append(self.graph.allocator, .{ .id = declared_id, .value = capture.value, .node = child });
         }
-        try self.finishEdge(parent, target, .pre_lift, &exact, &declared);
+        try self.finishEdge(parent, target, .pre_lift, &supplies);
     }
 
     fn collectExprSpan(self: *CaptureGraphBuilder, span: Ast.Span(Ast.ExprId), node: CaptureNodeId) Allocator.Error!void {
@@ -2686,7 +2620,67 @@ test "capture finalization supplies the caller's active binder local" {
     try std.testing.expectEqual(active_arg, supplied);
 }
 
-test "function reference supplies rewritten slot by checked capture identity" {
+test "capture finalization preserves explicitly keyed capture permutation" {
+    const allocator = std.testing.allocator;
+    var program = initCaptureTestProgram(allocator);
+    defer program.deinit();
+
+    const ty = try program.types.add(.zst);
+    const first_binder: checked.PatternBinderId = @enumFromInt(1);
+    const second_binder: checked.PatternBinderId = @enumFromInt(2);
+    const first_capture = try program.addLocalWithBinder(@enumFromInt(1), ty, first_binder);
+    const second_capture = try program.addLocalWithBinder(@enumFromInt(2), ty, second_binder);
+    const first_capture_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = first_capture } });
+    const second_capture_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = second_capture } });
+    const callee_body = try program.addExpr(.{
+        .ty = ty,
+        .data = .{ .tuple = try program.addExprSpan(&.{ first_capture_ref, second_capture_ref }) },
+    });
+    const callee = try program.addFn(.{
+        .symbol = @enumFromInt(3),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = callee_body },
+        .ret = ty,
+    });
+
+    const first_arg = try program.addLocalWithBinder(@enumFromInt(4), ty, first_binder);
+    const second_arg = try program.addLocalWithBinder(@enumFromInt(5), ty, second_binder);
+    const first_arg_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = first_arg } });
+    const second_arg_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = second_arg } });
+    const operands = try program.addCaptureOperandSpan(&.{
+        .{ .id = checked.CaptureId.fromBinder(first_binder), .value = second_arg_ref },
+        .{ .id = checked.CaptureId.fromBinder(second_binder), .value = first_arg_ref },
+    });
+    const reference = try program.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
+        .fn_id = callee,
+        .captures = operands,
+    } } });
+    const caller = try program.addFn(.{
+        .symbol = @enumFromInt(6),
+        .args = try program.addTypedLocalSpan(&.{
+            .{ .local = first_arg, .ty = ty },
+            .{ .local = second_arg, .ty = ty },
+        }),
+        .captures = .empty(),
+        .body = .{ .roc = reference },
+        .ret = ty,
+    });
+
+    try recomputeCaptures(allocator, &program);
+
+    try std.testing.expectEqual(@as(usize, 0), program.typedLocalSpan(program.getFn(caller).captures).len);
+    const finalized_data = program.getExpr(reference).data;
+    if (finalized_data != .fn_ref) return error.TestUnexpectedResult;
+    const finalized = program.captureOperandSpan(finalized_data.fn_ref.captures);
+    try std.testing.expectEqual(@as(usize, 2), finalized.len);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(first_binder), GuardedList.at(finalized, 0).id);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(second_binder), GuardedList.at(finalized, 1).id);
+    try std.testing.expectEqual(second_arg_ref, GuardedList.at(finalized, 0).value);
+    try std.testing.expectEqual(first_arg_ref, GuardedList.at(finalized, 1).value);
+}
+
+test "lift boundary normalizes checked capture identity" {
     const allocator = std.testing.allocator;
     var program = initCaptureTestProgram(allocator);
     defer program.deinit();
@@ -2703,43 +2697,50 @@ test "function reference supplies rewritten slot by checked capture identity" {
         checked_id,
     );
 
-    const callee_body = try program.addExpr(.{ .ty = ty, .data = .{ .local = rewritten_capture } });
-    const callee = try program.addFn(.{
-        .symbol = @enumFromInt(1),
-        .args = .empty(),
-        .captures = .empty(),
-        .body = .{ .roc = callee_body },
-        .ret = ty,
-    });
-
     const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });
     const supplied_span = try program.addCaptureOperandSpan(&.{.{ .id = checked_id, .value = supplied_value }});
-    const reference = try program.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
-        .fn_id = callee,
-        .captures = supplied_span,
-    } } });
-    const caller = try program.addFn(.{
-        .symbol = @enumFromInt(2),
-        .args = .empty(),
-        .captures = .empty(),
-        .body = .{ .roc = reference },
-        .ret = ty,
-    });
+    const reference = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const slots = [_]Ast.TypedLocal{.{ .local = rewritten_capture, .ty = ty }};
+    var bound = BoundSet.init(allocator);
+    defer bound.deinit();
+    const finalized = try rebuildCaptureOperandSpan(&program, supplied_span, &slots, reference, &bound);
 
-    try recomputeCaptures(allocator, &program);
-
-    const callee_captures = program.typedLocalSpan(program.getFn(callee).captures);
-    try std.testing.expectEqual(@as(usize, 1), callee_captures.len);
-    try std.testing.expectEqual(rewritten_capture, GuardedList.at(callee_captures, 0).local);
-    try std.testing.expectEqual(@as(usize, 0), program.typedLocalSpan(program.getFn(caller).captures).len);
-
-    const finalized_data = program.getExpr(reference).data;
-    if (finalized_data != .fn_ref) return error.TestUnexpectedResult;
-    const finalized = finalized_data.fn_ref;
-    const operands = program.captureOperandSpan(finalized.captures);
+    const operands = program.captureOperandSpan(finalized);
     try std.testing.expectEqual(@as(usize, 1), operands.len);
     const operand = GuardedList.at(operands, 0);
     try std.testing.expectEqual(rewritten_id, operand.id);
+    try std.testing.expectEqual(supplied_value, operand.value);
+}
+
+test "lift boundary preserves an already-lifted capture identity" {
+    const allocator = std.testing.allocator;
+    var program = initCaptureTestProgram(allocator);
+    defer program.deinit();
+
+    const ty = try program.types.add(.zst);
+    const binder: checked.PatternBinderId = @enumFromInt(1);
+    const checked_id = checked.CaptureId.fromBinder(binder);
+    const lifted_id = program.nextLiftCaptureId();
+    const capture = try program.addLocalWithCaptureIdentity(
+        @enumFromInt(1),
+        ty,
+        binder,
+        lifted_id,
+        checked_id,
+    );
+
+    const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const supplied_span = try program.addCaptureOperandSpan(&.{.{ .id = lifted_id, .value = supplied_value }});
+    const reference = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const slots = [_]Ast.TypedLocal{.{ .local = capture, .ty = ty }};
+    var bound = BoundSet.init(allocator);
+    defer bound.deinit();
+    const finalized = try rebuildCaptureOperandSpan(&program, supplied_span, &slots, reference, &bound);
+
+    const operands = program.captureOperandSpan(finalized);
+    try std.testing.expectEqual(@as(usize, 1), operands.len);
+    const operand = GuardedList.at(operands, 0);
+    try std.testing.expectEqual(lifted_id, operand.id);
     try std.testing.expectEqual(supplied_value, operand.value);
 }
 

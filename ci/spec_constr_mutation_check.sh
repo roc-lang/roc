@@ -4,13 +4,13 @@
 # Each patch in ci/spec_constr_mutations/ seeds one representative SpecConstr
 # bug into src/postcheck/monotype_lifted/spec_constr.zig, and a named
 # lir_inline test must catch it. This script applies each patch, rebuilds the
-# in-process lir_inline suite, and requires the suite to FAIL — a mutant that
+# in-process lir_inline suite, and requires the suite to FAIL—a mutant that
 # survives means the named guard is not actually protecting that behavior.
 #
 #   m1  resolvePending always pins (effect-windowed delegation never fires):
 #       the structural fusion tests (e.g. "issue 10301 for-loop over
-#       effect-produced list scalarizes") assert the fused shape — raw list
-#       accesses live in the root, no iterator-step proc remains reachable — and
+#       effect-produced list scalarizes") assert the fused shape—raw list
+#       accesses live in the root, no iterator-step proc remains reachable—and
 #       fail when nothing fuses.
 #   m3  the loop-carried binder-wide install is skipped (#10317): a carried
 #       variable reassigned inside the loop resolves to its vanished pre-loop
@@ -62,7 +62,7 @@ for patch in ci/spec_constr_mutations/*.patch; do
 
     run_log="$log_dir/$name.log"
     if zig build run-test-zig-lir-inline >"$run_log" 2>&1; then
-        echo "FAILED: MUTANT SURVIVED ($name) — the lir_inline suite passed with the seeded bug"
+        echo "FAILED: MUTANT SURVIVED ($name)—the lir_inline suite passed with the seeded bug"
         failed=1
     else
         echo "caught: $name"

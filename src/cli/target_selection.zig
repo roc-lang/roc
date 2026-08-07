@@ -438,8 +438,8 @@ test "a platform without a v1 target reports its incompatible CPU floor" {
         selectRunTarget(config, null, .v1),
     );
 
-    // Naming the target explicitly still builds it — cross-compiling for a
-    // newer CPU than this one is as legitimate as compiling for another OS —
+    // Naming the target explicitly still builds it—cross-compiling for a
+    // newer CPU than this one is as legitimate as compiling for another OS—
     // but running it here is not.
     const explicit = try expectSelected(selectBuildTarget(config, native.toName(), .v1));
     try std.testing.expectEqual(native, explicit.target);

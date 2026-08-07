@@ -149,7 +149,7 @@ fn resolveThreadDefaults(max_threads: ?usize) struct { usize, Mode } {
 }
 
 /// Options for constructing the orchestration core (`BuildEnv`) for a CLI
-/// command. Every entry path — check, build, run, test, docs, bundle — wires
+/// command. Every entry path—check, build, run, test, docs, bundle—wires
 /// the core through `initCliBuildEnv`, so thread defaults, the working
 /// directory, cache attachment, and the publication mode are configured in
 /// exactly one place.
@@ -860,8 +860,8 @@ fn configuredSharedMemorySize() usize {
 }
 
 /// Floor for the retry loop in `createSharedMemory`. Set to the
-/// macOS/Windows reservation — documented as "ample headroom for real
-/// programs" — so a smaller reservation still produces a usable arena. On
+/// macOS/Windows reservation—documented as "ample headroom for real
+/// programs"—so a smaller reservation still produces a usable arena. On
 /// 32-bit targets the preferred size is already smaller than 8 GiB and an
 /// 8 GiB literal doesn't fit in `usize`, so the floor is the preferred size
 /// itself (single attempt, no retry); `-Dshared-memory-size` builds are
@@ -1188,7 +1188,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     var gpa, const is_safe = gpa: {
         // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
         // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
-        // else uses the fast target allocator — see base.defaultGpa.
+        // else uses the fast target allocator—see base.defaultGpa.
         const use_debug_allocator = builtin.os.tag != .freestanding and
             (builtin.mode == .Debug or build_options.debug_gpa);
         if (use_debug_allocator) {
@@ -2559,7 +2559,7 @@ const SourceRefResolveError = CliError || Allocator.Error || error{ UnsupportedW
 
 /// A source argument resolved to a compilable local path, together with the
 /// bundle URL it came from when the source was a managed URL/installed root.
-/// The URL — not the extracted path — is the root's package identity.
+/// The URL—not the extracted path—is the root's package identity.
 const ResolvedSourceArg = struct {
     path: []const u8,
     url: ?[]const u8,
@@ -2603,7 +2603,7 @@ const ResolvedInstalledEntry = struct {
 
 /// Resolve a shorthand to its published install entry, validating the
 /// manifest and the presence of the built artifact. Missing or corrupt state
-/// is an explicit error — never a fallback to a cache entry or a redownload.
+/// is an explicit error—never a fallback to a cache entry or a redownload.
 fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.Error)!ResolvedInstalledEntry {
     const root = install_store.installRootDir(ctx.coreCtx(), ctx.arena) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -2673,7 +2673,7 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
     defer parsed.deinit();
 
     // The recorded URL is the entry's identity, so it must still be a valid
-    // bundle URL — a manifest that fails this check is corrupt, and nothing
+    // bundle URL—a manifest that fails this check is corrupt, and nothing
     // downstream may be handed an unvalidated URL.
     _ = base.url.parseUrlPath(parsed.manifest().url) catch {
         return ctx.fail(.{ .install_entry_corrupt = .{
@@ -3893,7 +3893,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         };
     }
 
-    // Headerless default apps never hot reload — they compile through throwaway synthetic
+    // Headerless default apps never hot reload—they compile through throwaway synthetic
     // source files, so there is nothing stable to reload. They just run once.
     const internal_static_data = successfulInternalStaticData(&lowered_result, "default app run");
     const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, false);
@@ -4205,6 +4205,7 @@ const HotShimChild = struct {
     done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     term: ?std.process.Child.Term = null,
     wait_error: ?std.process.Child.WaitError = null,
+    joined: bool = false,
 
     fn waitThread(self: *HotShimChild, io: std.Io) void {
         self.term = self.child.wait(io) catch |err| {
@@ -4213,6 +4214,37 @@ const HotShimChild = struct {
             return;
         };
         self.done.store(true, .seq_cst);
+    }
+
+    /// Join the wait thread once. Idempotent so the watch loop can join as
+    /// soon as the child reports it exited, and `shutdown` can still join a
+    /// child that never got that far.
+    fn join(self: *HotShimChild) void {
+        if (self.joined) return;
+        self.joined = true;
+        self.thread.join();
+    }
+
+    /// Release the child: kill it if it is still running, join the wait
+    /// thread, then free the allocation.
+    ///
+    /// The single `defer` at the point of creation owns this, so every exit
+    /// from the watch loop -- returned error included -- frees exactly once.
+    fn shutdown(self: *HotShimChild, ctx: *CliCtx) void {
+        if (!self.joined) self.terminate();
+        self.join();
+        ctx.gpa.destroy(self);
+    }
+
+    fn terminate(self: *HotShimChild) void {
+        const pid = self.child.id orelse return;
+        switch (builtin.os.tag) {
+            .windows => {
+                _ = std.os.windows.ntdll.NtTerminateProcess(pid, @enumFromInt(1));
+            },
+            .wasi => {},
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => std.posix.kill(pid, .KILL) catch {},
+        }
     }
 };
 
@@ -4277,22 +4309,6 @@ fn spawnHotShimChild(
         return err;
     };
     return watched;
-}
-
-fn terminateHotShimChild(child: *HotShimChild) void {
-    if (child.child.id) |pid| {
-        switch (builtin.os.tag) {
-            .windows => {
-                _ = std.os.windows.ntdll.NtTerminateProcess(pid, @enumFromInt(1));
-            },
-            .wasi => {},
-            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => std.posix.kill(pid, .KILL) catch {},
-        }
-    }
-}
-
-fn destroyHotShimChild(ctx: *CliCtx, child: *HotShimChild) void {
-    ctx.gpa.destroy(child);
 }
 
 const HotReloadRebuild = struct {
@@ -4915,14 +4931,7 @@ fn runHotReloadDevShim(
     errdefer if (initial_input_set_needs_deinit) initial_input_set.deinit(ctx);
 
     const host_child = try spawnHotShimChild(ctx, exe_path, args.path, hotReloadHostChildHandle(shm_handle), args.app_args);
-    var host_child_joined = false;
-    errdefer {
-        if (!host_child_joined) {
-            terminateHotShimChild(host_child);
-            host_child.thread.join();
-        }
-        destroyHotShimChild(ctx, host_child);
-    }
+    defer host_child.shutdown(ctx);
 
     initial_input_set_needs_deinit = false;
     var pending_rebuild = try refreshWatchState(ctx, &state, &signal, initial_input_set);
@@ -5027,9 +5036,7 @@ fn runHotReloadDevShim(
         std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
     }
 
-    host_child.thread.join();
-    host_child_joined = true;
-    defer destroyHotShimChild(ctx, host_child);
+    host_child.join();
     _ = try reportHotReloadAcknowledgement(
         ctx,
         hot_reload_control,
@@ -5540,7 +5547,7 @@ fn successfulInternalStaticData(result: *const LoweredCoordinatorResult, label: 
 
 /// Render every report drained from the core and print the run-path summary
 /// trailer. Draining moves the reports out of the core, so calling this again
-/// renders nothing new — re-rendering a report is structurally impossible
+/// renders nothing new—re-rendering a report is structurally impossible
 /// rather than a call-site convention (the PR 9759 bug class). Version-bump
 /// notes and synthetic default-app path remapping are applied by the core
 /// during the drain.
@@ -7299,7 +7306,7 @@ fn discoverAndAddBundleModules(
     var build_env = try initCliBuildEnv(ctx, .{ .max_threads = 1 });
     defer build_env.deinit();
 
-    // Run the build — the Coordinator discovers all transitive module dependencies
+    // Run the build—the Coordinator discovers all transitive module dependencies
     build_env.build(abs_entry) catch {
         // Drain and display any errors from the build
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
@@ -7318,7 +7325,7 @@ fn discoverAndAddBundleModules(
                 }
             }
         }
-        // Build errors are not fatal for bundling — continue to check what we can
+        // Build errors are not fatal for bundling—continue to check what we can
     };
 
     // Detect platform from BuildEnv packages using the accessor
@@ -7501,7 +7508,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     // inside the archive (the unbundle side rejects them, and a relative path
     // is what the user actually wants extracted). If any input is absolute we
     // rebase all paths against their longest common parent directory and pass
-    // that directory to the bundle library — so the archive itself only ever
+    // that directory to the bundle library—so the archive itself only ever
     // contains relative paths.
     var any_absolute = false;
     for (paths_to_use) |path| {
@@ -7870,6 +7877,14 @@ fn rocBuildCommand(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) 
 }
 
 fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
+    if (args.fuzz and args.opt != .size and args.opt != .speed) {
+        try ctx.io.stderr().print(
+            "Error: `roc build --fuzz` requires the LLVM backend; use --opt=speed or --opt=size.\n",
+            .{},
+        );
+        return error.UnsupportedTarget;
+    }
+
     // Headerless apps build through a synthetic default platform.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
         return rocBuildDefaultApp(ctx, args, source);
@@ -9072,6 +9087,18 @@ fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allo
     return roc_target.llvmFeatureString(allocator, std_target);
 }
 
+fn llvmObjectUsesPic(link_type: roc_target.OutputKind, fuzz: bool) bool {
+    return link_type == .shared or fuzz;
+}
+
+test "LLVM fuzz output uses position-independent code" {
+    try std.testing.expect(llvmObjectUsesPic(.archive, true));
+    try std.testing.expect(llvmObjectUsesPic(.exe, true));
+    try std.testing.expect(llvmObjectUsesPic(.shared, false));
+    try std.testing.expect(!llvmObjectUsesPic(.archive, false));
+    try std.testing.expect(!llvmObjectUsesPic(.exe, false));
+}
+
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -9125,9 +9152,9 @@ fn compileLlvmAppObject(
 
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
-    // Shared libraries need position-independent code; keep their objects
-    // separate from exe objects in the artifact directory.
-    const pic = link_type == .shared;
+    // Shared libraries and fuzz hosts need position-independent code; keep
+    // their objects separate from ordinary exe/archive objects.
+    const pic = llvmObjectUsesPic(link_type, args.fuzz);
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
     const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
     var tuning_hash = std.hash.Crc32.init();
@@ -9135,8 +9162,9 @@ fn compileLlvmAppObject(
     tuning_hash.update(&[_]u8{0});
     tuning_hash.update(llvm_features);
     const tuning_hash_value = tuning_hash.final();
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
+    const fuzz_suffix: []const u8 = if (args.fuzz) "_fuzz" else "";
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix, fuzz_suffix });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix, fuzz_suffix });
     const artifact_dir = try createUniqueTempDir(ctx);
     errdefer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, artifact_dir) catch {};
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, bitcode_filename });
@@ -9163,6 +9191,7 @@ fn compileLlvmAppObject(
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = args.debug,
+        .fuzz = args.fuzz,
         .link_builtins = true,
         .pic = pic,
         // Linked LLVM output uses the symbol ABI: builtins reach the host
@@ -9461,6 +9490,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.output;
+
+    if (args.fuzz and target.toCpuArch() == .wasm32) {
+        try ctx.io.stderr().writeAll("Error: `roc build --fuzz` does not support WebAssembly targets.\n");
+        return error.UnsupportedTarget;
+    }
 
     if (target.isDynamic() and builtin.target.os.tag != .linux) {
         renderValidationError(ctx, .{
@@ -11209,6 +11243,13 @@ fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+fn proveRangesForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 fn optimizedDbgWarningsForBuild(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -11317,6 +11358,7 @@ fn lowerCheckedSourceToLir(
             },
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
+            .prove_ranges = proveRangesForOpt(opt),
             .proc_debug_names = proc_debug_names,
             .timing = timing,
         },
@@ -13404,6 +13446,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.target) |target| try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{target});
             if (args.output) |output| try appendOwnedArg(ctx.gpa, &argv, &owned, "--output={s}", .{output});
             if (args.debug) try argv.append(ctx.gpa, "--debug");
+            if (args.fuzz) try argv.append(ctx.gpa, "--fuzz");
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.timings) try argv.append(ctx.gpa, "--timings");
             if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
@@ -14704,7 +14747,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
 
     // The line editor handles Ctrl-C itself (press twice in a row to quit).
     // Ignore SIGINT at the process level so a Ctrl-C while the terminal is
-    // momentarily in cooked mode — during startup or while evaluating — can't
+    // momentarily in cooked mode—during startup or while evaluating—can't
     // hard-kill the REPL instead of going through that flow.
     if (mode == .interactive and builtin.os.tag != .windows) {
         const ignore_sigint = std.posix.Sigaction{
@@ -14720,7 +14763,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
 
     // Publishing the Builtin module here is the dominant startup cost (~1s). Do
     // it before printing the greeting so the greeting and the first prompt appear
-    // together and the REPL is immediately interactive — otherwise the greeting
+    // together and the REPL is immediately interactive—otherwise the greeting
     // shows with no prompt until this finishes.
     var session = try ReplSession.init(ctx.gpa, ctx.coreCtx(), backend_kind);
     defer session.deinit();
@@ -17166,7 +17209,7 @@ fn generateDocs(
             // yet no module was scheduled to document. This happens when the
             // source's module name shadows a compiler builtin (e.g. a file
             // declaring `Builtin`) or otherwise isn't built as a standalone
-            // module — there are no canonicalization or type errors to report.
+            // module—there are no canonicalization or type errors to report.
             std.debug.print(
                 "  The file compiled successfully but produced no standalone module to document.\n" ++
                     "  This typically means its module name shadows a compiler builtin, or it is a\n" ++
@@ -17591,7 +17634,7 @@ test "longestCommonParentDir" {
         .{ .paths = &.{ "/tmp/pkg/main.roc", "/tmp/pkg/Mod.roc" }, .expected = "/tmp/pkg" },
         // Files in sibling subdirectories: common parent.
         .{ .paths = &.{ "/tmp/nested/a/main.roc", "/tmp/nested/b/Mod.roc" }, .expected = "/tmp/nested" },
-        // Names share a byte prefix but no directory boundary — must back up.
+        // Names share a byte prefix but no directory boundary—must back up.
         .{ .paths = &.{ "/tmp/abc/a.roc", "/tmp/abd/b.roc" }, .expected = "/tmp" },
         // Only root in common.
         .{ .paths = &.{ "/etc/foo.roc", "/var/bar.roc" }, .expected = "/" },

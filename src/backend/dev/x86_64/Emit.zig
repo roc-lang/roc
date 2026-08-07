@@ -230,7 +230,7 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
-        /// POPCNT dst, src (population count) — `F3 0F B8 /r`. dst is ModRM.reg.
+        /// POPCNT dst, src (population count)—`F3 0F B8 /r`. dst is ModRM.reg.
         pub fn popcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3); // mandatory prefix
             try self.emitRex(width, dst, src);
@@ -239,7 +239,7 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
-        /// BSR dst, src (index of highest set bit) — `0F BD /r`. dst is ModRM.reg.
+        /// BSR dst, src (index of highest set bit)—`0F BD /r`. dst is ModRM.reg.
         ///
         /// Sets ZF when src is zero and leaves dst architecturally undefined,
         /// so callers must select the zero result themselves. This is the
@@ -253,7 +253,7 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
-        /// BSF dst, src (index of lowest set bit) — `0F BC /r`. dst is ModRM.reg.
+        /// BSF dst, src (index of lowest set bit)—`0F BC /r`. dst is ModRM.reg.
         ///
         /// Sets ZF when src is zero and leaves dst architecturally undefined.
         /// See `bsrRegReg` for how this relates to TZCNT.
@@ -264,7 +264,7 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
-        /// LZCNT dst, src (count leading zeros) — `F3 0F BD /r`. dst is ModRM.reg.
+        /// LZCNT dst, src (count leading zeros)—`F3 0F BD /r`. dst is ModRM.reg.
         pub fn lzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3); // mandatory prefix
             try self.emitRex(width, dst, src);
@@ -273,7 +273,7 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
-        /// TZCNT dst, src (count trailing zeros) — `F3 0F BC /r`. dst is ModRM.reg.
+        /// TZCNT dst, src (count trailing zeros)—`F3 0F BC /r`. dst is ModRM.reg.
         pub fn tzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3); // mandatory prefix
             try self.emitRex(width, dst, src);
@@ -838,7 +838,7 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LEA reg, [base + disp32] (load effective address)
-        /// LEA reg, [RIP + disp32] — compute PC-relative address
+        /// LEA reg, [RIP + disp32]—compute PC-relative address
         /// disp is relative to the end of this instruction (7 bytes total).
         pub fn leaRegRipRel(self: *Self, dst: GeneralReg, disp: i32) Allocator.Error!void {
             try self.emitRex(.w64, dst, .RBP); // REX.W prefix (RBP enc = 5, doesn't matter for mod=00 rm=101)

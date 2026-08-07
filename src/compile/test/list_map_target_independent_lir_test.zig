@@ -1,5 +1,5 @@
 //! Regression test guarding that lowering produces a target-independent LIR op
-//! stream — the property that lets one lowered LIR image be cached across 32-bit
+//! stream—the property that lets one lowered LIR image be cached across 32-bit
 //! and 64-bit targets.
 //!
 //! The sharp case is `List.map`'s in-place reuse. Reuse is allowed only when the

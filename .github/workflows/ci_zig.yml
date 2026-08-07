@@ -454,7 +454,7 @@ jobs:
           }
 
       # Parser code coverage - run on ARM64 Linux (native build)
-      # TODO ZIG 16: re-check if DWARF bug is fixed in 0.16 — may be able to enable x86_64 coverage
+      # TODO ZIG 16: re-check if DWARF bug is fixed in 0.16—may be able to enable x86_64 coverage
       # Note: Zig 0.15.2 on x86_64 generates invalid DWARF .debug_line sections,
       # causing libdw to fail parsing user source files. ARM64 works correctly.
       - name: Install kcov dependencies

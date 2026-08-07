@@ -5,8 +5,8 @@
 //! Consumers (CLI, WASM playground, tests) inject a concrete implementation.
 //!
 //! Pre-built implementations:
-//!   - `CoreCtx.default(...)` — delegates to the real OS (or stubs on wasm32)
-//!   - `CoreCtx.testing(...)` — panics on every I/O call (override fields for mocks)
+//!   - `CoreCtx.default(...)`—delegates to the real OS (or stubs on wasm32)
+//!   - `CoreCtx.testing(...)`—panics on every I/O call (override fields for mocks)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -67,11 +67,11 @@ pub const VTable = struct {
     listDirTop: *const fn (?*anyopaque, std.Io, []const u8, Allocator) ListError![]FileEntry = &missingListDirTop,
 
     /// Return the directory portion of a path, or `null` if there is none.
-    /// No allocation — returns a slice into the input.
+    /// No allocation—returns a slice into the input.
     dirName: *const fn (?*anyopaque, std.Io, []const u8) ?[]const u8,
 
     /// Return the final component (filename) of a path.
-    /// No allocation — returns a slice into the input.
+    /// No allocation—returns a slice into the input.
     baseName: *const fn (?*anyopaque, std.Io, []const u8) []const u8,
 
     /// Join path segments with the platform separator. Caller owns the result.
@@ -342,7 +342,7 @@ pub fn terminalWidth(self: Self) ?u16 {
 }
 
 // --- Error types ---
-// All errors use plain error sets — no std.posix-specific types —
+// All errors use plain error sets—no std.posix-specific types—
 // so they compile on wasm32-freestanding.
 
 /// Errors that can occur when reading a file.
@@ -466,7 +466,7 @@ pub const max_file_size = std.math.maxInt(u32);
 /// virtual files to participate in path-derived package identity. All other
 /// vtable functions (writeFile, fileExists, stat, …) delegate to `base`.
 /// This is safe when `base` is `Io.os()` or `Io.default()` because those vtable
-/// functions ignore their `ctx` argument — so passing a `ReadFileOverride` pointer
+/// functions ignore their `ctx` argument—so passing a `ReadFileOverride` pointer
 /// as `ctx` causes no harm.
 ///
 /// Usage:
@@ -1289,7 +1289,7 @@ fn osTimestampNow(_: ?*anyopaque, std_io: std.Io) i128 {
     return std.Io.Timestamp.now(std_io, .real).nanoseconds;
 }
 
-// --- Testing implementations — panic on every call ---
+// --- Testing implementations—panic on every call ---
 
 fn testingReadFile(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) ReadError![]u8 {
     @panic("readFile should not be called in this test");
@@ -1405,7 +1405,7 @@ fn testingTimestampNow(_: ?*anyopaque, _: std.Io) i128 {
     @panic("timestampNow should not be called in this test");
 }
 
-// --- Freestanding implementations —
+// --- Freestanding implementations—
 // Used on wasm32-freestanding where there is no real filesystem or stdio.
 // Callers must override with a proper implementation (e.g. WasmFilesystem).
 

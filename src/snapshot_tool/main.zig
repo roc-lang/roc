@@ -56,7 +56,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
         panic_jmp = null; // prevent re-entry
         sljmp.longjmp(jmp, 1);
     }
-    // No protection active — use default behavior.
+    // No protection active—use default behavior.
     std.debug.defaultPanic(msg, @returnAddress());
 }
 
@@ -2697,7 +2697,7 @@ fn getDefaultedTypeStringWithSeen(
         .flex => {
             // Fall through to TypeWriter. `finalizeLiteralDefaults` already
             // committed concrete `Dec` to the store for any defaulted numeral
-            // before MONO renders, so the live store is the source of truth —
+            // before MONO renders, so the live store is the source of truth—
             // no display-time `Dec` substitution is needed here.
         },
         .structure => |flat_type| {

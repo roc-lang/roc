@@ -112,6 +112,7 @@ const ExprNodeTag = enum {
     if_without_else,
     match,
     dbg,
+    crash,
     bin_op,
     block,
     ellipsis,
@@ -1231,6 +1232,11 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .dbg;
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.expr);
+        },
+        .crash => |c| {
+            node.tag = .crash;
+            node.region = c.region;
+            node.data.lhs = @intFromEnum(c.expr);
         },
         .record_builder => |rb| {
             node.tag = .record_builder;
@@ -2398,6 +2404,12 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .expr = @enumFromInt(node.data.lhs),
             } };
         },
+        .crash => {
+            return .{ .crash = .{
+                .region = node.region,
+                .expr = @enumFromInt(node.data.lhs),
+            } };
+        },
         .bin_op => {
             return .{ .bin_op = .{
                 .left = @enumFromInt(node.data.lhs),
@@ -2506,7 +2518,7 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
 /// exactly one literal part, i.e. a plain string with no interpolation.
 ///
 /// Returns null for any other expression, and for strings whose text is split
-/// across several parts (interpolation, escapes, line continuations) — callers
+/// across several parts (interpolation, escapes, line continuations)—callers
 /// use this to read short literals like a pinned compiler version straight out
 /// of the source, which is only sound when the source says it verbatim.
 pub fn singleStringPartToken(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?Token.Idx {

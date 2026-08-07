@@ -15,7 +15,7 @@
 //! and message, the ordered dbg transcript, and the expect-failure transcript.
 //! A divergence localizes a body-lowering bug (or an oracle/evaluator bug) to
 //! a concrete program with both results in hand. Constructs the tree
-//! evaluator does not support are counted and reported per reason — never
+//! evaluator does not support are counted and reported per reason—never
 //! silently skipped.
 //!
 //! Generated corpus cases additionally run under the dev JIT backend and must
@@ -180,7 +180,7 @@ const Case = struct {
 const CaseStatus = enum {
     /// Both executions agreed.
     pass,
-    /// The two executions disagreed — a body-lowering (or evaluator) bug.
+    /// The two executions disagreed—a body-lowering (or evaluator) bug.
     diverged,
     /// The tree evaluator does not support a construct in this program.
     unsupported,
@@ -359,7 +359,7 @@ fn runCaseForPool(io: std.Io, allocator: std.mem.Allocator, case: Case, timeout_
 }
 
 /// Serialize a case result for the pool: one status byte followed by the
-/// detail text, uncapped — divergence details are the harness's product.
+/// detail text, uncapped—divergence details are the harness's product.
 fn serializeCaseResult(fd: posix.fd_t, result: CaseResult) void {
     test_harness.writeAll(fd, &[_]u8{statusByte(result.status)});
     if (result.detail) |detail| test_harness.writeAll(fd, detail);
@@ -543,7 +543,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
 
     if (fail_fast) {
         // Sequential in-process debugging mode: deterministic order, live
-        // output, stop at the first failure. No crash isolation — a compiler
+        // output, stop at the first failure. No crash isolation—a compiler
         // panic surfaces directly in this process.
         report.live_progress = true;
         for (run_list.items) |case| {

@@ -153,8 +153,8 @@ fn createWithMapFailureLogging(
 /// the next attempt would drop below `min_size`. Errors unrelated to size
 /// (e.g. memfd_create failure) propagate immediately without retrying.
 ///
-/// This matters on aarch64 Linux kernels built with `CONFIG_ARM64_VA_BITS=39`
-/// — the default on 64-bit Raspberry Pi OS — which cap user VA at ~256 GiB and
+/// This matters on aarch64 Linux kernels built with `CONFIG_ARM64_VA_BITS=39`—
+/// the default on 64-bit Raspberry Pi OS—which cap user VA at ~256 GiB and
 /// reject a 2 TiB reservation outright. On systems where the preferred size
 /// fits, a single attempt succeeds and no retry happens.
 ///

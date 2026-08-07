@@ -267,14 +267,14 @@ pub const Store = struct {
         return self.problems.items.len;
     }
 
-    /// Discard every problem appended after `new_len` — the rollback of a
+    /// Discard every problem appended after `new_len`—the rollback of a
     /// speculative probe that recorded against this store. Problem entries
     /// reference other stores by index (snapshots, extra strings) and own no
     /// memory themselves, so truncation is a plain length rewind; the caller
     /// rewinds the referenced stores in tandem.
     ///
     /// `extra_strings_backing` / `missing_patterns_backing` are deliberately
-    /// NOT rewound here: no probe path writes them — they are appended to
+    /// NOT rewound here: no probe path writes them—they are appended to
     /// only by exhaustiveness checking (Check.zig, checkMatchExpr's
     /// non-exhaustive-match reporting), which never runs inside a probe. The
     /// probe rollback site asserts that their lengths are unchanged; if a

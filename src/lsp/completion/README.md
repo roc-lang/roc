@@ -18,9 +18,9 @@ All paths are relative to `src/lsp/`.
 | `completion/mod.zig` | Re-exports `CompletionContext`, `detectCompletionContext`, `computeOffset`, and `CompletionBuilder`. |
 | `scope_map.zig` | Reconstructs lexical scopes from CIR so the builder can answer "which local variables are visible at byte offset X?" |
 | `cir_queries.zig` | Offset-based CIR queries. `findFieldAccessReceiverTypeVar()` finds the receiver type of an existing field-access node. `findTypeAtOffset()` returns the type at an arbitrary offset. Used as a first-pass type resolver before falling back to name-based lookup. |
-| `module_lookup.zig` | `findDefinitionByName()` — searches a `ModuleEnv`'s defs and statements for a name and returns its pattern index. Used when resolving access chains. |
+| `module_lookup.zig` | `findDefinitionByName()`—searches a `ModuleEnv`'s defs and statements for a name and returns its pattern index. Used when resolving access chains. |
 | `build_env_handle.zig` | Reference-counted wrapper around `BuildEnv`. Ensures a `BuildEnv` stays alive while snapshot or previous-build references exist. |
-| `build_session.zig` | `BuildSession` — manages a single build invocation (used at the top of `getCompletionsAtPosition`). |
+| `build_session.zig` | `BuildSession`—manages a single build invocation (used at the top of `getCompletionsAtPosition`). |
 
 ### Supporting compiler modules (outside `src/lsp/`)
 
@@ -29,7 +29,7 @@ All paths are relative to `src/lsp/`.
 | `canonicalize/ModuleEnv.zig` | Per-module compilation state: CIR node store, type store, method idents, ident table, etc. |
 | `compile/BuildEnv` | Root compilation environment. Its `Coordinator` owns per-package `ModuleState` lists. Also holds `builtin_modules`. |
 | `types/` | Type inference results: `Var`, `Content`, `TypeStore`, records, aliases, nominals, functions, static dispatch constraints. |
-| `can/` (CIR) | Canonical Intermediate Representation — `Statement`, `Def`, `Pattern`, `Expr`, `TypeAnno`. |
+| `can/` (CIR) | Canonical Intermediate Representation—`Statement`, `Def`, `Pattern`, `Expr`, `TypeAnno`. |
 
 ---
 
@@ -65,12 +65,12 @@ handlers/completion.zig
 
 The system tries three sources for a `ModuleEnv`, in order:
 
-1. **Snapshot env** — cached from the last successful build of this file.
+1. **Snapshot env**—cached from the last successful build of this file.
    Best for completions because the user is usually mid-edit and the current
    build may fail.
-2. **Previous build env** — the last globally-successful build. Fallback when
+2. **Previous build env**—the last globally-successful build. Fallback when
    no snapshot exists for this file.
-3. **Current build** — used only when the build just succeeded with no reports.
+3. **Current build**—used only when the build just succeeded with no reports.
 
 When a snapshot or previous env is used, the flag `used_snapshot` is set to
 `true`.  This matters because CIR byte offsets from a snapshot do not match the
@@ -128,25 +128,25 @@ pub const CompletionContext = union(enum) {
 Each completion context triggers a different set of builder methods. Here is
 every kind of completion the system can produce, grouped by context.
 
-### 1. Module Member Completions — `after_module_dot`
+### 1. Module Member Completions—`after_module_dot`
 
 **Trigger:** `Str.`, `List.`, `Json.`, or `MyNominalType.`
 
 **What happens:**
-1. `resolveModuleAlias(module_env, name)` — if the module was imported with
+1. `resolveModuleAlias(module_env, name)`—if the module was imported with
    `import Json as J`, this maps `J` back to `Json`.
-2. `builder.addModuleMemberCompletions(env, resolved_name, module_env_opt)` —
+2. `builder.addModuleMemberCompletions(env, resolved_name, module_env_opt)`—
    walks all `exposed_items` from the target module's `ModuleEnv`. For builtin
    type names (recognised via `isBuiltinType`), it uses the special
    `builtin_module.env`. Items are classified as `function` (lowercase) or
    `class` (uppercase).
-3. `builder.addTagCompletionsForNominalType(module_env, name, null)` — if the
+3. `builder.addTagCompletionsForNominalType(module_env, name, null)`—if the
    name is also a nominal type in the current module, adds its tag constructors
    (e.g., `Color.Red`, `Color.Green`).
 
 **CompletionItemKind:** `function`, `class`, `enum_member`
 
-### 2. Incomplete Value-Dot Completions — `after_value_dot`
+### 2. Incomplete Value-Dot Completions—`after_value_dot`
 
 **Trigger:** `myRecord.`, `myrec.subrec.`
 
@@ -159,9 +159,9 @@ every kind of completion the system can produce, grouped by context.
    - Name-based: `addRecordFieldCompletions(name, offset)` and
      `addMethodCompletions(name, offset)`
 3. Once a `types.Var` is in hand:
-   - `addFieldsFromTypeVar()` — unwraps aliases/nominals up to 8 levels, then
+   - `addFieldsFromTypeVar()`—unwraps aliases/nominals up to 8 levels, then
      iterates record fields. Each field gets a `detail` string showing its type.
-   - `addMethodsFromTypeVar()` — independently looks up the type identity in
+   - `addMethodsFromTypeVar()`—independently looks up the type identity in
      `method_idents`. It does not inspect record fields.
 
 At `value.` the source is incomplete: selecting a field and stopping produces
@@ -171,7 +171,7 @@ does not merge their lookup or resolution.
 
 **CompletionItemKind:** `field`, `method`
 
-### 3. Incomplete Receiver-Dot Completions — `after_receiver_dot`
+### 3. Incomplete Receiver-Dot Completions—`after_receiver_dot`
 
 **Trigger:** `getValue().`, `Str.join(items).`, `testFunc("hi").`
 
@@ -186,18 +186,18 @@ does not merge their lookup or resolution.
 
 **CompletionItemKind:** `field`, `method`
 
-### 4. Type Annotation Completions — `after_colon`
+### 4. Type Annotation Completions—`after_colon`
 
 **Trigger:** `x : `, `foo : `, a function signature parameter annotation
 
 **What happens:**
-1. `addTypeCompletions(module_env)` — iterates `all_statements` for
+1. `addTypeCompletions(module_env)`—iterates `all_statements` for
    `s_alias_decl` and `s_nominal_decl`, adding each type name.
-2. `addModuleNameCompletions(module_env)` — iterates `all_statements` for
+2. `addModuleNameCompletions(module_env)`—iterates `all_statements` for
    `s_import` and adds imported module names/aliases.
-3. `addTypeCompletionsFromEnv(env)` — same as (1) but across all modules
+3. `addTypeCompletionsFromEnv(env)`—same as (1) but across all modules
    in the `BuildEnv`.
-4. `addModuleNameCompletionsFromEnv(env)` — adds all module names from
+4. `addModuleNameCompletionsFromEnv(env)`—adds all module names from
    `BuildEnv` coordinator packages **and** calls `addBuiltinModuleNameCompletions()`
    which adds every entry in `BUILTIN_TYPES`.
 
@@ -208,21 +208,21 @@ imported module names, all loaded module names, and all 21 builtin types
 
 **CompletionItemKind:** `class` (types), `module` (module names)
 
-### 5. Expression Completions — `expression`
+### 5. Expression Completions—`expression`
 
 **Trigger:** beginning of a line, after `=`, after `if`, any general expression
 position.
 
 **What happens:**
-1. `addLocalCompletions(module_env, cursor_offset)` — builds a `ScopeMap` from
+1. `addLocalCompletions(module_env, cursor_offset)`—builds a `ScopeMap` from
    CIR, then adds every binding visible at the cursor. Also adds top-level
    defs (from `all_defs`) and statement-level defs (from `all_statements`).
    Closures/lambdas get kind `function`; everything else gets `variable`.
-2. `addModuleNameCompletions(module_env)` — imported module names.
-3. `addAmbientTagCompletions(module_env)` — structural tags from the type
+2. `addModuleNameCompletions(module_env)`—imported module names.
+3. `addAmbientTagCompletions(module_env)`—structural tags from the type
    store (e.g. `Ok`, `Err` if they appear in the module).
-4. `addTypeCompletions(module_env)` — alias and nominal type names.
-5. `addModuleNameCompletionsFromEnv(env)` — all module names + builtins.
+4. `addTypeCompletions(module_env)`—alias and nominal type names.
+5. `addModuleNameCompletionsFromEnv(env)`—all module names + builtins.
 
 **CompletionItemKind:** `variable`, `function`, `module`, `enum_member`, `class`
 
@@ -430,7 +430,7 @@ These tests call `getCompletionsAtPosition()` directly on a `SyntaxChecker`:
 1. Create a `SyntaxChecker` with a temp working directory.
 2. Write a `.roc` file with specific source.
 3. Call `syntax_checker.getCompletionsAtPosition(uri, source, line, char)`.
-4. Assert on the returned `CompletionResult.items` — check specific labels,
+4. Assert on the returned `CompletionResult.items`—check specific labels,
    kinds, and detail strings.
 
 ### Running tests

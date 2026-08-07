@@ -101,7 +101,7 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8, line_index: L
                 pos += 1;
             }
         } else if (pos == source.len or source[pos] == '\n') {
-            // Empty line — skip but keep looking
+            // Empty line—skip but keep looking
             if (pos < source.len) pos += 1;
             // If we already collected some doc comment lines, an empty line
             // that's purely whitespace can be part of the gap before the header.
@@ -170,11 +170,11 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
             const content = base.doc_comment.stripPrefix(trimmed);
             try lines.append(gpa, content);
         } else if (trimmed.len == 0) {
-            // Empty/whitespace line — stop looking if we already have doc lines
+            // Empty/whitespace line—stop looking if we already have doc lines
             if (lines.items.len > 0) break;
             // Skip empty lines between def and potential doc comment
         } else {
-            // Non-comment content — stop
+            // Non-comment content—stop
             break;
         }
 
@@ -466,7 +466,7 @@ pub fn extractModuleDocs(
     // For example, in Color.roc only `Color := ...` and its methods are visible;
     // helper functions or types defined outside `Color` are not documented.
     //
-    // The Builtin module is a special case — it contains many top-level types
+    // The Builtin module is a special case—it contains many top-level types
     // (Str, List, Bool, etc.) that need complex re-parenting rather than simple
     // filtering, so it is handled separately below.
     const is_builtin = std.mem.eql(u8, module_env.module_name, "Builtin");
@@ -501,8 +501,8 @@ pub fn extractModuleDocs(
 /// Filter entries in a type module to only include the main type and its children.
 ///
 /// In a type module (e.g. `Color.roc`), only the entry whose name matches the
-/// module name is public. All other top-level entries — helper functions, internal
-/// types, etc. — are private to the module and excluded from documentation.
+/// module name is public. All other top-level entries—helper functions, internal
+/// types, etc.—are private to the module and excluded from documentation.
 /// The main type entry's children (methods defined inside `Color := [...].{...}`)
 /// are preserved as nested entries.
 fn filterTypeModuleEntries(
@@ -537,7 +537,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
     const bi = builtin_idx orelse return;
     const builtin_children = entries_list.items[bi].children;
 
-    // Process each child — move it under its proper parent
+    // Process each child—move it under its proper parent
     for (builtin_children) |child| {
         try reparentDottedChild(gpa, entries_list, child);
     }
@@ -2232,7 +2232,7 @@ fn extractRecord(
                 is_open = true;
                 if (ident_text) |t| {
                     if (t.len == 0 or t[0] == '#') {
-                        // Synthetic anonymous-open name — render as `..` with no name.
+                        // Synthetic anonymous-open name—render as `..` with no name.
                     } else {
                         ext_doc_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, t) });
                     }
