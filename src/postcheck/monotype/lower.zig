@@ -5236,8 +5236,6 @@ const Builder = struct {
         // so their specialization request cannot become a durable TypeId until
         // that graph freezes. The exact open shape is the graph-local lookup
         // authority whether or not the current nodes happen to look resolved.
-        const resolved_request_ty: ?Type.TypeId = null;
-        const resolved_lookup_address: ?DraftNestedLookupAddress = null;
         const open_request_shape: ?solve.OpenFunctionInterfaceShape =
             try source_ctx.graph.openFunctionInterfaceShape(request_fn_node);
         const open_shape_lookup_address: ?DraftNestedLookupAddress = if (open_request_shape) |shape| .{
@@ -5252,31 +5250,12 @@ const Builder = struct {
         var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
         defer seen_specs.deinit();
         var selection = DraftOpenCandidateSelection{};
-        if (resolved_lookup_address) |address| {
-            if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
-                for (candidates.items) |raw_spec| {
-                    const spec = &source_ctx.draft.nested_specs.items[raw_spec];
-                    if (signature_relation == .exact_graph and
-                        source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
-                    {
-                        continue;
-                    }
-                    if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
-                    if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
-                    if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
-                    const spec_fn_ty = spec.request_fn_ty orelse continue;
-                    if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
-                    if (!selection.add(raw_spec, true)) unreachable;
-                }
-            }
-        }
         if (selection.selected() == null) {
             if (open_shape_lookup_address) |address| {
                 if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
                     for (candidates.items) |raw_spec| {
                         const spec = &source_ctx.draft.nested_specs.items[raw_spec];
                         if (spec.state != .lowered) continue;
-                        if (spec.request_fn_ty != null) continue;
                         if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
@@ -5308,7 +5287,6 @@ const Builder = struct {
                             const seen = try seen_specs.getOrPut(raw_spec);
                             if (seen.found_existing) continue;
                             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
-                            if (spec.request_fn_ty != null) continue;
                             if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
                             if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                             if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
@@ -5474,7 +5452,6 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .request_fn_node = request_fn_node,
             .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(request_fn_node),
-            .request_fn_ty = null,
             .evidence = requested_evidence,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
             .demand_start = @intCast(source_ctx.draft.runtime_value_demands.items.len),
@@ -6711,6 +6688,7 @@ const Builder = struct {
         try self.prepareDraftDeferredExprs(body_draft, graph);
         try graph.finalizeGeneratedIteratorRepresentations();
         try graph.finalizeGeneratedIteratorIdentities();
+        try graph.bindGeneratedIteratorCanonicalTypes(&self.generated_types_by_identity);
         try graph.freezeRelations();
         var impossibility_evaluator = try FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, graph, body_draft);
         defer impossibility_evaluator.deinit(self.allocator);
@@ -9571,7 +9549,6 @@ fn draftNestedActiveRecursiveCandidate(
     current_owner: DraftOwner,
 ) Allocator.Error!bool {
     if (spec.state != .lowering) return false;
-    if (spec.request_fn_ty != null) return false;
     if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) return false;
     if (!evidenceChainEql(spec.evidence, requested_evidence)) return false;
     if (!draftCaptureEntryGuardsMatch(graph, spec.capture_entry_guards, capture_entry_guards)) return false;
@@ -9588,7 +9565,6 @@ fn draftNestedCaptureAnchoredRecursiveCandidate(
     requested_evidence: EvidenceChain,
 ) Allocator.Error!bool {
     if (spec.state != .lowering) return false;
-    if (spec.request_fn_ty != null) return false;
     if (capture_entry_guards.len == 0) return false;
     if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) return false;
     if (!evidenceChainEql(spec.evidence, requested_evidence)) return false;
@@ -10361,7 +10337,6 @@ const DraftNestedSpec = struct {
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
-    request_fn_ty: ?Type.TypeId,
     evidence: EvidenceChain,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
     demand_start: u32 = 0,

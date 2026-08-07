@@ -2608,6 +2608,18 @@ coalescing equal finalized content addresses as they go. They never search the
 full Monotype graph to rediscover which nodes are generated representations;
 unrelated graph nodes do no work in either pass.
 
+The durable generated-identity table owns one canonical Monotype tree per
+finalized content address across body graphs. After identity finalization and
+before relation freezing, a graph whose generated root hits that table imports
+the canonical root and explicitly relates the complete canonical backing to the
+producer's live backing. Every imported descendant retains its canonical
+`TypeId` through sealing. Reusing only the named root is invalid: an
+independently requested step function, state, or recursive-rest descendant
+would otherwise be sealed under a fresh identity and later callable solving
+would treat the apparent root and its actual backing as unrelated types. A
+cache miss seals and publishes the complete tree once; a cache hit preserves
+that tree's root and descendant identities without a late structural scan.
+
 For a minted iterator, the stable generated `TypeDigest` is SHA-256 over an
 explicit domain separator, the public source declaration identity, the producer
 kind, the exact item-type digest, the ordered digests of every
