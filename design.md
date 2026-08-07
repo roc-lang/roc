@@ -6760,7 +6760,7 @@ const ConstValue = union(enum) {
 
 `ConstBlobView` is an `(interned blob id, byte offset, byte length)` view.
 Strings and packed scalar lists intern into the same exact-content namespace.
-Packed multi-byte scalars use canonical little-endian checked-value bytes;
+Packed multi-byte scalars use little-endian checked-value bytes;
 this is target-independent `ConstStore` data, not a captured host allocation or
 backend-owned byte sequence. Post-check lowering validates the byte count
 against the scalar layout before making a runtime static-data view.
