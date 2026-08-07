@@ -5185,6 +5185,11 @@ and every later child because none is reachable. In particular, callable flow
 inside a later child is neither propagated through an impossible aggregate nor
 lowered into LIR. Direct LIR lowering consumes this fact; it does not rescan the
 solved type graph to rediscover inhabitation.
+The finalized column is computed with one memo over each solved type identity,
+not a fresh type walk per expression. A negative query that crosses an active
+recursive type edge remains uncached, because a different entry into that
+recursive component can still reach a closed empty union; positive proofs may
+be cached immediately.
 
 Monotype may carry both the definition-private nominal view and the opaque
 interface view of one checked `TypeDef`. Lambda solving relates those views only
