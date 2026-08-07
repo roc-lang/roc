@@ -8648,7 +8648,10 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
     const key: u32 = @intFromEnum(proc_id);
 
     if (proc.abi == .erased_callable) {
-        const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
+        // Matches `builtins.erased_callable.ErasedCallableFn`: pointers for
+        // ops, ret, args, capture, reuse, and out_desc — the exact type
+        // `roc_boxy_call_erased` invokes through `call_indirect`.
+        const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
         const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
         const func_idx = defined.function.raw();
         _ = try self.addLirProcFunctionSymbol(defined, proc.name);
@@ -8810,7 +8813,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
 
     // Locals declaration (beyond function parameters).
     const param_count: u32 = if (proc.abi == .erased_callable)
-        5
+        6
     else if (symbol_abi_proc)
         @intCast(args.len + @intFromBool(proc.runtime_ret_desc != null))
     else
