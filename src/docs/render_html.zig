@@ -2269,7 +2269,7 @@ fn renderDocTypeHtml(
                         if (item.needs_parens) try frames.append(gpa, .{ .html = ")" });
                         try frames.append(gpa, .{ .doc_type = .{
                             .value = func.ret,
-                            .needs_parens = false,
+                            .needs_parens = true,
                             .indent = item.indent,
                         } });
                         try frames.append(gpa, .{ .html = if (func.effectful)
@@ -2414,7 +2414,7 @@ fn renderDocTypeHtml(
                                 try frames.append(gpa, .{ .html = ",\n" });
                                 try frames.append(gpa, .{ .doc_type = .{
                                     .value = tup.elems[i],
-                                    .needs_parens = false,
+                                    .needs_parens = true,
                                     .indent = item.indent + 1,
                                 } });
                                 try frames.append(gpa, .{ .indent = item.indent + 1 });
@@ -2426,7 +2426,7 @@ fn renderDocTypeHtml(
                                 i -= 1;
                                 try frames.append(gpa, .{ .doc_type = .{
                                     .value = tup.elems[i],
-                                    .needs_parens = false,
+                                    .needs_parens = true,
                                     .indent = item.indent,
                                 } });
                                 if (i > 0) try frames.append(gpa, .{ .html = ", " });
@@ -2445,7 +2445,7 @@ fn renderDocTypeHtml(
                                 try frames.append(gpa, .{ .html = ",\n" });
                                 try frames.append(gpa, .{ .doc_type = .{
                                     .value = app.args[i],
-                                    .needs_parens = false,
+                                    .needs_parens = true,
                                     .indent = item.indent + 1,
                                 } });
                                 try frames.append(gpa, .{ .indent = item.indent + 1 });
@@ -2457,7 +2457,7 @@ fn renderDocTypeHtml(
                                 i -= 1;
                                 try frames.append(gpa, .{ .doc_type = .{
                                     .value = app.args[i],
-                                    .needs_parens = false,
+                                    .needs_parens = true,
                                     .indent = item.indent,
                                 } });
                                 if (i > 0) try frames.append(gpa, .{ .html = ", " });
@@ -2572,7 +2572,7 @@ fn renderDocTypeHtml(
                             try frames.append(gpa, .{ .html = ",\n" });
                             try frames.append(gpa, .{ .doc_type = .{
                                 .value = item.value.args[i],
-                                .needs_parens = false,
+                                .needs_parens = true,
                                 .indent = item.indent + 1,
                             } });
                             try frames.append(gpa, .{ .indent = item.indent + 1 });
@@ -2584,7 +2584,7 @@ fn renderDocTypeHtml(
                             i -= 1;
                             try frames.append(gpa, .{ .doc_type = .{
                                 .value = item.value.args[i],
-                                .needs_parens = false,
+                                .needs_parens = true,
                                 .indent = item.indent,
                             } });
                             if (i > 0) try frames.append(gpa, .{ .html = ", " });
