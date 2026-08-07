@@ -385,7 +385,7 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// SBCS reg, reg, reg (subtract with carry/borrow, sets flags)
         pub fn sbcsRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
-            // SBCS <Xd>, <Xn>, <Xm> — same as SBC but with S bit (bit 29) set
+            // SBCS <Xd>, <Xn>, <Xm>—same as SBC but with S bit (bit 29) set
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b1111010000 << 21) |
@@ -631,7 +631,7 @@ pub fn Emit(comptime target: RocTarget) type {
         /// ORN reg, reg, reg (OR NOT: dst = src1 | ~src2)
         /// With src1 = XZR this computes dst = ~src2 (the MVN alias).
         pub fn ornRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
-            // ORN <Xd>, <Xn>, <Xm> — same as ORR but with the N (negate) bit set.
+            // ORN <Xd>, <Xn>, <Xm>—same as ORR but with the N (negate) bit set.
             const sf = width.sf();
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b0101010 << 24) |
@@ -783,7 +783,7 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
-        /// ADR Xd, #imm — compute PC-relative address
+        /// ADR Xd, #imm—compute PC-relative address
         /// offset_bytes is a byte offset from the ADR instruction, range ±1 MB.
         pub fn adr(self: *Self, rd: GeneralReg, offset_bytes: i21) Allocator.Error!void {
             // ADR: 0 immlo[1:0] 10000 immhi[18:0] Rd[4:0]
@@ -804,8 +804,8 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// The 4-instruction PC-relative address sequence used to materialize
-        /// internal code addresses: ADR Xd, #0 — MOVZ Xs, #lo16 — MOVK Xs,
-        /// #hi16, LSL #16 — ADD/SUB Xd, Xd, Xs.
+        /// internal code addresses: ADR Xd, #0—MOVZ Xs, #lo16—MOVK Xs,
+        /// #hi16, LSL #16—ADD/SUB Xd, Xd, Xs.
         ///
         /// The sequence encodes a pure byte delta from the ADR's own address, so
         /// it is correct wherever the code lands: linked sections load at
@@ -2161,7 +2161,7 @@ test "CC.returnI128ByPointer is false for all aarch64 targets" {
 /// where the sequence sits in memory. Mirrors the hardware so the test below
 /// checks the resulting address rather than just the bits.
 fn evalPcRelSequence(base: u64, instr_offset: u64, words: [4]u32) u64 {
-    // ADR Xd, #imm — anchor. The test emits it with imm 0, so Xd = PC.
+    // ADR Xd, #imm—anchor. The test emits it with imm 0, so Xd = PC.
     const adr = words[0];
     std.debug.assert((adr >> 24) & 0x1F == 0b10000 and adr >> 31 == 0);
     const anchor = base + instr_offset;

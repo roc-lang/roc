@@ -38,7 +38,7 @@ pub fn sanitisePathForSnapshots(path: []const u8) []const u8 {
     return path;
 }
 
-/// Byte offset where `path`'s filename starts — just past the last separator,
+/// Byte offset where `path`'s filename starts—just past the last separator,
 /// or 0 when there is none. Both separators are handled so the split is the
 /// same on every platform.
 fn filenameStart(path: []const u8) usize {
@@ -140,7 +140,7 @@ pub fn renderReportToBoxPlain(report: *const Report, writer: *std.Io.Writer, con
 // Lays a report out as a header line followed by the content:
 //
 // -- ❌ TYPE MISMATCH ----------------------------- path/to/file.roc:6:8
-// 
+//
 // <one-line summary>
 //
 // <source code>
@@ -150,7 +150,7 @@ pub fn renderReportToBoxPlain(report: *const Report, writer: *std.Io.Writer, con
 //
 // The header line starts with an emoji icon representing the severity,
 // followed by the title in ALL-CAPS, a dash-filled separator, and the location.
-// The same layout is used for the colored terminal output and the plain 
+// The same layout is used for the colored terminal output and the plain
 // markdown/snapshot output — the only difference is the palette (ANSI vs NO_COLOR).
 
 /// The thin red rule under the offending span.
@@ -970,7 +970,7 @@ fn wrapAndEmitBelowLine(
         start = end;
     }
     if (first) {
-        // Body was empty (prefix only) — still emit it.
+        // Body was empty (prefix only)—still emit it.
         try writer.splatByteAll(' ', base_indent);
         if (palette.secondary.len > 0 and ansiEscLen(prefix, 0) == 0) {
             try writer.writeAll(palette.secondary);
@@ -1257,7 +1257,7 @@ fn lineHasCaretRow(regions: []const UnderlineRegion, line_num: u32) bool {
 /// Write one caret row: the `^^^` line drawn under a source line. The padding
 /// before the first span mirrors the source line's own whitespace (preserving
 /// tabs so the carets stay aligned), gaps between spans are spaces, and each
-/// span becomes a run of carets — colored by its annotation on the terminal
+/// span becomes a run of carets—colored by its annotation on the terminal
 /// target, bare elsewhere. This is the single implementation of underline
 /// layout; every target that draws carets draws them through here.
 fn writeCaretRowForLine(

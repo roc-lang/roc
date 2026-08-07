@@ -49,8 +49,8 @@ pub const Version = struct {
     }
 
     /// Order two versions within the same compatibility group: by minor, then
-    /// patch. Asserts that the major versions match — and for major 0, that
-    /// the minors match too — since different compatibility groups are
+    /// patch. Asserts that the major versions match—and for major 0, that
+    /// the minors match too—since different compatibility groups are
     /// different packages for solving purposes and must never be compared.
     pub fn orderWithinMajor(self: Version, other: Version) std.math.Order {
         std.debug.assert(self.major == other.major);
@@ -232,9 +232,9 @@ fn makeUrlId(url: []const u8, prefix_start: usize, prefix_end: usize, suffix_sta
 /// The hash is the trailing run of base58 characters in the final path
 /// segment (ignoring a .tar.zst extension), so filenames may carry a prefix
 /// like "roc-thing-" as long as it ends with a non-base58 separator. The
-/// version may appear anywhere between the scheme and the hash — as its own
+/// version may appear anywhere between the scheme and the hash—as its own
 /// path segment, a filename prefix, or embedded in a segment like
-/// "v1.9.0-rc2" — but at most once.
+/// "v1.9.0-rc2"—but at most once.
 pub fn parseUrlPath(url: []const u8) error{ InvalidUrl, InvalidVersion, AmbiguousVersion, NoHashInUrl }!ParsedUrl {
     const url_id_start = schemeContentStart(url) orelse return error.InvalidUrl;
     const last_slash = std.mem.findLast(u8, url, "/") orelse return error.NoHashInUrl;

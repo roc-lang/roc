@@ -1,5 +1,5 @@
 # Cross-engine conformance for exact numeric literals: every executor must
-# produce identical bits for these — they exercise correctly-rounded float
+# produce identical bits for these—they exercise correctly-rounded float
 # conversion (ties-to-even, subnormals, overflow), exact Dec scaling, and
 # integer boundary values.
 

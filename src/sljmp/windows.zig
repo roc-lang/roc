@@ -44,8 +44,8 @@ const win32 = struct {
 };
 
 /// Windows x64 jmp_buf layout (240 bytes total):
-///   0x00-0x48: GP registers (RBX, RBP, RSI, RDI, R12-R15, RSP, RIP) — 10 * 8 = 80 bytes
-///   0x50-0xE0: XMM registers (XMM6-XMM15) — 10 * 16 = 160 bytes
+///   0x00-0x48: GP registers (RBX, RBP, RSI, RDI, R12-R15, RSP, RIP)—10 * 8 = 80 bytes
+///   0x50-0xE0: XMM registers (XMM6-XMM15)—10 * 16 = 160 bytes
 pub const JmpBuf = [30]u64;
 
 /// Naked function implementation for setjmp.

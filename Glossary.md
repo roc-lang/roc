@@ -158,7 +158,7 @@ Parsing of type vars: search `ty_var` in [Parser.zig](src/parse/Parser.zig)
 A function or type that is natively provided by Roc, for example `Dict.empty`, `List.map`, `Result`, ... .
 You don't need to import any of these to use them.
 
-[Builtin Docs](https://www.roc-lang.org/builtins)
+[Builtin Docs](https://www.roc-lang.org/docs/main/)
 
 Implementation of builtins: [src/builtins](src/builtins) (work in progress)
 
@@ -529,7 +529,7 @@ TODO
 
 Wrapping a value or function in a generic, opaque representation (box) that can easily be passed to the platform.
 A boxed value is allocated on the [heap](#heap).
-You can box something in Roc with the [builtin](#builtin) [Box.box](https://www.roc-lang.org/builtins/Box#box) and unbox it with [Box.unbox](https://www.roc-lang.org/builtins/Box#unbox).
+You can box something in Roc with the [builtin](#builtin) [Box.box](https://www.roc-lang.org/docs/main/Box/#box) and unbox it with [Box.unbox](https://www.roc-lang.org/docs/main/Box/#unbox).
 
 [Example handling of boxes in basic-cli](https://github.com/search?q=repo%3Aroc-lang%2Fbasic-cli%20Box&type=code).
 
@@ -639,7 +639,7 @@ TODO
 (ADT)
 
 A custom type that can combine these simpler types:
-- Sum Types: a value can be one of several options, for example, with [Result](https://www.roc-lang.org/builtins/Result/) it can be either:
+- Sum Types: a value can be one of several options, for example, with [Try](https://www.roc-lang.org/docs/main/Try/) it can be either:
   - `Ok(something)`
   - `Err(some_error)`
 - Product Types: multiple pieces of data together, for example, A `Person` record might contain both a `name` and an `age`.

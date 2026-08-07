@@ -2,14 +2,14 @@
 
 ## Problem
 
-When the compiler itself panics — an `unreachable`, a failed
+When the compiler itself panics—an `unreachable`, a failed
 `std.debug.assert`, an explicit `std.debug.panic("… invariant violated: …")`,
-or a segfault — the user sees a bare Zig stack trace. The stack trace names
+or a segfault—the user sees a bare Zig stack trace. The stack trace names
 Zig functions and addresses, but it never says the one thing that turns an
 internal compiler error (ICE) into an actionable bug report: **what the
 compiler was doing.** Which phase was running? Which module was in flight?
-Which definition or proc was being processed? And — most importantly for
-anyone triaging — what single command reproduces it?
+Which definition or proc was being processed? And—most importantly for
+anyone triaging—what single command reproduces it?
 
 That information exists, in structured form, at the moment of the crash. The
 compile coordinator knows the module's name, its filesystem path, and its
@@ -36,14 +36,14 @@ There is no custom panic handler in the CLI binary. `src/cli/main.zig`'s
 Debug or ReleaseSafe build routes to `std.debug.defaultPanic` and prints only
 a stack trace. `src/cli/main.zig` alone contains 28 `std.debug.panic(
 "… invariant violated: …")` sites (of 46 `std.debug.panic` calls in the
-file) — for example `:1680` (`"default roc command invariant violated:
+file)—for example `:1680` (`"default roc command invariant violated:
 hosted section size {d} differs from checked hosted catalog size {d}"`),
 `:2628` (`"default roc command invariant violated: no platform entrypoints
 in checked LIR root metadata"`), `:2751` (`"interpreter run invariant
 violated: missing LIR shared-memory handle"`), `:3363` (`"default app run
 invariant violated: no platform entrypoints"`), and `:5549` (`"dev run
 invariant violated: LIR proc {d} was not compiled before image symbol
-publication"`) — each one a place where an ICE can surface today with no
+publication"`)—each one a place where an ICE can surface today with no
 context.
 
 Across `src/` (559 `.zig` files) the explicit-abort surface is large:
@@ -61,7 +61,7 @@ failed `assert` panic), and explicit `@panic`/`std.debug.panic` in every
 build mode. Those are exactly the paths a developer or CI runs when an ICE is
 first seen, so that is the right coverage target.
 
-## Background — the pieces already in the repo
+## Background—the pieces already in the repo
 
 Everything this project needs already exists in some form; the work is to
 connect them.
@@ -81,9 +81,9 @@ connect them.
   WaitingOnPlatformRequirements → TypeCheck → Done`. Each `ModuleState`
   carries `name` (`:460`), `path` (`:462`), and `phase` (`:484`). Worker
   threads pull tasks in `workerThread` (`:4830`) and dispatch them in
-  `executeTaskInline` (`:2734`), whose three arms —
+  `executeTaskInline` (`:2734`), whose three arms—
   `.parse → executeParse`, `.canonicalize → executeCanonicalize`,
-  `.type_check → executeTypeCheck` (`:2736`–`:2738`) — are the natural
+  `.type_check → executeTypeCheck` (`:2736`–`:2738`)—are the natural
   push/pop boundaries: each task knows its module the whole time it runs.
 
 - **Signal handling for faults is already installed per thread.**
@@ -93,26 +93,26 @@ connect them.
   wires those callbacks and is installed on the main thread
   (`main.zig:1031`), on every coordinator worker (`coordinator.zig:4831`),
   and in the shared thread pool (`base/parallel.zig:48`). A segfault therefore
-  already runs Roc-authored code before the process dies — the hook point for
+  already runs Roc-authored code before the process dies—the hook point for
   the stretch goal below.
 
 - **The house style for contextual diagnostics is set by the interpreter.**
   `src/eval/interpreter.zig`'s `invariantFailed` (`:819`) prints a formatted
-  message and asserts in Debug, `unreachable` in release — a terse, one-line,
+  message and asserts in Debug, `unreachable` in release—a terse, one-line,
   context-carrying failure. The crash-context block should read the same way:
   plain text, no ceremony, the facts and nothing else.
 
 ## Solution design
 
-A small module — suggest `src/base/crash_context.zig` (visible to the
+A small module—suggest `src/base/crash_context.zig` (visible to the
 coordinator, backends, and interpreter) or `src/cli/crash_context.zig` if kept
-CLI-local — that owns a **thread-local, fixed-depth, zero-allocation stack of
+CLI-local—that owns a **thread-local, fixed-depth, zero-allocation stack of
 context frames**, plus a `pub const panic` override in `src/cli/main.zig`
 (and optionally the LSP and snapshot binaries) that prints the frames.
 
 ### The frame
 
-A frame is a small fixed-size value — no owned allocations, no slices into
+A frame is a small fixed-size value—no owned allocations, no slices into
 freed memory:
 
 ```zig
@@ -128,7 +128,7 @@ pub const Frame = struct {
 The strings are *borrowed*, not copied: a frame is only live while the code
 that pushed it is on the stack, so the module path/name it points at (owned by
 `ModuleState`) outlives the frame by construction. Pushing and popping copy the
-small struct into and out of a fixed array — no heap traffic, so it is
+small struct into and out of a fixed array—no heap traffic, so it is
 affordable even in release builds.
 
 ### The thread-local stack
@@ -157,14 +157,14 @@ block notes when frames were dropped.
 
 ### Where frames are pushed
 
-Push at cheap boundaries where the identity of the work is already known — one
+Push at cheap boundaries where the identity of the work is already known—one
 push per unit of work, `defer`-popped:
 
 - **Coordinator worker tasks** (`coordinator.zig` `executeTaskInline`,
   `:2734`): each arm pushes `{ .phase = .Parse/.Canonicalize/.TypeCheck,
   .module_path = mod.path, .module_name = mod.name }` for the duration of
   `executeParse` / `executeCanonicalize` / `executeTypeCheck`.
-- **Post-check stage entry** — the stage sequence driven by
+- **Post-check stage entry**—the stage sequence driven by
   `lowerCheckedModulesToLir` (`src/lir/checked_pipeline.zig:214`), whose
   `postcheck.*.run` calls fire in order (`:235`–`:273`: Monotype lower,
   MonotypeLifted lift, SpecConstr, LambdaSolved solve, SolvedLirLower):
@@ -199,7 +199,7 @@ fn iceHandler(msg: []const u8, ret_addr: ?usize) noreturn {
 (they are thread-local, so it prints exactly the panicking thread's work and
 nothing from any other worker) and writes the block below to stderr before the
 default handler prints the stack trace. It uses a fixed stack buffer and
-direct stderr writes — no allocation, safe to run mid-panic.
+direct stderr writes—no allocation, safe to run mid-panic.
 
 ### What the printed block looks like
 
@@ -236,7 +236,7 @@ phase and thread only and omits the repro line rather than inventing one.
 ### Multi-threading
 
 Context frames are thread-local, so the handler prints only the frames of the
-thread that panicked — which is the thread that matters, because Zig's panic
+thread that panicked—which is the thread that matters, because Zig's panic
 runs on the faulting thread. Other workers' in-flight modules are irrelevant
 noise and are never printed. The block names the thread (`std.Thread`'s
 current name, when set for coordinator workers) so a report from a parallel
@@ -264,7 +264,7 @@ path is an additive follow-on.
   diagnostics, exit codes, and timing on success are unchanged.
 - **Comment hygiene.** Suggested comments must not use the banned word that
   the CI semantic-audit gate rejects (the one starting "fall-"), and must
-  describe only the current behavior — never what any code "previously" did.
+  describe only the current behavior—never what any code "previously" did.
 
 ## Implementation steps
 
@@ -274,7 +274,7 @@ Small; on the order of a few days.
    `frames`/`depth` stack, `push`/`pop`/`enter`/`Guard`, and
    `printFramesForCurrentThread(msg)` (fixed-buffer, allocation-free, stderr).
    Include the repro-command derivation from the innermost path-bearing frame.
-2. **Push at the coordinator task boundaries** — the three arms of
+2. **Push at the coordinator task boundaries**—the three arms of
    `executeTaskInline` (`coordinator.zig:2734`). This alone covers the most
    common ICEs (parse/canonicalize/type-check).
 3. **Add the `pub const panic` override** in `src/cli/main.zig` that prints
@@ -292,12 +292,12 @@ Small; on the order of a few days.
 
 Every criterion below must hold; the project is not done until all do:
 
-- A forced panic in each covered phase — parse, canonicalize, type-check,
-  post-check, backend codegen, interpreter — prints a context block naming the
+- A forced panic in each covered phase—parse, canonicalize, type-check,
+  post-check, backend codegen, interpreter—prints a context block naming the
   correct phase and the correct module (and, where applicable, the def/proc),
   followed by the normal stack trace.
 - The printed block includes a copy-pasteable repro command that, run on a
-  clean checkout, re-triggers the same ICE — verified for at least the
+  clean checkout, re-triggers the same ICE—verified for at least the
   `roc check <module>` case.
 - On a multi-threaded build, a panic on a worker thread prints only that
   thread's frames (no other worker's module appears) and names the thread.
@@ -311,15 +311,15 @@ Every criterion below must hold; the project is not done until all do:
   and the semantic-audit gate passes (no banned comment words; no comments
   referencing prior code states).
 - The `pub const panic` override coexists with the existing stack-overflow
-  signal handler and with the snapshot tool's own override — none is
+  signal handler and with the snapshot tool's own override—none is
   disabled or double-installed.
 
 ## How to evaluate the result (long-term)
 
 ### Correctness ideal
 
-Every deterministic compiler abort — explicit `@panic`/`std.debug.panic`, and
-`unreachable`/failed `assert` in Debug and ReleaseSafe — carries the phase +
+Every deterministic compiler abort—explicit `@panic`/`std.debug.panic`, and
+`unreachable`/failed `assert` in Debug and ReleaseSafe—carries the phase +
 module (+ item) that was in flight and a working repro command, on the exact
 thread that failed. A new phase or backend added later gets context for free
 once it adds one push at its work boundary; the missing-context failure mode is
@@ -327,7 +327,7 @@ a single missing `enter` call at an entry point, which is easy to review for.
 
 ### Performance ideal
 
-None at runtime beyond a fixed-array store and a `defer` per work unit — no
+None at runtime beyond a fixed-array store and a `defer` per work unit—no
 allocation, no locking, no cross-thread coordination (frames are thread-local).
 The crash path may do as much work as it likes since the process is dying.
 Guard against regression by keeping the "zero allocation on push/pop" property
@@ -343,15 +343,15 @@ wrapped in `crash_context.enter` flags gaps.
 ## Tests to add
 
 - **A Debug-only child-process test per phase.** Extend the existing CLI test
-  runner — `src/cli/test/parallel_cli_runner.zig` already spawns child
+  runner—`src/cli/test/parallel_cli_runner.zig` already spawns child
   compiler processes and asserts on their stderr (`stderr_exact`,
   `expected_build_stderr_contains`, and `not_contains` with
   `.{ .stream = .stderr, .text = "panic" }` / `"invariant violated"`, e.g. the
   #9588 case at `:749`). Add spec entries that compile inputs which trip a
   *controlled* ICE in each phase (behind a debug-only test hook that forces a
   panic when a sentinel module/def is seen), and assert the child's stderr
-  **contains** the expected context lines — the phase name, the module name,
-  and the `Reproduce with: roc check …` line — ahead of the stack trace.
+  **contains** the expected context lines—the phase name, the module name,
+  and the `Reproduce with: roc check …` line—ahead of the stack trace.
 - **A thread-name assertion.** One spec that forces a panic on a coordinator
   worker during a parallel build and asserts the block names a worker thread
   and shows only that module's frames.
@@ -364,9 +364,9 @@ wrapped in `crash_context.enter` flags gaps.
 
 ## Related work in the repo
 
-- `src/snapshot_tool/main.zig:36` — the working `pub const panic` precedent to
+- `src/snapshot_tool/main.zig:36`—the working `pub const panic` precedent to
   mirror (thread-local state read in the handler, chain to the default).
-- `src/base/signal_handler.zig` / `src/base/stack_overflow.zig` — the
+- `src/base/signal_handler.zig` / `src/base/stack_overflow.zig`—the
   per-thread fault-handling hooks the segfault stretch goal extends.
-- `src/eval/interpreter.zig:819` (`invariantFailed`) — the house style for a
+- `src/eval/interpreter.zig:819` (`invariantFailed`)—the house style for a
   terse, context-carrying failure the printed block should match.

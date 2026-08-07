@@ -31,7 +31,7 @@ a=0O0\r.0
 
 # TOKENS
 ~~~zig
-LowerIdent,OpAssign,Int,NewlineDotInt,
+LowerIdent,OpAssign,Int,DotInt,
 EndOfFile,
 ~~~
 # PARSE

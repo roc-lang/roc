@@ -40,7 +40,7 @@ const FormatFlags = enum {
 pub const Options = struct {
     /// Version string of the compiler that is running. When it is a nightly
     /// newer than the one a header pins with `roc: "..."`, formatting rewrites
-    /// that pin to name it — see `base.roc_version.shouldUpgrade`.
+    /// that pin to name it—see `base.roc_version.shouldUpgrade`.
     ///
     /// Null leaves every pin exactly as written, which is what tools that
     /// format for inspection want: the snapshot tool, the playground and the
@@ -993,7 +993,7 @@ const Formatter = struct {
                 try fmt.pushIndent();
             }
             const ident_tag = fmt.ast.tokens.tokens.items(.tag)[ident];
-            if (ident_tag == .NoSpaceDotUpperIdent or ident_tag == .NoSpaceDotLowerIdent or ident_tag == .DotUpperIdent or ident_tag == .DotLowerIdent or ident_tag == .NewlineDotLowerIdent) {
+            if (ident_tag == .NoSpaceDotUpperIdent or ident_tag == .NoSpaceDotLowerIdent or ident_tag == .DotUpperIdent or ident_tag == .DotLowerIdent) {
                 try fmt.push('.');
             }
         }
@@ -3700,7 +3700,7 @@ const Formatter = struct {
         const tag = fmt.ast.tokens.tokens.items(.tag)[ti];
         const region = fmt.ast.tokens.resolve(ti);
         var start = region.start.offset;
-        if (tag == .NoSpaceDotLowerIdent or tag == .NoSpaceDotUpperIdent or tag == .DotLowerIdent or tag == .DotUpperIdent or tag == .NewlineDotLowerIdent) {
+        if (tag == .NoSpaceDotLowerIdent or tag == .NoSpaceDotUpperIdent or tag == .DotLowerIdent or tag == .DotUpperIdent) {
             start += 1;
         }
 

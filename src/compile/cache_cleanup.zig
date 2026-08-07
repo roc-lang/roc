@@ -8,11 +8,11 @@
 //! it exits automatically when done, and if the main process exits first,
 //! the OS will terminate the cleanup thread along with the process.
 //!
-//! This is strictly a native `roc` CLI operation — it is never reached on
+//! This is strictly a native `roc` CLI operation—it is never reached on
 //! wasm (`compile/mod.zig` substitutes a stub there). It therefore talks to
 //! the real OS directly through `std.Io.Dir` rather than going through the
 //! `CoreCtx` filesystem abstraction, whose only purpose is injecting a
-//! non-OS implementation (the playground's virtual FS or test mocks) — none
+//! non-OS implementation (the playground's virtual FS or test mocks)—none
 //! of which can apply here. The directory base paths are resolved once by the
 //! caller (see `startBackgroundCleanup`) and copied in by value, so this code
 //! depends on neither `CoreCtx` nor a caller-provided allocator. The walk uses

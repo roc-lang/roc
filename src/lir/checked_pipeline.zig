@@ -16,6 +16,8 @@ const BoxReuse = @import("box_reuse.zig");
 const ReturnSlot = @import("return_slot.zig");
 const StrAppend = @import("str_append.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
+const LoopAppendPromote = @import("loop_append_promote.zig");
+const RangeProve = @import("range_prove.zig");
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const LIR = core.LIR;
@@ -66,6 +68,11 @@ pub const TargetConfig = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// Thread slack counters through loop-carried append-only lists so the
+    /// per-element ownership and capacity checks amortize. On by default;
+    /// shape-comparison tests turn it off because promotion intentionally
+    /// changes the loop skeleton of qualifying sides.
+    promote_loop_appends: bool = true,
     /// Control Monotype specialization cache reads and writes.
     monotype_cache: MonotypeCacheControl = .{},
     /// Build ConstStore materialization plans for requested layouts.
@@ -76,6 +83,10 @@ pub const TargetConfig = struct {
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
     tag_reachability: bool = false,
+    /// Elide checks proven always-safe by unsigned value-range analysis. This
+    /// is enabled for optimized builds and kept off for dev and compile-time
+    /// evaluation.
+    prove_ranges: bool = false,
     /// Debug-only: forwarded to `SolvedLirLower.Options.debug_materialized_out`
     /// so a differential harness can execute the Debug verifier's materialized
     /// Lambda Mono program. The slot receives a value only in Debug builds.
@@ -573,6 +584,12 @@ pub fn lowerCheckedModulesToLir(
     // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    if (target.promote_loop_appends) {
+        try LoopAppendPromote.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
+    if (target.prove_ranges) {
+        try RangeProve.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
     try BoxReuse.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try StrAppend.run(&lowered.lir_result.store);

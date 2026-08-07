@@ -70,8 +70,6 @@ pub const Token = struct {
         DotLowerIdent,
         DotInt,
         DotUpperIdent,
-        NewlineDotInt, // trivia before the dot contains a line break
-        NewlineDotLowerIdent, // trivia before the dot contains a line break
         NoSpaceDotInt,
         NoSpaceDotLowerIdent,
         NoSpaceDotUpperIdent,
@@ -190,8 +188,6 @@ pub const Token = struct {
                 .DotLowerIdent,
                 .DotInt,
                 .DotUpperIdent,
-                .NewlineDotInt,
-                .NewlineDotLowerIdent,
                 .NoSpaceDotInt,
                 .NoSpaceDotLowerIdent,
                 .NoSpaceDotUpperIdent,
@@ -301,7 +297,6 @@ pub const Token = struct {
             return tok == .UpperIdent or
                 tok == .LowerIdent or
                 tok == .DotLowerIdent or
-                tok == .NewlineDotLowerIdent or
                 tok == .DotUpperIdent or
                 tok == .NoSpaceDotLowerIdent or
                 tok == .NoSpaceDotUpperIdent or
@@ -332,8 +327,6 @@ pub const Token = struct {
                 tok == .DotLowerIdent or
                 tok == .DotUpperIdent or
                 tok == .DotInt or
-                tok == .NewlineDotLowerIdent or
-                tok == .NewlineDotInt or
                 tok == .NoSpaceDotLowerIdent or
                 tok == .NoSpaceDotUpperIdent or
                 tok == .NoSpaceDotInt or
@@ -447,7 +440,6 @@ pub const Token = struct {
                 => .variable,
 
                 .DotLowerIdent,
-                .NewlineDotLowerIdent,
                 .NoSpaceDotLowerIdent,
                 => .field,
 
@@ -458,7 +450,6 @@ pub const Token = struct {
                 .Int,
                 .Float,
                 .DotInt,
-                .NewlineDotInt,
                 .NoSpaceDotInt,
                 .MalformedNumberBadSuffix,
                 .MalformedNumberUnicodeSuffix,
@@ -745,9 +736,8 @@ pub const Cursor = struct {
         }
     }
 
-    /// Chomps "trivia" (whitespace, comments, etc.) and reports whether it contained a line break.
-    pub fn chompTrivia(self: *Cursor) bool {
-        var saw_newline = false;
+    /// Chomps "trivia" (whitespace, comments, etc.).
+    pub fn chompTrivia(self: *Cursor) void {
         while (self.pos < self.buf.len) {
             const b = self.buf[self.pos];
             if (b == ' ') {
@@ -755,10 +745,8 @@ pub const Cursor = struct {
             } else if (b == '\t') {
                 self.pos += 1;
             } else if (b == '\n') {
-                saw_newline = true;
                 self.pos += 1;
             } else if (b == '\r') {
-                saw_newline = true;
                 self.pos += 1;
                 if (self.pos < self.buf.len and self.buf[self.pos] == '\n') {
                     self.pos += 1;
@@ -777,7 +765,6 @@ pub const Cursor = struct {
                 break;
             }
         }
-        return saw_newline;
     }
 
     pub fn chompNumber(self: *Cursor) Token.Tag {
@@ -1363,20 +1350,17 @@ pub const Tokenizer = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        var saw_whitespace = true;
-        var saw_newline = false;
+        var sawWhitespace: bool = true;
         while (self.cursor.pos < self.cursor.buf.len) {
             const start = self.cursor.pos;
-            const sp = saw_whitespace;
-            const line_break = saw_newline;
-            saw_whitespace = false;
-            saw_newline = false;
+            const sp = sawWhitespace;
+            sawWhitespace = false;
             const b = self.cursor.buf[self.cursor.pos];
             switch (b) {
                 // Whitespace & control characters
                 0...32, '#' => {
-                    saw_newline = self.cursor.chompTrivia();
-                    saw_whitespace = true;
+                    self.cursor.chompTrivia();
+                    sawWhitespace = true;
                 },
 
                 // Dot (.)
@@ -1400,12 +1384,7 @@ pub const Tokenizer = struct {
                         } else if (n >= '0' and n <= '9') {
                             self.cursor.pos += 1;
                             self.cursor.chompInteger();
-                            var tag: Token.Tag = if (!sp)
-                                .NoSpaceDotInt
-                            else if (line_break)
-                                .NewlineDotInt
-                            else
-                                .DotInt;
+                            var tag: Token.Tag = if (sp) .DotInt else .NoSpaceDotInt;
                             const suffix_start = self.cursor.pos;
                             const suffix_tag = self.cursor.chompNumberSuffix(tag);
                             if (self.cursor.pos != suffix_start) {
@@ -1416,12 +1395,7 @@ pub const Tokenizer = struct {
                             }
                             try self.pushTokenNormalHere(gpa, tag, start);
                         } else if (n >= 'a' and n <= 'z') {
-                            var tag: Token.Tag = if (!sp)
-                                .NoSpaceDotLowerIdent
-                            else if (line_break)
-                                .NewlineDotLowerIdent
-                            else
-                                .DotLowerIdent;
+                            var tag: Token.Tag = if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent;
                             self.cursor.pos += 1;
                             const text_start = self.cursor.pos;
                             if (!self.cursor.chompIdentGeneral()) {
@@ -2205,19 +2179,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                     try buf2.append('1');
                 }
             },
-            .NewlineDotInt => {
-                try buf2.append('.');
-                for (1..length) |_| {
-                    try buf2.append('1');
-                }
-            },
             .DotLowerIdent => {
-                try buf2.append('.');
-                for (1..length) |_| {
-                    try buf2.append('z');
-                }
-            },
-            .NewlineDotLowerIdent => {
                 try buf2.append('.');
                 for (1..length) |_| {
                     try buf2.append('z');
@@ -2635,8 +2597,6 @@ test "tokenizer" {
     // existing behavior must not change:
     try testTokenization(gpa, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
     try testTokenization(gpa, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
-    try testTokenization(gpa, "value\n.field", &[_]Token.Tag{ .LowerIdent, .NewlineDotLowerIdent });
-    try testTokenization(gpa, "value\n.0", &[_]Token.Tag{ .LowerIdent, .NewlineDotInt });
     try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});
     try testTokenization(gpa, "var", &[_]Token.Tag{.KwVar});
     try testTokenization(gpa, "{a, b}", &[_]Token.Tag{ .OpenCurly, .LowerIdent, .Comma, .LowerIdent, .CloseCurly });

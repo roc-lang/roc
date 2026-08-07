@@ -4,8 +4,8 @@
 //! declaration statements carry dotted names like "Taxonomy.Domain.Kingdom"),
 //! applying the type-module visibility rule: in a type module only the type
 //! matching the module name and its associated items are public. Every item's
-//! type comes from the checked artifact — the canonical scheme/root published
-//! at check time — never from source annotations or rendered strings.
+//! type comes from the checked artifact—the canonical scheme/root published
+//! at check time—never from source annotations or rendered strings.
 //!
 //! Extraction has no fallbacks: missing checked data for a public item, an
 //! unknown origin module, or a public type from an unstable (path or
@@ -169,7 +169,7 @@ const Extractor = struct {
         defer seen_paths.deinit(self.gpa);
 
         // Type declaration statements (nominal and alias, including nested
-        // associated types — their names are already dotted).
+        // associated types—their names are already dotted).
         const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (stmts_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
@@ -203,7 +203,7 @@ const Extractor = struct {
         }
 
         // Top-level value defs (values, associated methods, and associated
-        // constants — associated names are already dotted).
+        // constants—associated names are already dotted).
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
@@ -501,7 +501,7 @@ fn nameIsPublic(name: []const u8, module_name: []const u8) bool {
 
 /// The stable qualified path for a named type reference. Type names in CIR
 /// are dotted relative to their module's main type, which itself matches the
-/// module name — so a name that already starts with the module name is used
+/// module name—so a name that already starts with the module name is used
 /// as-is, and anything else is qualified with its module. Builtin types use
 /// their bare name (there is no meaningful "Builtin." namespace for users).
 fn qualifiedPath(

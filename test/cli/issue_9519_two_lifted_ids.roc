@@ -1,4 +1,4 @@
-# Regression fixture for https://github.com/roc-lang/roc/issues/9519 —
+# Regression fixture for https://github.com/roc-lang/roc/issues/9519—
 # "Monotype function template was assigned two lifted function ids". The two
 # expects reach the same generic closure specialization through two call
 # sites; flaky identity once assigned it two lifted function ids.

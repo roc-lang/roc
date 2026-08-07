@@ -1,7 +1,7 @@
 # Debugging Backend Bugs (Interpreter / Dev / WASM)
 
 This guide walks through the workflow for reproducing, tracing, and fixing
-bugs that surface in the eval backends — the LIR interpreter, dev (native)
+bugs that surface in the eval backends—the LIR interpreter, dev (native)
 code generator, or WASM code generator.
 
 ## Overview
@@ -21,7 +21,7 @@ When a backend crashes or produces the wrong answer, the workflow is:
 
 ## Two test systems
 
-There are **two separate test systems** — don't mix them up:
+There are **two separate test systems**—don't mix them up:
 
 | System | Build command | How to filter | What it tests |
 |--------|--------------|---------------|---------------|
@@ -29,7 +29,7 @@ There are **two separate test systems** — don't mix them up:
 | **Unit tests** | `zig build run-test-zig` | `--test-filter "pattern"` | Sequential Zig tests (`helpers.zig`, `fx_platform_test.zig`, etc.) |
 
 The eval test runner is a standalone binary. You build it once, then run it
-directly — there's no need to rebuild between runs unless you change source.
+directly—there's no need to rebuild between runs unless you change source.
 
 ## 1. Add a reproducing test case
 
@@ -41,13 +41,13 @@ Test cases live in `src/eval/test/eval_tests.zig`. Add a new entry to the
 ```
 
 Key fields:
-- **`name`** — descriptive name, used by `--filter`
-- **`source`** — a Roc expression (single expression, not a module)
-- **`expected`** — one of:
-  - `.i64_val`, `.u64_val`, `.f64_val`, `.bool_val`, `.dec_val` — typed value check (interpreter only) + cross-backend `Str.inspect` comparison
-  - `.str_val` — string value check
-  - `.inspect_str` — only compare `Str.inspect` output across backends
-- **`skip`** — optionally skip specific backends: `.skip = .{ .wasm = true }`
+- **`name`**—descriptive name, used by `--filter`
+- **`source`**—a Roc expression (single expression, not a module)
+- **`expected`**—one of:
+  - `.i64_val`, `.u64_val`, `.f64_val`, `.bool_val`, `.dec_val`—typed value check (interpreter only) + cross-backend `Str.inspect` comparison
+  - `.str_val`—string value check
+  - `.inspect_str`—only compare `Str.inspect` output across backends
+- **`skip`**—optionally skip specific backends: `.skip = .{ .wasm = true }`
 
 Rebuild the test runner after adding your test:
 
@@ -57,7 +57,7 @@ zig build build-test-eval-runner
 
 ## 2. Run the failing test
 
-**Build once, then run the binary directly** — this is much faster than
+**Build once, then run the binary directly**—this is much faster than
 rebuilding via `zig build run-test-eval` each time:
 
 ```sh
@@ -105,11 +105,11 @@ Note the different flag: `--test-filter` (not `--filter`).
 There are two independent comptime trace flags. They are compiled out when
 disabled, so normal builds have zero overhead.
 
-**Important**: Trace flags require a rebuild — they are comptime options passed
+**Important**: Trace flags require a rebuild—they are comptime options passed
 to `zig build`, not runtime flags. After rebuilding with trace flags, you run
 the binary as normal.
 
-### `-Dtrace-eval=true` — Lowering + interpreter eval tracing
+### `-Dtrace-eval=true`—Lowering + interpreter eval tracing
 
 Traces the full pipeline:
 - Lowering stages: canonical lowering → LIR → RC insertion
@@ -134,7 +134,7 @@ Example output:
 [interp] list_concat: elem_width=24 align=8 rc=true
 ```
 
-### `-Dtrace-refcount=true` — Memory + refcount tracing
+### `-Dtrace-refcount=true`—Memory + refcount tracing
 
 Traces every allocation, deallocation, reallocation, and refcount operation:
 

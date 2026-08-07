@@ -270,7 +270,7 @@ def format_lines(summary, line_data, root, top_n, context):
             continue
 
         section_lines = []
-        section_lines.append(f"## {basename} — {pct}% covered ({uncovered} uncovered lines)")
+        section_lines.append(f"## {basename}—{pct}% covered ({uncovered} uncovered lines)")
         section_lines.append("")
 
         # Try to read source for context

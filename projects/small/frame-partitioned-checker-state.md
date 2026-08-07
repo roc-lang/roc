@@ -9,17 +9,17 @@ storage, so a consumer resolved it against the wrong frame.**
 
 - Issue #9827 (checker): `return`/`?` constraints were appended to the
   checker's shared constraint list, and the drain at every lambda close
-  processed *all* of them — a nested returned lambda's rank-3 constraint
+  processed *all* of them—a nested returned lambda's rank-3 constraint
   was unified while checking a top-level dependency in a rank-2 env,
   panicking the generalizer on a well-typed program. The first fix
-  (PR #9929, tag-and-filter on the shared list) **failed** — other
-  consumers still drained foreign frames' constraints — and was redone a
+  (PR #9929, tag-and-filter on the shared list) **failed**—other
+  consumers still drained foreign frames' constraints—and was redone a
   day later (PR #10010) as dedicated per-frame storage:
   `return_constraint_frames` + `pushReturnConstraintFrame`
   (`src/check/Check.zig:129`, `:18182`), each lambda draining exactly
   `[frame.start..]` with a frame-identity assert.
 - Issues #9961/#9912 (canonicalization): the declaration currently being
-  defined could satisfy its own RHS lookups — `Thing : Thing` reported a
+  defined could satisfy its own RHS lookups—`Thing : Thing` reported a
   false RECURSIVE ALIAS; `SelfRef := [].{ with_uri = with_uri }`
   manufactured a self-cycle that overflowed the stack downstream. Fixed
   (PR #10001) with explicitly scoped defining-state:
@@ -31,7 +31,7 @@ explicit frame stack, and asserts that frames balance. What does NOT
 exist is any assurance that these were the only two members. Nothing
 distinguishes, in either phase's code, "this list is settled-state by
 design (drained once at end of check)" from "this list is frame-scoped
-and every consumer must filter" — the distinction lives in each list's
+and every consumer must filter"—the distinction lives in each list's
 drain discipline, which is exactly what #9827 got wrong. The failed
 #9929 attempt shows the cost of guessing: tag-and-filter looked
 equivalent and wasn't.
@@ -62,9 +62,9 @@ returns unless it adopts the frame-storage shape first.
   shared-list variant failed and the frame-partitioned variant is what
   held. The strongest single instability signal in the July analysis.
 - `src/check/Check.zig:129` `return_constraint_frames`, `:18182`
-  `pushReturnConstraintFrame` — the template cure.
+  `pushReturnConstraintFrame`—the template cure.
 - `src/canonicalize/Can.zig:209` `active_decl_scopes`, `:310`
-  `scratch_defining_bound_vars` — the same template in canonicalization.
+  `scratch_defining_bound_vars`—the same template in canonicalization.
 - No inventory exists: no comment on the checker's other deferred lists
   states whether they are settled-state or frame-scoped, and no assert
   enforces the distinction.
@@ -98,7 +98,7 @@ Every criterion below must hold; the project is not done until all do:
 
 - The inventory exists (PR description or code comments), covering every
   deferred/growable collection on `Check.zig`'s `Self` and `Can.zig`'s
-  scope state — none unclassified.
+  scope state—none unclassified.
 - Every frame-scoped collection is structurally frame-partitioned; no
   consumer filters a shared list by tag to find its frame's entries.
   `grep -n "return_lambda" src/check/Check.zig` (the #9929 tag) matches
@@ -119,7 +119,7 @@ Every criterion below must hold; the project is not done until all do:
 "Drained the wrong frame's work" is unrepresentable for converted lists
 (the storage is the frame) and loud for the rest (identity asserts). A
 new deferred list must choose a classification to compile-review
-cleanly — the inventory makes "unclassified" visible.
+cleanly—the inventory makes "unclassified" visible.
 
 ### Performance ideal
 
@@ -139,5 +139,5 @@ parity on the snapshot corpus.
 
 ## Related projects
 
-- [../small/audit-solver-mutating-rewrites.md](../small/audit-solver-mutating-rewrites.md)
-  — the same audit-and-codify method applied to solver mutations.
+- [../small/audit-solver-mutating-rewrites.md](../small/audit-solver-mutating-rewrites.md)—
+  the same audit-and-codify method applied to solver mutations.

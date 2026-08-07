@@ -104,7 +104,7 @@ test "computeDisplayWidth: plain ascii" {
 }
 
 test "computeDisplayWidth: skips ANSI color codes" {
-    // The cyan REPL prompt: ESC[1;36m » ESC[0m space — visible width is 2.
+    // The cyan REPL prompt: ESC[1;36m » ESC[0m space—visible width is 2.
     try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("\x1b[1;36m»\x1b[0m "));
     try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("\x1b[1;36m…\x1b[0m "));
 }

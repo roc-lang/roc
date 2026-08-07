@@ -8,7 +8,7 @@ type=repl
 » "a,b,a".replace_first(",", " and ")
 » "abc".replace_first("x", "y")
 » "abc".replace_first("", "X")
-» source = "alpha, beta, gamma, delta — this is a long heap string that will not fit inline"
+» source = "alpha, beta, gamma, delta—this is a long heap string that will not fit inline"
 » Str.replace_first(source, ", ", " / ")
 » source
 ~~~
@@ -21,8 +21,8 @@ type=repl
 ---
 assigned `source`
 ---
-"alpha / beta, gamma, delta — this is a long heap string that will not fit inline"
+"alpha / beta, gamma, delta—this is a long heap string that will not fit inline"
 ---
-"alpha, beta, gamma, delta — this is a long heap string that will not fit inline"
+"alpha, beta, gamma, delta—this is a long heap string that will not fit inline"
 # PROBLEMS
 NIL

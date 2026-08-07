@@ -1,4 +1,4 @@
-## parser_v1 with `fail` taking a second argument — a MAJOR change.
+## parser_v1 with `fail` taking a second argument—a MAJOR change.
 
 Parser(input, val) := { run : input -> [Ok(val, input), Err(Str)] }.{
 

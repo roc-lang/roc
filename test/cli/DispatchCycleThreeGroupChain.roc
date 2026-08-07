@@ -1,7 +1,7 @@
 # Dispatch-cycle matrix (plan.md item 6/6a): a three-group dispatch chain
 # whose back-edge closes only at the third group. `alpha` dispatches to
 # Hop.once (group 2), whose body dispatches to Hop.twice (group 3), whose body
-# calls back into the suspended `alpha` — Invariant D must keep the first two
+# calls back into the suspended `alpha`—Invariant D must keep the first two
 # groups open (neither seals while its obligation is outstanding) so all three
 # merge and generalize together.
 Hop := [Mk(U64)].{

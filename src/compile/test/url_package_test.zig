@@ -180,8 +180,8 @@ test "transitive URL dependency compiles through the orchestration core from a w
     build_env.package_cache_dir = try gpa.dupe(u8, cache_dir);
 
     // Compile the app (which reaches through mid to the URL package) with no
-    // network: every pipeline that consumes the core — check, build, run,
-    // test — resolves and registers the same transitive graph.
+    // network: every pipeline that consumes the core—check, build, run,
+    // test—resolves and registers the same transitive graph.
     try build_env.build(app_main);
 
     // Drain and count without rendering: no diagnostics of any severity.

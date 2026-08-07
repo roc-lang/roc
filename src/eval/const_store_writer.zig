@@ -313,7 +313,7 @@ pub const Writer = struct {
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
         const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, roc_list.len());
         // `nodes` is owned here for its whole lifetime: the store copies from it (it
-        // never frees inputs), so free on every path — build failure, append failure,
+        // never frees inputs), so free on every path—build failure, append failure,
         // and success alike.
         defer self.module.const_store.allocator.free(nodes);
         if (layout_value.tag == .list_of_zst) {

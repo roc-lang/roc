@@ -120,7 +120,7 @@ test "every annotation preserves its content on every render target" {
         var outputs = try renderAllTargets(gpa, &doc);
         defer outputs.deinit(gpa);
 
-        // Every target keeps the content, exactly once — no annotation may
+        // Every target keeps the content, exactly once—no annotation may
         // drop or duplicate what it decorates.
         try testing.expectEqual(@as(usize, 1), countOccurrences(outputs.terminal_ansi, payload));
         try testing.expectEqual(@as(usize, 1), countOccurrences(outputs.terminal_plain, payload));

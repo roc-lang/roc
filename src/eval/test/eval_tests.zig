@@ -64,7 +64,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
-        .name = "line-broken postfix applies to completed pipe",
+        .name = "whitespace-separated postfix applies to completed pipe",
         .source_kind = .module,
         .source =
         \\Holder := { n : I64 }.{
@@ -75,8 +75,7 @@ const core_tests = [_]TestCase{
         \\bar : I64 -> Holder
         \\bar = |n| Holder.{ n: n }
         \\
-        \\main = 2 |> bar()
-        \\    .blah()(3)
+        \\main = 2 |> bar() .blah()(3)
         ,
         .expected = .{ .inspect_str = "5" },
     },
@@ -737,7 +736,7 @@ const core_tests = [_]TestCase{
         \\main = (describe(force(999)), describe(force(7)))
         ,
         // digits_before_pt holds base-256 digits: 999 is two bytes, while 100
-        // and 7 are one byte each — so 7 converts equal to the pattern literal
+        // and 7 are one byte each—so 7 converts equal to the pattern literal
         // and 999 does not, proving the pattern compares converted values.
         .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
     },

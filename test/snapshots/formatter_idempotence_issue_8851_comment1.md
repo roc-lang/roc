@@ -23,7 +23,7 @@ Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpArrow,LowerIdent,
-NewlineDotLowerIdent,NoSpaceOpenRound,CloseRound,
+DotLowerIdent,NoSpaceOpenRound,CloseRound,
 EndOfFile,
 ~~~
 # PARSE

@@ -3,9 +3,9 @@
 //! The `roc` binary is built for the architecture baseline so that one release
 //! runs on every CPU of that architecture, which means `builtin.cpu` describes
 //! the floor the binary was compiled to and says nothing about the machine it
-//! ended up on. Code Roc generates to run on that machine — compile-time
+//! ended up on. Code Roc generates to run on that machine—compile-time
 //! execution, in-memory dev runs, and the target a command picks when the user
-//! names none — must be held to what the machine can actually execute, and
+//! names none—must be held to what the machine can actually execute, and
 //! only a runtime query answers that: CPUID on x86-64, the OS feature report
 //! on aarch64.
 //!
@@ -118,7 +118,7 @@ comptime {
 /// A Linux auxiliary-vector lookup that answers in the released binary.
 ///
 /// `std.os.linux.getauxval` resolves to Zig's own implementation whenever libc
-/// is linked, and that implementation reads `std.os.linux.elf_aux_maybe` — a
+/// is linked, and that implementation reads `std.os.linux.elf_aux_maybe`—a
 /// variable assigned only by `posixCallMainAndExit`, the startup path Zig uses
 /// when it owns `_start`. The `roc` binary sets `link_libc = true`, so libc
 /// owns `_start`, Zig never sees the auxiliary vector, and every lookup

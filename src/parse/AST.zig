@@ -300,7 +300,7 @@ fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Alloca
     if (token_tag == .UpperIdent or token_tag == .DotUpperIdent or token_tag == .NoSpaceDotUpperIdent) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("Names that start with uppercase letters are used for tags, type names, and module names in Roc.");
-    } else if (token_tag == .LowerIdent or token_tag == .DotLowerIdent or token_tag == .NewlineDotLowerIdent or token_tag == .NoSpaceDotLowerIdent) {
+    } else if (token_tag == .LowerIdent or token_tag == .DotLowerIdent or token_tag == .NoSpaceDotLowerIdent) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.");
     } else if (token_tag == .KwApp or
@@ -647,7 +647,7 @@ pub const Diagnostic = struct {
         invalid_type_arg,
         expr_arrow_expects_ident,
         expr_pipe_expects_ident,
-        /// `a..b` is not range syntax — ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
+        /// `a..b` is not range syntax—ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
         expr_double_dot_is_not_range,
         var_only_allowed_in_a_body,
         var_must_have_ident,
@@ -743,7 +743,7 @@ pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
 /// The compiler version a header pins, exactly as written in the source.
 ///
 /// `field_idx` is a header's `roc_version` field. Returns null when its value
-/// is not a plain string literal — the parser has already reported that as
+/// is not a plain string literal—the parser has already reported that as
 /// `invalid_roc_version`, and every later phase treats an unreadable pin as no
 /// pin at all rather than guessing at what was meant.
 pub fn rocVersionText(self: *const AST, field_idx: RecordField.Idx) ?[]const u8 {
@@ -1317,7 +1317,7 @@ pub const Pattern = union(enum) {
         /// True when the tag was written with an argument list, including an
         /// empty argument list such as `Tag()`.
         has_args: bool = false,
-        /// True when written as `Type.(pattern)` — a nominal-value destructure
+        /// True when written as `Type.(pattern)`—a nominal-value destructure
         /// (the inverse of `Type.(value)` construction), where `tag_tok` is the
         /// nominal type and `args` is the backing pattern. False for ordinary
         /// tag patterns like `Tag(args)` / `Module.Tag`.
@@ -2839,7 +2839,7 @@ pub const Expr = union(enum) {
     tuple_access: struct {
         /// The tuple expression being accessed
         expr: Expr.Idx,
-        /// The token containing the element index (NoSpaceDotInt, DotInt, or NewlineDotInt)
+        /// The token containing the element index (NoSpaceDotInt or DotInt)
         elem_token: Token.Idx,
         region: TokenizedRegion,
     },

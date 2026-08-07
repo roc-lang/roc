@@ -455,7 +455,7 @@ const Skip = union(enum) {
     windows: []const u8,
 };
 
-/// A single CLI test operation — one matrix cell of work.
+/// A single CLI test operation—one matrix cell of work.
 const CliCase = struct {
     /// Unique id within this runner invocation. This keeps generated binary
     /// names distinct even on hosts that run all specs in the same process.
@@ -1089,6 +1089,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "pipeline parity: check/build/run/test share one checked-module cache (issue 9788)", .body = .{ .custom = .pipeline_parity_shared_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9509: run renders each diagnostic exactly once (PR 9759)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/pipeline_parity/error_app/main.roc", .exit = .{ .code = 1 }, .occurrences = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH", .count = 1 }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "transitive package dependency runs exactly when it builds", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/pipeline_parity/app/main.roc", .contains = &.{.{ .stream = .stdout, .text = "alpha[beta:parity]" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "package expect replays a sibling local procedure under its checked lexical evidence parent", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/sibling_local_proc_evidence/main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9694: --opt=speed run compiles a binary instead of interpreting", .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/pipeline_parity/dbg_app/main.roc", .exit = .{ .code = 2 }, .contains = &.{ .{ .stream = .stderr, .text = "OPTIMIZED BUILD" }, .{ .stream = .stdout, .text = "done 9694" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9971: unannotated polymorphic eq used at two types runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/issue_9971_unannotated_polymorphic_eq.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "failed" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9971: unannotated polymorphic eq used at two types runs (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_9971_unannotated_polymorphic_eq.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "failed" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -5816,7 +5817,13 @@ fn customCachePassingResults(io: std.Io, allocator: Allocator, env: *const CaseE
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/AllPassTests.roc" })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/AllPassTests.roc", .contains = &.{.{ .stream = .stdout, .text = "(cached)" }} })) |failure| return failure;
+    // https://github.com/roc-lang/roc/issues/10624
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = "test/cli/AllPassTests.roc",
+        .contains = &.{.{ .stream = .stdout, .text = " ms. (cached)" }},
+        .not_contains = &.{.{ .stream = .stdout, .text = "tests passed (cached) in" }},
+    })) |failure| return failure;
     return null;
 }
 
@@ -5824,7 +5831,14 @@ fn customCacheFailingResults(io: std.Io, allocator: Allocator, env: *const CaseE
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 } })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "(cached)" }} })) |failure| return failure;
+    // https://github.com/roc-lang/roc/issues/10624
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = "test/cli/SomeFailTests.roc",
+        .exit = .{ .code = 1 },
+        .contains = &.{ .{ .stream = .stderr, .text = "Ran 3 tests in " }, .{ .stream = .stderr, .text = " ms. (cached):" } },
+        .not_contains = &.{.{ .stream = .stderr, .text = "tests (cached) in" }},
+    })) |failure| return failure;
     return null;
 }
 
@@ -7061,7 +7075,7 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
     })) |failure| return failure;
 
     // 3. Desert island: delete the package cache; the installed tool must
-    //    still run (and must not touch the network — the server is gone).
+    //    still run (and must not touch the network—the server is gone).
     std.Io.Dir.cwd().deleteTree(io, env.dirs.roc_cache_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to delete cache dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
@@ -7747,7 +7761,7 @@ fn compileGlueRuntimeCHost(
     // double` is 80-bit x87, so those f128 libcalls are never referenced.)
     //
     // So the merge is needed only on aarch64. On x86_64 the host object links
-    // cleanly on its own, so we archive it directly — which also matters
+    // cleanly on its own, so we archive it directly—which also matters
     // because the merge itself is broken there: `zig cc -r` (and the LLD `-r`
     // it drives) aborts when fed the `-fcompiler-rt` object on x86_64, so
     // merging would be both pointless and a hard crash.
@@ -7965,7 +7979,7 @@ fn fileHasWasmMagic(io: std.Io, path: []const u8) bool {
 /// some compiler_builtins intrinsics as host-arch (x86_64) ELF objects rather
 /// than wasm; `wasm-ld --whole-archive` force-includes every member and aborts
 /// on those ("Bitcode section not found in object file"). The dropped
-/// intrinsics are unreferenced by the glue contract apps — if a future app
+/// intrinsics are unreferenced by the glue contract apps—if a future app
 /// needed one, the final wasm link would report it undefined rather than
 /// miscompile.
 fn rebuildWasmOnlyArchive(
@@ -9718,7 +9732,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     // `--worker <idx>` (single test) or `--worker-stream` (persistent). The
     // worker rebuilt the same case list above, so indices stay aligned with
     // the parent's. Handling these before the parent path matters: a worker
-    // that fell through would reentrantly spawn its own pool of workers —
+    // that fell through would reentrantly spawn its own pool of workers—
     // fork-bombing the box.
     if (Pool.runWorkerMode(init.io, args, tests, timeout_ms)) return;
 

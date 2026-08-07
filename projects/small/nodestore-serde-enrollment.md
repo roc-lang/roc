@@ -18,8 +18,8 @@ invokes `assertBidirectionalFieldSet`
 (`src/canonicalize/ModuleEnv.zig:3296`, helper in
 `src/collections/serde_validation.zig:40`), making owner/Serialized
 field drift a compile error. `CheckedModuleArtifact` is enrolled too
-(`src/check/checked_artifact.zig:22908`). NodeStore — the largest
-hand-enumerated serialization root in the codebase — is not.
+(`src/check/checked_artifact.zig:22908`). NodeStore—the largest
+hand-enumerated serialization root in the codebase—is not.
 
 A same-family loose end in the parser: `src/parse/NodeStore.zig:150-158`
 hardcodes `AST_HEADER_NODE_COUNT = 6`, `AST_STATEMENT_NODE_COUNT = 13`,
@@ -39,23 +39,23 @@ to the `Serialized` struct for cache invalidation, but not a field
 present in both structs yet missing from a function body. Note the
 residual gap even where enrollment exists: `assertBidirectionalFieldSet`
 checks field-*set* equality, not that `serialize`'s body touches every
-field — which is why step 2 below (comptime iteration driving the
+field—which is why step 2 below (comptime iteration driving the
 bodies) is the real fix and the audit is the floor.
 
 ## Evidence
 
 - The eight hand-lists cited above; diff any two to see the manual
   ordering contract.
-- `grep -rn assertBidirectionalFieldSet src/` — exactly two enrolled
+- `grep -rn assertBidirectionalFieldSet src/`—exactly two enrolled
   roots today; NodeStore absent.
-- `src/parse/NodeStore.zig:150-158` — four literals beside one derived
+- `src/parse/NodeStore.zig:150-158`—four literals beside one derived
   count in the same block.
 
 ## Solution design
 
 1. **Enroll.** Add the `assertBidirectionalFieldSet` comptime audit to
-   `NodeStore.Serialized` (with the owner-only fields — `gpa`,
-   `scratch` — declared, following `ModuleEnv.zig:3277-3289`).
+   `NodeStore.Serialized` (with the owner-only fields—`gpa`,
+   `scratch`—declared, following `ModuleEnv.zig:3277-3289`).
 2. **Drive the bodies from the type.** The ~20 lists are uniform
    (`SafeList(T)` fields); `clone`/`deinit`/`relocate`/`serialize`/
    `deserializeInto`/`deserializeWithCopy` become
@@ -67,7 +67,7 @@ bodies) is the real fix and the audit is the floor.
    `std.meta.fields(...).len`, matching `AST_EXPR_NODE_COUNT`.
 4. Coordinate with the serialization-root registry proposed in
    [cache-and-identity-residuals.md](cache-and-identity-residuals.md)
-   item 2 — NodeStore is the standing example of the unenrolled-root
+   item 2—NodeStore is the standing example of the unenrolled-root
    hazard that registry exists to close; enrolling it should go
    through the registry if that lands first.
 
@@ -77,7 +77,7 @@ Every criterion below must hold; the project is not done until all do:
 
 - Adding a `SafeList` field to `NodeStore` and recompiling either
   just works (comptime-driven bodies) or fails at comptime naming the
-  field — demonstrated by adding a dummy field in a scratch build.
+  field—demonstrated by adding a dummy field in a scratch build.
 - No function in `NodeStore.zig` enumerates the backing lists by hand.
 - Round-trip tests populate every list (comptime-enumerated fixture so
   a new field fails the test until covered).
@@ -85,7 +85,7 @@ Every criterion below must hold; the project is not done until all do:
   `grep -n 'NODE_COUNT = [0-9]' src/parse/NodeStore.zig` is empty.
 - `MODULE_ENV_VERSION_HASH` golden value and cache tests updated
   intentionally if the `Serialized` layout changes as a side effect
-  (it should not — field order is preserved).
+  (it should not—field order is preserved).
 
 ## How to evaluate the result
 
@@ -112,6 +112,6 @@ hand-written version contains; no runtime dispatch is introduced.
 
 ## Related projects
 
-- [cache-and-identity-residuals.md](cache-and-identity-residuals.md)
-  — item 2 (auto-enrolled serialization roots) is the general form of
+- [cache-and-identity-residuals.md](cache-and-identity-residuals.md)—
+  item 2 (auto-enrolled serialization roots) is the general form of
   this project's step 1.

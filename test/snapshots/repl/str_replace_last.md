@@ -8,7 +8,7 @@ type=repl
 » "a,b,a".replace_last(",", " and ")
 » "abc".replace_last("x", "y")
 » "abc".replace_last("", "X")
-» source = "alpha, beta, gamma, delta — this is a long heap string that will not fit inline"
+» source = "alpha, beta, gamma, delta—this is a long heap string that will not fit inline"
 » Str.replace_last(source, ", ", " / ")
 » source
 ~~~
@@ -21,8 +21,8 @@ type=repl
 ---
 assigned `source`
 ---
-"alpha, beta, gamma / delta — this is a long heap string that will not fit inline"
+"alpha, beta, gamma / delta—this is a long heap string that will not fit inline"
 ---
-"alpha, beta, gamma, delta — this is a long heap string that will not fit inline"
+"alpha, beta, gamma, delta—this is a long heap string that will not fit inline"
 # PROBLEMS
 NIL
