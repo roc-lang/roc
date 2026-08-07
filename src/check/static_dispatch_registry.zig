@@ -336,6 +336,9 @@ pub const LocalProcedureMethodTarget = struct {
     /// Whether this local procedure consumes or produces an exact Monotype
     /// graph that must become its specialization interface.
     graph_participating: bool = false,
+    /// Evaluating this local procedure can return an exact Monotype selected
+    /// by its body or by an exact caller-supplied argument.
+    produces_exact_graph: bool = false,
 };
 
 /// Public `MethodTargetKind` declaration.

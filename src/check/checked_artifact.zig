@@ -13777,6 +13777,9 @@ pub const LocalProcedureBinding = struct {
     /// has one. Consumers use this producer-recorded identity directly; they
     /// must not rediscover scope ownership by scanning checked expressions.
     dispatch_scope: ?DispatchScopeId = null,
+    /// Evaluating this local procedure can return an exact Monotype selected
+    /// by its body or by an exact caller-supplied argument.
+    produces_exact_graph: bool = false,
 };
 
 /// Return the checked module id that owns a top-level procedure binding.
@@ -14491,6 +14494,7 @@ const ExactGraphProducerAnalysis = struct {
     dependencies: std.ArrayList(TemplateDependency),
     current_template: canonical.CheckedProcedureTemplateId = @enumFromInt(0),
     saw_evidence_dependency: bool = false,
+    use_final_procedure_facts: bool = false,
 
     fn init(
         allocator: Allocator,
@@ -14860,6 +14864,14 @@ const ExactGraphProducerAnalysis = struct {
                 current = dependency.next;
             }
         }
+
+        // Local procedures are not independent checked templates, so their
+        // result-flow facts are queried after the template call-graph fixpoint.
+        // Clear the first-phase expression memo and make same-module calls
+        // consume the now-final template columns during those targeted queries.
+        self.use_final_procedure_facts = true;
+        @memset(self.expr_states, .unknown);
+        @memset(self.return_states, .unknown);
     }
 
     fn addTemplateDependency(
@@ -14970,6 +14982,9 @@ const ExactGraphProducerAnalysis = struct {
                 return switch (binding.body) {
                     .direct_template => |direct| switch (direct.template) {
                         .checked => |template_ref| blk: {
+                            if (self.use_final_procedure_facts) {
+                                break :blk self.templates.get(template_ref.template).produces_exact_graph;
+                            }
                             try self.addTemplateDependency(template_ref.template);
                             break :blk false;
                         },
@@ -15041,6 +15056,9 @@ const ExactGraphProducerAnalysis = struct {
                     if (iterator.producesIteratorValue()) break :blk true;
                 }
                 if (std.meta.eql(procedure.template.artifact.bytes, self.artifact_key.bytes)) {
+                    if (self.use_final_procedure_facts) {
+                        break :blk self.templates.get(procedure.template.template).produces_exact_graph;
+                    }
                     try self.addTemplateDependency(procedure.template.template);
                     break :blk false;
                 }
@@ -15554,11 +15572,13 @@ fn recordExactResultFlowFacts(
             required.procedure.produces_exact_graph = analysis.procedureUseProducesFinal(required.procedure);
             required.procedure.exact_graph_from_evidence = analysis.procedureUseDependsOnEvidence(required.procedure);
         },
+        .local_proc => |*local| {
+            local.produces_exact_graph = try analysis.callableExprProduces(local.expr);
+        },
         .local_param,
         .local_value,
         .local_mutable_version,
         .pattern_binder,
-        .local_proc,
         .selected_hoisted_const,
         .top_level_const,
         .imported_const,
@@ -15572,14 +15592,20 @@ fn recordExactResultFlowFacts(
             procedure.produces_exact_graph = analysis.methodTargetProducesFinal(entry.target);
             procedure.exact_graph_from_evidence = analysis.methodTargetDependsOnEvidence(entry.target);
         },
-        .local_proc, .structural => {},
+        .local_proc => |*local| {
+            local.produces_exact_graph = try analysis.callableExprProduces(local.expr);
+        },
+        .structural => {},
     };
     for (plans.evidence_nodes) |*node| switch (node.target.kind) {
         .procedure => |*procedure| {
             procedure.produces_exact_graph = analysis.methodTargetProducesFinal(node.target);
             procedure.exact_graph_from_evidence = analysis.methodTargetDependsOnEvidence(node.target);
         },
-        .local_proc, .structural => {},
+        .local_proc => |*local| {
+            local.produces_exact_graph = try analysis.callableExprProduces(local.expr);
+        },
+        .structural => {},
     };
 }
 

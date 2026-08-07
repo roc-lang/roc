@@ -679,6 +679,17 @@ fn relateFunctionRequestInterface(graph: *InstGraph, checked_fn: NodeId, exact_f
     _ = try graph.applyCheckedTypeMapping(checked_fn, exact_fn);
 }
 
+fn relateFunctionRequestArguments(graph: *InstGraph, checked_fn: NodeId, exact_fn: NodeId) Allocator.Error!void {
+    const checked_nodes = try graph.functionNodes(checked_fn);
+    const exact_nodes = try graph.functionNodes(exact_fn);
+    if (checked_nodes.args.len != exact_nodes.args.len) {
+        Common.invariant("function argument relation received different arities");
+    }
+    for (checked_nodes.args, exact_nodes.args) |checked_arg, exact_arg| {
+        _ = try graph.applyCheckedTypeMapping(checked_arg, exact_arg);
+    }
+}
+
 fn applyProducedTypeToRequest(graph: *InstGraph, request_node: NodeId, produced_node: NodeId) Allocator.Error!void {
     _ = try graph.applyProducedTypeToRequest(request_node, produced_node);
 }
@@ -2578,6 +2589,7 @@ const Builder = struct {
         defer ctx.deinit();
 
         const root_node = try ctx.instNode(request.checked_type);
+        try ctx.relateCheckedFunctionSourceToRequest(request.checked_type, root_node);
         const initial_fn = try graph.functionNodes(root_node);
         const args = try self.allocator.alloc(DraftTypedLocal, initial_fn.args.len);
         defer self.allocator.free(args);
@@ -3756,6 +3768,7 @@ const Builder = struct {
             const source_fn_node = source_ctx.graph.requestCheckedSource(request_fn_node) orelse
                 Common.invariant("exact procedure request had no checked source interface");
             try relateFunctionRequestInterface(source_ctx.graph, root_node, source_fn_node);
+            try relateFunctionRequestArguments(source_ctx.graph, root_node, request_fn_node);
         } else if (!local_context_dependent and
             signature_relation == .independent_roots and
             template.target != .hosted)
@@ -5470,12 +5483,23 @@ const Builder = struct {
                 scope,
             );
         }
-        if (nested_ctx.graph.requestCheckedSource(request_fn_node)) |source_fn_node| {
+        if (signature_relation == .exact_graph) {
+            const source_fn_node = nested_ctx.graph.requestCheckedSource(request_fn_node) orelse
+                Common.invariant("exact local procedure request had no checked source interface");
             try relateFunctionRequestInterface(nested_ctx.graph, root_node, source_fn_node);
+        } else {
+            if (nested_ctx.graph.requestCheckedSource(request_fn_node)) |source_fn_node| {
+                try relateFunctionRequestInterface(nested_ctx.graph, root_node, source_fn_node);
+            }
+            try relateFunctionRequestInterface(nested_ctx.graph, root_node, request_fn_node);
         }
-        try relateFunctionRequestInterface(nested_ctx.graph, root_node, request_fn_node);
         const body_fn_node = request_fn_node;
-        const lowered = try nested_ctx.lowerNestedFunctionAtNode(expr_id, body_fn_node, capture_entry_guards);
+        const lowered = try nested_ctx.lowerNestedFunctionAtNode(
+            expr_id,
+            body_fn_node,
+            capture_entry_guards,
+            signature_relation,
+        );
         const completed_fn_node = try nested_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
             lowered.ret,
@@ -12231,6 +12255,7 @@ const CollectedListPattern = struct {
 
 const ControlFlowDestinationRelation = enum {
     checked_mapping,
+    exact_request,
     exact_producer,
 };
 
@@ -15739,7 +15764,7 @@ const BodyContext = struct {
         template_ref: names.ProcTemplate,
         template: checked.CheckedProcedureTemplate,
         fn_node: NodeId,
-        signature_relation: Ast.SignatureRelation,
+        _: Ast.SignatureRelation,
     ) Allocator.Error!LoweredTemplateBody {
         var timing_scope = ProcedureTimingScope.begin(self.builder.timing, .body_lowering);
         defer timing_scope.end();
@@ -15761,10 +15786,7 @@ const BodyContext = struct {
                         body.root_expr,
                         lambda,
                         fn_node,
-                        if (signature_relation == .exact_graph)
-                            .exact_producer
-                        else
-                            try self.functionRequestReturnRelation(fn_node),
+                        try self.functionRequestReturnRelation(fn_node),
                     ),
                     .closure => |closure| closure_blk: {
                         if (closure.captures.len != 0) {
@@ -15776,10 +15798,7 @@ const BodyContext = struct {
                             closure.lambda,
                             lambda_expr.data.lambda,
                             fn_node,
-                            if (signature_relation == .exact_graph)
-                                .exact_producer
-                            else
-                                try self.functionRequestReturnRelation(fn_node),
+                            try self.functionRequestReturnRelation(fn_node),
                         );
                     },
                     .hosted_lambda => Common.invariant("hosted lambda template must lower through hosted metadata, not source lambda body"),
@@ -16551,8 +16570,12 @@ const BodyContext = struct {
         );
         var body = if (materialized_args.items.len == 0)
             switch (ret_destination_relation) {
-                .checked_mapping => try self.lowerExpr(checked_body),
-                .exact_producer => try self.lowerExprAtTypeCell(checked_body, body_ret_cell),
+                .checked_mapping => try self.lowerProducedValueAtIndependentCheckedCell(checked_body),
+                .exact_request, .exact_producer => try self.lowerExprAtControlFlowDestination(
+                    checked_body,
+                    body_ret_cell,
+                    ret_destination_relation,
+                ),
             }
         else
             try self.lowerBindingContinuation(.{ .materialized_args = .{
@@ -16617,7 +16640,7 @@ const BodyContext = struct {
         return if (self.graph.sameClass(request.ret, source.ret))
             .checked_mapping
         else
-            .exact_producer;
+            .exact_request;
     }
 
     fn lowerNestedFunctionAtNode(
@@ -16625,6 +16648,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         fn_node: NodeId,
         capture_entry_guards: []const NodeId,
+        _: Ast.SignatureRelation,
     ) Allocator.Error!LoweredTemplateBody {
         const fn_nodes = try self.graph.functionNodes(fn_node);
         const saved_function_entry_demand_guards = self.function_entry_demand_guards;
@@ -16634,12 +16658,18 @@ const BodyContext = struct {
         @memcpy(entry_guards[fn_nodes.args.len..], capture_entry_guards);
         self.function_entry_demand_guards = entry_guards;
         const expr = self.view.bodies.expr(expr_id);
+        const return_relation = try self.functionRequestReturnRelation(fn_node);
         return switch (expr.data) {
-            .lambda => |lambda| try self.lowerNestedLambdaTemplateAtNode(expr_id, lambda, fn_node),
+            .lambda => |lambda| try self.lowerNestedLambdaTemplateAtNode(expr_id, lambda, fn_node, return_relation),
             .closure => |closure| blk: {
                 const lambda_expr = self.view.bodies.expr(closure.lambda);
                 if (lambda_expr.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
-                break :blk try self.lowerNestedLambdaTemplateAtNode(closure.lambda, lambda_expr.data.lambda, fn_node);
+                break :blk try self.lowerNestedLambdaTemplateAtNode(
+                    closure.lambda,
+                    lambda_expr.data.lambda,
+                    fn_node,
+                    return_relation,
+                );
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("local procedure site did not point at a lambda or closure"),
         };
@@ -16650,12 +16680,18 @@ const BodyContext = struct {
         lambda_id: checked.CheckedExprId,
         lambda: anytype,
         fn_node: NodeId,
+        return_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!LoweredTemplateBody {
         var saved = std.ArrayList(BinderRestore).empty;
         defer saved.deinit(self.allocator);
         for (lambda.args) |pattern_id| try self.savePatternBinders(pattern_id, &saved);
         defer self.restoreBinders(saved.items);
-        return try self.lowerLambdaTemplateAtNode(lambda_id, lambda, fn_node);
+        return try self.lowerLambdaTemplateAtNodeWithReturnRelation(
+            lambda_id,
+            lambda,
+            fn_node,
+            return_relation,
+        );
     }
 
     fn lowerExprTypeNode(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!NodeId {
@@ -17925,7 +17961,7 @@ const BodyContext = struct {
                         self.view.types.rootKey(expr.ty),
                         request_fn_node,
                         try self.evidenceForUseSite(record.expr),
-                        .independent_roots,
+                        self.localProcedureUseSignatureRelation(local),
                     );
                     const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                     return try self.addExprWithTypeCell(
@@ -18457,11 +18493,21 @@ const BodyContext = struct {
         };
     }
 
-    fn localProcedureSignatureRelation(
+    fn localProcedureUseSignatureRelation(
+        _: *BodyContext,
+        procedure: checked.LocalProcedureBinding,
+    ) Ast.SignatureRelation {
+        return if (procedure.produces_exact_graph) .exact_graph else .independent_roots;
+    }
+
+    fn localProcedureMethodSignatureRelation(
         _: *BodyContext,
         target: static_dispatch.LocalProcedureMethodTarget,
     ) Ast.SignatureRelation {
-        return if (target.graph_participating) .exact_graph else .independent_roots;
+        return if (target.graph_participating or target.produces_exact_graph)
+            .exact_graph
+        else
+            .independent_roots;
     }
 
     fn callsiteIntrinsicForMethodTarget(
@@ -19249,7 +19295,7 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
         request_fn_node: NodeId,
-        checked_args: []const checked.CheckedExprId,
+        checked_args: ?[]const checked.CheckedExprId,
     ) Allocator.Error!?NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
         const request_fn = try self.graph.functionNodes(request_fn_node);
@@ -19266,7 +19312,7 @@ const BodyContext = struct {
 
         switch (procedure) {
             .iter_iter => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                if (request_fn.args.len != 1) {
                     Common.invariant("Iter.iter reached Monotype with an unexpected arity");
                 }
                 if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) {
@@ -19274,7 +19320,7 @@ const BodyContext = struct {
                 }
             },
             .iter_next => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                if (request_fn.args.len != 1) {
                     Common.invariant("Iter.next reached Monotype with an unexpected arity");
                 }
                 if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) {
@@ -19285,7 +19331,7 @@ const BodyContext = struct {
                 }
             },
             .iter_custom => {
-                if (checked_args.len != 3 or request_fn.args.len != 3) {
+                if (request_fn.args.len != 3) {
                     Common.invariant("Iter.custom reached Monotype with an unexpected arity");
                 }
                 return try self.graphFunctionNode(
@@ -19294,12 +19340,12 @@ const BodyContext = struct {
                         .custom,
                         public_fn.ret,
                         &.{ request_fn.args[0], request_fn.args[2] },
-                        try self.callableArgumentEvidenceDigest(checked_args[2]),
+                        if (checked_args) |args| try self.callableArgumentEvidenceDigest(args[2]) else null,
                     ),
                 );
             },
             .list_iter => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                if (request_fn.args.len != 1) {
                     Common.invariant("List.iter reached Monotype with an unexpected arity");
                 }
                 return try self.graphFunctionNode(
@@ -19308,7 +19354,7 @@ const BodyContext = struct {
                 );
             },
             .str_iter_utf8 => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                if (request_fn.args.len != 1) {
                     Common.invariant("Str.iter_utf8 reached Monotype with an unexpected arity");
                 }
                 return try self.graphFunctionNode(
@@ -19317,7 +19363,7 @@ const BodyContext = struct {
                 );
             },
             .iter_single => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                if (request_fn.args.len != 1) {
                     Common.invariant("Iter.single reached Monotype with an unexpected arity");
                 }
                 return try self.graphFunctionNode(
@@ -19343,7 +19389,7 @@ const BodyContext = struct {
             .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(.take_first, public_fn.ret, request_fn.args, checked_args, null),
             .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(.drop_first, public_fn.ret, request_fn.args, checked_args, null),
             .iter_concat => {
-                if (checked_args.len != 2 or request_fn.args.len != 2) {
+                if (request_fn.args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
                 }
                 if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0]) or
@@ -19366,17 +19412,17 @@ const BodyContext = struct {
         kind: Type.IteratorKind,
         public_ret: NodeId,
         args: []const NodeId,
-        checked_args: []const checked.CheckedExprId,
+        checked_args: ?[]const checked.CheckedExprId,
         callable_index: ?usize,
     ) Allocator.Error!?NodeId {
-        if (checked_args.len != 2 or args.len != 2) {
+        if (args.len != 2) {
             Common.invariant("iterator adapter reached Monotype with an unexpected arity");
         }
         if (!self.isGeneratedIteratorEvidenceNode(args[0])) return null;
-        const callable_evidence = if (callable_index) |index|
-            try self.callableArgumentEvidenceDigest(checked_args[index])
+        const callable_evidence = if (callable_index) |index| if (checked_args) |source_args|
+            try self.callableArgumentEvidenceDigest(source_args[index])
         else
-            null;
+            null else null;
         return try self.graphFunctionNode(
             args,
             try self.generatedIteratorNode(kind, public_ret, args, callable_evidence),
@@ -19462,7 +19508,7 @@ const BodyContext = struct {
         };
         const mint_depth = self.generatedIteratorMintDepth(kind, components) orelse
             return try self.forcedDynamicIteratorNode(public_iterator, public_named.args[0], public_source);
-        if (self.graph.findGeneratedIterator(public_iterator, kind, components, callable_evidence)) |existing| {
+        if (try self.graph.findGeneratedIterator(public_iterator, kind, components, callable_evidence)) |existing| {
             return existing;
         }
 
@@ -19578,7 +19624,7 @@ const BodyContext = struct {
         item_node: NodeId,
         public_source: solve.InstIteratorPublicSource,
     ) Allocator.Error!NodeId {
-        if (self.graph.findGeneratedIterator(public_iterator, .forced_dynamic, &.{}, null)) |existing| {
+        if (try self.graph.findGeneratedIterator(public_iterator, .forced_dynamic, &.{}, null)) |existing| {
             return existing;
         }
         const Context = struct {
@@ -25898,7 +25944,7 @@ const BodyContext = struct {
                 source_fn_key,
                 request_fn_node,
                 evidence,
-                .independent_roots,
+                self.localProcedureUseSignatureRelation(local),
             ) },
             .top_level_proc,
             .imported_proc,
@@ -25970,6 +26016,7 @@ const BodyContext = struct {
             self.view = previous_view;
             self.source_file_id = previous_source_file_id;
         }
+        try self.relateCheckedFunctionSourceToRequest(source_fn_ty, request_fn_node);
         const crosses_module = !moduleBytesEqual(previous_view.key.bytes, local_view.key.bytes);
         const previous_binders = self.binders;
         const previous_typed_binders = self.typed_binders;
@@ -26623,7 +26670,7 @@ const BodyContext = struct {
                     self.view.types.rootKey(checked_ty),
                     request_fn_node,
                     try self.evidenceForUseSite(record.expr),
-                    .independent_roots,
+                    self.localProcedureUseSignatureRelation(local),
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                 break :blk try self.addExprWithTypeCell(
@@ -26737,7 +26784,7 @@ const BodyContext = struct {
                     self.view.types.rootKey(checked_ty),
                     expected_node,
                     try self.evidenceForUseSite(record.expr),
-                    .independent_roots,
+                    self.localProcedureUseSignatureRelation(local),
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, expected_node);
                 return try self.addExprWithTypeCell(
@@ -26841,7 +26888,7 @@ const BodyContext = struct {
     fn lowerProcedureUseValueAtNode(
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
-        request_fn_node: NodeId,
+        raw_request_fn_node: NodeId,
         evidence: []const SpecEvidence,
         root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!DraftExprId {
@@ -26849,12 +26896,23 @@ const BodyContext = struct {
             return try self.lowerCallableEvalBindingValueAtNode(
                 callable_eval.view,
                 callable_eval.template,
-                request_fn_node,
+                raw_request_fn_node,
                 evidence,
             );
         }
         const source_fn_ty = proc.source_fn_ty_payload orelse
             Common.invariant("checked procedure value reached Monotype without a requested function type");
+        try self.relateCheckedFunctionSourceToRequest(source_fn_ty, raw_request_fn_node);
+        var request_fn_node = try self.graph.functionRequestRoot(raw_request_fn_node);
+        if (proc.iterator_procedure) |procedure| {
+            const public_fn_node = self.graph.requestCheckedSource(request_fn_node) orelse
+                Common.invariant("iterator procedure value request had no checked source interface");
+            if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, request_fn_node, null)) |private_fn_node| {
+                try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
+                try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
+                request_fn_node = private_fn_node;
+            }
+        }
         const slot = try self.draftFnSlotForProcedureUseAtNode(
             proc,
             source_fn_ty,
@@ -26869,6 +26927,23 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(fn_node),
             .{ .fn_def = .{ .fn_id = fn_id } },
         );
+    }
+
+    /// Record the checked function occurrence applied to an exact runtime
+    /// request. Procedure values, root requests, lambdas, and closures do not
+    /// necessarily pass through `functionRequestNode`, so they establish the
+    /// same explicit provenance relation at their own creation boundary.
+    fn relateCheckedFunctionSourceToRequest(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        raw_request_fn_node: NodeId,
+    ) Allocator.Error!void {
+        const source_fn_node = try self.graph.functionRequestRoot(try self.instNode(source_fn_ty));
+        const request_fn_node = try self.graph.functionRequestRoot(raw_request_fn_node);
+        if (self.graph.requestCheckedSource(request_fn_node) == null) {
+            try self.graph.registerRequestCheckedSource(request_fn_node, source_fn_node);
+        }
+        try relateFunctionRequestInterface(self.graph, source_fn_node, request_fn_node);
     }
 
     fn requireLocalDraftSlot(self: *BodyContext, slot: DraftFnSlot) Allocator.Error!DraftFnTarget {
@@ -28041,6 +28116,7 @@ const BodyContext = struct {
                 try fn_ctx.inheritActiveConstBinding(self);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 fn_ctx.current_fn_key = nested.context_fn_key;
+                try fn_ctx.relateCheckedFunctionSourceToRequest(fn_value.source_fn_ty, request_fn_node);
                 const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 return try self.builder.lowerDraftNestedFromContext(
@@ -28093,6 +28169,7 @@ const BodyContext = struct {
         defer fn_ctx.deinit();
         try fn_ctx.inheritActiveConstBinding(self);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
+        try fn_ctx.relateCheckedFunctionSourceToRequest(fn_value.source_fn_ty, request_fn_node);
         fn_ctx.current_fn_key = switch (fn_def) {
             .nested => |nested| nested.context_fn_key,
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function had no nested function identity"),
@@ -31067,6 +31144,7 @@ const BodyContext = struct {
         const lambda = self.view.bodies.expr(closure.lambda);
         const source_fn_ty = lambda.ty;
         if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
+        try self.relateCheckedFunctionSourceToRequest(source_fn_ty, request_fn_node);
         const nested = try self.builder.nestedFnForExpr(
             self.view,
             self.owner_template,
@@ -31197,6 +31275,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnTarget {
         const source_fn_ty = self.view.bodies.expr(expr_id).ty;
+        try self.relateCheckedFunctionSourceToRequest(source_fn_ty, request_fn_node);
         const nested = try self.builder.nestedFnForExpr(
             self.view,
             self.owner_template,
@@ -33890,6 +33969,7 @@ const BodyContext = struct {
                         .binder = local.binder,
                         .expr = local.expr,
                         .dispatch_scope = local.dispatch_scope,
+                        .produces_exact_graph = local.produces_exact_graph,
                     },
                     lookup.view,
                     lookup.local_proc_context orelse
@@ -33898,7 +33978,7 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
-                    self.localProcedureSignatureRelation(local),
+                    self.localProcedureMethodSignatureRelation(local),
                 ) };
             },
             .structural => Common.invariant("structural method registry result has no callable procedure body"),
@@ -33977,6 +34057,7 @@ const BodyContext = struct {
                         .binder = local.binder,
                         .expr = local.expr,
                         .dispatch_scope = local.dispatch_scope,
+                        .produces_exact_graph = local.produces_exact_graph,
                     },
                     lookup.view,
                     lookup.local_proc_context orelse
@@ -33985,7 +34066,7 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
-                    self.localProcedureSignatureRelation(local),
+                    self.localProcedureMethodSignatureRelation(local),
                 ) };
             },
             .structural => Common.invariant("direct checked call targeted a structural derivation"),
@@ -39879,28 +39960,58 @@ const BodyContext = struct {
             return try self.lowerExplicitUninhabitedInvocationAtTypeCell(body, result_cell);
         }
         return switch (destination_relation) {
-            .checked_mapping => blk: {
-                // The checked branch type supplies substitution context, but
-                // the branch remains the authority for the produced value.
-                try self.constrainCheckedInterfaceToCell(self.view.bodies.expr(body).ty, result_cell);
-                break :blk try self.lowerExpr(body);
-            },
-            .exact_producer => blk: {
-                // The branch is the authority for its produced representation.
-                // Give it an independent checked output cell so ordinary
-                // literals have their solved shape without inheriting the
-                // enclosing destination's exact identity. The control-flow
-                // selection joins the completed cell after this one lowering.
-                const branch_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-                _ = try self.graph.applyCheckedTypeMapping(
-                    try self.freshInstNode(self.view.bodies.expr(body).ty),
-                    branch_node,
-                );
-                break :blk try self.lowerExprAtTypeCell(
-                    body,
-                    DraftTypeCell.fromGraphNode(branch_node),
-                );
-            },
+            .checked_mapping, .exact_producer => try self.lowerProducedValueAtIndependentCheckedCell(body),
+            .exact_request => try self.lowerExprAtControlFlowDestination(body, result_cell, .exact_request),
+        };
+    }
+
+    /// Lower one producer into an independent graph cell carrying only its
+    /// checked interface. The expression remains the authority for its exact
+    /// representation, and unresolved children stay in the graph until the
+    /// enclosing destination or control-flow join supplies more information.
+    fn lowerProducedValueAtIndependentCheckedCell(
+        self: *BodyContext,
+        body: checked.CheckedExprId,
+    ) Allocator.Error!DraftExprId {
+        const produced_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+        _ = try self.graph.applyCheckedTypeMapping(
+            try self.freshInstNode(self.view.bodies.expr(body).ty),
+            produced_node,
+        );
+        return try self.lowerExprAtTypeCell(
+            body,
+            DraftTypeCell.fromGraphNode(produced_node),
+        );
+    }
+
+    fn lowerExprAtControlFlowDestination(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        result_cell: DraftTypeCell,
+        destination_relation: ControlFlowDestinationRelation,
+    ) Allocator.Error!DraftExprId {
+        if (destination_relation != .exact_request) {
+            return try self.lowerExprAtTypeCell(checked_expr, result_cell);
+        }
+        return switch (self.view.bodies.expr(checked_expr).data) {
+            .match_ => |match| try self.lowerMatchExprAtTypeCellWithRelation(
+                checked_expr,
+                match,
+                result_cell,
+                .exact_request,
+            ),
+            .if_ => |if_| try self.lowerIfExprAtTypeCellWithRelation(
+                checked_expr,
+                if_,
+                result_cell,
+                .exact_request,
+            ),
+            .block => |block| try self.lowerBlockAtTypeCellWithRelation(
+                block,
+                result_cell,
+                .exact_request,
+            ),
+            else => try self.lowerExprAtTypeCell(checked_expr, result_cell),
         };
     }
 
@@ -41776,6 +41887,7 @@ const BodyContext = struct {
         const declared_node = try selection.declared.toGraphNode(self.graph);
         switch (selection.destination_relation) {
             .checked_mapping => _ = try self.graph.applyCheckedTypeMapping(declared_node, value_node),
+            .exact_request => _ = try self.graph.applyProducedTypeToRequest(declared_node, value_node),
             .exact_producer => {
                 const joined = try self.graph.joinProducedTypeRepresentations(declared_node, value_node);
                 try self.graph.writeProducedTypeSelection(value_node, joined);
@@ -42457,6 +42569,15 @@ const BodyContext = struct {
         block: anytype,
         result_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
+        return try self.lowerBlockAtTypeCellWithRelation(block, result_cell, .exact_producer);
+    }
+
+    fn lowerBlockAtTypeCellWithRelation(
+        self: *BodyContext,
+        block: anytype,
+        result_cell: DraftTypeCell,
+        destination_relation: ControlFlowDestinationRelation,
+    ) Allocator.Error!DraftExprId {
         const previous_statement_success_frames = self.runtime_demand_guard_frames;
         defer self.runtime_demand_guard_frames = previous_statement_success_frames;
         const stmts = try self.lowerBlockStatements(block.statements);
@@ -42474,7 +42595,11 @@ const BodyContext = struct {
             else if (try self.nodeIsProvenUninhabited(result_node))
                 try self.lowerExplicitUninhabitedInvocationAtTypeCell(block.final_expr, result_cell)
             else
-                try self.lowerExprAtTypeCell(block.final_expr, result_cell),
+                try self.lowerExprAtControlFlowDestination(
+                    block.final_expr,
+                    result_cell,
+                    destination_relation,
+                ),
         };
         // A block is representation-transparent: its final expression's exact
         // produced type is the block's exact produced type.

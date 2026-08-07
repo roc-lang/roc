@@ -4079,6 +4079,35 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: local attached procedure preserves exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\make_iter = || [1.I64, 2, 3].iter()
+        \\
+        \\main = {
+        \\    Source := [Source].{
+        \\        make : Source -> Iter(I64)
+        \\        make = |_| make_iter()
+        \\    }
+        \\    selected = Source.make(Source.Source)
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: iterator procedure value retains its checked source",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    iter_fn = List.iter
+        \\    iterator = iter_fn([1.I64, 2, 3])
+        \\    Iter.fold(iterator, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: Iter.append yields item after iterator",
         .source =
         \\{

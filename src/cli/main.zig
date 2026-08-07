@@ -15168,7 +15168,6 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [27]
         .{ .name = "Function request builds", .count = graph.function_request_builds },
         .{ .name = "Function request pairs visited", .count = graph.function_request_pairs_visited },
         .{ .name = "Function request replacements", .count = graph.function_request_replacements },
-        .{ .name = "Function request distinct concrete slots", .count = graph.function_request_distinct_concrete_slots },
         .{ .name = "Function request nodes materialized", .count = graph.function_request_nodes_materialized },
         .{ .name = "Generated representation roots finalized", .count = graph.generated_representation_roots_finalized },
         .{ .name = "Generated identity roots finalized", .count = graph.generated_identity_roots_finalized },
