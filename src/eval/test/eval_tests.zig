@@ -3923,6 +3923,23 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: independent procedure arguments preserve distinct exact iterators",
+        .source_kind = .module,
+        .source =
+        \\fold_two : Iter(I64), Iter(I64) -> List(I64)
+        \\fold_two = |first, second| {
+        \\    from_first = Iter.fold(first, [], |out, value| out.append(value))
+        \\    Iter.fold(second, from_first, |out, value| out.append(value))
+        \\}
+        \\
+        \\main = fold_two(
+        \\    [1.I64, 2].iter(),
+        \\    [3.I64, 4].iter().map(|value| value),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3, 4]" },
+    },
+    .{
         .name = "inspect: record rest preserves an exact iterator field",
         .source_kind = .module,
         .source =

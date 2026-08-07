@@ -211,6 +211,7 @@ pub const GraphDiagnostics = struct {
     function_request_builds: u64 = 0,
     function_request_pairs_visited: u64 = 0,
     function_request_replacements: u64 = 0,
+    function_request_distinct_concrete_slots: u64 = 0,
     function_request_nodes_materialized: u64 = 0,
     generated_representation_roots_finalized: u64 = 0,
     generated_identity_roots_finalized: u64 = 0,
@@ -248,8 +249,14 @@ const NodePair = struct {
     right: NodeId,
 };
 
+const ConcreteFunctionRequestReplacement = union(enum) {
+    unique: NodeId,
+    distinct,
+};
+
 const FunctionRequestSubstitution = struct {
     replacements: collections.DenseMap(NodeId, NodeId),
+    concrete_replacements: collections.DenseMap(NodeId, ConcreteFunctionRequestReplacement),
     origins: collections.DenseMap(NodeId, NodeId),
     materialized: collections.DenseMap(NodeId, NodeId),
     compared: std.AutoHashMap(NodePair, void),
@@ -257,6 +264,7 @@ const FunctionRequestSubstitution = struct {
     fn init(allocator: Allocator) FunctionRequestSubstitution {
         return .{
             .replacements = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .concrete_replacements = collections.DenseMap(NodeId, ConcreteFunctionRequestReplacement).init(allocator),
             .origins = collections.DenseMap(NodeId, NodeId).init(allocator),
             .materialized = collections.DenseMap(NodeId, NodeId).init(allocator),
             .compared = std.AutoHashMap(NodePair, void).init(allocator),
@@ -265,6 +273,7 @@ const FunctionRequestSubstitution = struct {
 
     fn deinit(self: *FunctionRequestSubstitution) void {
         self.replacements.deinit();
+        self.concrete_replacements.deinit();
         self.origins.deinit();
         self.materialized.deinit();
         self.compared.deinit();
@@ -2394,9 +2403,10 @@ pub const InstGraph = struct {
     }
 
     /// Construct one complete specialization interface from a checked callable
-    /// and the exact values at this call site. Each checked cell that denotes an
-    /// exact generated nominal is substituted everywhere it occurs in the
-    /// callable before body lowering begins. This is a single directed
+    /// and the exact values at this call site. Each checked polymorphic cell is
+    /// substituted everywhere it occurs, while independent concrete argument
+    /// positions retain the distinct exact values they produced. This completes
+    /// the callable before body lowering begins through one directed
     /// request-to-produced traversal, not a containment scan followed by a
     /// whole-root merge.
     pub fn functionRequestFromProducedArguments(
@@ -2428,7 +2438,11 @@ pub const InstGraph = struct {
             try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, &substitution);
         }
 
-        const changed_args = try self.materializeFunctionRequestNodes(current_request_fn.args, &substitution);
+        const changed_args = try self.materializeFunctionRequestArgumentNodes(
+            current_request_fn.args,
+            produced_args,
+            &substitution,
+        );
         const request_ret = try self.materializeFunctionRequestNode(current_request_fn.ret, &substitution);
         const ret_changed = !self.sameClass(current_request_fn.ret, request_ret);
 
@@ -2469,7 +2483,7 @@ pub const InstGraph = struct {
         if (isGeneratedPrivateRootContent(produced_content) and checked_content == .named and
             sameTypeDef(checked_content.named.def, produced_content.named.def))
         {
-            try self.recordFunctionRequestReplacement(checked_node, produced_node, substitution);
+            try self.recordConcreteFunctionRequestReplacement(checked_node, produced_node, substitution);
             if (checked_content.named.args.len != produced_content.named.args.len) {
                 Common.invariant("generated-private function substitution changed public argument arity");
             }
@@ -2598,6 +2612,28 @@ pub const InstGraph = struct {
         entry.value_ptr.* = try self.joinProducedTypeRepresentations(entry.value_ptr.*, produced_node);
     }
 
+    fn recordConcreteFunctionRequestReplacement(
+        self: *InstGraph,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        try self.recordFunctionRequestOrigin(checked_node, produced_node, substitution);
+        const entry = try substitution.concrete_replacements.getOrPut(checked_node);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = .{ .unique = produced_node };
+            self.countDiagnostic("function_request_replacements");
+            return;
+        }
+        switch (entry.value_ptr.*) {
+            .unique => |existing| if (!self.sameClass(existing, produced_node)) {
+                entry.value_ptr.* = .distinct;
+                self.countDiagnostic("function_request_distinct_concrete_slots");
+            },
+            .distinct => {},
+        }
+    }
+
     fn recordFunctionRequestOrigin(
         _: *InstGraph,
         checked_node: NodeId,
@@ -2614,12 +2650,16 @@ pub const InstGraph = struct {
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!NodeId {
         const node = self.find(raw_node);
-        const source = substitution.origins.get(node) orelse node;
-        if (substitution.replacements.get(source)) |replacement| return self.find(replacement);
-        if (substitution.materialized.get(node)) |materialized| return self.find(materialized);
-
         const node_content = self.nodes.items[@intFromEnum(node)];
         if (isGeneratedPrivateRootContent(node_content)) return node;
+
+        const source = substitution.origins.get(node) orelse node;
+        if (substitution.replacements.get(source)) |replacement| return self.find(replacement);
+        if (substitution.concrete_replacements.get(source)) |replacement| switch (replacement) {
+            .unique => |exact| return self.find(exact),
+            .distinct => {},
+        };
+        if (substitution.materialized.get(node)) |materialized| return self.find(materialized);
 
         const materialized = switch (node_content) {
             .redirect => unreachable,
@@ -2755,6 +2795,30 @@ pub const InstGraph = struct {
             } else if (!self.sameClass(node, materialized)) {
                 const out = try self.arena().alloc(NodeId, nodes.len);
                 @memcpy(out[0..index], nodes[0..index]);
+                out[index] = materialized;
+                changed_nodes = out;
+            }
+        }
+        return changed_nodes;
+    }
+
+    fn materializeFunctionRequestArgumentNodes(
+        self: *InstGraph,
+        current_nodes: []const NodeId,
+        produced_nodes: []const NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!?[]NodeId {
+        if (current_nodes.len != produced_nodes.len) {
+            Common.invariant("function request argument materialization received different arities");
+        }
+        var changed_nodes: ?[]NodeId = null;
+        for (current_nodes, produced_nodes, 0..) |current, produced, index| {
+            const materialized = try self.materializeFunctionRequestNode(produced, substitution);
+            if (changed_nodes) |out| {
+                out[index] = materialized;
+            } else if (!self.sameClass(current, materialized)) {
+                const out = try self.arena().alloc(NodeId, current_nodes.len);
+                @memcpy(out[0..index], current_nodes[0..index]);
                 out[index] = materialized;
                 changed_nodes = out;
             }
@@ -6916,8 +6980,14 @@ test "function request substitutes one exact generated type through every callab
             .authority = .generated_private,
         },
     } });
-    const public_list = try graph.newNode(.{ .list = public });
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const checked_list = try graph.newNode(.{ .list = slot });
     const checked_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ checked_list, slot }),
+        .ret = checked_list,
+    } });
+    const public_list = try graph.newNode(.{ .list = public });
+    const current_fn = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{ public_list, public }),
         .ret = public_list,
     } });
@@ -6925,12 +6995,12 @@ test "function request substitutes one exact generated type through every callab
 
     const request = try graph.functionRequestFromProducedArguments(
         checked_fn,
-        checked_fn,
+        current_fn,
         &.{ produced_list, exact },
     );
     const request_fn = try graph.functionNodes(request);
 
-    try std.testing.expect(!graph.sameClass(request, checked_fn));
+    try std.testing.expect(!graph.sameClass(request, current_fn));
     try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.args[0]), exact));
     try std.testing.expect(graph.sameClass(request_fn.args[1], exact));
     try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.ret), exact));
@@ -6953,6 +7023,34 @@ test "function request substitutes one exact generated type through every callab
     try std.testing.expect(graph.sameClass(structural_request, structural_view_fn));
     try std.testing.expect(graph.content(structural_request_fn.args[0]) == .empty_record);
     try std.testing.expect(graph.content(structural_request_fn.ret) == .empty_record);
+
+    var second_def = def;
+    second_def.generated = .{ .bytes = [_]u8{0xA2} ** 32 };
+    const second_exact = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = second_def,
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+    const concrete_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ public, public }),
+        .ret = public_backing,
+    } });
+    const distinct_request = try graph.functionRequestFromProducedArguments(
+        concrete_fn,
+        concrete_fn,
+        &.{ exact, second_exact },
+    );
+    const distinct_request_fn = try graph.functionNodes(distinct_request);
+    try std.testing.expect(graph.sameClass(distinct_request_fn.args[0], exact));
+    try std.testing.expect(graph.sameClass(distinct_request_fn.args[1], second_exact));
+    try std.testing.expect(!graph.sameClass(distinct_request_fn.args[0], distinct_request_fn.args[1]));
 }
 
 test "checked type mapping preserves forced-dynamic iterator identity" {

@@ -2661,10 +2661,17 @@ repair the representation.
 Building that request is one whole-interface substitution. Monotype walks each
 checked argument beside its completed produced argument once and records the
 directed replacement for every checked polymorphic cell that selected an exact
-generated nominal. It then materializes every argument and the return from the
-same table, using the current produced request as the structural authority; the
-checked interface supplies occurrence identity but cannot replace an already
-selected private structural or nominal view. Repeated occurrences therefore
+generated nominal. It then materializes every completed argument and the
+current requested return from the same table. Each completed argument is its
+own structural authority, so two independent concrete `Iter(U64)` parameters
+may retain two different exact identities; only a shared checked polymorphic
+cell requires a common replacement. A checker-reused concrete public nominal
+cell may refine other public occurrences only when every completed occurrence
+has the same exact identity. If its completed arguments have distinct exact
+identities, Monotype does not join them or preselect the return; the body’s
+explicit produced-result flow determines the return instead. The checked
+interface supplies occurrence identity but cannot replace an already selected
+private structural or nominal view. Repeated polymorphic occurrences therefore
 cannot disagree: specializing
 `List(a), a -> List(a)` with an exact `Iter` produces
 `List(Iter$identity), Iter$identity -> List(Iter$identity)` before the body is

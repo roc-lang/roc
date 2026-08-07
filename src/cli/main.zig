@@ -15144,7 +15144,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [27]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15168,6 +15168,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]
         .{ .name = "Function request builds", .count = graph.function_request_builds },
         .{ .name = "Function request pairs visited", .count = graph.function_request_pairs_visited },
         .{ .name = "Function request replacements", .count = graph.function_request_replacements },
+        .{ .name = "Function request distinct concrete slots", .count = graph.function_request_distinct_concrete_slots },
         .{ .name = "Function request nodes materialized", .count = graph.function_request_nodes_materialized },
         .{ .name = "Generated representation roots finalized", .count = graph.generated_representation_roots_finalized },
         .{ .name = "Generated identity roots finalized", .count = graph.generated_identity_roots_finalized },
