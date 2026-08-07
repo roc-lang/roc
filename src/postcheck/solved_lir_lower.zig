@@ -2860,27 +2860,47 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const items = self.solved.lifted.exprSpan(span);
-        const elem_locals = try self.allocator.alloc(LIR.LocalId, items.len);
+        const first_uninhabited = self.firstUninhabitedExprIndex(items);
+        const evaluated_len = if (first_uninhabited) |index| index + 1 else items.len;
+        const elem_locals = try self.allocator.alloc(LIR.LocalId, evaluated_len);
         defer self.allocator.free(elem_locals);
 
         const elem_ty = self.listElemType(ty);
         const elem_layout = self.localListElemLayout(target);
-        for (0..items.len) |i| {
+        for (0..evaluated_len) |i| {
             elem_locals[i] = try self.addLocalForLayout(elem_layout);
             try self.local_types.put(elem_locals[i], elem_ty);
         }
 
-        var current = try self.result.store.addCFStmt(.{ .assign_list = .{
-            .target = target,
-            .elems = try self.result.store.addLocalSpan(elem_locals),
-            .next = next,
-        } });
-        var i = items.len;
+        var current = if (first_uninhabited != null)
+            try self.result.store.addCFStmt(.{ .runtime_error = {} })
+        else
+            try self.result.store.addCFStmt(.{ .assign_list = .{
+                .target = target,
+                .elems = try self.result.store.addLocalSpan(elem_locals),
+                .next = next,
+            } });
+        var i = evaluated_len;
         while (i > 0) {
             i -= 1;
             current = try self.lowerExprIntoAtType(elem_locals[i], GuardedList.at(items, i), elem_ty, current);
         }
         return current;
+    }
+
+    fn exprIsUninhabited(self: *const Lowerer, expr: Lifted.ExprId) bool {
+        const index = @intFromEnum(expr);
+        if (index >= self.solved.expr_is_uninhabited.items.len) {
+            Common.invariant("Lambda Solved omitted expression inhabitation data");
+        }
+        return self.solved.expr_is_uninhabited.items[index];
+    }
+
+    fn firstUninhabitedExprIndex(self: *const Lowerer, items: anytype) ?usize {
+        for (0..items.len) |index| {
+            if (self.exprIsUninhabited(GuardedList.at(items, index))) return index;
+        }
+        return null;
     }
 
     fn lowerTupleIntoAtType(
@@ -2917,11 +2937,13 @@ const Lowerer = struct {
             return try self.lowerStructExprsIntoAtTypes(backing_local, owned_items, owned_tys, boundary);
         }
 
-        const field_locals = try self.allocator.alloc(LIR.LocalId, owned_items.len);
+        const first_uninhabited = self.firstUninhabitedExprIndex(owned_items);
+        const evaluated_len = if (first_uninhabited) |index| index + 1 else owned_items.len;
+        const field_locals = try self.allocator.alloc(LIR.LocalId, evaluated_len);
         defer self.allocator.free(field_locals);
 
         const target_is_zst = self.isZstLocal(target);
-        for (0..owned_items.len) |i| {
+        for (0..evaluated_len) |i| {
             const field_layout = if (target_is_zst)
                 layout.Idx.zst
             else
@@ -2930,7 +2952,9 @@ const Lowerer = struct {
             try self.local_types.put(field_locals[i], owned_tys[i]);
         }
 
-        var current = if (target_is_zst)
+        var current = if (first_uninhabited != null)
+            try self.result.store.addCFStmt(.{ .runtime_error = {} })
+        else if (target_is_zst)
             try self.assignZst(target, next)
         else
             try self.result.store.addCFStmt(.{ .assign_struct = .{
@@ -2939,11 +2963,11 @@ const Lowerer = struct {
                 .next = next,
             } });
         const saved_return_target = self.current_return_target;
-        const demanded_child = if (saved_return_target == target)
+        const demanded_child = if (first_uninhabited == null and saved_return_target == target)
             self.singleErasedResultChildIndex(owned_tys)
         else
             null;
-        var i = owned_items.len;
+        var i = evaluated_len;
         while (i > 0) {
             i -= 1;
             self.current_return_target = if (demanded_child != null and demanded_child.? == i)
@@ -3200,11 +3224,16 @@ const Lowerer = struct {
         defer self.current_return_target = saved_return_target;
 
         if (payloads.len == 1) {
+            const payload = GuardedList.at(payloads, 0);
+            const continuation = if (self.exprIsUninhabited(payload))
+                try self.result.store.addCFStmt(.{ .runtime_error = {} })
+            else
+                assign_tag;
             return try self.lowerExprIntoAtType(
                 payload_local,
-                GuardedList.at(payloads, 0),
+                payload,
                 GuardedList.at(payload_tys, 0),
-                assign_tag,
+                continuation,
             );
         }
         return try self.lowerStructExprsIntoAtTypes(payload_local, payloads, payload_tys, assign_tag);
@@ -3221,6 +3250,10 @@ const Lowerer = struct {
     fn lowerNominalInto(self: *Lowerer, target: LIR.LocalId, nominal_ty: Type.TypeId, backing: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const backing_ty = try self.nominalBackingType(nominal_ty, backing);
         const backing_data = self.solved.lifted.getExpr(backing).data;
+        const continuation = if (self.exprIsUninhabited(backing))
+            try self.result.store.addCFStmt(.{ .runtime_error = {} })
+        else
+            next;
         // Constructors do not have a pre-existing runtime representation.
         // Build them directly in the nominal target layout so recursive
         // Box edges come from that producer-owned layout graph instead of
@@ -3229,12 +3262,12 @@ const Lowerer = struct {
         if (backing_data == .list or backing_data == .tuple or backing_data == .record or
             backing_data == .record_update or backing_data == .tag)
         {
-            return try self.lowerExprIntoAtType(target, backing, backing_ty, next);
+            return try self.lowerExprIntoAtType(target, backing, backing_ty, continuation);
         }
 
         const backing_layout = try self.layoutOfType(backing_ty);
         const backing_local = try self.addLocalForLayout(backing_layout);
-        const assign = try self.assignNominalBoundaryAtTypes(target, nominal_ty, backing_local, backing_ty, backing_layout, next);
+        const assign = try self.assignNominalBoundaryAtTypes(target, nominal_ty, backing_local, backing_ty, backing_layout, continuation);
         const saved_return_target = self.current_return_target;
         if (saved_return_target == target and self.result.store.getLocal(target).layout_idx == backing_layout) {
             self.current_return_target = backing_local;
@@ -9398,6 +9431,7 @@ fn cloneSolvedProgram(allocator: std.mem.Allocator, solved: *const Solved.Progra
         .defs = try cloneArrayList(Solved.Def, allocator, &solved.defs),
         .local_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.local_tys),
         .expr_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.expr_tys),
+        .expr_is_uninhabited = try cloneArrayList(bool, allocator, &solved.expr_is_uninhabited),
         .pat_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.pat_tys),
         .fn_tys = try cloneArrayList(SolvedType.TypeVarId, allocator, &solved.fn_tys),
         .layout_requests = try cloneArrayList(Solved.LayoutRequest, allocator, &solved.layout_requests),

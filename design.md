@@ -2584,19 +2584,29 @@ tag payload, list, box, function result, local, pattern binder, and capture use
 the exact produced types of their children directly; they do not retain a
 second checked-public Monotype graph and reconcile it with the produced graph.
 
-Generated representation identity is content-addressed and interned at its
-construction boundary. Equal complete representation inputs select one dense
-in-session type identity before backing construction or body lowering is
-repeated. A stable `TypeDigest` is computed once when durable or cross-store
-identity requires it; repeated in-session access uses the dense identity rather
-than rehashing a type graph. Different representation inputs remain different
-exact types even when checking assigned them the same public Roc type.
+Generated representation identity is content-addressed. When all identity
+inputs are already resolved or share graph cells, the construction boundary
+interns them immediately: equal complete inputs select one dense in-session
+type identity before backing construction or body lowering is repeated. It is
+unsound to equate two independent unresolved cells merely because both are
+currently open, since later relations may resolve them differently. Such
+producers remain distinct only while relations are still being written. At the
+single relation-finalization barrier, their language-defined defaults and all
+other identity inputs are final, so Monotype computes their stable SHA-256
+identities and coalesces equal roots and backings before any type is sealed,
+specialization key is committed, or later IR is built. This is the earliest
+point at which those formerly open identities can safely deduplicate; there is
+no late Lambda/LIR repair or graph-wide rediscovery pass. Repeated in-session
+access after either interning point uses the dense identity rather than
+rehashing a type graph. Different representation inputs remain different exact
+types even when checking assigned them the same public Roc type.
 
 The same construction boundary appends the produced root to an explicit dense
 generated-representation registry. Representation-tier and durable-identity
-finalization iterate only that registry, resolving duplicate union classes as
-they go. They never search the full Monotype graph to rediscover which nodes are
-generated representations; unrelated graph nodes do no work in either pass.
+finalization iterate only that registry, resolving duplicate union classes and
+coalescing equal finalized content addresses as they go. They never search the
+full Monotype graph to rediscover which nodes are generated representations;
+unrelated graph nodes do no work in either pass.
 
 For a minted iterator, the stable generated `TypeDigest` is SHA-256 over an
 explicit domain separator, the public source declaration identity, the producer
@@ -2665,13 +2675,12 @@ generated nominal. It then materializes every completed argument and the
 current requested return from the same table. Each completed argument is its
 own structural authority, so two independent concrete `Iter(U64)` parameters
 may retain two different exact identities; only a shared checked polymorphic
-cell requires a common replacement. A checker-reused concrete public nominal
-cell may refine other public occurrences only when every completed occurrence
-has the same exact identity. If its completed arguments have distinct exact
-identities, Monotype does not join them or preselect the return; the body’s
-explicit produced-result flow determines the return instead. The checked
-interface supplies occurrence identity but cannot replace an already selected
-private structural or nominal view. Repeated polymorphic occurrences therefore
+cell requires a common replacement. Reuse of one concrete public nominal node
+by the checker does not make separate runtime occurrences one substitution slot
+and cannot preselect the return. The body’s explicit produced-result flow
+determines the return instead. The checked interface supplies polymorphic
+substitution identity but cannot replace an already selected private structural
+or nominal view. Repeated polymorphic occurrences therefore
 cannot disagree: specializing
 `List(a), a -> List(a)` with an exact `Iter` produces
 `List(Iter$identity), Iter$identity -> List(Iter$identity)` before the body is
@@ -5145,6 +5154,17 @@ The solver:
 - solves recursive groups as groups, not by accidental declaration order
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+
+After every Monotype leaf and callable slot is final, Lambda Solved records one
+explicit inhabitation fact for each lifted expression. A true
+`expr_is_uninhabited` entry means evaluating that expression would have to
+produce a value of a closed uninhabited type. Constructor lowering preserves
+the constructor's explicit evaluation order through the first such child, emits the
+compiler-impossible continuation after it, and omits the constructor assignment
+and every later child because none is reachable. In particular, callable flow
+inside a later child is neither propagated through an impossible aggregate nor
+lowered into LIR. Direct LIR lowering consumes this fact; it does not rescan the
+solved type graph to rediscover inhabitation.
 
 Monotype may carry both the definition-private nominal view and the opaque
 interface view of one checked `TypeDef`. Lambda solving relates those views only

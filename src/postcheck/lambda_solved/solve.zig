@@ -339,6 +339,14 @@ const Solver = struct {
         // After finalization so the materialized clones' callable slots close
         // exactly as their eager counterparts always did.
         try self.closeUnfilledCallableSlots();
+
+        try self.program.expr_is_uninhabited.ensureTotalCapacity(self.allocator, self.program.expr_tys.items.len);
+        for (self.program.expr_tys.items) |ty| {
+            try self.program.expr_is_uninhabited.append(
+                self.allocator,
+                try self.typeIsProvenUninhabited(ty),
+            );
+        }
     }
 
     fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
