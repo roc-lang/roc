@@ -5293,6 +5293,15 @@ const GeneratedIteratorIdentityFinalizer = struct {
 
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         const item_digest = try self.graph.generatedIteratorIdentityInputDigest(self, named.args[0]);
+        hasher.update("public_source");
+        hasher.update(self.graph.name_store.moduleIdentityBytes(provenance.public_source.def.module));
+        if (provenance.public_source.def.source_decl) |source_decl| {
+            hasher.update(&.{1});
+            updateGeneratedIteratorInternU32(&hasher, source_decl);
+        } else {
+            hasher.update(&.{0});
+            hasher.update(self.graph.name_store.typeNameText(provenance.public_source.def.type_name));
+        }
         if (named.def.iterator_representation == .forced_dynamic) {
             if (provenance.components.len != 0 or provenance.callable_evidence != null) {
                 Common.invariant("forced-dynamic iterator retained minted producer identity inputs");
@@ -5301,9 +5310,6 @@ const GeneratedIteratorIdentityFinalizer = struct {
             hasher.update(&item_digest.bytes);
         } else {
             hasher.update("roc.generated_iterator.producer_identity.v3");
-            updateGeneratedIteratorInternU32(&hasher, @intFromEnum(provenance.public_source.def.module));
-            updateGeneratedIteratorInternU32(&hasher, @intFromEnum(provenance.public_source.def.type_name));
-            updateGeneratedIteratorInternU32(&hasher, provenance.public_source.def.source_decl orelse std.math.maxInt(u32));
             hasher.update(&.{@intFromEnum(named.def.iterator_kind)});
             hasher.update(&item_digest.bytes);
             updateGeneratedIteratorInternU32(&hasher, @intCast(provenance.components.len));
@@ -7727,6 +7733,71 @@ test "generated iterator identity includes nested graph-local producer evidence"
     try std.testing.expect(optionalInstDigestEql(outer_a_named.def.generated, outer_equivalent_named.def.generated));
     try std.testing.expectEqual(@as(usize, 1), outer_a_named.args.len);
     try std.testing.expectEqual(@as(usize, 1), outer_b_named.args.len);
+}
+
+test "generated iterator identity is independent of dense module interning order" {
+    const Build = struct {
+        fn digest(allocator: Allocator, intern_dummy_first: bool) Allocator.Error!names.TypeDigest {
+            var type_store = Type.Store.init(allocator);
+            defer type_store.deinit();
+            var name_store = names.NameStore.init(allocator);
+            defer name_store.deinit();
+            const graph = try InstGraph.create(allocator, &type_store, &name_store);
+            defer graph.destroy();
+
+            if (intern_dummy_first) {
+                _ = try name_store.internModuleIdentity(&([_]u8{0x12} ** 32));
+            }
+            const module_identity = try name_store.internModuleIdentity(&([_]u8{0x34} ** 32));
+            const type_name = try name_store.internTypeName("Iter");
+            const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(16) };
+            const public_def: Type.TypeDef = .{
+                .module = module_identity,
+                .type_name = type_name,
+                .source_decl = 17,
+            };
+            const public_source: InstIteratorPublicSource = .{
+                .named_type = named_type,
+                .def = public_def,
+                .kind = .@"opaque",
+                .builtin_owner = .iter,
+                .backing = .{
+                    .node = try graph.newNode(.empty_record),
+                    .use = .runtime_layout_only,
+                },
+                .declared_order = &.{},
+            };
+            const item = try graph.newNode(.{ .primitive = .u64 });
+            var generated_def = public_def;
+            generated_def.iterator_kind = .list;
+            const generated = try graph.newNode(.{ .named = .{
+                .named_type = named_type,
+                .def = generated_def,
+                .kind = .@"opaque",
+                .builtin_owner = .iter,
+                .args = try graph.arena().dupe(NodeId, &.{item}),
+                .backing = .{
+                    .node = try graph.newNode(.empty_record),
+                    .use = .runtime_layout_only,
+                    .authority = .generated_private,
+                },
+                .generated_iterator = .{
+                    .callable_evidence = null,
+                    .components = try graph.arena().dupe(NodeId, &.{try graph.newNode(.{ .list = item })}),
+                    .public_source = public_source,
+                },
+            } });
+            try graph.registerGeneratedIterator(generated);
+            try graph.finalizeGeneratedIteratorRepresentations();
+            try graph.finalizeGeneratedIteratorIdentities();
+            return graph.content(generated).named.def.generated orelse
+                Common.invariant("generated iterator test identity was not finalized");
+        }
+    };
+
+    const direct = try Build.digest(std.testing.allocator, false);
+    const shifted = try Build.digest(std.testing.allocator, true);
+    try std.testing.expect(optionalInstDigestEql(direct, shifted));
 }
 
 test "generated iterator identity hashes a nested producer chain linearly" {
