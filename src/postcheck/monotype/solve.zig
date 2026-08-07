@@ -3940,6 +3940,10 @@ pub const InstGraph = struct {
     }
 
     pub fn assertTypeHasNoActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!void {
+        // The walk allocates and recurses the whole type, and its only consumer
+        // is `Common.invariant`, which is itself a Debug-only panic. Computing
+        // it in release buys an `unreachable`.
+        if (comptime @import("builtin").mode != .Debug) return;
         if (try self.typeHasActiveSnapshots(ty)) {
             Common.invariant("Monotype body draft retained an active type snapshot after sealing");
         }
