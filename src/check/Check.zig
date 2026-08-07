@@ -1355,7 +1355,7 @@ const ScratchStaticDispatchConstraint = struct {
 
 const ReturnConstraint = struct {
     expected: Var,
-    actual: Var,
+    actual_expr: CIR.Expr.Idx,
     ctx: problem.Context,
 };
 
@@ -14575,20 +14575,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             self.markCurrentHoistObservableEffect();
             const return_expected = nested_expected.forReturnValue();
             does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
-            const ret_var = ModuleEnv.varFrom(ret.expr);
             const return_ctx: problem.Context = switch (ret.context) {
                 .return_expr => .early_return,
                 .try_suffix => .try_operator,
             };
 
             if (return_expected.returnResult()) |expected_return| {
-                _ = try self.unifyInContext(expected_return, ret_var, env, return_ctx);
+                try self.checkReturnRelation(expected_return, ret.expr, return_ctx, env);
             } else {
                 // Validate the lambda body type against the return value after the
                 // body is fully checked, but before the lambda generalizes.
                 const lambda_expr = self.cir.store.getExpr(ret.lambda);
                 std.debug.assert(lambda_expr == .e_lambda);
-                try self.appendReturnConstraint(ret.lambda, ModuleEnv.varFrom(lambda_expr.e_lambda.body), ret_var, return_ctx);
+                try self.appendReturnConstraint(ret.lambda, ModuleEnv.varFrom(lambda_expr.e_lambda.body), ret.expr, return_ctx);
             }
 
             // Note that we DO NOT unify the return type with the expr here.
@@ -16011,16 +16010,15 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // Type check the return expression
                 const return_expected = expected.forReturnValue();
                 does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
-                const ret_var = ModuleEnv.varFrom(ret.expr);
 
                 if (return_expected.returnResult()) |expected_return| {
-                    _ = try self.unifyInContext(expected_return, ret_var, env, .early_return);
+                    try self.checkReturnRelation(expected_return, ret.expr, .early_return, env);
                 } else {
                     // Validate the lambda body type against the return value after the
                     // body is fully checked, but before the lambda generalizes.
                     const lambda_expr = self.cir.store.getExpr(ret.lambda);
                     std.debug.assert(lambda_expr == .e_lambda);
-                    try self.appendReturnConstraint(ret.lambda, ModuleEnv.varFrom(lambda_expr.e_lambda.body), ret_var, .early_return);
+                    try self.appendReturnConstraint(ret.lambda, ModuleEnv.varFrom(lambda_expr.e_lambda.body), ret.expr, .early_return);
                 }
 
                 // A return statement's type should be a flex var so it can unify with any type.
@@ -20380,7 +20378,7 @@ fn appendReturnConstraint(
     self: *Self,
     lambda_idx: CIR.Expr.Idx,
     expected: Var,
-    actual: Var,
+    actual_expr: CIR.Expr.Idx,
     ctx: problem.Context,
 ) std.mem.Allocator.Error!void {
     switch (ctx) {
@@ -20417,9 +20415,22 @@ fn appendReturnConstraint(
     std.debug.assert(frame.lambda == lambda_idx);
     try self.return_constraints.append(self.gpa, .{
         .expected = expected,
-        .actual = actual,
+        .actual_expr = actual_expr,
         .ctx = ctx,
     });
+}
+
+fn checkReturnRelation(
+    self: *Self,
+    expected: Var,
+    actual_expr: CIR.Expr.Idx,
+    ctx: problem.Context,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const result = try self.unifyInContext(expected, ModuleEnv.varFrom(actual_expr), env, ctx);
+    if (result.isProblem()) {
+        try self.erroneous_value_exprs.put(self.gpa, actual_expr, {});
+    }
 }
 
 /// Process the return-flow constraints owned by this lambda. Called at the end
@@ -20434,10 +20445,10 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
     for (self.return_constraints.items[frame.start..]) |constraint| {
         switch (constraint.ctx) {
             .early_return => {
-                _ = try self.unifyInContext(constraint.expected, constraint.actual, env, .early_return);
+                try self.checkReturnRelation(constraint.expected, constraint.actual_expr, .early_return, env);
             },
             .try_operator => {
-                _ = try self.unifyInContext(constraint.expected, constraint.actual, env, .try_operator);
+                try self.checkReturnRelation(constraint.expected, constraint.actual_expr, .try_operator, env);
             },
             .none,
             .fn_call_arity,
