@@ -122,7 +122,8 @@ pub const Constants = struct {
     /// 48: Source imports retain parser-owned bindings and type-module owners
     ///     instead of reconstructing them from normalized module identities.
     /// 49: Associated lookups retain exact alias-resolution targets in CIR.
-    pub const CACHE_VERSION = 49;
+    /// 50: Interned literal entries record maximum runtime backing alignment.
+    pub const CACHE_VERSION = 50;
 };
 
 /// Configuration for the Roc cache system.

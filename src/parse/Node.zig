@@ -74,7 +74,7 @@ pub const Tag = enum {
     /// * lhs - node index to actual expr node
     /// * rhs - ignored
     expr,
-    /// A crash statement
+    /// A crash statement or expression
     /// Example: `crash "A message"`
     /// * lhs - node index to message(Should be a str_lit)
     /// * rhs - ignored

@@ -904,11 +904,6 @@ const non_exhaustive_destructure_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "[]" },
 };
 
-const crash_expression_needles = [_]OutputNeedle{
-    .{ .stream = .stderr, .text = "CRASH STATEMENT IN EXPRESSION" },
-    .{ .stream = .stderr, .text = "block expression" },
-};
-
 const warning_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "UNUSED VARIABLE" },
     .{ .stream = .stderr, .text = "warning" },
@@ -954,6 +949,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10301: borrowed chunk sublists run on dev backend", .backend = .dev, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_10301_borrowed_sublist.roc", .stdin = "abcdefghijklmnopABCDEFGHIJKLMNOP\n", .stdout_exact = "2832\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10301: borrowed chunk sublists run on speed backend", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_10301_borrowed_sublist.roc", .stdin = "abcdefghijklmnopABCDEFGHIJKLMNOP\n", .stdout_exact = "2832\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10370: optimized record-held effects preserve source order", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/Issue10370EffectOrder.roc", .stdout_exact = "0 begin 1\n1 middle\n2 after\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10648: roc check reports missing method on OsStr", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10648_osstr_missing_method/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING METHOD" }, .{ .stream = .stderr, .text = "to_str" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10648: roc check resolves existing method on platform-required OsStr", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10648_osstr_missing_method/valid_app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
     // Repro for https://github.com/roc-lang/roc/issues/10369: associated items
     // on a nominal type remain available through a re-exported type alias.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10369: re-exported type alias exposes associated items", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10369_reexported_alias_associated_items/Main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
@@ -1045,6 +1042,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10022: deep tail recursion with a List runs on LLVM speed backend", .backend = .speed, .body = .{ .custom = .issue_10022_deep_tail_recursion } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10529: open Try ? chain builds in dev within the perf guard", .backend = .dev, .timeout_ms = 30_000, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue10529OpenTryChainBuildTime.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "segmentation fault" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10015: macOS roc test imported package expect passes on LLVM size backend", .backend = .size, .body = .{ .custom = .issue_10015_url_random_test_size } },
+    // Repro for https://github.com/roc-lang/roc/issues/10620: optimized
+    // inlining must preserve explicitly keyed closure capture operands.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10620: optimized imported List.sublist test passes", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_10620_optimized_sublist_import/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test expect_err reports across linked optimized modules", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/multi_module_expect_err/Main.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "result = to_positive(-2)?" }, .{ .stream = .stderr, .text = "result = to_positive(-1)?" }, .{ .stream = .stderr, .text = "The value was: Err(IsNegative)" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "roc_expect_err_region" }, .{ .stream = .stderr, .text = "symbol multiply defined" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test crash in one optimized root does not pollute the next root", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/MultiRootCrashIsolation.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "passed" }, .{ .stream = .stderr, .text = "failed" }, .{ .stream = .stderr, .text = "Roc application crashed with this message:" }, .{ .stream = .stderr, .text = "first root crashed" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9897: nested callback capture count matches target", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/Issue9897NestedCaptureCount.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "function reference capture count differs from its target" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -1076,6 +1076,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10456: missing try suffix reports a type mismatch without postcheck panic", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/issue_10456_missing_try_suffix.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10365: erroneous captured local closure builds as a runtime error", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_10365_boxed_closure_annotated_local.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "checked closure specialization relation did not reference a lambda" }, .{ .stream = .stderr, .text = "checked closure did not point at a lambda expression" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10474: interpolated record field reports type mismatch without publication panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10474_record_field_interpolation.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "publication could not resolve a checked dispatch target" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "callable eval error used in a record reports diagnostics without postcheck panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/CallableEvalErrorInRecord.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "TYPE MISMATCH" }, .{ .stream = .stderr, .text = "COMPILE TIME CRASH" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "callable eval binding root did not output a callable value" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10459: mismatched integer equality in expect reports a type mismatch without panic", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/Issue10459MismatchedIntegerEquality.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "TYPE MISMATCH" }, .{ .stream = .stderr, .text = "I128" }, .{ .stream = .stderr, .text = "I64" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10481: default app main function alias lowers as a callable value", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/issue_10481_main_function_alias.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "callable eval template must be restored through ConstStore before Monotype lowering" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10238: unresolved synthetic dispatch target reports missing method without panic", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_10238_checked_synthetic_dispatch_arity.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING METHOD" }, .{ .stream = .stderr, .text = "Roc application crashed with this message:" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "checked synthetic dispatch target arity differs from its function type" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -1138,7 +1139,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 9508: anonymous recursive tag type reports an error", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9508_anonymous_recursion.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "ANONYMOUS RECURSION" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9210: ambiguous tuple access in a lambda", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9210_tuple_access_lambda.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "AMBIGUOUS TUPLE ACCESS" }}, .not_contains = &.{.{ .stream = .stderr, .text = "TYPE MISMATCH" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 2686: bare List tag payload reports its missing type argument", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_2686_bare_list_payload.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "TOO FEW ARGS" }, .{ .stream = .stderr, .text = "expects 1 argument" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 9499: crash in match branch reports one targeted parse error", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue9499CrashMatchBranch.roc", .exit = .failure, .contains = &crash_expression_needles, .not_contains = &.{ .{ .stream = .stderr, .text = "UNEXPECTED EXPRESSION SYNTAX" }, .{ .stream = .stderr, .text = "match_branch_missing_arrow" }, .{ .stream = .stderr, .text = "expected_close_curly_at_end_of_match" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 9499: crash is valid in a match branch", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue9499CrashMatchBranch.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "CRASH STATEMENT IN EXPRESSION" }, .{ .stream = .stderr, .text = "UNEXPECTED EXPRESSION SYNTAX" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9544: list function parameter destructure must be exhaustive", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue9544NonExhaustiveParam.roc", .exit = .failure, .contains = &non_exhaustive_destructure_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 1 file and 1 symbol", .body = .{ .custom = .generated_graph_1_1 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 5 files and 5 symbols", .body = .{ .custom = .generated_graph_5_5 } },
@@ -3320,13 +3321,26 @@ const hot_reload_host_c_source =
     \\"    value = 8\n"
     \\"}\n";
     \\
-    \\static int write_bytes(const char *path, const char *bytes) {
-    \\    FILE *file = fopen(path, "wb");
+    \\// `roc --watch` rebuilds whenever a watched input's content hash changes, and it
+    \\// hashes the file shortly after the change event arrives. Truncating a watched file
+    \\// in place therefore exposes an empty intermediate state that the watcher can hash
+    \\// and rebuild from, which would make the hot reload generation count depend on
+    \\// scheduling. Writing a temp file and renaming it into place keeps every state the
+    \\// watcher can observe a complete edit, since rename is atomic.
+    \\static int write_file_atomically(const char *path, const char *first, const char *second) {
+    \\    char temp_path[4096];
+    \\    int temp_len = snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+    \\    if (temp_len < 0 || (size_t)temp_len >= sizeof(temp_path)) {
+    \\        fprintf(stderr, "temp path too long for %s\n", path);
+    \\        return 1;
+    \\    }
+    \\
+    \\    FILE *file = fopen(temp_path, "wb");
     \\    if (file == NULL) {
     \\        perror("fopen");
     \\        return 1;
     \\    }
-    \\    if (fputs(bytes, file) < 0) {
+    \\    if (fputs(first, file) < 0 || (second != NULL && fputs(second, file) < 0)) {
     \\        perror("fputs");
     \\        fclose(file);
     \\        return 1;
@@ -3335,25 +3349,19 @@ const hot_reload_host_c_source =
     \\        perror("fclose");
     \\        return 1;
     \\    }
+    \\    if (rename(temp_path, path) != 0) {
+    \\        perror("rename");
+    \\        return 1;
+    \\    }
     \\    return 0;
     \\}
     \\
+    \\static int write_bytes(const char *path, const char *bytes) {
+    \\    return write_file_atomically(path, bytes, NULL);
+    \\}
+    \\
     \\static int write_app(const char *path, const char *body) {
-    \\    FILE *file = fopen(path, "wb");
-    \\    if (file == NULL) {
-    \\        perror("fopen app");
-    \\        return 1;
-    \\    }
-    \\    if (fputs(app_header, file) < 0 || fputs(body, file) < 0) {
-    \\        perror("fputs app");
-    \\        fclose(file);
-    \\        return 1;
-    \\    }
-    \\    if (fclose(file) != 0) {
-    \\        perror("fclose app");
-    \\        return 1;
-    \\    }
-    \\    return 0;
+    \\    return write_file_atomically(path, app_header, body);
     \\}
     \\
     \\uint64_t roc_host_edit_app_and_sleep(uint64_t value) {
@@ -3368,24 +3376,6 @@ const hot_reload_host_c_source =
     \\    uint64_t *result = (uint64_t *)arg;
     \\    *result = roc_main(0);
     \\    return NULL;
-    \\}
-    \\
-    \\static int append_bytes(const char *path, const char *bytes) {
-    \\    FILE *file = fopen(path, "ab");
-    \\    if (file == NULL) {
-    \\        perror("fopen append");
-    \\        return 1;
-    \\    }
-    \\    if (fputs(bytes, file) < 0) {
-    \\        perror("fputs append");
-    \\        fclose(file);
-    \\        return 1;
-    \\    }
-    \\    if (fclose(file) != 0) {
-    \\        perror("fclose append");
-    \\        return 1;
-    \\    }
-    \\    return 0;
     \\}
     \\
     \\static int wait_for_value(const char *label, uint64_t expected) {
@@ -3877,8 +3867,17 @@ const hot_reload_model_host_c_source =
     \\"value : Model -> U64\n"
     \\"value = |model| model.value + model.extra\n";
     \\
+    \\// Renamed into place rather than truncated in place so `roc --watch` never hashes a
+    \\// partially written app and rebuilds from it; see the dev-shim host for details.
     \\static int write_app(const char *path, const char *body) {
-    \\    FILE *file = fopen(path, "wb");
+    \\    char temp_path[4096];
+    \\    int temp_len = snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+    \\    if (temp_len < 0 || (size_t)temp_len >= sizeof(temp_path)) {
+    \\        fprintf(stderr, "temp path too long for %s\n", path);
+    \\        return 1;
+    \\    }
+    \\
+    \\    FILE *file = fopen(temp_path, "wb");
     \\    if (file == NULL) {
     \\        perror("fopen app");
     \\        return 1;
@@ -3890,6 +3889,10 @@ const hot_reload_model_host_c_source =
     \\    }
     \\    if (fclose(file) != 0) {
     \\        perror("fclose app");
+    \\        return 1;
+    \\    }
+    \\    if (rename(temp_path, path) != 0) {
+    \\        perror("rename app");
     \\        return 1;
     \\    }
     \\    return 0;

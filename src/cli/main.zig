@@ -4205,6 +4205,7 @@ const HotShimChild = struct {
     done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     term: ?std.process.Child.Term = null,
     wait_error: ?std.process.Child.WaitError = null,
+    joined: bool = false,
 
     fn waitThread(self: *HotShimChild, io: std.Io) void {
         self.term = self.child.wait(io) catch |err| {
@@ -4213,6 +4214,37 @@ const HotShimChild = struct {
             return;
         };
         self.done.store(true, .seq_cst);
+    }
+
+    /// Join the wait thread once. Idempotent so the watch loop can join as
+    /// soon as the child reports it exited, and `shutdown` can still join a
+    /// child that never got that far.
+    fn join(self: *HotShimChild) void {
+        if (self.joined) return;
+        self.joined = true;
+        self.thread.join();
+    }
+
+    /// Release the child: kill it if it is still running, join the wait
+    /// thread, then free the allocation.
+    ///
+    /// The single `defer` at the point of creation owns this, so every exit
+    /// from the watch loop -- returned error included -- frees exactly once.
+    fn shutdown(self: *HotShimChild, ctx: *CliCtx) void {
+        if (!self.joined) self.terminate();
+        self.join();
+        ctx.gpa.destroy(self);
+    }
+
+    fn terminate(self: *HotShimChild) void {
+        const pid = self.child.id orelse return;
+        switch (builtin.os.tag) {
+            .windows => {
+                _ = std.os.windows.ntdll.NtTerminateProcess(pid, @enumFromInt(1));
+            },
+            .wasi => {},
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => std.posix.kill(pid, .KILL) catch {},
+        }
     }
 };
 
@@ -4277,22 +4309,6 @@ fn spawnHotShimChild(
         return err;
     };
     return watched;
-}
-
-fn terminateHotShimChild(child: *HotShimChild) void {
-    if (child.child.id) |pid| {
-        switch (builtin.os.tag) {
-            .windows => {
-                _ = std.os.windows.ntdll.NtTerminateProcess(pid, @enumFromInt(1));
-            },
-            .wasi => {},
-            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => std.posix.kill(pid, .KILL) catch {},
-        }
-    }
-}
-
-fn destroyHotShimChild(ctx: *CliCtx, child: *HotShimChild) void {
-    ctx.gpa.destroy(child);
 }
 
 const HotReloadRebuild = struct {
@@ -4915,14 +4931,7 @@ fn runHotReloadDevShim(
     errdefer if (initial_input_set_needs_deinit) initial_input_set.deinit(ctx);
 
     const host_child = try spawnHotShimChild(ctx, exe_path, args.path, hotReloadHostChildHandle(shm_handle), args.app_args);
-    var host_child_joined = false;
-    errdefer {
-        if (!host_child_joined) {
-            terminateHotShimChild(host_child);
-            host_child.thread.join();
-        }
-        destroyHotShimChild(ctx, host_child);
-    }
+    defer host_child.shutdown(ctx);
 
     initial_input_set_needs_deinit = false;
     var pending_rebuild = try refreshWatchState(ctx, &state, &signal, initial_input_set);
@@ -5027,9 +5036,7 @@ fn runHotReloadDevShim(
         std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
     }
 
-    host_child.thread.join();
-    host_child_joined = true;
-    defer destroyHotShimChild(ctx, host_child);
+    host_child.join();
     _ = try reportHotReloadAcknowledgement(
         ctx,
         hot_reload_control,
@@ -7923,6 +7930,14 @@ fn rocBuildCommand(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) 
 }
 
 fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
+    if (args.fuzz and args.opt != .size and args.opt != .speed) {
+        try ctx.io.stderr().print(
+            "Error: `roc build --fuzz` requires the LLVM backend; use --opt=speed or --opt=size.\n",
+            .{},
+        );
+        return error.UnsupportedTarget;
+    }
+
     // Headerless apps build through a synthetic default platform.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
         return rocBuildDefaultApp(ctx, args, source);
@@ -9125,6 +9140,18 @@ fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allo
     return roc_target.llvmFeatureString(allocator, std_target);
 }
 
+fn llvmObjectUsesPic(link_type: roc_target.OutputKind, fuzz: bool) bool {
+    return link_type == .shared or fuzz;
+}
+
+test "LLVM fuzz output uses position-independent code" {
+    try std.testing.expect(llvmObjectUsesPic(.archive, true));
+    try std.testing.expect(llvmObjectUsesPic(.exe, true));
+    try std.testing.expect(llvmObjectUsesPic(.shared, false));
+    try std.testing.expect(!llvmObjectUsesPic(.archive, false));
+    try std.testing.expect(!llvmObjectUsesPic(.exe, false));
+}
+
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -9178,9 +9205,9 @@ fn compileLlvmAppObject(
 
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
-    // Shared libraries need position-independent code; keep their objects
-    // separate from exe objects in the artifact directory.
-    const pic = link_type == .shared;
+    // Shared libraries and fuzz hosts need position-independent code; keep
+    // their objects separate from ordinary exe/archive objects.
+    const pic = llvmObjectUsesPic(link_type, args.fuzz);
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
     const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
     var tuning_hash = std.hash.Crc32.init();
@@ -9188,8 +9215,9 @@ fn compileLlvmAppObject(
     tuning_hash.update(&[_]u8{0});
     tuning_hash.update(llvm_features);
     const tuning_hash_value = tuning_hash.final();
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
+    const fuzz_suffix: []const u8 = if (args.fuzz) "_fuzz" else "";
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix, fuzz_suffix });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix, fuzz_suffix });
     const artifact_dir = try createUniqueTempDir(ctx);
     errdefer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, artifact_dir) catch {};
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, bitcode_filename });
@@ -9216,6 +9244,7 @@ fn compileLlvmAppObject(
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = args.debug,
+        .fuzz = args.fuzz,
         .link_builtins = true,
         .pic = pic,
         // Linked LLVM output uses the symbol ABI: builtins reach the host
@@ -9514,6 +9543,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.output;
+
+    if (args.fuzz and target.toCpuArch() == .wasm32) {
+        try ctx.io.stderr().writeAll("Error: `roc build --fuzz` does not support WebAssembly targets.\n");
+        return error.UnsupportedTarget;
+    }
 
     if (target.isDynamic() and builtin.target.os.tag != .linux) {
         renderValidationError(ctx, .{
@@ -13465,6 +13499,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.target) |target| try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{target});
             if (args.output) |output| try appendOwnedArg(ctx.gpa, &argv, &owned, "--output={s}", .{output});
             if (args.debug) try argv.append(ctx.gpa, "--debug");
+            if (args.fuzz) try argv.append(ctx.gpa, "--fuzz");
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.timings) try argv.append(ctx.gpa, "--timings");
             if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");

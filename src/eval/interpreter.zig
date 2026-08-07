@@ -3740,10 +3740,11 @@ pub const Interpreter = struct {
         );
     }
 
-    fn evalBytesLiteral(self: *LirInterpreter, literal: LIR.StrLiteral, target_layout: layout_mod.Idx) Error!Value {
+    fn evalBytesLiteral(self: *LirInterpreter, literal: LIR.ListLiteral, target_layout: layout_mod.Idx) Error!Value {
         return self.makeStaticRocListLiteralView(
-            self.staticStringBacking(literal.backing),
-            literal.offset,
+            self.staticStringBacking(literal.bytes.backing),
+            literal.bytes.offset,
+            literal.bytes.len,
             literal.len,
             target_layout,
         );
@@ -3801,14 +3802,21 @@ pub const Interpreter = struct {
         return self.rocStrToValue(rs, .str);
     }
 
-    fn makeStaticRocListLiteralView(self: *LirInterpreter, backing: []const u8, offset: u32, len: u32, target_layout: layout_mod.Idx) Error!Value {
+    fn makeStaticRocListLiteralView(
+        self: *LirInterpreter,
+        backing: []const u8,
+        offset: u32,
+        byte_len: u32,
+        elem_len: u32,
+        target_layout: layout_mod.Idx,
+    ) Error!Value {
         const offset_usize: usize = offset;
-        const len_usize: usize = len;
-        if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
+        const byte_len_usize: usize = byte_len;
+        if (offset_usize > backing.len or byte_len_usize > backing.len - offset_usize) {
             self.invariantFailed("LIR/interpreter invariant violated: byte-list literal view exceeded backing bytes", .{});
         }
 
-        if (len_usize == 0) {
+        if (byte_len_usize == 0) {
             return self.rocListToValue(RocList.empty(), target_layout);
         }
 
@@ -3829,13 +3837,13 @@ pub const Interpreter = struct {
             }
         }
 
-        const bytes = backing[offset_usize..][0..len_usize];
-        const whole_backing = offset_usize == 0 and len_usize == backing.len;
+        const bytes = backing[offset_usize..][0..byte_len_usize];
+        const whole_backing = offset_usize == 0 and byte_len_usize == backing.len;
         const rl = RocList{
             .bytes = @ptrCast(@constCast(bytes.ptr)),
-            .length = bytes.len,
+            .length = elem_len,
             .capacity_or_alloc_ptr = if (whole_backing)
-                RocList.encodeCapacity(bytes.len)
+                RocList.encodeCapacity(elem_len)
             else
                 RocList.encodeSliceAllocationPtr(@ptrCast(@constCast(backing.ptr))),
         };

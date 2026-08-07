@@ -2495,6 +2495,14 @@ pipeline consumes that output directly and must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
 Monotype Lifted output. No later pipeline stage repeats that finalization.
+Each post-lift capture operand explicitly names the callee capture slot it
+supplies. Capture finalization preserves that key while rewriting the operand
+value and never infers the target slot from the value's own capture identity.
+At the lift boundary, each declared key's namespace states how it joins:
+source-authored and check-generated keys normalize once through the target slot's
+checked identity, while lift-generated keys already name the target's lifted
+slot and remain exact. After that boundary, capture recomputation accepts only
+lifted keys; it never retries a lookup in another identity namespace.
 
 Optional tag reachability uses a recursive abstract value tree. A struct field
 or tag payload carries the complete nested `ValueInfo` output for the value
@@ -3026,6 +3034,19 @@ the data segment. This is why a constant list consumed through `.iter()` can
 have zero runtime list allocation in a size cart even though the eval allocation
 harness, which does not perform final constant hoisting, observes one base-list
 allocation.
+
+Strings and flat scalar lists use one shared content-interned blob store.
+`List(U8)` therefore has the same constant-storage cost as a `Str` containing
+the same bytes, and equal string/list contents reuse one blob. A packed list
+view records its scalar encoding and item count separately from its byte
+view. Lists whose items contain pointers or structured values remain
+explicit child-node lists so their graph edges and sharing stay visible.
+
+When packed list views reach LIR, the shared literal backing records the maximum
+alignment required by every view. Each view offset must also satisfy its own
+item alignment. Static-data materialization aligns the backing to that
+maximum while keeping the Roc list length and capacity in items rather than
+bytes.
 
 The direct LIR const plan also records the root's exact Monotype return type.
 Finalization clones that type into the durable `ConstStore` type store and saves
@@ -6727,8 +6748,15 @@ const StoredConstTemplate = struct {
 
 const ConstValue = union(enum) {
     scalar: ConstScalar,
-    string: StringLiteralId,
-    list: Span(ConstNodeId),
+    string: ConstBlobView,
+    list: union(enum) {
+        nodes: Span(ConstNodeId),
+        scalar_bytes: struct {
+            bytes: ConstBlobView,
+            len: u32,
+            item: ConstPackedScalar,
+        },
+    },
     tuple: Span(ConstNodeId),
     record: Span(ConstField),
     tag: ConstTag,
@@ -6737,6 +6765,13 @@ const ConstValue = union(enum) {
     fn_: ConstFn,
 };
 ```
+
+`ConstBlobView` is an `(interned blob id, byte offset, byte length)` view.
+Strings and packed scalar lists intern into the same exact-content namespace.
+Packed multi-byte scalars use little-endian checked-value bytes;
+this is target-independent `ConstStore` data, not a captured host allocation or
+backend-owned byte sequence. Post-check lowering validates the byte count
+against the scalar layout before making a runtime static-data view.
 
 `ConstScalar` is a closed checked scalar representation:
 
