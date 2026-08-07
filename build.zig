@@ -657,6 +657,18 @@ const CheckTypeCheckerPatternsStep = struct {
         // because platform and app modules have separate ident stores—the same alias
         // name has different Ident.Idx values across modules, so we must compare via text.
         .{ .file = "cir_to_lir.zig", .start = 110, .end = 115 },
+        // inspected.zig resolves a type module's import statement from the caller's
+        // module name, which arrives as text from outside this module's ident store.
+        .{ .file = "inspected.zig", .start = 226, .end = 232 },
+        // inspected.zig trims the trailing newline off a rendered report. This is
+        // presentation text on its way out, not a type-checker comparison.
+        .{ .file = "inspected.zig", .start = 2110, .end = 2116 },
+        // inspected.zig converts a NUL-terminated dylib path from the linker into a
+        // slice. Path bytes, not identifiers.
+        .{ .file = "inspected.zig", .start = 2830, .end = 2840 },
+        // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
+        // matched by name at the host boundary and has no Ident.Idx.
+        .{ .file = "inspected_run.zig", .start = 97, .end = 103 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
