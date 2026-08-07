@@ -20,7 +20,7 @@ fn readU32(bytes: []const u8) u32 {
         (@as(u32, bytes[3]) << 24);
 }
 
-fn invoke(interface: Interface, allocator: std.mem.Allocator, request: []const u8) ![]u8 {
+fn invoke(interface: Interface, allocator: std.mem.Allocator, request: []const u8) anyerror![]u8 {
     var alloc_params = [_]bytebox.Val{.{ .I32 = @intCast(request.len) }};
     var alloc_returns = [_]bytebox.Val{.{ .I32 = 0 }};
     try interface.instance.invoke(interface.alloc, &alloc_params, &alloc_returns, .{});
@@ -58,13 +58,13 @@ fn invoke(interface: Interface, allocator: std.mem.Allocator, request: []const u
     return response;
 }
 
-fn requireContains(response: []const u8, expected: []const u8) !void {
+fn requireContains(response: []const u8, expected: []const u8) anyerror!void {
     if (std.mem.find(u8, response, expected) != null) return;
     std.debug.print("Expected response to contain:\n{s}\nActual response:\n{s}\n", .{ expected, response });
     return error.UnexpectedResponse;
 }
 
-fn requireInOrder(response: []const u8, expected: []const []const u8) !void {
+fn requireInOrder(response: []const u8, expected: []const []const u8) anyerror!void {
     var offset: usize = 0;
     for (expected) |fragment| {
         const relative = std.mem.find(u8, response[offset..], fragment) orelse {
@@ -75,7 +75,7 @@ fn requireInOrder(response: []const u8, expected: []const []const u8) !void {
     }
 }
 
-fn sendAndRequire(interface: Interface, allocator: std.mem.Allocator, request: []const u8, expected: []const []const u8) !void {
+fn sendAndRequire(interface: Interface, allocator: std.mem.Allocator, request: []const u8, expected: []const []const u8) anyerror!void {
     const response = try invoke(interface, allocator, request);
     defer allocator.free(response);
     for (expected) |fragment| try requireContains(response, fragment);
@@ -87,7 +87,7 @@ fn sendAndCheck(
     request: []const u8,
     expected: []const []const u8,
     rejected: []const []const u8,
-) !void {
+) anyerror!void {
     const response = try invoke(interface, allocator, request);
     defer allocator.free(response);
     for (expected) |fragment| try requireContains(response, fragment);
@@ -98,7 +98,7 @@ fn sendAndCheck(
     }
 }
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa_impl: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .init;
     defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();

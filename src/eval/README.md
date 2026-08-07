@@ -71,14 +71,14 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 
 ## Host Integrations
 
-- **Inspected evaluation** (`inspected.zig`, `inspected_run.zig`) — Compiles an
+- **Inspected evaluation** (`inspected.zig`, `inspected_run.zig`)—Compiles an
   explicit checked root and executes it through a selected backend while
   returning the inspected value, crash outcome, allocation count, and ordered
   host events.
-- **Runtime host** (`runtime_host.zig`) — Implements compiler-owned `RocOps`
+- **Runtime host** (`runtime_host.zig`)—Implements compiler-owned `RocOps`
   callbacks with allocation tracking and ordered `dbg`, failed-`expect`, and
   crash capture. Production REPLs and evaluator tests use the same host.
-- **Interpreter shim** (`src/interpreter_shim/main.zig`) — Provides a
+- **Interpreter shim** (`src/interpreter_shim/main.zig`)—Provides a
   C-callable entry point (`roc_entrypoint`) that maps/views an ARC-inserted LIR
   image and evaluates it via the interpreter.
 
@@ -97,7 +97,7 @@ Evaluation coverage lives in `src/eval/test/`:
   on LIR structure (TRMC pointer ops, detection/transform outcomes, inlining).
 - `host_effects_runner.zig` / `host_effects_tests.zig`—Runtime host-effect
   coverage.
-- `runtime_host.zig` — Shared `RocOps` host with allocation leak checks and
+- `runtime_host.zig`—Shared `RocOps` host with allocation leak checks and
   event capture.
 
 Run tests with:

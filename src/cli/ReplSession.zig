@@ -26,8 +26,10 @@ const ReplSession = @This();
 
 const RenderError = Allocator.Error || error{WriteFailed};
 const ModuleRenderError = eval.Inspected.Error || RenderError;
-const ReplInitError = eval.BuiltinModules.InitError;
-const ReplStepError = eval.Inspected.Error || RenderError;
+/// Everything that can go wrong while standing up a session's builtin modules.
+pub const ReplInitError = eval.BuiltinModules.InitError;
+/// Everything that can go wrong while evaluating or inspecting one REPL input.
+pub const ReplStepError = eval.Inspected.Error || RenderError;
 const ReplTestError = ReplStepError || ReplInitError || error{
     ParseError,
     TestExpectedEqual,
