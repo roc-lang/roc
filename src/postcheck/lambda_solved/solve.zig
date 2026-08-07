@@ -120,6 +120,13 @@ const Solver = struct {
     /// leaves so the named nodes it must mark exist in the solved store.
     contains_forced_dynamic: []bool,
     shared_clones: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
+    /// Recycled `TypeCloner` memo maps. A cloner's map is direct-indexed by
+    /// Monotype id, so a freshly created one re-grows its sparse chunk table
+    /// toward the highest id it touches; finalization runs one cloner per
+    /// surviving leaf, which made those rebuilds quadratic across the program.
+    /// Pooling keeps the chunks allocated so each clone only pays for the
+    /// entries it actually writes.
+    cloner_map_pool: std.ArrayList(collections.DenseMap(MonoType.TypeId, Type.TypeVarId)),
     /// One memo map per lazily materialized tree, tying recursive
     /// back-references to their existing vars exactly as an eager clone's
     /// per-call memo did. Allocated on a leaf's first expansion.
@@ -234,6 +241,7 @@ const Solver = struct {
             .contains_callable = masks.contains_callable,
             .contains_forced_dynamic = masks.contains_forced_dynamic,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
+            .cloner_map_pool = .empty,
             .leaf_contexts = .empty,
         };
     }
@@ -241,6 +249,8 @@ const Solver = struct {
     fn deinit(self: *Solver) void {
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
         self.leaf_contexts.deinit(self.allocator);
+        for (self.cloner_map_pool.items) |*map| map.deinit();
+        self.cloner_map_pool.deinit(self.allocator);
         self.shared_clones.deinit();
         self.allocator.free(self.contains_forced_dynamic);
         self.allocator.free(self.contains_callable);
@@ -2877,12 +2887,16 @@ const TypeCloner = struct {
     fn init(solver: *Solver) TypeCloner {
         return .{
             .solver = solver,
-            .map = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
+            .map = solver.cloner_map_pool.pop() orelse
+                collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
         };
     }
 
     fn deinit(self: *TypeCloner) void {
-        self.map.deinit();
+        self.map.clearRetainingCapacity();
+        self.solver.cloner_map_pool.append(self.solver.allocator, self.map) catch {
+            self.map.deinit();
+        };
     }
 
     fn lower(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {

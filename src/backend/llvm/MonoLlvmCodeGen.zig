@@ -297,6 +297,12 @@ pub const MonoLlvmCodeGen = struct {
     loop_break_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
     local_slots: []LocalSlot = &.{},
     deferred_str_captures: []?DeferredStrCapture = &.{},
+    /// Number of non-null entries in `deferred_str_captures`. Deferred
+    /// captures are rare, and several hooks run once per local write or once
+    /// per join; the count lets those hooks skip their whole-table scans in
+    /// the overwhelmingly common all-empty state, which otherwise turn
+    /// quadratic in a proc's local count.
+    deferred_str_capture_count: usize = 0,
     string_counter: u32 = 0,
     /// When true the module is built with DWARF debug info: a compile unit,
     /// one subprogram per proc, and per-statement line locations from the
@@ -1510,6 +1516,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         const outer_deferred_str_captures = self.deferred_str_captures;
+        const outer_deferred_str_capture_count = self.deferred_str_capture_count;
         defer {
             self.wip = outer_wip;
             self.rc_arg_scratch = outer_rc_scratch;
@@ -1522,6 +1529,7 @@ pub const MonoLlvmCodeGen = struct {
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
             self.deferred_str_captures = outer_deferred_str_captures;
+            self.deferred_str_capture_count = outer_deferred_str_capture_count;
         }
 
         self.join_points.clearRetainingCapacity();
@@ -1622,7 +1630,8 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(self.local_slots);
         self.deferred_str_captures = try self.allocator.alloc(?DeferredStrCapture, self.store.localCount());
         defer self.allocator.free(self.deferred_str_captures);
-        self.clearDeferredStrCaptures();
+        @memset(self.deferred_str_captures, null);
+        self.deferred_str_capture_count = 0;
         try self.allocProcLocalSlots(proc);
         try self.unpackProcArgs(proc);
         if (!builder.strip and self.emit_local_debug_info) {
@@ -6386,15 +6395,18 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn clearDeferredStrCaptures(self: *MonoLlvmCodeGen) void {
+        if (self.deferred_str_capture_count == 0) return;
         for (self.deferred_str_captures) |*capture| {
             capture.* = null;
         }
+        self.deferred_str_capture_count = 0;
     }
 
     fn installDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId, capture: DeferredStrCapture) Error!void {
         if (!self.isStrLocal(local)) return error.CompilationFailed;
         try self.prepareLocalWrite(local);
         self.deferred_str_captures[@intFromEnum(local)] = capture;
+        self.deferred_str_capture_count += 1;
     }
 
     fn deferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) ?DeferredStrCapture {
@@ -6404,7 +6416,10 @@ pub const MonoLlvmCodeGen = struct {
 
     fn clearDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) void {
         if (self.deferred_str_captures.len == 0) return;
-        self.deferred_str_captures[@intFromEnum(local)] = null;
+        if (self.deferred_str_captures[@intFromEnum(local)] != null) {
+            self.deferred_str_captures[@intFromEnum(local)] = null;
+            self.deferred_str_capture_count -= 1;
+        }
     }
 
     fn materializeLocalIfDeferred(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
@@ -6429,6 +6444,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn materializeAllDeferredStrCaptures(self: *MonoLlvmCodeGen) Error!void {
+        if (self.deferred_str_capture_count == 0) return;
         var index: usize = 0;
         while (index < self.deferred_str_captures.len) : (index += 1) {
             if (self.deferred_str_captures[index] != null) {
@@ -6447,6 +6463,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn materializeDeferredCapturesUsingSource(self: *MonoLlvmCodeGen, source: LocalId) Error!void {
+        if (self.deferred_str_capture_count == 0) return;
         var index: usize = 0;
         while (index < self.deferred_str_captures.len) : (index += 1) {
             const capture = self.deferred_str_captures[index] orelse continue;
@@ -6467,6 +6484,7 @@ pub const MonoLlvmCodeGen = struct {
         if (target != source) {
             try self.prepareLocalWrite(target);
             self.deferred_str_captures[@intFromEnum(target)] = capture;
+            self.deferred_str_capture_count += 1;
         }
         return true;
     }

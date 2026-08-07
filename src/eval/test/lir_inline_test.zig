@@ -7683,3 +7683,111 @@ test "issue 10409 duplicate top-level value defs do not panic constant root look
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
 }
+
+// A while loop whose mutated state exceeds sixteen locals must still get its
+// join parameters scalarized. An unscalarized struct parameter is rebuilt and
+// destructured every iteration, and the materialized struct holds a second
+// reference to every refcounted field across the body's calls — which turns
+// each in-place list update inside the loop into a full copy. The shape here
+// mirrors a compressor main loop: nested whiles inside branches, early
+// error returns out of the loops, and enough mutated state to overflow a
+// too-small scalarization cap.
+test "wide loop-carried state scalarizes into flat join params" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\walk : U64 -> Try(U64, [Bug])
+        \\walk = |n| {
+        \\    var $t1 = List.repeat(0.U16, 64)
+        \\    var $t2 = List.repeat(0.U16, 64)
+        \\    var $t3 = List.repeat(0.U16, 64)
+        \\    var $t4 = List.repeat(0.U32, 64)
+        \\    var $t5 = List.repeat(0.U32, 64)
+        \\    var $a = 0.U64
+        \\    var $b = 1.U64
+        \\    var $c = 2.U64
+        \\    var $d = 3.U64
+        \\    var $e = 4.U64
+        \\    var $f = 5.U64
+        \\    var $g = 6.U64
+        \\    var $h = 7.U64
+        \\    var $j = 8.U64
+        \\    var $k = 9.U64
+        \\    var $l = 10.U64
+        \\    var $m = 11.U64
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        if $i.bitwise_and(1) == 0 {
+        \\            var $inner = 0.U64
+        \\            while $inner < 3 {
+        \\                $t1 = match List.set($t1, $i % 64, $i.to_u16_wrap()) {
+        \\                    Ok(v) => v
+        \\                    Err(_) => return Err(Bug)
+        \\                }
+        \\                $t4 = match List.set($t4, $i % 64, $i.to_u32_wrap()) {
+        \\                    Ok(v) => v
+        \\                    Err(_) => return Err(Bug)
+        \\                }
+        \\                $a = $a + $inner
+        \\                $b = $b + $a
+        \\                $inner = $inner + 1
+        \\            }
+        \\        } else {
+        \\            $t2 = match List.set($t2, $i % 64, $i.to_u16_wrap()) {
+        \\                Ok(v) => v
+        \\                Err(_) => return Err(Bug)
+        \\            }
+        \\            $t3 = match List.set($t3, $i % 64, $i.to_u16_wrap()) {
+        \\                Ok(v) => v
+        \\                Err(_) => return Err(Bug)
+        \\            }
+        \\            $t5 = match List.set($t5, $i % 64, $i.to_u32_wrap()) {
+        \\                Ok(v) => v
+        \\                Err(_) => return Err(Bug)
+        \\            }
+        \\            $c = $c + $b
+        \\            $d = $d + $c
+        \\            $e = $e + $d
+        \\            $f = $f + $e
+        \\            $g = $g + $f
+        \\            $h = $h + $g
+        \\            $j = $j + $h
+        \\            $k = $k + $j
+        \\            $l = $l + $k
+        \\            $m = $m + $l
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    Ok($a + $b + $c + $d + $e + $f + $g + $h + $j + $k + $l + $m
+        \\        + ($t1.get(0) ?? 0).to_u64()
+        \\        + ($t2.get(0) ?? 0).to_u64()
+        \\        + ($t3.get(0) ?? 0).to_u64()
+        \\        + ($t4.get(0) ?? 0).to_u64()
+        \\        + ($t5.get(0) ?? 0).to_u64())
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    match walk(n) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0
+        \\    }
+        \\}
+    ;
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var total_incref: usize = 0;
+    var max_join_params: usize = 0;
+    const proc_count = optimized.lowered.lir_result.store.getProcSpecs().len;
+    for (0..proc_count) |index| {
+        const shape = try collectProcShape(allocator, &optimized.lowered, @enumFromInt(@as(u32, @intCast(index))));
+        total_incref += shape.incref_count;
+        max_join_params = @max(max_join_params, shape.max_join_param_count);
+    }
+    // The loop joins carry every mutated var as its own parameter, not one
+    // struct whose per-iteration rebuild would alias the lists.
+    try std.testing.expect(max_join_params >= 18);
+    // With flat parameters the lists stay uniquely owned end to end, so the
+    // loops need no refcount traffic at all.
+    try std.testing.expectEqual(@as(usize, 0), total_incref);
+}
