@@ -2530,7 +2530,6 @@ const Solver = struct {
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
         if (std.meta.activeTag(content) != .named or content.named.kind != .alias) return null;
         if (census.enabled and content.named.builtin_owner != null) {
-            census.bump("lambda_alias_unwrap_builtin_owned");
         }
         return (content.named.backing orelse Common.invariant("transparent alias reached Lambda Solved without a backing type")).ty;    }
 

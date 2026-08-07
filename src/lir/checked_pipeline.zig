@@ -129,6 +129,13 @@ pub const Timing = struct {
         // the rest of compilation, in every pipeline that lowers through
         // Monotype rather than only the one the CLI flag reaches. Opt-in for
         // the same reason the flag is: the timestamping is not free.
+        // Freestanding wasm targets link no libc, so the opt-in read is only
+        // compiled where an environment exists to read.
+        if (comptime @import("builtin").target.cpu.arch.isWasm() or
+            @import("builtin").os.tag == .freestanding)
+        {
+            return timing;
+        }
         if (std.c.getenv("ROC_GRAPH_COST") != null) timing.detailed_monotype_body = true;
         return timing;
     }

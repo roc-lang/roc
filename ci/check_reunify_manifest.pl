@@ -58,10 +58,7 @@ my $SLL   = 'src/postcheck/solved_lir_lower.zig';
 my $LMLOW = 'src/postcheck/lambda_mono/lower.zig';
 my $RPOL  = 'src/postcheck/representation_policy.zig';
 my $RCLO  = 'src/postcheck/representation_closure.zig';
-my $RSLOG = 'src/postcheck/reunify_shadow/logical_identity.zig';
-my $RSHAD = 'src/postcheck/reunify_shadow/shadow.zig';
 my $DTRAN = 'src/postcheck/monotype/direct_translate.zig';
-my $RMIRR = 'src/postcheck/monotype/representation_mirror.zig';
 my $PCMOD = 'src/postcheck/mod.zig';
 my $FSID  = 'src/postcheck/monotype/final_spec_id.zig';
 my $SREH  = 'src/postcheck/monotype/spec_rehearsal.zig';
@@ -74,11 +71,8 @@ my @categories = (
         name    => 'instantiation-graph-creation',
         exempt  => [],
         patterns => [
-            # $RMIRR gained one InstGraph.create in Slice 7 Stage B: the
-            # representation-mirror unit test fixture builds a real graph to
-            # exercise the shadow; it deletes with the shadow at the flip.
             { label => 'InstGraph.create(', re => qr/InstGraph\.create\(/,
-              counts => { $SOLVE => 39, $LOWER => 18, $RMIRR => 1 } },
+              counts => { $SOLVE => 39, $LOWER => 18 } },
             { label => 'InstVariable.row(', re => qr/InstVariable\.row\(/,
               counts => { $SOLVE => 16, $LOWER => 3 } },
         ],
@@ -88,9 +82,6 @@ my @categories = (
         # Lambda Solved's unifier is the permanent callable-flow carve-out.
         exempt  => ['src/postcheck/lambda_solved/'],
         patterns => [
-            # $RMIRR's two `.unify(` calls are in the Stage B mirror tests, which
-            # drive the graph's join path so the shadow reflects it; they delete
-            # with the shadow at the flip.
             #
             # Every one of $LOWER's 42 has a `census.UnifySite` identity
             # (reunify.md sections 9, 13 Slice 7), so the constraint-replay table
@@ -114,7 +105,7 @@ my @categories = (
             # $PCMOD's single hit is a structural test asserting that the
             # string does NOT appear in the process source, not a call.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 39, $RMIRR => 2, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 39, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
@@ -151,12 +142,6 @@ my @categories = (
         name    => 'constraint-replay-census',
         exempt  => [],
         patterns => [
-            { label => 'measureUnifySite', re => qr/\bmeasureUnifySite\b/,
-              counts => { $LOWER => 42, $SREH => 1 } },
-            { label => 'noteUnifySite', re => qr/\bnoteUnifySite\b/,
-              counts => { $LOWER => 13 } },
-            { label => 'noteUnifyConstruction', re => qr/\bnoteUnifyConstruction\b/,
-              counts => { $LOWER => 4, $SREH => 1 } },
         ],
     },
     {
@@ -316,17 +301,6 @@ my @categories = (
             # past the flip.
             { label => 'evidenceOwnerUsesScoreSelection', re => qr/\bevidenceOwnerUsesScoreSelection\b/,
               counts => { $RPOL => 7, $SREH => 2, $DTRAN => 2 } },
-            # $RMIRR (Slice 7 Stage B): the graph-driven representation-closure
-            # shadow cites `applyIteratorJoin` (the graph site it mirrors) in a
-            # doc comment; it deletes at the flip.
-            # $RSHAD gained one `relate(` in Slice 6: the FinalSpecId sealing census
-            # (reunify.md 11.1/11.2) seals each spec record's declared representation
-            # inputs by relating same-logical positions through the section 10.3
-            # closure engine, so the shadow drives real `relate` workload.
-            # $RMIRR gained one `relate(` in Slice 7 Stage B: the graph-driven
-            # shadow relates the two mirrored slots through the section 10.3
-            # closure engine at each decision site it mirrors, so the engine runs
-            # real workload on the live corpus. It deletes with the shadow.
             # $FSID gained one `relate(` in Slice 7 Stage C: the production
             # FinalSpecId computation seals a record's representation inputs by
             # relating same-logical positions through the section 10.3 closure
@@ -350,48 +324,9 @@ my @categories = (
             # representation back out of the resulting class. It is the flip's own
             # representation closure and stays past the flip.
             { label => 'relate(', re => qr/\brelate\(/,
-              counts => { $RCLO => 18, $RSHAD => 1, $RMIRR => 1, $FSID => 1, $SREH => 2, $DTRAN => 1 } },
+              counts => { $RCLO => 18, $FSID => 1, $SREH => 2, $DTRAN => 1 } },
             { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
               counts => { $RCLO => 4 } },
-        ],
-    },
-    {
-        # The reunify.md Slice 5 shadow: eager logical identity, checked-node
-        # translation, scheme instantiation, and the harness hook. Unlike the
-        # shrinking re-derivation categories above, this shadow surface grows as
-        # it expands to the full lifecycle (Slice 6); its pins move up in the
-        # same change that grows it, so every entry point stays tracked.
-        name    => 'reunify-shadow',
-        exempt  => [],
-        patterns => [
-            { label => 'checkedLogicalIdentity', re => qr/\bcheckedLogicalIdentity\b/,
-              counts => { $RSLOG => 18, $RSHAD => 1 } },
-            { label => 'checkedLogicalIdentityUnder', re => qr/\bcheckedLogicalIdentityUnder\b/,
-              counts => { $RSLOG => 10, $RSHAD => 2 } },
-            # $RSHAD grew 1 -> 2 in Slice 6: the specialization-registry census
-            # (reunify.md 11) reduces each sealed spec record's requested and solved
-            # types to a logical skeleton through a second `monoLogicalIdentity` call
-            # site (`logicalOf`), alongside the concrete-root comparison's call.
-            { label => 'monoLogicalIdentity', re => qr/\bmonoLogicalIdentity\b/,
-              counts => { $RSLOG => 2, $RSHAD => 2 } },
-            # New in Slice 6: the representation-erasing sealing walk. It is defined
-            # once in $RSLOG and called twice in the sealing census ($RSHAD) — once
-            # for each spec record's requested type and once for its solved type —
-            # to erase representation to the logical binding while collecting the
-            # representation-input positions a FinalSpecId digests. $RSHAD grew
-            # 2 -> 3 in Slice 7 Stage C: the Stage C parity test drives the shadow
-            # walk once more to prove the production FinalSpecId ($FSID) computes
-            # the same digest. $FSID names it once in the module doc comment that
-            # ties the production duplicate of this walk to the shadow original;
-            # $FSID owns its own faithful copy (`Walk`), which the flip keeps.
-            { label => 'walkRequestSealing', re => qr/\bwalkRequestSealing\b/,
-              counts => { $RSLOG => 1, $RSHAD => 3, $FSID => 1 } },
-            { label => 'instantiateScheme', re => qr/\binstantiateScheme\b/,
-              counts => { $RSLOG => 7, $RSHAD => 1 } },
-            { label => 'alphaEqual', re => qr/\balphaEqual\b/,
-              counts => { $RSLOG => 5, $RSHAD => 1 } },
-            { label => 'runReunifyShadow', re => qr/\brunReunifyShadow\b/,
-              counts => { $LOWER => 2 } },
         ],
     },
     {
@@ -405,24 +340,8 @@ my @categories = (
         name    => 'direct-translation',
         exempt  => [],
         patterns => [
-            # $DTRAN grew 15 -> 21 as Stage A gained recursive-group construction
-            # and the engine_input_needed skip class: the self-recursive,
-            # mutually-recursive, nested-list, and generated-evidence unit tests
-            # each drive `translateGroundRoot`. It grew 21 -> 27 with the section
-            # 10 emission layer, whose unit tests each drive the same entry point
-            # over a position that opens, closes, and seals a representation slot
-            # — including the issue-10170 recursive minted backing and a producer
-            # input that places minted components and a generated backing. It
-            # grew 28 -> 29 with the two-parameter declaration whose backing
-            # reaches each formal several levels down, which is the shape the
-            # corpus divergences take. It stays inert
-            # (probe-only) until Stage E repoints the seam.
-            { label => 'translateGroundRoot', re => qr/\btranslateGroundRoot\b/,
-              counts => { $DTRAN => 29, $LOWER => 1 } },
             { label => 'instantiateStoredScheme', re => qr/\binstantiateStoredScheme\b/,
               counts => { $DTRAN => 4 } },
-            { label => 'runDirectTranslateProbe', re => qr/\brunDirectTranslateProbe\b/,
-              counts => { $DTRAN => 1, $LOWER => 2 } },
         ],
     },
 );

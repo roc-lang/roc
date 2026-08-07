@@ -492,7 +492,6 @@ pub const Store = struct {
         if (census.enabled) {
             switch (content) {
                 .named => |named| if (named.kind == .alias and named.builtin_owner != null) {
-                    census.bump("builtin_owned_alias_created");
                 },
                 else => {},
             }
@@ -875,7 +874,6 @@ pub const Store = struct {
                 try self.registerRoot(name_store, member);
                 registered += 1;
             }
-            census.bump("intern_miss");
             @memcpy(out_ids, provisional);
             return;
         }
@@ -913,7 +911,6 @@ pub const Store = struct {
             if (rep != index or existing_id[index] != null) continue;
             try self.registerRoot(name_store, final_ids[index]);
         }
-        census.bump("intern_miss");
         @memcpy(out_ids, final_ids);
     }
 
@@ -1128,19 +1125,16 @@ pub const Store = struct {
                         switch (self.get(candidate)) {
                             .func, .named, .tag_union => {
                                 try bucket.append(self.allocator, candidate);
-                                census.bump("intern_hit_occurrence_held");
                                 return candidate;
                             },
                             .record, .tuple, .list, .box, .primitive, .erased, .zst => {},
                         }
                     }
                     self.restore(mark_);
-                    census.bump("intern_hit");
                     return existing;
                 }
             }
             try bucket.append(self.allocator, candidate);
-            census.bump("intern_miss");
             return candidate;
         }
 
@@ -1148,7 +1142,6 @@ pub const Store = struct {
         errdefer bucket.deinit(self.allocator);
         try bucket.append(self.allocator, candidate);
         try buckets.put(key, bucket);
-        census.bump("intern_miss");
         return candidate;
     }
 
@@ -1188,12 +1181,10 @@ pub const Store = struct {
             if (existing == candidate) return candidate;
             if (self.dedup_excluded.contains(existing)) continue;
             if (try self.typeEql(name_store, existing, candidate)) {
-                census.bump("intern_hit");
                 return existing;
             }
         }
         try gop.value_ptr.append(self.allocator, candidate);
-        census.bump("intern_miss");
         return candidate;
     }
 
@@ -3392,7 +3383,6 @@ fn cycleDigest(position: u32) names.TypeDigest {
 /// allocation id, so the digest is independent of construction order; any
 /// resulting bucket collision is resolved by exact `typeEql`.
 fn writeDeepShape(hasher: *std.crypto.hash.sha2.Sha256, content_tag: ContentTag) void {
-    census.bump("digest_stack_depth_exceeded");
     writeBytes(hasher, "deep");
     writeBytes(hasher, @tagName(content_tag));
 }

@@ -48,7 +48,6 @@ const direct_translate = @import("direct_translate.zig");
 const solve = @import("solve.zig");
 const closure = @import("../representation_closure.zig");
 const policy = @import("../representation_policy.zig");
-const reunify_shadow = @import("../reunify_shadow/shadow.zig");
 
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
@@ -703,96 +702,6 @@ pub const ContextedProvenance = struct {
     request_edge: ?RequestEdgeName = null,
 };
 
-/// Debug/probe-only record of what each graph node stands for and how it
-/// sealed, so a read at a graph exit can name the checked position behind it.
-pub const SealTrace = struct {
-    allocator: Allocator,
-    provenance: std.AutoHashMapUnmanaged(u32, CheckedAddress),
-    /// Every node instantiated from a checked position, regardless of the
-    /// binding context it was created under. `provenance` records only the
-    /// contexts whose binding the rehearsal can describe; this records the
-    /// question "does this node stand for a checked position at all", which is
-    /// what says whether a read of it could ever name one (reunify.md 13.2
-    /// step 2a).
-    from_checked: std.AutoHashMapUnmanaged(u32, void),
-    /// Every node instantiated from a checked position, with the binding
-    /// context it was created under. `provenance` covers only the root context,
-    /// because a nested scope binds the same checked id under a different
-    /// binding; recording the context lets a read decide whether the binding it
-    /// holds is the one the node was built under (reunify.md 13.2 step 2a).
-    contexted: std.AutoHashMapUnmanaged(u32, ContextedProvenance),
-    sealed: std.AutoHashMapUnmanaged(u32, Type.TypeId),
-    disabled: bool,
-
-    /// An empty trace owning no storage yet.
-    pub fn init(allocator: Allocator) SealTrace {
-        return .{
-            .allocator = allocator,
-            .provenance = .empty,
-            .from_checked = .empty,
-            .contexted = .empty,
-            .sealed = .empty,
-            .disabled = false,
-        };
-    }
-
-    /// Release the trace's tables.
-    pub fn deinit(self: *SealTrace) void {
-        self.provenance.deinit(self.allocator);
-        self.from_checked.deinit(self.allocator);
-        self.contexted.deinit(self.allocator);
-        self.sealed.deinit(self.allocator);
-    }
-
-    /// Record that `node` was instantiated from `address`. Repeats keep the
-    /// first address: one node stands for one checked position.
-    /// Record `node`'s checked position and the context it was built under.
-    pub fn noteContexted(self: *SealTrace, node: u32, record: ContextedProvenance) void {
-        if (self.disabled) return;
-        const gop = self.contexted.getOrPut(self.allocator, node) catch {
-            self.disabled = true;
-            return;
-        };
-        if (!gop.found_existing) gop.value_ptr.* = record;
-    }
-
-    /// The recorded position and context for `node`, if any.
-    pub fn contextedFor(self: *const SealTrace, node: u32) ?ContextedProvenance {
-        return self.contexted.get(node);
-    }
-
-    /// Record that `node` was instantiated from some checked position.
-    pub fn noteFromChecked(self: *SealTrace, node: u32) void {
-        if (self.disabled) return;
-        _ = self.from_checked.getOrPut(self.allocator, node) catch {
-            self.disabled = true;
-        };
-    }
-
-    /// Whether `node` stands for a checked position.
-    pub fn isFromChecked(self: *const SealTrace, node: u32) bool {
-        return self.from_checked.contains(node);
-    }
-
-    pub fn noteProvenance(self: *SealTrace, node: u32, address: CheckedAddress) void {
-        if (self.disabled) return;
-        const gop = self.provenance.getOrPut(self.allocator, node) catch {
-            self.disabled = true;
-            return;
-        };
-        if (!gop.found_existing) gop.value_ptr.* = address;
-    }
-
-    /// Record that `node` sealed to `ty`. A node sealed more than once keeps its
-    /// latest committed id, which is the one lowering carries forward.
-    pub fn noteSealed(self: *SealTrace, node: u32, ty: Type.TypeId) void {
-        if (self.disabled) return;
-        self.sealed.put(self.allocator, node, ty) catch {
-            self.disabled = true;
-        };
-    }
-};
-
 /// Resolves a module's content identity to the cursor a translation reads it by.
 /// The lowering Builder owns the module list; this hands the rehearsal exactly
 /// the read it needs without duplicating that list.
@@ -884,18 +793,13 @@ fn templateSchemeOwnerNode(start: SpecializationStart) ?u32 {
     return scheme.owner_node;
 }
 
-/// One active specialization's environment plus the graph trace it compares
-/// against. `chain` ends at this specialization's own level, whose bound values
+/// One active specialization's environment. `chain` ends at this
+/// specialization's own level, whose bound values
 /// are dense and ordered exactly like `binders` (reunify.md section 9.1); the
 /// levels before it are the lexically enclosing environments the callee scheme's
 /// checked captured binders name (reunify.md sections 7.1, 7.3). The whole
-/// chain is owned by the rehearsal and freed when the frame pops. The trace is
-/// heap-allocated so the graph's pointer to it survives the frame stack growing
-/// under a nested specialization.
+/// chain is owned by the rehearsal and freed when the frame pops.
 const Frame = struct {
-    /// The graph-seal trace of the transitional comparison, present only while
-    /// that Debug measurement runs.
-    trace: ?*SealTrace,
     /// The module whose ids `binders` name, and whose residual dispositions
     /// `owner_node` selects. Only positions in this module translate under the
     /// environment; a position in another module has no binder in scope.
@@ -1462,7 +1366,6 @@ pub const Rehearsal = struct {
     nested_leaf_dumped: usize = 0,
     /// Positions the seam reported a divergence at, so whether each is a
     /// template can be settled after lowering rather than mid-seal.
-    diverged_addresses: std.AutoHashMapUnmanaged(CheckedAddress, void) = .empty,
     frames: std.ArrayList(Frame),
     /// The open request scopes, innermost last. The seam opens one around every
     /// request it makes and closes it when the request finishes, so the edge a
@@ -1519,7 +1422,6 @@ pub const Rehearsal = struct {
     disabled: bool,
     /// Whether the transitional graph comparison runs. Debug measurement only:
     /// it selects nothing, and the emission below is the same either way.
-    comparing: bool,
 
     /// Build the instantiation state for one lowering run.
     pub fn create(
@@ -1558,7 +1460,6 @@ pub const Rehearsal = struct {
             .unresolved_details = .empty,
             .unify_details = @splat(null),
             .disabled = false,
-            .comparing = census.enabled and reunify_shadow.shouldRun(),
         };
         self.translator = direct_translate.Translator.init(allocator, self.types, program_names, resolver);
         return self;
@@ -1567,12 +1468,10 @@ pub const Rehearsal = struct {
     /// Dump the bounded mismatch detail and release everything the rehearsal
     /// owns. Nothing it allocated is visible to lowering.
     pub fn destroy(self: *Rehearsal) void {
-        self.dumpDetails();
         for (self.frames.items) |*frame| self.releaseFrame(frame);
         self.frames.deinit(self.allocator);
         self.component_arena.deinit();
         self.use_mints.deinit();
-        self.diverged_addresses.deinit(self.allocator);
         self.details.deinit(self.allocator);
         self.unresolved_details.deinit(self.allocator);
         self.slot_descriptors.deinit(self.allocator);
@@ -1639,7 +1538,6 @@ pub const Rehearsal = struct {
                 self,
                 rehearsalSlotFinal,
             ) catch null) orelse break :seal;
-            census.bump("value_sealed_by_drafts");
             return sealed;
         }
         // A frame whose start-of-frame emission skipped at an undictated
@@ -1647,11 +1545,9 @@ pub const Rehearsal = struct {
         // live under the frame's floor, so the position the start emission
         // could not state may state now.
         const scheme_root = frame.scheme_root_checked orelse {
-            census.bump("value_declined_no_scheme_root");
             return null;
         };
         if (!frame.env_ready) {
-            census.bump("value_declined_env_unready");
             return null;
         }
         const cursor = self.lookup.cursor(frame.env_module_bytes) orelse return null;
@@ -1663,7 +1559,6 @@ pub const Rehearsal = struct {
             .function => |root_fn| {
                 for (root_fn.args) |arg| {
                     if (arg == root_fn.ret) {
-                        census.bump("value_reemission_shared_position");
                         return null;
                     }
                 }
@@ -1676,10 +1571,8 @@ pub const Rehearsal = struct {
             frame.owner_node,
             @enumFromInt(scheme_root),
         ) orelse {
-            census.bump("value_declined_reemission_skip");
             return null;
         };
-        census.bump("value_sealed_by_reemission");
         return sealed;
     }
 
@@ -1746,7 +1639,6 @@ pub const Rehearsal = struct {
                 if (self.engine.related(slot, emitted_slot)) return;
                 self.engine.relate(slot, emitted_slot, .iterator_public_minted) catch return;
                 self.recordClassFinal(emitted_slot);
-                census.bump("rehearsal_provisional_slot_joined");
             },
             .draft => |draft_id| {
                 const draft = drafts.drafts.items[@intFromEnum(draft_id)];
@@ -1806,7 +1698,6 @@ pub const Rehearsal = struct {
         } }) catch return null;
         self.slots.append(self.allocator, slot) catch return null;
         self.slot_descriptors.put(self.allocator, @intFromEnum(slot), declared) catch return null;
-        census.bump("rehearsal_joinable_slots_opened");
         return slot;
     }
 
@@ -1826,17 +1717,15 @@ pub const Rehearsal = struct {
         const frame = &self.frames.items[self.frames.items.len - 1];
         const start_root = frame.request_root orelse {
             if (!frame.env_ready) {
-                census.bump("spec_root_declined_env_unready");
                 if (frame.skip) |skip| switch (skip) {
-                    .root_request => census.bump("spec_root_declined_root_request"),
-                    .generated_request => census.bump("spec_root_declined_generated_request"),
-                    .no_site => census.bump("spec_root_declined_no_site"),
-                    .site_ambiguous => census.bump("spec_root_declined_site_ambiguous"),
-                    .defining_module_differs => census.bump("spec_root_declined_module_differs"),
-                    .edge_unusable => census.bump("spec_root_declined_edge_unusable"),
+                    .root_request => {},
+                    .generated_request => {},
+                    .no_site => {},
+                    .site_ambiguous => {},
+                    .defining_module_differs => {},
+                    .edge_unusable => {},
                 };
             } else {
-                census.bump("spec_root_declined_emission_null");
             }
             return null;
         };
@@ -1872,7 +1761,6 @@ pub const Rehearsal = struct {
         var index: usize = 0;
         while (index < len) : (index += 1) arg_buffer[index] = GuardedList.at(args, index);
         const rebuilt = self.types.internFunc(self.program_names, arg_buffer, minted_ret) catch return start_root;
-        census.bump("rehearsal_request_root_body_final");
         return rebuilt;
     }
 
@@ -1896,7 +1784,6 @@ pub const Rehearsal = struct {
             .representation = mint,
         }) catch return;
         if (frame.input_floor == null) frame.input_floor = floor;
-        census.bump("rehearsal_body_root_mint_declared");
     }
 
     /// The innermost frame's skip-class name, for the probe's decline trace.
@@ -1973,232 +1860,6 @@ pub const Rehearsal = struct {
         return false;
     }
 
-    /// Debug/probe-only: for a divergence that entered through no request edge,
-    /// whether any recorded site in the position's own module names the
-    /// definition its unbound variable belongs to (reunify.md 13.2 2a).
-    fn noteEdgelessDivergenceOwner(self: *Rehearsal, address: CheckedAddress, under_callee: bool) void {
-        if (comptime !census.enabled) return;
-        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
-        var env: ?*const direct_translate.BindingEnvironment = null;
-        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
-        if (callee) |level| {
-            env = level.chain.innermost();
-        } else if (self.frameForModule(address.module_bytes)) |frame| {
-            env = frame.environment();
-        }
-        const free = self.firstFreeVariable(cursor.view, @enumFromInt(address.type_id), env) orelse {
-            census.bump("edgeless_no_free_variable");
-            return;
-        };
-        var owner_node: ?u32 = null;
-        for (cursor.view.schemes) |scheme| {
-            for (scheme.generalizedVars(cursor.view)) |binder| {
-                if (binder == free) {
-                    owner_node = scheme.owner_node;
-                    break;
-                }
-            }
-            if (owner_node != null) break;
-        }
-        const owner = owner_node orelse {
-            census.bump("edgeless_free_var_unowned");
-            // No scheme generalizes this variable, so no instantiation edge can
-            // state its value. Ask what checking DOES hold for it: if it is a
-            // variable checking left unresolved and unclassified, there is
-            // nothing for checking to record and the value only exists once a
-            // specialization is chosen (reunify.md 15.2).
-            // A rigid is a declared parameter of some signature. If no scheme's
-            // binder list holds it, ask whether it is REACHABLE from the root
-            // of the definition being specialized: if it is, that definition's
-            // binder list omits a parameter its own signature contains, which
-            // is a capture gap; if it is not, the parameter belongs to some
-            // definition this specialization never names (reunify.md 7.1).
-            // The decisive question: is this rigid in ANY definition's signature
-            // in the module? If it is, that definition's binder list omits a
-            // parameter of its own signature and checking can record it. If it
-            // is in none, it is a parameter no signature carries, and there is
-            // nothing for checking to attach it to (reunify.md 7.1, 15.2).
-            {
-                var found_in_some_scheme = false;
-                for (cursor.view.schemes) |scheme| {
-                    if (self.checkedReaches(cursor, scheme.root, free)) {
-                        found_in_some_scheme = true;
-                        break;
-                    }
-                }
-                if (found_in_some_scheme) {
-                    census.bump("unowned_rigid_in_some_scheme_root");
-                } else {
-                    census.bump("unowned_rigid_in_no_scheme_root");
-                    // Local schemes are only half the definitions. A parameter
-                    // of an IMPORTED definition lives in the projected
-                    // imported-scheme table, whose binder list is separate
-                    // (reunify.md 7.1).
-                    var in_imported_binders = false;
-                    for (cursor.view.importedSchemeBinders()) |binder| {
-                        if (binder == free) {
-                            in_imported_binders = true;
-                            break;
-                        }
-                    }
-                    if (in_imported_binders) {
-                        census.bump("unowned_rigid_is_imported_binder");
-                    } else {
-                        var in_imported_root = false;
-                        for (cursor.view.importedSchemes()) |imported| {
-                            if (self.checkedReaches(cursor, imported.localRoot(), free)) {
-                                in_imported_root = true;
-                                break;
-                            }
-                        }
-                        if (in_imported_root) {
-                            census.bump("unowned_rigid_in_imported_root_not_binders");
-                        } else {
-                            census.bump("unowned_rigid_in_no_root_at_all");
-                            // A scheme's recorded `root` is the FINAL root,
-                            // whose free variables may have been unified after
-                            // generalization; `snapshot_root` is the pristine
-                            // scheme at the boundary. A parameter substituted
-                            // away in the former still stands in the latter
-                            // (reunify.md 7.1).
-                            var in_pristine = false;
-                            for (cursor.view.schemes) |scheme| {
-                                if (scheme.snapshot_root == checked.scheme_snapshot_root_none) continue;
-                                const pristine: checked.CheckedTypeId = @enumFromInt(scheme.snapshot_root);
-                                if (self.checkedReaches(cursor, pristine, free)) {
-                                    in_pristine = true;
-                                    break;
-                                }
-                            }
-                            if (in_pristine) {
-                                census.bump("unowned_rigid_in_pristine_root_only");
-                            } else {
-                                census.bump("unowned_rigid_in_no_pristine_root_either");
-                                // A scheme is a VALUE definition's signature. A
-                                // nominal TYPE declaration also has formal
-                                // parameters, and those are bound by the
-                                // nominal's arguments at each use rather than by
-                                // any scheme's binder list. Ask whether the
-                                // parameter is one of those.
-                                var in_declaration = false;
-                                for (cursor.view.nominal_declarations) |declaration| {
-                                    if (self.checkedReaches(cursor, declaration.declaration_root, free) or
-                                        self.checkedReaches(cursor, declaration.backing, free))
-                                    {
-                                        in_declaration = true;
-                                        break;
-                                    }
-                                }
-                                if (in_declaration) {
-                                    census.bump("unowned_rigid_is_nominal_declaration_parameter");
-                                } else {
-                                    census.bump("unowned_rigid_in_nothing_at_all");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if (self.frameForModule(address.module_bytes)) |frame| {
-                if (cursor.view.schemeIdForOwnerNode(frame.owner_node)) |frame_scheme_id| {
-                    if (cursor.view.schemeById(frame_scheme_id)) |frame_scheme| {
-                        if (self.checkedReaches(cursor, frame_scheme.root, free)) {
-                            census.bump("unowned_rigid_reachable_from_frame_scheme");
-                        } else {
-                            census.bump("unowned_rigid_outside_frame_scheme");
-                        }
-                    }
-                } else {
-                    census.bump("unowned_frame_owner_has_no_scheme");
-                }
-            } else {
-                census.bump("unowned_no_frame_for_module");
-            }
-            switch (cursor.view.payload(free)) {
-                .flex => |variable| {
-                    census.bump("unowned_var_is_flex");
-                    if (variable.constraints.len != 0) census.bump("unowned_var_has_constraints");
-                    if (variable.numeric_default_phase != null) census.bump("unowned_var_has_numeric_default");
-                    if (variable.row_default != null) census.bump("unowned_var_has_row_default");
-                },
-                .rigid => census.bump("unowned_var_is_rigid"),
-                else => census.bump("unowned_var_is_not_a_variable"),
-            }
-            var disposed = false;
-            for (cursor.view.residualDispositions()) |disposition| {
-                if (disposition.type_id == @intFromEnum(free)) {
-                    disposed = true;
-                    break;
-                }
-            }
-            if (disposed) {
-                census.bump("unowned_var_has_disposition");
-            } else {
-                census.bump("unowned_var_has_no_disposition");
-            }
-            return;
-        };
-        for (cursor.view.instantiationSites()) |site| {
-            if (site.scheme_owner_node == owner) {
-                census.bump("edgeless_owner_has_site_somewhere");
-                return;
-            }
-        }
-        census.bump("edgeless_owner_has_no_site_anywhere");
-    }
-
-    pub fn noteDivergenceEdgeSite(
-        self: *Rehearsal,
-        address: CheckedAddress,
-        under_callee: bool,
-        edge: ?RequestEdgeName,
-    ) void {
-        if (comptime !census.enabled) return;
-        if (self.disabled) return;
-        const named = edge orelse {
-            census.bump("divergence_no_request_edge");
-            // No entering edge names a site for this position. Ask whether the
-            // checked data records its definition's instantiation ANYWHERE in
-            // the module: if it does, the value exists and only the key that
-            // selects it is missing; if it does not, no recorded edge states
-            // it at all and closing this needs checking to record more.
-            self.noteEdgelessDivergenceOwner(address, under_callee);
-            return;
-        };
-        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
-        var env: ?*const direct_translate.BindingEnvironment = null;
-        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
-        if (callee) |level| {
-            env = level.chain.innermost();
-        } else if (self.frameForModule(address.module_bytes)) |frame| {
-            env = frame.environment();
-        }
-        const free = self.firstFreeVariable(cursor.view, @enumFromInt(address.type_id), env) orelse {
-            census.bump("divergence_no_free_variable");
-            return;
-        };
-        var owner: ?u32 = null;
-        for (cursor.view.schemes) |scheme| {
-            for (scheme.generalizedVars(cursor.view)) |binder| {
-                if (binder == free) {
-                    owner = scheme.owner_node;
-                    break;
-                }
-            }
-            if (owner != null) break;
-        }
-        const owner_node = owner orelse {
-            census.bump("divergence_free_var_unowned");
-            return;
-        };
-        const caller = self.lookup.cursor(named.module_bytes) orelse return;
-        if (self.siteQuietly(caller, named.use_expr, owner_node) != null) {
-            census.bump("divergence_site_at_request_edge");
-        } else {
-            census.bump("divergence_no_site_at_request_edge");
-        }
-    }
-
     pub fn openRequestEdge(
         self: *Rehearsal,
         module_bytes: [32]u8,
@@ -2222,19 +1883,6 @@ pub const Rehearsal = struct {
                     edge.adopted_mint = mint;
                     break :capture;
                 }
-            }
-            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                std.debug.print("FS-EDGE expr={d} captured={s} stack:", .{
-                    @intFromEnum(use_expr),
-                    if (edge.adopted_mint) |m| @tagName(m.iterator_kind) else "-",
-                });
-                var walk = self.frames.items.len;
-                while (walk > 0) {
-                    walk -= 1;
-                    const f = &self.frames.items[walk];
-                    std.debug.print(" s{d}/{s}", .{ f.scheme.scheme, if (f.ret_mint) |m| @tagName(m.iterator_kind) else "-" });
-                }
-                std.debug.print("\n", .{});
             }
         }
         self.requests.append(self.allocator, .{ .checked = edge }) catch {
@@ -2303,7 +1951,6 @@ pub const Rehearsal = struct {
                 if (edge.input_floor) |floor| {
                     self.translator.truncateRepresentationInputs(floor);
                 }
-                census.bump("rehearsal_request_edge_unclaimed");
                 self.releaseEdge(edge);
             },
         }
@@ -2356,17 +2003,13 @@ pub const Rehearsal = struct {
         caller_owner_node: u32,
         edge_adopted: ?direct_translate.ProducerRepresentation,
     ) ?usize {
-        census.bump("iter_declare_attempt");
         if (declared.rule != .iterator_dispatch_receiver and declared.rule != .iterator_direct_call) {
-            census.bump("iter_declare_not_iterator_rule");
             return null;
         }
         const source = declared.source orelse {
-            census.bump("iter_declare_no_source");
             return null;
         };
         const procedure = source.procedure orelse {
-            census.bump("iter_declare_no_procedure");
             return null;
         };
         // A constructor that mints nothing of its own produces exactly what
@@ -2388,34 +2031,26 @@ pub const Rehearsal = struct {
             break :adopted null;
         };
         const kind = kindForIteratorProcedure(procedure) orelse (if (adopted) |mint| mint.iterator_kind else {
-            census.bump("iter_declare_nonminting_procedure");
             return null;
         });
-        if (adopted != null) census.bump("iter_declare_adopted_enclosing_mint");
         const function = switch (defining.view.payload(scheme.root)) {
             .function => |function| function,
             else => {
-                census.bump("iter_declare_root_not_function");
                 return null;
             },
         };
         const caller = self.lookup.cursor(source.module_bytes) orelse {
-            census.bump("iter_declare_no_caller_cursor");
             return null;
         };
         const topology_lookup = self.lookup.iterator_topology orelse {
-            census.bump("iter_declare_no_topology_lookup");
             return null;
         };
         const topology_ids = topology_lookup(self.lookup.context, source.module_bytes) orelse {
-            census.bump("iter_declare_no_topology_ids");
             return null;
         };
         const topology = self.internTopology(caller, topology_ids) orelse {
-            census.bump("iter_declare_topology_intern_failed");
             return null;
         };
-        census.bump("iter_declare_declared");
 
         const floor = self.translator.representationInputCount();
         self.declareReceiverChainInputs(caller, caller_env, caller_owner_node, source.receiver_link, topology);
@@ -2460,25 +2095,10 @@ pub const Rehearsal = struct {
                         },
                         .representation = final_representation,
                     }) catch return null;
-                    census.bump("iter_declare_caller_ret_declared");
-                    if (self.unbound_no_frame_dumped < 8) {
-                        self.unbound_no_frame_dumped += 1;
-                        if (std.c.getenv("ROC_REUNIFY_CENSUS")) |raw_path| {
-                            const module_hex = std.fmt.bytesToHex(source.module_bytes[0..8].*, .lower);
-                            var line_buf: [160]u8 = undefined;
-                            if (std.fmt.bufPrint(&line_buf, "declare_ids module={s} callee_ret={d} caller_ret={d}\n", .{
-                                &module_hex,
-                                @intFromEnum(function.ret),
-                                @intFromEnum(caller_function.ret),
-                            })) |line| {
-                                census.appendToFile(raw_path, line);
-                            } else |_| {}
-                        }
-                    }
                 },
-                else => census.bump("iter_declare_witness_not_function"),
+                else => {},
             },
-            .receiver_at_argument => census.bump("iter_declare_witness_receiver_only"),
+            .receiver_at_argument => {},
         }
         // The consumers of this declaration read after the callee level
         // closes, so the enclosing generated request scope carries the
@@ -2525,7 +2145,6 @@ pub const Rehearsal = struct {
     ) void {
         const key = RequestingSite{ .module_bytes = module_bytes, .use_expr = @intFromEnum(use_expr) };
         self.use_mints.put(key, mint) catch return;
-        census.bump("rehearsal_use_mint_recorded");
         if (self.frames.items.len == 0) return;
         const owner = &self.frames.items[self.frames.items.len - 1];
         owner.recorded_uses.append(self.allocator, key) catch {
@@ -2550,7 +2169,6 @@ pub const Rehearsal = struct {
                             return;
                         };
                     }
-                    census.bump("rehearsal_use_mint_propagated");
                 }
             }
             break;
@@ -2595,7 +2213,6 @@ pub const Rehearsal = struct {
             null;
         const mint = link.ready orelse recorded orelse derive: {
             const procedure = link.procedure orelse {
-                census.bump("iter_chain_link_underived");
                 return;
             };
             const kind = kindForIteratorProcedure(procedure) orelse return;
@@ -2606,7 +2223,6 @@ pub const Rehearsal = struct {
                 .evidence = link.evidence,
                 .stamp_position = link.produced,
             }, topology) orelse {
-                census.bump("iter_chain_link_underived");
                 return;
             };
         };
@@ -2614,7 +2230,6 @@ pub const Rehearsal = struct {
             .position = .{ .module_bytes = caller.module_bytes, .type_id = @intFromEnum(link.produced) },
             .representation = mint,
         }) catch return;
-        census.bump("iter_chain_link_declared");
     }
 
     /// What one producer mints over, named entirely in the requesting
@@ -2681,14 +2296,12 @@ pub const Rehearsal = struct {
                 .range_exclusive, .range_inclusive => {},
                 else => {
                     const value = receiver orelse {
-                        census.bump("iter_declare_primary_component_untranslated");
                         return null;
                     };
                     primary_components[0] = value;
                     count = 1;
                     if (spec.kind == .custom) {
                         const state_ty = spec.state_ty orelse {
-                            census.bump("iter_declare_primary_state_missing");
                             return null;
                         };
                         const state = self.translator.translateUnderEnvironment(
@@ -2698,7 +2311,6 @@ pub const Rehearsal = struct {
                             state_ty,
                             &reason,
                         ) catch {
-                            census.bump("iter_declare_primary_component_untranslated");
                             return null;
                         };
                         primary_components[1] = state;
@@ -2755,14 +2367,12 @@ pub const Rehearsal = struct {
                 &unstamped_reason,
             ) catch {
                 self.translator.truncateRepresentationInputs(unstamped_floor);
-                census.bump("iter_declare_identity_emit_failed");
                 break :two_phase;
             };
             self.translator.truncateRepresentationInputs(unstamped_floor);
             switch (self.types.get(unstamped)) {
                 .named => {},
                 else => {
-                    census.bump("iter_declare_identity_not_named");
                     break :two_phase;
                 },
             }
@@ -2776,7 +2386,6 @@ pub const Rehearsal = struct {
             }
             final_representation.generated = .{ .bytes = hasher.finalResult() };
             final_representation.minting = null;
-            census.bump("iter_declare_identity_stamped");
         }
         return final_representation;
     }
@@ -2838,7 +2447,6 @@ pub const Rehearsal = struct {
                 .components = pooled,
             },
         }) catch return null;
-        census.bump("spec_record_producer_declared");
         return floor;
     }
 
@@ -3016,21 +2624,17 @@ pub const Rehearsal = struct {
             .ready = false,
         };
         const defining = self.lookup.cursor(binding.defining_module_bytes) orelse {
-            census.bump("rehearsal_callee_unresolved_defining_module_absent");
             return unresolved;
         };
         const scheme = defining.view.schemeById(binding.scheme) orelse {
-            census.bump("rehearsal_callee_unresolved_scheme_absent");
             return unresolved;
         };
         // A callee that captures enclosing binders needs the lexical parents its
         // own specialization frame links (reunify.md section 7.3); a call-site
         // binding states this scheme's own binders and nothing else.
         if (scheme.captured_len != 0) {
-            census.bump("rehearsal_callee_unresolved_captures");
             return unresolved;
         }
-        if (scheme.gv_len == 0) census.bump("rehearsal_callee_scheme_without_binders");
 
         var use = binding.request;
         var rule = binding.rule;
@@ -3069,13 +2673,10 @@ pub const Rehearsal = struct {
                 }
             }
             const site = self.siteQuietly(caller, named.use_expr, scheme.owner_node) orelse {
-                census.bump("rehearsal_callee_site_absent");
                 // Only a callee whose scheme actually generalizes something can
                 // strand a binder; one with none needs no binding at all.
                 if (scheme.gv_len == 0) {
-                    census.bump("rehearsal_callee_site_absent_scheme_without_binders");
                 } else {
-                    census.bump("rehearsal_callee_site_absent_scheme_with_binders");
                 }
                 classifyAbsentCalleeSite(caller, named.use_expr, scheme.owner_node);
                 break :resolved_by_site;
@@ -3089,10 +2690,8 @@ pub const Rehearsal = struct {
                 caller_owner_node,
                 site,
             ) orelse {
-                census.bump("rehearsal_callee_site_bind_failed");
                 break :resolved_by_site;
             };
-            census.bump("rehearsal_callee_resolved_by_site");
             return .{
                 .module_bytes = defining.module_bytes,
                 .owner_node = scheme.owner_node,
@@ -3110,8 +2709,6 @@ pub const Rehearsal = struct {
         }
 
         const declared = rule orelse {
-            census.bump("rehearsal_callee_unresolved_no_site_no_rule");
-            if (scheme.gv_len != 0) census.bump("rehearsal_callee_unresolved_no_rule_with_binders");
             return unresolved;
         };
         const chain = self.bindCalleeFromRule(
@@ -3122,11 +2719,8 @@ pub const Rehearsal = struct {
             caller_env,
             caller_owner_node,
         ) orelse {
-            census.bump("rehearsal_callee_unresolved_rule_bind_failed");
-            if (scheme.gv_len != 0) census.bump("rehearsal_callee_unresolved_rule_failed_with_binders");
             return unresolved;
         };
-        census.bump("rehearsal_callee_resolved_by_rule");
         return .{
             .module_bytes = defining.module_bytes,
             .owner_node = scheme.owner_node,
@@ -3221,23 +2815,17 @@ pub const Rehearsal = struct {
         }
         const binders = scheme.generalizedVars(defining.view);
         const receiver_root = self.emitQuietly(caller, caller_env, caller_owner_node, source.receiver.checked_ty) orelse {
-            census.bump("rehearsal_rule_receiver_untranslatable");
             return null;
         };
         const receiver = followEmittedPath(self.types, receiver_root, &source.receiver.path) orelse {
-            census.bump("rehearsal_rule_receiver_path_absent");
             return null;
         };
         const argument_count = receiverArgumentCount(self.types, receiver) orelse {
-            census.bump("rehearsal_rule_receiver_not_applied");
             return null;
         };
         if (argument_count != binders.len) {
             if (argument_count == 0) {
-                census.bump("rehearsal_rule_receiver_argument_free");
-                if (binders.len == 1) census.bump("rehearsal_rule_receiver_argument_free_one_binder");
             } else {
-                census.bump("rehearsal_rule_receiver_arity_differs");
             }
             return null;
         }
@@ -3270,7 +2858,6 @@ pub const Rehearsal = struct {
             .receiver_at_argument => receiver,
         };
         if (self.quietWitnessAgrees(left, right)) return chain;
-        census.bump("rehearsal_rule_witness_disagreed");
         chain.release(self.allocator);
         return null;
     }
@@ -3290,11 +2877,9 @@ pub const Rehearsal = struct {
         scheme: checked.CheckedTypeScheme,
         callable: Type.TypeId,
     ) ?EnvironmentChain {
-        census.bump("rehearsal_rule_stored_binding_attempt");
         const binders = scheme.generalizedVars(defining.view);
         var paths: [max_binder_paths]?BinderPath = @splat(null);
         if (binders.len > max_binder_paths) {
-            census.bump("rehearsal_rule_stored_binder_count_exceeds_paths");
             return null;
         }
         self.findBinderPaths(defining.view, scheme.root, binders, paths[0..binders.len]);
@@ -3305,11 +2890,9 @@ pub const Rehearsal = struct {
         defer self.allocator.free(bound);
         for (paths[0..binders.len], 0..) |path, index| {
             const declared_path = path orelse {
-                census.bump("rehearsal_rule_stored_binder_position_absent");
                 return null;
             };
             const component = self.followBinderPath(defining, scheme.root, callable, &declared_path) orelse {
-                census.bump("rehearsal_rule_stored_callable_position_absent");
                 return null;
             };
             bound[index] = direct_translate.BoundType.of(component);
@@ -3325,10 +2908,8 @@ pub const Rehearsal = struct {
         };
         const declared = self.emitQuietly(defining, chain.innermost(), scheme.owner_node, scheme.root);
         if (self.quietWitnessAgrees(declared, callable)) {
-            census.bump("rehearsal_rule_stored_bound");
             return chain;
         }
-        census.bump("rehearsal_rule_stored_witness_disagreed");
         chain.release(self.allocator);
         return null;
     }
@@ -3487,13 +3068,9 @@ pub const Rehearsal = struct {
             if (site.scheme_owner_node == scheme_owner_node) owner_has_sites = true;
         }
         if (use_has_sites and owner_has_sites) {
-            census.bump("rehearsal_callee_site_absent_both_present_unpaired");
         } else if (use_has_sites) {
-            census.bump("rehearsal_callee_site_absent_use_owned_elsewhere");
         } else if (owner_has_sites) {
-            census.bump("rehearsal_callee_site_absent_owner_used_elsewhere");
         } else {
-            census.bump("rehearsal_callee_site_absent_unrecorded");
         }
     }
 
@@ -3504,13 +3081,11 @@ pub const Rehearsal = struct {
     pub fn claimRequestEdge(self: *Rehearsal, fn_id: u32) void {
         if (self.disabled) return;
         if (self.requests.items.len == 0) {
-            census.bump("rehearsal_request_edge_claim_without_scope");
             return;
         }
         const slot = &self.requests.items[self.requests.items.len - 1];
         const claim: ClaimedRequest = switch (slot.*) {
             .none => {
-                census.bump("rehearsal_request_edge_claim_without_edge");
                 return;
             },
             .checked => |edge| .{ .checked = edge },
@@ -3526,12 +3101,10 @@ pub const Rehearsal = struct {
             return;
         };
         slot.* = .none;
-        census.bump("rehearsal_request_edge_claimed");
         // One reserved id is requested once: a second claim would mean two
         // distinct use sites reserved the same specialization body, which is
         // recorded rather than silently overwritten.
         if (existing) |previous| {
-            census.bump("rehearsal_request_edge_claim_repeated");
             self.releaseClaim(previous.value);
         }
     }
@@ -3548,23 +3121,19 @@ pub const Rehearsal = struct {
     ) bool {
         if (self.disabled) return false;
         if (self.requests.items.len == 0) {
-            census.bump("rehearsal_nested_claim_without_scope");
             return false;
         }
         const top = self.requests.items[self.requests.items.len - 1];
         const edge = switch (top) {
             .checked => |edge| edge,
             else => {
-                census.bump("rehearsal_nested_claim_top_not_checked");
                 return false;
             },
         };
         if (edge.use_expr != use_expr or !std.mem.eql(u8, &edge.module_bytes, &module_bytes)) {
-            census.bump("rehearsal_nested_claim_edge_differs");
             return false;
         }
         self.claimRequestEdge(fn_id);
-        census.bump("rehearsal_nested_claim_matched");
         return true;
     }
 
@@ -3574,9 +3143,7 @@ pub const Rehearsal = struct {
     /// stay with the enclosing specialization that owns the graph.
     pub fn beginNestedSpecialization(self: *Rehearsal, start: SpecializationStart) void {
         if (self.disabled) return;
-        census.bump("rehearsal_nested_spec_attempted");
         var frame = Frame{
-            .trace = null,
             .env_module_bytes = start.cursor.module_bytes,
             .scheme = .{ .module_bytes = start.cursor.module_bytes, .scheme = 0 },
             .owner_node = checked.checked_residual_disposition_module_body_owner,
@@ -3589,7 +3156,6 @@ pub const Rehearsal = struct {
             .env_ready = false,
         };
         self.resolveEnvironment(start, &frame);
-        if (frame.env_ready) census.bump("rehearsal_nested_spec_resolved");
         self.frames.append(self.allocator, frame) catch {
             self.releaseFrame(&frame);
             self.disabled = true;
@@ -3694,7 +3260,6 @@ pub const Rehearsal = struct {
     pub fn holdRequest(self: *Rehearsal) HeldRequest {
         if (self.disabled) return HeldRequest.none;
         if (self.requests.items.len == 0) {
-            census.bump("rehearsal_request_hold_without_scope");
             return HeldRequest.none;
         }
         const slot = &self.requests.items[self.requests.items.len - 1];
@@ -3709,9 +3274,9 @@ pub const Rehearsal = struct {
         slot.* = .none;
         self.next_held_request += 1;
         switch (taken) {
-            .none => census.bump("rehearsal_request_held_without_edge"),
-            .checked => census.bump("rehearsal_request_held_checked"),
-            .generated => census.bump("rehearsal_request_held_generated"),
+            .none => {},
+            .checked => {},
+            .generated => {},
         }
         return .{ .token = token };
     }
@@ -3741,8 +3306,6 @@ pub const Rehearsal = struct {
     /// (reunify.md sections 7.3, 9.1).
     fn captureCallerEnvironment(self: *Rehearsal, module_bytes: [32]u8) ?CapturedEnvironment {
         const frame = self.callerFrameFor(module_bytes) orelse return null;
-        census.bump("rehearsal_caller_env_captured");
-        if (frame.chain.depth() > 1) census.bump("rehearsal_caller_env_captured_chained");
         const chain = self.copyEnvironmentChain(frame.environment(), frame.chain.depth(), null) orelse return null;
         return .{
             .module_bytes = frame.env_module_bytes,
@@ -3778,12 +3341,11 @@ pub const Rehearsal = struct {
     }
 
     /// Start one specialization: resolve its binder environment from checked
-    /// data and attach the trace the graph fills. Always pushes a frame, so the
-    /// matching `endSpecialization` is unconditional.
+    /// data. Always pushes a frame, so the matching `endSpecialization` is
+    /// unconditional.
     pub fn beginSpecialization(self: *Rehearsal, start: SpecializationStart) void {
         if (self.disabled) return;
         self.beginSpecializationFrame(start);
-        if (start.graph) |graph| self.attachSpecializationGraph(graph);
     }
 
     /// Resolve and push this specialization's frame: the binder environment
@@ -3793,14 +3355,7 @@ pub const Rehearsal = struct {
     /// off the frame ahead of the cache probe.
     pub fn beginSpecializationFrame(self: *Rehearsal, start: SpecializationStart) void {
         if (self.disabled) return;
-        census.bump("rehearsal_spec_attempted");
-        const trace: ?*SealTrace = if (self.comparing) blk: {
-            const owned = self.allocator.create(SealTrace) catch return self.fail();
-            owned.* = SealTrace.init(self.allocator);
-            break :blk owned;
-        } else null;
         var frame = Frame{
-            .trace = trace,
             .env_module_bytes = start.cursor.module_bytes,
             .scheme = .{ .module_bytes = start.cursor.module_bytes, .scheme = 0 },
             .owner_node = checked.checked_residual_disposition_module_body_owner,
@@ -3813,220 +3368,11 @@ pub const Rehearsal = struct {
             .env_ready = false,
         };
         self.resolveEnvironment(start, &frame);
-        if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-            std.debug.print("FRAME name={s} scheme=s{d} ready={s} mint={s}\n", .{
-                start.template_name,
-                frame.scheme.scheme,
-                if (frame.env_ready) "y" else "-",
-                if (frame.ret_mint) |m| @tagName(m.iterator_kind) else "-",
-            });
-        }
         self.frames.append(self.allocator, frame) catch {
             self.releaseFrame(&frame);
             self.disabled = true;
             return;
         };
-    }
-
-    /// Attach the specialization's graph to the innermost frame's trace, once
-    /// the graph exists. Paired with `beginSpecializationFrame`.
-    pub fn attachSpecializationGraph(self: *Rehearsal, graph: *solve.InstGraph) void {
-        if (self.disabled) return;
-        if (self.frames.items.len == 0) return;
-        const frame = &self.frames.items[self.frames.items.len - 1];
-        graph.trace = frame.trace;
-        graph.seal_probe = self;
-    }
-
-    /// Debug/probe-only: name the checked position behind a divergence, once
-    /// per occurrence, so the number of DISTINCT positions needing a new
-    /// recorded entry can be counted offline. The count of reads overstates
-    /// that badly, since one position is read many times (reunify.md 15.2).
-    fn notePositionNeedingRecord(self: *Rehearsal, address: CheckedAddress) void {
-        if (comptime !census.enabled) return;
-        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
-        const hex = std.fmt.bytesToHex(address.module_bytes[0..8].*, .lower);
-        // Name the parameter the position wants. A rigid carries the source
-        // name it was declared under, which says what construct introduced it.
-        var param_name: []const u8 = "?";
-        var param_id: u32 = 0;
-        var position_kind: []const u8 = "?";
-        if (self.lookup.cursor(address.module_bytes)) |cursor| {
-            position_kind = @tagName(cursor.view.payload(@enumFromInt(address.type_id)));
-            var env: ?*const direct_translate.BindingEnvironment = null;
-            if (self.frameForModule(address.module_bytes)) |frame| env = frame.environment();
-            if (self.firstFreeVariable(cursor.view, @enumFromInt(address.type_id), env)) |free| {
-                param_id = @intFromEnum(free);
-                switch (cursor.view.payload(free)) {
-                    .rigid => |variable| param_name = variable.name orelse "<unnamed>",
-                    .flex => |variable| param_name = variable.name orelse "<unnamed-flex>",
-                    else => param_name = "<not-a-var>",
-                }
-            }
-        }
-        const line = std.fmt.allocPrint(
-            self.allocator,
-            "needs_record {s} {d} pos={s} param={d} name={s}\n",
-            .{ &hex, address.type_id, position_kind, param_id, param_name },
-        ) catch return;
-        defer self.allocator.free(line);
-        census.appendToFile(raw_path, line);
-    }
-
-    /// Debug/probe-only: is this position reachable from another position the
-    /// same specialization also reads? The seam compares one graph node at a
-    /// time, but directed translation walks a type compositionally from a root
-    /// and binds a nominal's parameters on the way in. A position only ever
-    /// reached inside such a walk is covered by it, and its standalone
-    /// comparison says nothing production would ever ask (reunify.md 13.2 2a).
-    fn noteReachableFromAnotherReadPosition(
-        self: *Rehearsal,
-        address: CheckedAddress,
-        graph: *solve.InstGraph,
-    ) void {
-        if (comptime !census.enabled) return;
-        const trace = graph.trace orelse return;
-        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
-        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
-        var it = trace.contexted.iterator();
-        while (it.next()) |entry| {
-            const other = entry.value_ptr.*;
-            if (other.address.type_id == address.type_id) continue;
-            if (!std.mem.eql(u8, &other.address.module_bytes, &address.module_bytes)) continue;
-            if (self.checkedReaches(cursor, @enumFromInt(other.address.type_id), position)) {
-                census.bump("position_reachable_from_another_read");
-                return;
-            }
-        }
-        census.bump("position_only_read_standalone");
-    }
-
-    /// Debug/probe-only: asked POSITION-first rather than node-first, is this
-    /// position a declaration parameter that some nominal instance in the same
-    /// module already supplies an argument for? The node-first form failed
-    /// because most diverging nodes are created outside a backing
-    /// instantiation, which describes when the graph makes nodes rather than
-    /// what the checked store holds (reunify.md 7.1).
-    fn notePositionCoveredByNominalArgs(
-        self: *Rehearsal,
-        address: CheckedAddress,
-        graph: *solve.InstGraph,
-        sealed: Type.TypeId,
-    ) void {
-        if (comptime !census.enabled) return;
-        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
-        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
-        const free = self.firstFreeVariable(cursor.view, position, null) orelse {
-            // A ground position waits on no binding, so it is the only shape
-            // that could be a disagreement rather than a missing frame.
-            census.bump("nominal_args_no_free_variable");
-            self.noteSealedAgainstChecked(address, sealed);
-            census.bump("ground_divergence_judged_against_checking");
-            return;
-        };
-        // Which declaration, if any, declares this parameter.
-        var declaring: ?checked.CheckedNominalDeclaration = null;
-        var formal_index: usize = 0;
-        for (cursor.view.nominal_declarations) |declaration| {
-            const formals = declaration.formalArgs(cursor.view);
-            for (formals, 0..) |formal, index| {
-                if (formal == free) {
-                    declaring = declaration;
-                    formal_index = index;
-                    break;
-                }
-            }
-            if (declaring != null) break;
-        }
-        const declaration = declaring orelse {
-            self.noteWhetherASchemeFrameBindsIt(cursor, free, address, graph);
-            return;
-        };
-        // Does the root this specialization is bound under reach an INSTANCE of
-        // that declaration? Directed translation binds the declaration's formal
-        // args to an instance's args on the way into the backing, so a position
-        // only reached inside such a walk is already supplied by it, and reading
-        // it standalone asks something production never asks. The frame's own
-        // scheme root is the root production enters, so it is asked first; the
-        // recorded reads answer a weaker form of the question, for a position
-        // whose frame is not the one that reaches it.
-        // The strongest form of the question, and the one that does not depend
-        // on which frame the graph happened to be in when it sealed: does the
-        // DECLARATION'S OWN BACKING reach this position? If it does, the
-        // position lives inside the very type whose formals the walk binds, so
-        // every walk that enters this nominal supplies it.
-        if (self.checkedReaches(cursor, declaration.backing, position) or
-            self.checkedReaches(cursor, declaration.declaration_root, position))
-        {
-            census.bump("nominal_param_supplied_by_walk_into_backing");
-            census.bump("nominal_param_inside_the_backing_that_binds_it");
-            return;
-        }
-        if (self.frameSchemeRoot(cursor, address.module_bytes)) |frame_root| {
-            if (self.reachesInstanceOfDeclaration(cursor, frame_root, declaration.id, formal_index)) {
-                census.bump("nominal_param_supplied_by_walk_into_backing");
-                census.bump("nominal_param_reached_from_frame_scheme_root");
-                return;
-            }
-        }
-        const trace = graph.trace orelse return;
-        var it = trace.contexted.iterator();
-        while (it.next()) |entry| {
-            const other = entry.value_ptr.*;
-            if (other.address.type_id == address.type_id) continue;
-            if (!std.mem.eql(u8, &other.address.module_bytes, &address.module_bytes)) continue;
-            if (self.reachesInstanceOfDeclaration(
-                cursor,
-                @enumFromInt(other.address.type_id),
-                declaration.id,
-                formal_index,
-            )) {
-                census.bump("nominal_param_supplied_by_walk_into_backing");
-                return;
-            }
-        }
-        census.bump("nominal_param_no_read_reaches_an_instance");
-    }
-
-    /// Debug/probe-only: which binding a diverging position's free variable
-    /// waits on, for the reads measured outside the seal exit. A position with
-    /// no free variable at all cannot be waiting on a frame, so it is the only
-    /// shape that could be a genuine disagreement (reunify.md 13.2 2a, 15.1b).
-    pub fn noteDivergenceFreeVariableClass(
-        self: *Rehearsal,
-        address: CheckedAddress,
-        sealed: Type.TypeId,
-    ) void {
-        if (comptime !census.enabled) return;
-        const cursor = self.lookup.cursor(address.module_bytes) orelse {
-            census.bump("outside_exit_divergence_no_cursor");
-            return;
-        };
-        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
-        const free = self.firstFreeVariable(cursor.view, position, null) orelse {
-            // Ground: it waits on no binding, so it is judged against the head
-            // checking recorded rather than left unexplained.
-            census.bump("outside_exit_divergence_is_ground");
-            self.noteSealedAgainstChecked(address, sealed);
-            return;
-        };
-        for (cursor.view.nominal_declarations) |declaration| {
-            for (declaration.formalArgs(cursor.view)) |formal| {
-                if (formal == free) {
-                    census.bump("outside_exit_divergence_nominal_param");
-                    return;
-                }
-            }
-        }
-        for (cursor.view.schemes) |scheme| {
-            for (scheme.generalizedVars(cursor.view)) |binder| {
-                if (binder == free) {
-                    census.bump("outside_exit_divergence_scheme_binder");
-                    return;
-                }
-            }
-        }
-        census.bump("outside_exit_divergence_free_but_unbound");
     }
 
     /// Whether the innermost binding for a module covers every variable a
@@ -4043,152 +3389,6 @@ pub const Rehearsal = struct {
             @enumFromInt(address.type_id),
             frame.environment(),
         ) == null;
-    }
-
-    /// Debug/probe-only: what a frame for a nested local scheme would need at
-    /// one variable-headed leaf the flip left on the graph: which scheme owns
-    /// the leaf's variable, whether a request scope is open at the leaf, and
-    /// whether that scheme captures enclosing binders and so needs its frame
-    /// chained onto the enclosing one (reunify.md 13.2d).
-    pub fn noteNestedLeafBindingNeeds(self: *Rehearsal, address: CheckedAddress) void {
-        if (comptime !census.enabled) return;
-        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
-        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
-        const free = self.firstFreeVariable(cursor.view, position, null) orelse {
-            census.bump("nested_leaf_no_free_variable");
-            return;
-        };
-        // The question the arm actually needs answered: does the ACTIVE
-        // binding already cover this position? A leaf the innermost frame
-        // binds reads correctly through the directed seam today.
-        if (self.frameForModule(address.module_bytes)) |frame| {
-            if (self.firstFreeVariable(cursor.view, position, frame.environment()) == null) {
-                census.bump("nested_leaf_active_frame_binds_it");
-            } else {
-                census.bump("nested_leaf_active_frame_does_not_bind_it");
-            }
-        } else {
-            census.bump("nested_leaf_no_active_frame");
-        }
-        var owner: ?checked.CheckedTypeScheme = null;
-        for (cursor.view.schemes) |scheme| {
-            for (scheme.generalizedVars(cursor.view)) |binder| {
-                if (binder == free) {
-                    owner = scheme;
-                    break;
-                }
-            }
-            if (owner != null) break;
-        }
-        const scheme = owner orelse {
-            census.bump("nested_leaf_no_scheme_owns_it");
-            return;
-        };
-        census.bump("nested_leaf_scheme_owned");
-        if (scheme.captured_len != 0) {
-            census.bump("nested_leaf_scheme_captures_enclosing");
-        }
-        if (self.requests.items.len != 0) {
-            census.bump("nested_leaf_request_scope_open");
-        } else {
-            census.bump("nested_leaf_no_request_scope");
-        }
-        // Which open scope's edge names a recorded site of the owning scheme:
-        // the innermost, a deeper one, or none. The frame construction reads
-        // whichever one answers.
-        var innermost_answers = false;
-        var any_answers = false;
-        var index: usize = self.requests.items.len;
-        while (index > 0) {
-            index -= 1;
-            const edge = switch (self.requests.items[index]) {
-                .checked => |checked_edge| checked_edge,
-                .none, .generated => continue,
-            };
-            if (!std.mem.eql(u8, &edge.module_bytes, &address.module_bytes)) continue;
-            var found = false;
-            for (cursor.view.instantiationSites()) |site| {
-                if (site.scheme_owner_node != scheme.owner_node) continue;
-                if (site.use_expr != @intFromEnum(edge.use_expr)) continue;
-                found = true;
-                break;
-            }
-            if (found) {
-                any_answers = true;
-                if (index == self.requests.items.len - 1) innermost_answers = true;
-                break;
-            }
-        }
-        if (innermost_answers) {
-            census.bump("nested_leaf_innermost_edge_names_site");
-        } else if (any_answers) {
-            census.bump("nested_leaf_outer_edge_names_site");
-        } else {
-            census.bump("nested_leaf_no_open_edge_names_site");
-            self.dumpNestedLeafDetail(cursor, address, scheme);
-        }
-    }
-
-    /// Debug/probe-only: the raw ids behind one failed edge-to-site join, so
-    /// the key relationship is read from data rather than guessed.
-    fn dumpNestedLeafDetail(
-        self: *Rehearsal,
-        cursor: direct_translate.ModuleCursor,
-        address: CheckedAddress,
-        scheme: checked.CheckedTypeScheme,
-    ) void {
-        if (self.nested_leaf_dumped >= 8) return;
-        self.nested_leaf_dumped += 1;
-        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
-        var line: std.ArrayList(u8) = .empty;
-        defer line.deinit(self.allocator);
-        const module_hex = std.fmt.bytesToHex(address.module_bytes[0..8].*, .lower);
-        line.print(
-            self.allocator,
-            "nested_leaf_detail module={s} leaf={d} scheme_owner={d} open_edges=[",
-            .{ &module_hex, address.type_id, scheme.owner_node },
-        ) catch return;
-        for (self.requests.items) |scope| switch (scope) {
-            .checked => |edge| {
-                if (!std.mem.eql(u8, &edge.module_bytes, &address.module_bytes)) {
-                    line.appendSlice(self.allocator, "othermod,") catch return;
-                    continue;
-                }
-                line.print(self.allocator, "{d},", .{@intFromEnum(edge.use_expr)}) catch return;
-            },
-            .none => line.appendSlice(self.allocator, "none,") catch return,
-            .generated => |generated| line.print(
-                self.allocator,
-                "gen:{s},",
-                .{@tagName(generated.edge.rule)},
-            ) catch return,
-        };
-        line.appendSlice(self.allocator, "] site_uses=[") catch return;
-        var shown: usize = 0;
-        for (cursor.view.instantiationSites()) |site| {
-            if (site.scheme_owner_node != scheme.owner_node) continue;
-            if (shown >= 10) {
-                line.appendSlice(self.allocator, "...,") catch return;
-                break;
-            }
-            line.print(self.allocator, "{d},", .{site.use_expr}) catch return;
-            shown += 1;
-        }
-        line.appendSlice(self.allocator, "]\n") catch return;
-        census.appendToFile(raw_path, line.items);
-        if (cursor.view.instantiationSites().len != 0) {
-            var sites: usize = 0;
-            for (cursor.view.instantiationSites()) |site| {
-                if (site.scheme_owner_node == scheme.owner_node) sites += 1;
-            }
-            if (sites == 0) {
-                census.bump("nested_leaf_scheme_has_no_recorded_site");
-            } else if (sites == 1) {
-                census.bump("nested_leaf_scheme_has_one_site");
-            } else {
-                census.bump("nested_leaf_scheme_has_many_sites");
-            }
-        }
     }
 
     /// Debug/probe-only: for a free variable that no nominal declaration
@@ -4222,8 +3422,6 @@ pub const Rehearsal = struct {
                     const root = imported.localRoot();
                     const here: checked.CheckedTypeId = @enumFromInt(address.type_id);
                     if (root == here or self.checkedReaches(cursor, root, here)) {
-                        census.bump("scheme_frame_supplies_the_position");
-                        census.bump("position_inside_an_imported_scheme_root");
                         return;
                     }
                 }
@@ -4231,10 +3429,7 @@ pub const Rehearsal = struct {
         }
         const scheme = binding orelse {
             if (with_binders == 0) {
-                census.bump("free_variable_unbound_no_scheme_lists_any_binder");
             } else {
-                census.bump("free_variable_no_scheme_binds_it");
-                self.noteWhereAnUnlistedVariableLives(cursor, free, address);
             }
             return;
         };
@@ -4245,14 +3440,10 @@ pub const Rehearsal = struct {
         // instantiation site supplies it.
         const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
         if (scheme.root == position or self.checkedReaches(cursor, scheme.root, position)) {
-            census.bump("scheme_frame_supplies_the_position");
-            census.bump("scheme_position_inside_its_own_scheme_root");
             return;
         }
         if (self.frameSchemeRoot(cursor, address.module_bytes)) |frame_root| {
             if (frame_root == scheme.root or self.checkedReaches(cursor, frame_root, scheme.root)) {
-                census.bump("scheme_frame_supplies_the_position");
-                census.bump("scheme_reached_from_frame_scheme_root");
                 return;
             }
         }
@@ -4264,11 +3455,9 @@ pub const Rehearsal = struct {
             if (!std.mem.eql(u8, &other.address.module_bytes, &address.module_bytes)) continue;
             const from: checked.CheckedTypeId = @enumFromInt(other.address.type_id);
             if (from == scheme.root or self.checkedReaches(cursor, from, scheme.root)) {
-                census.bump("scheme_frame_supplies_the_position");
                 return;
             }
         }
-        census.bump("scheme_binds_it_but_no_read_enters_the_scheme");
     }
 
     /// Debug/probe-only: the checked root of the scheme the innermost frame is
@@ -4285,200 +3474,6 @@ pub const Rehearsal = struct {
         if (!std.mem.eql(u8, &frame.scheme.module_bytes, &module_bytes)) return null;
         if (frame.scheme.scheme >= cursor.view.schemes.len) return null;
         return cursor.view.schemes[frame.scheme.scheme].root;
-    }
-
-    /// Debug/probe-only: does the position this specialization emitted unbound
-    /// lie inside the root whose binder a walk binds - a nominal declaration's
-    /// backing, or the root of the scheme that generalizes the variable? If it
-    /// does, the position is supplied whenever a walk enters that root, and its
-    /// standalone emission states nothing production asks (reunify.md 13.2c).
-    fn noteWhetherAFrameWillBindIt(
-        self: *Rehearsal,
-        address: CheckedAddress,
-        sealed: Type.TypeId,
-    ) void {
-        if (comptime !census.enabled) return;
-        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
-        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
-        const free = self.firstFreeVariable(cursor.view, position, null) orelse {
-            census.bump("mismatch_unbound_position_is_ground");
-            return;
-        };
-        for (cursor.view.nominal_declarations) |declaration| {
-            for (declaration.formalArgs(cursor.view)) |formal| {
-                if (formal != free) continue;
-                // The declaration's own root states the applied form the formals
-                // belong to, and its backing states what that form stands for. A
-                // walk binds the formals for both, so either reaching the
-                // position means a frame supplies it.
-                if (self.checkedReaches(cursor, declaration.backing, position) or
-                    self.checkedReaches(cursor, declaration.declaration_root, position))
-                {
-                    census.bump("mismatch_unbound_inside_the_backing_that_binds_it");
-                    return;
-                }
-            }
-        }
-        for (cursor.view.schemes) |scheme| {
-            for (scheme.generalizedVars(cursor.view)) |binder| {
-                if (binder != free) continue;
-                if (scheme.root == position or self.checkedReaches(cursor, scheme.root, position)) {
-                    census.bump("mismatch_unbound_inside_its_own_scheme_root");
-                    return;
-                }
-            }
-        }
-        // A scheme this module CONSUMES projects the defining module's binders
-        // into local ids, and a use of it binds them the same way (reunify.md
-        // 7.2). A position under such a projected root is supplied by that use.
-        for (cursor.view.importedSchemes()) |imported| {
-            for (imported.binders(cursor.view)) |binder| {
-                if (binder != free) continue;
-                const root = imported.localRoot();
-                if (root == position or self.checkedReaches(cursor, root, position)) {
-                    census.bump("mismatch_unbound_inside_an_imported_scheme_root");
-                    return;
-                }
-            }
-        }
-        census.bump("mismatch_unbound_no_frame_will_bind_it");
-        if (self.lookup.instantiated(address)) {
-            census.bump("unbound_no_frame_position_is_instantiated");
-        } else {
-            census.bump("unbound_no_frame_position_is_a_template");
-        }
-        self.dumpUnboundWithNoFrame(cursor, address, free, position, sealed);
-    }
-
-    /// Debug/probe-only: name the positions no frame will bind, so the last
-    /// class can be read as source rather than as a count.
-    fn dumpUnboundWithNoFrame(
-        self: *Rehearsal,
-        cursor: direct_translate.ModuleCursor,
-        address: CheckedAddress,
-        free: checked.CheckedTypeId,
-        position: checked.CheckedTypeId,
-        sealed: Type.TypeId,
-    ) void {
-        if (self.unbound_no_frame_dumped >= 32) return;
-        self.unbound_no_frame_dumped += 1;
-        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
-        const module_hex = std.fmt.bytesToHex(address.module_bytes[0..8].*, .lower);
-        var root_count: usize = 0;
-        var root_names: std.ArrayList(u8) = .empty;
-        defer root_names.deinit(self.allocator);
-        for (cursor.view.roots) |root| {
-            if (root.id != position and !self.checkedReaches(cursor, root.id, position)) continue;
-            root_count += 1;
-            if (root_names.items.len > 120) continue;
-            root_names.append(self.allocator, '/') catch {};
-            switch (cursor.view.payload(root.id)) {
-                .nominal => |n| root_names.appendSlice(
-                    self.allocator,
-                    cursor.source_names.typeNameText(n.name),
-                ) catch {},
-                else => |other| root_names.appendSlice(self.allocator, @tagName(other)) catch {},
-            }
-        }
-        // Name whatever nominal the position or its enclosing roots mention, so
-        // the class can be located in source rather than by id.
-        var nominal_name: []const u8 = "-";
-        if (cursor.view.payload(position) == .nominal) {
-            nominal_name = cursor.source_names.typeNameText(cursor.view.payload(position).nominal.name);
-        } else {
-            for (cursor.view.roots) |root| {
-                if (!self.checkedReaches(cursor, root.id, position)) continue;
-                if (cursor.view.payload(root.id) == .nominal) {
-                    nominal_name = cursor.source_names.typeNameText(cursor.view.payload(root.id).nominal.name);
-                    break;
-                }
-            }
-        }
-        const line = std.fmt.allocPrint(
-            self.allocator,
-            "unbound_no_frame module={s} checked_ty={d} payload={s} nominal={s} free={d} free_payload={s} sealed={s} roots_reaching={d} root_kinds={s} schemes={d} decls={d}\n",
-            .{
-                &module_hex,
-                address.type_id,
-                @tagName(cursor.view.payload(position)),
-                nominal_name,
-                @intFromEnum(free),
-                @tagName(cursor.view.payload(free)),
-                @tagName(self.types.get(sealed)),
-                root_count,
-                root_names.items,
-                cursor.view.schemes.len,
-                cursor.view.nominal_declarations.len,
-            },
-        ) catch return;
-        defer self.allocator.free(line);
-        census.appendToFile(raw_path, line);
-    }
-
-    /// Debug/probe-only: for the last free variables no scheme's generalized
-    /// list names, say where they do live - inside a scheme's root even though
-    /// that scheme does not list them, inside a nominal backing, or nowhere the
-    /// module states. Only the last shape would need checking to record more.
-    fn noteWhereAnUnlistedVariableLives(
-        self: *Rehearsal,
-        cursor: direct_translate.ModuleCursor,
-        free: checked.CheckedTypeId,
-        address: CheckedAddress,
-    ) void {
-        if (comptime !census.enabled) return;
-        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
-        // A scheme may close over a binder an enclosing scheme owns, which its
-        // own generalized list does not repeat (reunify.md 7.1).
-        for (cursor.view.schemes) |scheme| {
-            for (scheme.capturedBinders(cursor.view)) |captured| {
-                if (captured.outer_scheme == checked.captured_binder_outer_scheme_none) continue;
-                if (captured.outer_scheme >= cursor.view.schemes.len) continue;
-                const outer = cursor.view.schemes[captured.outer_scheme];
-                const outer_binders = outer.generalizedVars(cursor.view);
-                if (captured.binder_index >= outer_binders.len) continue;
-                if (outer_binders[captured.binder_index] == free) {
-                    census.bump("unlisted_variable_is_a_captured_binder");
-                    return;
-                }
-            }
-        }
-        for (cursor.view.schemes) |scheme| {
-            if (self.checkedReaches(cursor, scheme.root, position)) {
-                census.bump("unlisted_variable_inside_an_unlisting_scheme_root");
-                return;
-            }
-        }
-        for (cursor.view.nominal_declarations) |declaration| {
-            if (self.checkedReaches(cursor, declaration.backing, position) or
-                self.checkedReaches(cursor, declaration.declaration_root, position))
-            {
-                census.bump("unlisted_variable_inside_a_nominal_backing");
-                return;
-            }
-        }
-        // A variable nothing generalizes and nothing encloses is exactly what a
-        // residual disposition states the outcome for (reunify.md 7.4), so the
-        // module may already say how it lowers even though no binder names it.
-        for (cursor.view.residualDispositions()) |disposition| {
-            if (disposition.type_id != @intFromEnum(free)) continue;
-            switch (disposition.kind) {
-                .uninhabited => census.bump("unlisted_variable_disposed_uninhabited"),
-                .contextual => census.bump("unlisted_variable_disposed_contextual"),
-            }
-            return;
-        }
-        // Last question: is the position reachable from any root the module
-        // records at all? A position no root reaches is one nothing asks for,
-        // so its standalone comparison states nothing about a walk production
-        // performs. One no root reaches AND no binder covers is the only shape
-        // that would need checking to record more.
-        for (cursor.view.roots) |root| {
-            if (root.id == position or self.checkedReaches(cursor, root.id, position)) {
-                census.bump("unlisted_variable_under_a_recorded_root");
-                return;
-            }
-        }
-        census.bump("unlisted_variable_no_root_reaches_it");
     }
 
     /// Debug/probe-only: does a walk from `root` reach a nominal instance of
@@ -4539,327 +3534,13 @@ pub const Rehearsal = struct {
         return false;
     }
 
-    /// Debug/probe-only: what gave a diverging node its concrete value. The
-    /// graph resolves by unification, so the value arrives from some other node
-    /// joined into the same class. If a class member names a DIFFERENT checked
-    /// position, that position is the source a directed replacement has to read
-    /// (reunify.md 13.2 2a).
-    fn noteWhatSuppliedTheValue(
-        record: ContextedProvenance,
-        graph: *solve.InstGraph,
-        node: solve.NodeId,
-    ) void {
-        if (comptime !census.enabled) return;
-        const trace = graph.trace orelse return;
-        var members: usize = 0;
-        var other_positions: usize = 0;
-        var same_position: usize = 0;
-        var it = graph.classMemberIterator(node);
-        while (it.next()) |member| {
-            members += 1;
-            const other = trace.contextedFor(@intFromEnum(member)) orelse continue;
-            if (other.address.type_id == record.address.type_id and
-                std.mem.eql(u8, &other.address.module_bytes, &record.address.module_bytes))
-            {
-                same_position += 1;
-            } else {
-                other_positions += 1;
-            }
-        }
-        if (members <= 1) {
-            census.bump("supplier_class_is_alone");
-        } else if (other_positions > 0) {
-            census.bump("supplier_class_holds_another_position");
-        } else if (same_position > 0) {
-            census.bump("supplier_class_only_same_position");
-        } else {
-            census.bump("supplier_class_has_no_named_member");
-        }
-    }
-
-    /// Debug/probe-only: compare one sealed type against what directed
-    /// translation computes for the position the node stands for, using the
-    /// position's own recorded address (reunify.md 13.2 step 2a).
-    /// Settle, once lowering has finished and the stored type cache is complete,
-    /// whether the positions the seam diverged at are ones this lowering
-    /// instantiated or template positions a use edge's actuals make concrete.
-    /// The production probe compares only the instantiated ones.
-    pub fn reportDivergedPositionKinds(self: *Rehearsal) void {
-        if (comptime !census.enabled) return;
-        var it = self.diverged_addresses.keyIterator();
-        while (it.next()) |address| {
-            if (self.lookup.instantiated(address.*)) {
-                census.bump("settled_diverged_position_is_instantiated");
-            } else {
-                census.bump("settled_diverged_position_is_a_template");
-            }
-        }
-    }
-
-    pub fn compareSealedAgainstDirected(
-        self: *Rehearsal,
-        record: ContextedProvenance,
-        sealed: Type.TypeId,
-        graph: *solve.InstGraph,
-        node: solve.NodeId,
-    ) void {
-        if (comptime !census.enabled) return;
-        if (self.disabled) return;
-        var binding: PositionBinding = .none;
-        const probed = self.typeForCheckedPositionWithEdge(
-            record.address,
-            record.callee_context,
-            &binding,
-            record.request_edge,
-        ) catch null;
-        const direct_ty = probed orelse {
-            census.bump("seam_direct_absent");
-            // The seal's own disposition: an undisposed residual denotes the
-            // uninhabited row, which is what the graph materializes for it.
-            // Measured here before it becomes the seal's answer.
-            if (self.sealingTypeForCheckedPosition(record.address, record.callee_context)) |disposed| {
-                const disposed_digest = self.types.typeDigest(self.program_names, disposed);
-                const sealed_digest = self.types.typeDigest(self.program_names, sealed);
-                if (std.mem.eql(u8, &disposed_digest.bytes, &sealed_digest.bytes)) {
-                    census.bump("seam_disposed_agrees");
-                } else if (std.mem.eql(
-                    u8,
-                    &self.types.unfoldedDigest(self.program_names, disposed).bytes,
-                    &self.types.unfoldedDigest(self.program_names, sealed).bytes,
-                )) {
-                    census.bump("seam_disposed_agrees");
-                } else {
-                    census.bump("seam_disposed_differs");
-                    if (self.frameForModule(record.address.module_bytes) != null) {
-                        census.bump("seam_disposed_differs_with_frame");
-                    } else {
-                        census.bump("seam_disposed_differs_no_frame");
-                    }
-                }
-            } else {
-                census.bump("seam_disposed_absent");
-            }
-            // Why the position states nothing, so the absent class is a named
-            // list rather than a bulk (reunify.md 13.2 2a).
-            switch (binding) {
-                .callee => census.bump("seam_absent_under_callee_binding"),
-                .frame => census.bump("seam_absent_under_frame"),
-                .none => census.bump("seam_absent_no_environment"),
-            }
-            if (self.lookup.cursor(record.address.module_bytes)) |cursor| {
-                const ty: checked.CheckedTypeId = @enumFromInt(record.address.type_id);
-                if (@intFromEnum(ty) < cursor.view.payloadCount()) {
-                    if (self.schemeRootReachesVariable(cursor.view, ty)) {
-                        census.bump("seam_absent_reaches_variable");
-                    } else {
-                        census.bump("seam_absent_ground_position");
-                    }
-                } else {
-                    census.bump("seam_absent_address_out_of_range");
-                }
-            } else {
-                census.bump("seam_absent_module_absent");
-            }
-            return;
-        };
-        const left = self.types.typeDigest(self.program_names, direct_ty);
-        const right = self.types.typeDigest(self.program_names, sealed);
-        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
-            census.bump("seam_direct");
-            return;
-        }
-        const left_unfolded = self.types.unfoldedDigest(self.program_names, direct_ty);
-        const right_unfolded = self.types.unfoldedDigest(self.program_names, sealed);
-        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
-            census.bump("seam_direct");
-            return;
-        }
-        census.bump("seam_direct_diverged");
-        census.bump("seal_exit_diverged");
-        if (self.lookup.instantiated(record.address)) {
-            census.bump("diverged_position_is_instantiated");
-        } else {
-            census.bump("diverged_position_is_a_template");
-        }
-        // Asked here, `type_cache` is still filling, so the answer is only that
-        // the position was not instantiated YET. Keep the address so the same
-        // question can be settled once lowering has finished.
-        if (self.diverged_addresses.count() < 4096) {
-            self.diverged_addresses.put(self.allocator, record.address, {}) catch {};
-        }
-        noteWhatSuppliedTheValue(record, graph, node);
-        self.notePositionCoveredByNominalArgs(record.address, graph, sealed);
-        self.noteReachableFromAnotherReadPosition(record.address, graph);
-        self.notePositionNeedingRecord(record.address);
-        self.noteDivergenceEdgeSite(record.address, record.callee_context, record.request_edge);
-        // Classify it the way the constraint census classifies its own
-        // informative executions, so the seal exit's divergences can be
-        // compared against the shape already diagnosed there.
-        var path: DifferencePath = .{};
-        const difference = firstDifferenceOnPath(
-            self.types,
-            direct_ty,
-            self.types,
-            sealed,
-            self.program_names,
-            0,
-            &path,
-        );
-        if (difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
-            census.bump("seal_diverged_direct_unbound");
-        } else if (difference.right.isEmptyTagUnionHead() and !difference.left.isEmptyTagUnionHead()) {
-            census.bump("seal_diverged_graph_unbound");
-        } else if (difference.left.tag != difference.right.tag) {
-            census.bump("seal_diverged_head_tag");
-        } else if (difference.left.entries != difference.right.entries) {
-            census.bump("seal_diverged_row_width");
-        } else if (difference.named_field != .not_named and difference.named_field != .equal) {
-            census.bump("seal_diverged_named_identity");
-        } else {
-            census.bump("seal_diverged_unclassified");
-        }
-        if (!difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
-            self.noteSealedAgainstChecked(record.address, sealed);
-        }
-    }
-
-    /// Debug/probe-only: for a divergence where both sides carry content, ask
-    /// whether the type the GRAPH sealed still agrees with the head CHECKING
-    /// recorded at that position. The seam comparison is symmetric and cannot
-    /// say which side is wrong; checking is the authority on logical types, so
-    /// a sealed type contradicting the checked head is the graph's error
-    /// (reunify.md 15.1b).
-    fn noteSealedAgainstChecked(self: *Rehearsal, address: CheckedAddress, sealed: Type.TypeId) void {
-        if (comptime !census.enabled) return;
-        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
-        // Only a head no representation choice may alter counts as a
-        // contradiction. Roc lowers an enum-like tag union to an integer,
-        // unwraps a one-field record or tuple, and erases a zero-sized value,
-        // so those shapes are conceded rather than reported (reunify.md 10).
-        const agrees = switch (cursor.view.payload(@enumFromInt(address.type_id))) {
-            .function => switch (self.types.get(sealed)) {
-                .func, .zst, .erased => true,
-                else => false,
-            },
-            .record => |record| switch (self.types.get(sealed)) {
-                .record => true,
-                else => record.fields.len <= 1,
-            },
-            .record_unbound => |fields| switch (self.types.get(sealed)) {
-                .record => true,
-                else => fields.len <= 1,
-            },
-            .tuple => |items| switch (self.types.get(sealed)) {
-                .tuple => true,
-                else => items.len <= 1,
-            },
-            .tag_union => |union_type| switch (self.types.get(sealed)) {
-                .tag_union, .named => true,
-                else => blk: {
-                    // An enum-like union - every tag payload-free - lowers to an
-                    // integer, which is a representation choice, not a defect.
-                    for (union_type.tags) |tag| {
-                        if (tag.args_len != 0) break :blk false;
-                    }
-                    break :blk true;
-                },
-            },
-            // A named type carries its checked identity, so a nominal position
-            // is judged on that identity rather than on head shape. A sealed
-            // head that is not named is section 10 lowering the backing - an
-            // enum-like union to an integer, a one-field wrapper away, a
-            // zero-sized value erased - which says nothing about logical typing.
-            .nominal => |nominal| switch (self.types.get(sealed)) {
-                .named => |named| blk: {
-                    if (@intFromEnum(named.named_type.ty) == address.type_id) break :blk true;
-                    // Two checked positions may denote the same nominal, so the
-                    // identity alone does not settle it. The declared name does.
-                    const want = cursor.source_names.typeNameText(nominal.name);
-                    const got = self.program_names.typeNameText(named.def.type_name);
-                    if (std.mem.eql(u8, want, got)) {
-                        census.bump("sealed_vs_checked_same_nominal_other_position");
-                        break :blk true;
-                    }
-                    break :blk false;
-                },
-                else => {
-                    census.bump("sealed_vs_checked_nominal_lowered_by_representation");
-                    return;
-                },
-            },
-            // A rigid or flex position still carries a free variable, so the
-            // sealed side names a value the comparison has no binding for.
-            .flex, .rigid => {
-                census.bump("sealed_vs_checked_position_is_a_variable");
-                return;
-            },
-            // An alias is transparent: section 10 may seal either the alias or
-            // what it stands for, so its head carries no logical claim.
-            .alias => {
-                census.bump("sealed_vs_checked_position_is_an_alias");
-                return;
-            },
-            .empty_record, .empty_tag_union => switch (self.types.get(sealed)) {
-                .record, .tag_union, .zst, .erased => true,
-                else => false,
-            },
-            .pending, .err => {
-                census.bump("sealed_vs_checked_position_unresolved");
-                return;
-            },
-        };
-        if (agrees) {
-            census.bump("sealed_agrees_with_checked_head");
-        } else {
-            census.bump("sealed_contradicts_checked_head");
-        }
-    }
-
-    /// Compare, position by position, what this specialization's directed
-    /// emission produces against what the graph sealed. Runs while the graph is
-    /// still alive so a node's equivalence class still resolves.
-    pub fn compareSpecialization(self: *Rehearsal, graph: *solve.InstGraph) void {
-        if (comptime !census.enabled) return;
-        if (!self.comparing) return;
-        if (self.disabled) return;
-        if (self.frames.items.len == 0) return;
-        const frame = &self.frames.items[self.frames.items.len - 1];
-        if (!frame.env_ready) return;
-        census.bump("rehearsal_spec_compared");
-
-        var positions: std.AutoHashMapUnmanaged(CheckedAddress, Occurrences) = .empty;
-        defer positions.deinit(self.allocator);
-
-        const trace = frame.trace orelse return;
-        var it = trace.provenance.iterator();
-        while (it.next()) |entry| {
-            const root = @intFromEnum(graph.rootNode(@enumFromInt(entry.key_ptr.*)));
-            const sealed = trace.sealed.get(root) orelse continue;
-            const gop = positions.getOrPut(self.allocator, entry.value_ptr.*) catch return self.fail();
-            if (!gop.found_existing) gop.value_ptr.* = Occurrences.empty();
-            gop.value_ptr.record(sealed);
-        }
-
-        self.slots.clearRetainingCapacity();
-        self.slot_descriptors.clearRetainingCapacity();
-
-        var compared = positions.iterator();
-        while (compared.next()) |entry| {
-            self.comparePosition(frame, entry.key_ptr.*, entry.value_ptr.*);
-        }
-        self.relateInterface(frame);
-        self.sealSlots();
-    }
-
-    /// Finish one specialization: detach the trace and pop the environment.
-    pub fn endSpecialization(self: *Rehearsal, graph: *solve.InstGraph) void {
+    /// Finish one specialization: pop the environment.
+    pub fn endSpecialization(self: *Rehearsal) void {
         if (self.requests.items.len == 0 and self.callees.items.len == 0 and
             self.translator.representationInputCount() == 0)
         {
             _ = self.component_arena.reset(.retain_capacity);
         }
-        graph.trace = null;
-        graph.seal_probe = null;
         if (self.frames.items.len == 0) return;
         var frame = self.frames.pop() orelse return;
         self.releaseFrame(&frame);
@@ -4875,10 +3556,6 @@ pub const Rehearsal = struct {
         if (frame.request_drafts) |drafts| {
             drafts.deinit();
             self.allocator.destroy(drafts);
-        }
-        if (frame.trace) |trace| {
-            trace.deinit();
-            self.allocator.destroy(trace);
         }
         frame.chain.release(self.allocator);
     }
@@ -4981,7 +3658,6 @@ pub const Rehearsal = struct {
         const values = self.allocator.alloc(direct_translate.BoundType, captured.len) catch return null;
         var parent_levels: usize = 0;
         for (captured, 0..) |entry, index| {
-            census.bump("rehearsal_captured_binder");
             // A residual with no value is the uninhabited materialization the
             // rest of the rehearsal already measures, so an unresolved captured
             // position stays visible as a mismatch instead of as a silent hole.
@@ -4990,16 +3666,13 @@ pub const Rehearsal = struct {
                 return null;
             });
             const outer_id = entry.outerScheme() orelse {
-                census.bump("rehearsal_captured_binder_outer_unattributed");
                 continue;
             };
             const outer = defining.view.schemeById(outer_id) orelse {
-                census.bump("rehearsal_captured_binder_outer_unresolved");
                 continue;
             };
             const outer_binders = outer.generalizedVars(defining.view);
             if (entry.binder_index >= outer_binders.len) {
-                census.bump("rehearsal_captured_binder_index_out_of_range");
                 continue;
             }
             // The chain runs innermost first, so the first level that names the
@@ -5012,23 +3685,19 @@ pub const Rehearsal = struct {
                 break;
             }
             const position = found orelse {
-                census.bump("rehearsal_captured_binder_outer_not_active");
                 continue;
             };
             const level = order.items[position];
             if (entry.binder_index >= level.bound.len or entry.binder_index >= level.binders.len) {
-                census.bump("rehearsal_captured_binder_index_out_of_range");
                 continue;
             }
             // The checked pair and the active level must name the SAME checked
             // binder at that index; a disagreement would mean the two binder
             // orderings drifted and the value read would silently bind incorrectly.
             if (level.binders[entry.binder_index] != outer_binders[entry.binder_index]) {
-                census.bump("rehearsal_captured_binder_identity_disagrees");
                 continue;
             }
             values[index] = level.bound[entry.binder_index];
-            census.bump("rehearsal_captured_binder_bound");
             const levels_to_here = order.items.len - position;
             if (levels_to_here > parent_levels) parent_levels = levels_to_here;
         }
@@ -5076,20 +3745,16 @@ pub const Rehearsal = struct {
         // rule's binding is gated by (reunify.md section 9.6).
         if (start.stored_request_callable) |callable| stored: {
             const scheme_id = start.template_scheme orelse {
-                census.bump("rehearsal_stored_spec_scheme_absent");
                 break :stored;
             };
             const scheme = start.cursor.view.schemeById(scheme_id) orelse {
-                census.bump("rehearsal_stored_spec_scheme_absent");
                 break :stored;
             };
             if (scheme.gv_len == 0) break :stored;
             var scratch_outcome = GeneratedOutcome{};
             if (self.bindGeneratedRuleFromStoredCallable(start, frame, scheme_id, scheme, callable, &scratch_outcome)) {
-                census.bump("rehearsal_stored_spec_bound");
                 return;
             }
-            census.bump("rehearsal_stored_spec_bind_failed");
         }
         frame.skip = skip;
         self.resolveGroundTemplateEnvironment(start, frame, skip);
@@ -5102,10 +3767,8 @@ pub const Rehearsal = struct {
     fn resolveEnvironmentFromEdge(self: *Rehearsal, start: SpecializationStart, frame: *Frame) ?EdgeSkip {
         const claim = self.takeClaim(start.reserved_fn_id) orelse {
             if (self.frames.items.len == 0) {
-                census.bump("rehearsal_skip_root_edge");
                 return .root_request;
             }
-            census.bump("rehearsal_skip_generated_edge");
             return .{ .generated_request = null };
         };
         const edge = switch (claim) {
@@ -5114,7 +3777,6 @@ pub const Rehearsal = struct {
         };
         defer self.releaseEdge(edge);
         const caller = self.lookup.cursor(edge.module_bytes) orelse {
-            census.bump("rehearsal_skip_caller_module_absent");
             return .edge_unusable;
         };
         // The edge this specialization was requested at is the one whose callee
@@ -5123,7 +3785,6 @@ pub const Rehearsal = struct {
         // the owner node picks this one out (reunify.md section 7.2's edge
         // identity).
         const owner_node = templateSchemeOwnerNode(start) orelse {
-            census.bump("rehearsal_skip_template_owner_unresolved");
             return .edge_unusable;
         };
         const site = self.siteFor(caller, edge.use_expr, owner_node) catch |err| return switch (err) {
@@ -5148,7 +3809,6 @@ pub const Rehearsal = struct {
         else
             .unresolved_request_context;
         const scheme_id = site.schemeId() orelse {
-            census.bump("rehearsal_skip_scheme_unresolved");
             return .edge_unusable;
         };
         const defining_bytes = site.importedDefiningModule() orelse edge.module_bytes;
@@ -5160,23 +3820,18 @@ pub const Rehearsal = struct {
         // specialization binds from its own template's scheme instead — under an
         // exact witness, never by assuming the two binder orders line up.
         if (!std.mem.eql(u8, &start.cursor.module_bytes, &defining_bytes)) {
-            census.bump("rehearsal_skip_edge_defining_module_differs");
             if (self.resolveEnvironmentFromForeignSchemeEdge(start, frame, caller, site, edge)) return null;
             return .defining_module_differs;
         }
-        census.bump("rehearsal_edge_defining_module_matches_template");
         const defining = self.definingCursor(start, defining_bytes) orelse {
-            census.bump("rehearsal_skip_defining_module_absent");
             return .edge_unusable;
         };
         const scheme = defining.view.schemeById(scheme_id) orelse {
-            census.bump("rehearsal_skip_scheme_unresolved");
             return .edge_unusable;
         };
         const binders = scheme.generalizedVars(defining.view);
         const actuals = site.actuals(caller.view);
         if (actuals.len != binders.len) {
-            census.bump("rehearsal_skip_arity_mismatch");
             return .edge_unusable;
         }
 
@@ -5188,7 +3843,6 @@ pub const Rehearsal = struct {
         var filled: usize = 0;
         for (actuals) |actual| {
             if (@intFromEnum(actual) == checked.checked_instantiation_actual_unreached) {
-                census.bump("rehearsal_skip_unreached_actual");
                 return .edge_unusable;
             }
             const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse {
@@ -5197,7 +3851,6 @@ pub const Rehearsal = struct {
                 // is where the edge's declared covering rule states the
                 // binding instead (reunify.md sections 7.2, 9.6).
                 if (edge.covering_rule != null) {
-                    census.bump("rehearsal_site_actual_routes_to_rule");
                     return self.resolveEnvironmentFromCoveringRule(start, frame, edge);
                 }
                 return .edge_unusable;
@@ -5234,9 +3887,7 @@ pub const Rehearsal = struct {
             return .edge_unusable;
         };
         if (captured.parent_levels == 0) {
-            census.bump("rehearsal_env_parent_absent");
         } else {
-            census.bump("rehearsal_env_parent_linked");
         }
 
         frame.env_module_bytes = defining_bytes;
@@ -5245,11 +3896,8 @@ pub const Rehearsal = struct {
         frame.binders = binders;
         frame.env_ready = true;
         frame.scheme_root_checked = @intFromEnum(scheme.root);
-        census.bump("rehearsal_env_resolved");
         noteEnvironmentScheme(scheme);
         if (binders.len == 0) {
-            census.bump("rehearsal_env_resolved_without_binders");
-            self.classifyEmptyBinders(defining, scheme, site.importedDefiningModule() != null);
         }
 
         // The mint the requesting edge's covering rule states for this
@@ -5267,7 +3915,6 @@ pub const Rehearsal = struct {
                 caller_owner_node,
                 edge.adopted_mint,
             );
-            census.bump("rehearsal_frame_rule_declared");
             frame.ret_mint = self.last_declared_mint;
             self.last_declared_mint = null;
             if (frame.ret_mint) |mint| self.recordUseMint(edge.module_bytes, edge.use_expr, mint);
@@ -5325,7 +3972,6 @@ pub const Rehearsal = struct {
         if (frame.request_root) |requested| {
             const deep_floor = self.declareSealedProducerInputsDeep(defining_bytes, scheme.root, requested);
             if (frame.input_floor == null) frame.input_floor = deep_floor;
-            census.bump("rehearsal_frame_request_deep_declared");
         }
         return null;
     }
@@ -5345,11 +3991,9 @@ pub const Rehearsal = struct {
         outcome.claimed += 1;
         const named: EdgeSkip = .{ .generated_request = covering.rule };
         const scheme_id = start.template_scheme orelse {
-            census.bump("rehearsal_skip_generated_edge");
             return named;
         };
         const scheme = start.cursor.view.schemeById(scheme_id) orelse {
-            census.bump("rehearsal_skip_generated_edge");
             return named;
         };
         // The mint the rule states is independent of whether it can bind
@@ -5364,7 +4008,6 @@ pub const Rehearsal = struct {
             if (edge.caller) |captured| captured.owner_node else checked.checked_residual_disposition_module_body_owner,
             edge.adopted_mint,
         );
-        if (frame.input_floor != null) census.bump("rehearsal_rule_path_mint_declared");
         frame.ret_mint = self.last_declared_mint;
         self.last_declared_mint = null;
         if (frame.ret_mint) |mint| self.recordUseMint(edge.module_bytes, edge.use_expr, mint);
@@ -5373,7 +4016,6 @@ pub const Rehearsal = struct {
         // instantiation; the ground path already resolves those exactly.
         if (scheme.gv_len == 0) {
             outcome.ground += 1;
-            census.bump("rehearsal_skip_generated_edge");
             return named;
         }
         // A covering edge names its callable in checked terms; where the rule
@@ -5381,18 +4023,15 @@ pub const Rehearsal = struct {
         // requesting context is the stored instance the binding reads.
         const stored_callable: ?Type.TypeId = covering.stored_callable orelse derived: {
             const covering_source = covering.source orelse {
-                census.bump("rehearsal_stored_derive_source_absent");
                 break :derived null;
             };
             const checked_callable = switch (covering_source.witness) {
                 .callable => |callable| callable,
                 .receiver_at_argument => {
-                    census.bump("rehearsal_stored_derive_witness_not_callable");
                     break :derived null;
                 },
             };
             const caller = self.lookup.cursor(covering_source.module_bytes) orelse {
-                census.bump("rehearsal_stored_derive_cursor_absent");
                 break :derived null;
             };
             const emitted = self.emitQuietly(
@@ -5401,10 +4040,8 @@ pub const Rehearsal = struct {
                 if (edge.caller) |captured| captured.owner_node else checked.checked_residual_disposition_module_body_owner,
                 checked_callable,
             ) orelse {
-                census.bump("rehearsal_stored_derive_emit_failed");
                 break :derived null;
             };
-            census.bump("rehearsal_stored_derive_emitted");
             break :derived emitted;
         };
         const declared_source = if (covering.rule.declaresBinderSource()) covering.source else null;
@@ -5413,12 +4050,9 @@ pub const Rehearsal = struct {
                 if (self.bindGeneratedRuleFromStoredCallable(start, frame, scheme_id, scheme, callable, outcome)) {
                     return null;
                 }
-                census.bump("rehearsal_skip_generated_edge");
                 return named;
             }
             outcome.unbound += 1;
-            census.bump("rehearsal_skip_generated_edge");
-            census.bump("rehearsal_generated_rule_declared_unbound");
             return named;
         };
         if (self.bindGeneratedRule(start, frame, scheme_id, scheme, source, edge.caller, outcome)) {
@@ -5429,7 +4063,6 @@ pub const Rehearsal = struct {
                 return null;
             }
         }
-        census.bump("rehearsal_skip_generated_edge");
         return named;
     }
 
@@ -5449,11 +4082,9 @@ pub const Rehearsal = struct {
         const outcome = &self.generated_outcomes[@intFromEnum(request.edge.rule)];
         const named: EdgeSkip = .{ .generated_request = request.edge.rule };
         const scheme_id = start.template_scheme orelse {
-            census.bump("rehearsal_skip_generated_edge");
             return named;
         };
         const scheme = start.cursor.view.schemeById(scheme_id) orelse {
-            census.bump("rehearsal_skip_generated_edge");
             return named;
         };
         // As on the covering-rule path: the mint the rule states is declared
@@ -5466,14 +4097,12 @@ pub const Rehearsal = struct {
             if (request.caller) |captured| captured.owner_node else checked.checked_residual_disposition_module_body_owner,
             request.adopted_mint,
         );
-        if (frame.input_floor != null) census.bump("rehearsal_rule_path_mint_declared");
         frame.ret_mint = self.last_declared_mint;
         self.last_declared_mint = null;
         // A generated edge into a scheme with no binders has exactly one
         // instantiation; the ground path already resolves those exactly.
         if (scheme.gv_len == 0) {
             outcome.ground += 1;
-            census.bump("rehearsal_skip_generated_edge");
             return named;
         }
         // The walks that descend Monotypes hand the callable they built over
@@ -5481,18 +4110,15 @@ pub const Rehearsal = struct {
         // it emitted under the held requesting context instead.
         const stored_callable: ?Type.TypeId = request.edge.stored_callable orelse derived: {
             const edge_source = request.edge.source orelse {
-                census.bump("rehearsal_stored_derive_source_absent");
                 break :derived null;
             };
             const checked_callable = switch (edge_source.witness) {
                 .callable => |callable| callable,
                 .receiver_at_argument => {
-                    census.bump("rehearsal_stored_derive_witness_not_callable");
                     break :derived null;
                 },
             };
             const caller = self.lookup.cursor(edge_source.module_bytes) orelse {
-                census.bump("rehearsal_stored_derive_cursor_absent");
                 break :derived null;
             };
             const emitted = self.emitQuietly(
@@ -5501,10 +4127,8 @@ pub const Rehearsal = struct {
                 if (request.caller) |captured| captured.owner_node else checked.checked_residual_disposition_module_body_owner,
                 checked_callable,
             ) orelse {
-                census.bump("rehearsal_stored_derive_emit_failed");
                 break :derived null;
             };
-            census.bump("rehearsal_stored_derive_emitted");
             break :derived emitted;
         };
         const declared_source = if (request.edge.rule.declaresBinderSource()) request.edge.source else null;
@@ -5513,12 +4137,9 @@ pub const Rehearsal = struct {
                 if (self.bindGeneratedRuleFromStoredCallable(start, frame, scheme_id, scheme, callable, outcome)) {
                     return null;
                 }
-                census.bump("rehearsal_skip_generated_edge");
                 return named;
             }
             outcome.unbound += 1;
-            census.bump("rehearsal_skip_generated_edge");
-            census.bump("rehearsal_generated_rule_declared_unbound");
             return named;
         };
         if (self.bindGeneratedRule(start, frame, scheme_id, scheme, source, request.caller, outcome)) {
@@ -5532,7 +4153,6 @@ pub const Rehearsal = struct {
                 return null;
             }
         }
-        census.bump("rehearsal_skip_generated_edge");
         return named;
     }
 
@@ -5556,7 +4176,6 @@ pub const Rehearsal = struct {
     ) bool {
         const caller = self.lookup.cursor(source.module_bytes) orelse {
             outcome.receiver_unusable += 1;
-            census.bump("rehearsal_generated_rule_caller_module_absent");
             return false;
         };
         const binders = scheme.generalizedVars(start.cursor.view);
@@ -5564,7 +4183,6 @@ pub const Rehearsal = struct {
         // that also captures enclosing binders is outside every declared rule.
         if (scheme.captured_len != 0) {
             outcome.receiver_unusable += 1;
-            census.bump("rehearsal_generated_rule_scheme_captures");
             return false;
         }
         const caller_env: ?*const direct_translate.BindingEnvironment = if (captured_caller) |*held|
@@ -5582,22 +4200,18 @@ pub const Rehearsal = struct {
 
         const receiver_root = self.emitQuietly(caller, caller_env, caller_owner_node, source.receiver.checked_ty) orelse {
             outcome.receiver_unusable += 1;
-            census.bump("rehearsal_generated_rule_receiver_untranslatable");
             return false;
         };
         const receiver = followEmittedPath(self.types, receiver_root, &source.receiver.path) orelse {
             outcome.receiver_unusable += 1;
-            census.bump("rehearsal_generated_rule_receiver_path_absent");
             return false;
         };
         const argument_count = receiverArgumentCount(self.types, receiver) orelse {
             outcome.receiver_unusable += 1;
-            census.bump("rehearsal_generated_rule_receiver_not_named");
             return false;
         };
         if (argument_count != binders.len) {
             outcome.receiver_unusable += 1;
-            census.bump("rehearsal_generated_rule_receiver_arity_differs");
             return false;
         }
 
@@ -5609,7 +4223,6 @@ pub const Rehearsal = struct {
         for (0..binders.len) |index| {
             const argument = receiverArgumentAt(self.types, receiver, index) orelse {
                 outcome.receiver_unusable += 1;
-                census.bump("rehearsal_generated_rule_argument_untranslatable");
                 return false;
             };
             if (self.carriesResidualMaterialization(argument)) {
@@ -5670,10 +4283,7 @@ pub const Rehearsal = struct {
         frame.scheme_root_checked = @intFromEnum(scheme.root);
         frame.interface_root = declared;
         frame.request_root = requested;
-        census.bump("rehearsal_env_resolved");
-        census.bump("rehearsal_env_resolved_generated_rule");
         noteEnvironmentScheme(scheme);
-        census.bump("rehearsal_env_parent_absent");
         return true;
     }
 
@@ -5695,18 +4305,15 @@ pub const Rehearsal = struct {
         callable: Type.TypeId,
         outcome: *GeneratedOutcome,
     ) bool {
-        census.bump("rehearsal_rule_stored_binding_attempt");
         // The rule's mapping is over the callee scheme's own binders; a scheme
         // that also captures enclosing binders is outside every declared rule.
         if (scheme.captured_len != 0) {
             outcome.receiver_unusable += 1;
-            census.bump("rehearsal_generated_rule_scheme_captures");
             return false;
         }
         const binders = scheme.generalizedVars(start.cursor.view);
         if (binders.len > max_binder_paths) {
             outcome.receiver_unusable += 1;
-            census.bump("rehearsal_rule_stored_binder_count_exceeds_paths");
             return false;
         }
         var paths: [max_binder_paths]?BinderPath = @splat(null);
@@ -5719,12 +4326,10 @@ pub const Rehearsal = struct {
         for (paths[0..binders.len], 0..) |path, index| {
             const recorded = path orelse {
                 outcome.receiver_unusable += 1;
-                census.bump("rehearsal_rule_stored_binder_position_absent");
                 return false;
             };
             const component = self.followBinderPath(start.cursor, scheme.root, callable, &recorded) orelse {
                 outcome.receiver_unusable += 1;
-                census.bump("rehearsal_rule_stored_callable_position_absent");
                 return false;
             };
             if (self.carriesResidualMaterialization(component)) {
@@ -5747,7 +4352,6 @@ pub const Rehearsal = struct {
         };
         const declared = self.emitQuietly(start.cursor, chain.innermost(), scheme.owner_node, scheme.root);
         if (!self.generatedWitnessAgrees(declared, callable, outcome)) {
-            census.bump("rehearsal_rule_stored_witness_disagreed");
             chain.release(self.allocator);
             return false;
         }
@@ -5760,11 +4364,7 @@ pub const Rehearsal = struct {
         frame.scheme_root_checked = @intFromEnum(scheme.root);
         frame.interface_root = declared;
         frame.request_root = callable;
-        census.bump("rehearsal_rule_stored_bound");
-        census.bump("rehearsal_env_resolved");
-        census.bump("rehearsal_env_resolved_generated_rule");
         noteEnvironmentScheme(scheme);
-        census.bump("rehearsal_env_parent_absent");
         return true;
     }
 
@@ -5898,7 +4498,6 @@ pub const Rehearsal = struct {
         var formal_paths: [1]?BinderPath = .{null};
         self.findBinderPaths(backing.cursor.view, backing.root, &.{formal}, formal_paths[0..1]);
         const formal_path = formal_paths[0] orelse return null;
-        census.bump("rehearsal_rule_stored_erased_nominal_arg");
         return self.followBinderPath(backing.cursor, backing.root, stored, &formal_path);
     }
 
@@ -5957,7 +4556,6 @@ pub const Rehearsal = struct {
         for (remainder.items, payload_ranges.items) |*input, range| {
             input.payloads = payload_ids.items[range[0]..range[1]];
         }
-        census.bump("rehearsal_rule_stored_row_remainder");
         return self.types.internTagUnion(self.program_names, remainder.items) catch null;
     }
 
@@ -5973,12 +4571,10 @@ pub const Rehearsal = struct {
     ) bool {
         const left = declared orelse {
             outcome.witness_absent += 1;
-            census.bump("rehearsal_generated_rule_witness_absent");
             return false;
         };
         const right = requested orelse {
             outcome.witness_absent += 1;
-            census.bump("rehearsal_generated_rule_witness_absent");
             return false;
         };
         // As in `witnessesAgree`: the binding proof reads the
@@ -5987,18 +4583,15 @@ pub const Rehearsal = struct {
         const right_digest = self.types.specializationDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) {
             outcome.witness_agrees += 1;
-            census.bump("rehearsal_generated_rule_witness_agrees");
             return true;
         }
         const left_unfolded = self.types.unfoldedDigest(self.program_names, left);
         const right_unfolded = self.types.unfoldedDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
             outcome.witness_agrees += 1;
-            census.bump("rehearsal_generated_rule_witness_agrees_under_rerooting");
             return true;
         }
         outcome.witness_differs += 1;
-        census.bump("rehearsal_generated_rule_witness_differs");
         return false;
     }
 
@@ -6021,34 +4614,20 @@ pub const Rehearsal = struct {
         skip: EdgeSkip,
     ) void {
         const scheme_id = start.template_scheme orelse {
-            census.bump("rehearsal_edgeless_template_scheme_absent");
             return;
         };
         const scheme_raw = @intFromEnum(scheme_id);
         const scheme = start.cursor.view.schemeById(scheme_id) orelse {
-            census.bump("rehearsal_edgeless_scheme_unresolved");
             return;
         };
         if (scheme.gv_len != 0) {
-            census.bump("rehearsal_edgeless_scheme_has_binders");
             noteEdgelessWithBinders(start, scheme, skip);
-            self.noteUnresolvedDetail(start, scheme, skip);
-            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                std.debug.print("SEED-UNRESOLVED name={s} skip={s} rule={s} gv={d}\n", .{
-                    start.template_name,
-                    @tagName(skip),
-                    skipRuleName(skip),
-                    scheme.gv_len,
-                });
-            }
             return;
         }
         if (scheme.captured_len != 0) {
-            census.bump("rehearsal_edgeless_scheme_captures");
             return;
         }
         if (self.schemeRootReachesVariable(start.cursor.view, scheme.root)) {
-            census.bump("rehearsal_edgeless_scheme_root_variable");
             return;
         }
         const scheme_ident = direct_translate.SchemeIdent{
@@ -6067,8 +4646,6 @@ pub const Rehearsal = struct {
         frame.binders = &.{};
         frame.env_ready = true;
         frame.scheme_root_checked = @intFromEnum(scheme.root);
-        census.bump("rehearsal_env_resolved");
-        census.bump("rehearsal_env_resolved_edgeless_ground");
         noteEnvironmentScheme(scheme);
         frame.interface_root = self.emitQuietly(start.cursor, frame.environment(), scheme.owner_node, scheme.root);
         // A ground scheme has exactly one instantiation, so the declared root
@@ -6130,14 +4707,11 @@ pub const Rehearsal = struct {
         const scheme_id = start.template_scheme orelse return false;
         const scheme = start.cursor.view.schemeById(scheme_id) orelse return false;
         if (scheme.owner_node != site.scheme_owner_node) {
-            census.bump("rehearsal_foreign_scheme_owner_node_differs");
             return false;
         }
-        census.bump("rehearsal_foreign_scheme_owner_node_agrees");
         const binders = scheme.generalizedVars(start.cursor.view);
         const actuals = site.actuals(caller.view);
         if (actuals.len != binders.len) {
-            census.bump("rehearsal_foreign_scheme_arity_differs");
             return false;
         }
 
@@ -6161,14 +4735,12 @@ pub const Rehearsal = struct {
         defer self.allocator.free(bound);
         for (actuals, 0..) |actual, index| {
             if (@intFromEnum(actual) == checked.checked_instantiation_actual_unreached) {
-                census.bump("rehearsal_skip_unreached_actual");
                 return false;
             }
             const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse {
                 // As on the same-module path: an actual the site cannot state
                 // routes to the rule the edge declares (reunify.md 7.2, 9.6).
                 if (edge.covering_rule != null) {
-                    census.bump("rehearsal_site_actual_routes_to_rule");
                     return self.resolveEnvironmentFromCoveringRule(start, frame, edge) == null;
                 }
                 return false;
@@ -6213,7 +4785,6 @@ pub const Rehearsal = struct {
             frame.ret_mint = self.last_declared_mint;
             self.last_declared_mint = null;
             if (frame.ret_mint) |mint| self.recordUseMint(edge.module_bytes, edge.use_expr, mint);
-            census.bump("rehearsal_frame_rule_declared");
         }
         frame.use_key = .{ .module_bytes = edge.module_bytes, .use_expr = @intFromEnum(edge.use_expr) };
         const declared = self.emitQuietly(start.cursor, chain.innermost(), scheme.owner_node, scheme.root);
@@ -6239,38 +4810,7 @@ pub const Rehearsal = struct {
             },
             else => {},
         }
-        if (comptime census.enabled) provisional: {
-            if (rootSharesArgRet(caller, site.instantiated_root)) {
-                census.bump("value_reemission_shared_position");
-                break :provisional;
-            }
-            const drafts = self.allocator.create(direct_translate.MonoDraftStore) catch break :provisional;
-            drafts.* = direct_translate.MonoDraftStore.init(self.allocator);
-            var provisional_reason: direct_translate.SkipReason = undefined;
-            const provisional_root = self.translator.translateProvisionalUnderEnvironment(
-                caller,
-                caller_env,
-                caller_owner_node,
-                site.instantiated_root,
-                drafts,
-                .{ .context = @ptrCast(self), .open = openJoinableSlotInEngine },
-                &provisional_reason,
-            ) catch {
-                drafts.deinit();
-                self.allocator.destroy(drafts);
-                break :provisional;
-            };
-            frame.request_provisional = provisional_root;
-            frame.request_drafts = drafts;
-            census.bump("rehearsal_request_provisional_emitted");
-            if (frame.request_root) |emitted_root| {
-                self.relateProvisionalToEmitted(provisional_root, drafts, emitted_root, 0);
-            }
-        }
-        census.bump("rehearsal_env_resolved");
-        census.bump("rehearsal_env_resolved_foreign_scheme");
         noteEnvironmentScheme(scheme);
-        census.bump("rehearsal_env_parent_absent");
 
         // Every producer representation the requesting context's emission
         // carries is declared at the scheme's positions, exactly as on the
@@ -6278,7 +4818,6 @@ pub const Rehearsal = struct {
         if (frame.request_root) |requested_root| {
             const deep_floor = self.declareSealedProducerInputsDeep(start.cursor.module_bytes, scheme.root, requested_root);
             if (frame.input_floor == null) frame.input_floor = deep_floor;
-            census.bump("rehearsal_frame_request_deep_declared");
         }
         return true;
     }
@@ -6290,11 +4829,9 @@ pub const Rehearsal = struct {
     /// (reunify.md section 8.3), so the unfolding decides those.
     fn witnessesAgree(self: *Rehearsal, declared: ?Type.TypeId, requested: ?Type.TypeId) bool {
         const left = declared orelse {
-            census.bump("rehearsal_foreign_witness_absent");
             return false;
         };
         const right = requested orelse {
-            census.bump("rehearsal_foreign_witness_absent");
             return false;
         };
         // The witness proves the binding produced the requested logical
@@ -6304,42 +4841,16 @@ pub const Rehearsal = struct {
         const left_digest = self.types.specializationDigest(self.program_names, left);
         const right_digest = self.types.specializationDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) {
-            census.bump("rehearsal_foreign_witness_agrees");
             return true;
         }
         const left_unfolded = self.types.unfoldedDigest(self.program_names, left);
         const right_unfolded = self.types.unfoldedDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
-            census.bump("rehearsal_foreign_witness_agrees_under_rerooting");
             return true;
         }
-        census.bump("rehearsal_foreign_witness_differs");
         return false;
     }
 
-
-    fn noteUnresolvedDetail(
-        self: *Rehearsal,
-        start: SpecializationStart,
-        scheme: checked.CheckedTypeScheme,
-        skip: EdgeSkip,
-    ) void {
-        if (comptime !census.enabled) return;
-        if (self.unresolved_details.items.len >= max_unresolved_details) return;
-        var name_buf: [48]u8 = [_]u8{' '} ** 48;
-        const copy = @min(start.template_name.len, name_buf.len);
-        @memcpy(name_buf[0..copy], start.template_name[0..copy]);
-        const entry: UnresolvedDetail = .{
-            .name = name_buf,
-            .template_module = start.cursor.module_bytes[0..6].*,
-            .binders = scheme.gv_len,
-            .skip = skip,
-        };
-        for (self.unresolved_details.items) |existing| {
-            if (std.meta.eql(existing, entry)) return;
-        }
-        self.unresolved_details.append(self.allocator, entry) catch return;
-    }
 
     /// Name the population that genuinely still needs a binding: a
     /// specialization whose requesting edge supplied none and whose own template
@@ -6355,25 +4866,25 @@ pub const Rehearsal = struct {
         skip: EdgeSkip,
     ) void {
         switch (skip) {
-            .root_request => census.bump("rehearsal_edgeless_binders_root_request"),
-            .generated_request => census.bump("rehearsal_edgeless_binders_generated_request"),
-            .no_site => census.bump("rehearsal_edgeless_binders_no_site"),
-            .site_ambiguous => census.bump("rehearsal_edgeless_binders_site_ambiguous"),
-            .defining_module_differs => census.bump("rehearsal_edgeless_binders_module_differs"),
-            .edge_unusable => census.bump("rehearsal_edgeless_binders_edge_unusable"),
+            .root_request => {},
+            .generated_request => {},
+            .no_site => {},
+            .site_ambiguous => {},
+            .defining_module_differs => {},
+            .edge_unusable => {},
         }
         switch (scheme.owner_kind) {
-            .top_level_def => census.bump("rehearsal_edgeless_binders_owner_top_level"),
-            .nested_def => census.bump("rehearsal_edgeless_binders_owner_nested"),
-            .required_type => census.bump("rehearsal_edgeless_binders_owner_required"),
-            .synthetic => census.bump("rehearsal_edgeless_binders_owner_synthetic"),
+            .top_level_def => {},
+            .nested_def => {},
+            .required_type => {},
+            .synthetic => {},
         }
         switch (start.target_kind) {
-            .roc => census.bump("rehearsal_edgeless_binders_target_roc"),
-            .hosted => census.bump("rehearsal_edgeless_binders_target_hosted"),
-            .intrinsic => census.bump("rehearsal_edgeless_binders_target_intrinsic"),
-            .entry => census.bump("rehearsal_edgeless_binders_target_entry"),
-            .comptime_only => census.bump("rehearsal_edgeless_binders_target_comptime"),
+            .roc => {},
+            .hosted => {},
+            .intrinsic => {},
+            .entry => {},
+            .comptime_only => {},
         }
     }
 
@@ -6389,7 +4900,6 @@ pub const Rehearsal = struct {
     ) ?direct_translate.ModuleCursor {
         if (self.lookup.cursor(defining_bytes)) |cursor| return cursor;
         if (std.mem.eql(u8, &start.cursor.module_bytes, &defining_bytes)) {
-            census.bump("rehearsal_defining_module_from_template_cursor");
             return start.cursor;
         }
         return null;
@@ -6411,43 +4921,34 @@ pub const Rehearsal = struct {
         caller_origin: ResidualOrigin,
     ) ResidualOrigin {
         if (caller_env == null) {
-            census.bump("rehearsal_actual_residual_without_caller_env");
             return .unresolved_request_context;
         }
-        census.bump("rehearsal_actual_residual_with_caller_env");
         const free = self.firstFreeVariable(caller.view, actual, caller_env) orelse {
             // Every variable the actual reaches is bound, so the residual came
             // in through one of those bindings — or the empty row is checked
             // content the requesting body really names.
             if (caller_origin != .absent) {
-                census.bump("rehearsal_actual_residual_inherited");
                 return caller_origin;
             }
-            census.bump("rehearsal_actual_residual_closed_empty_row");
             return .closed_empty_row;
         };
-        census.bump("rehearsal_actual_residual_unbound_here");
         switch (caller.view.payload(actual)) {
-            .flex, .rigid => census.bump("rehearsal_actual_residual_bare_variable"),
-            else => census.bump("rehearsal_actual_residual_structure"),
+            .flex, .rigid => {},
+            else => {},
         }
         for (caller.view.schemes) |scheme| {
             for (scheme.generalizedVars(caller.view)) |binder| {
                 if (binder != free) continue;
-                census.bump("rehearsal_actual_residual_is_scheme_binder");
                 return .scheme_binder;
             }
         }
         for (caller.view.residualDispositions()) |disposition| {
             if (disposition.type_id != @intFromEnum(free)) continue;
             if (disposition.scheme_owner_node == owner_node) {
-                census.bump("rehearsal_actual_residual_disposed_here");
                 return .disposed_here;
             }
-            census.bump("rehearsal_actual_residual_disposed_elsewhere");
             return .disposed_elsewhere;
         }
-        census.bump("rehearsal_actual_residual_undisposed");
         return .undisposed;
     }
 
@@ -6487,47 +4988,14 @@ pub const Rehearsal = struct {
     /// its environment to a lexical parent however wide the checked capture is.
     fn noteEnvironmentScheme(scheme: checked.CheckedTypeScheme) void {
         switch (scheme.owner_kind) {
-            .top_level_def => census.bump("rehearsal_env_owner_top_level"),
-            .nested_def => census.bump("rehearsal_env_owner_nested"),
-            .required_type => census.bump("rehearsal_env_owner_required"),
-            .synthetic => census.bump("rehearsal_env_owner_synthetic"),
+            .top_level_def => {},
+            .nested_def => {},
+            .required_type => {},
+            .synthetic => {},
         }
         if (scheme.captured_len == 0) {
-            census.bump("rehearsal_env_scheme_captures_absent");
         } else {
-            census.bump("rehearsal_env_scheme_captures_present");
         }
-    }
-
-    /// Split one empty-binder environment into the classes reunify.md 7.1
-    /// distinguishes: a genuinely monomorphic scheme (its root reaches no
-    /// residual variable, so an empty vector is the right answer) versus a gap
-    /// (the root does reach one), reported alongside the owner kind, whether a
-    /// pristine snapshot root came with it, and whether the scheme was read out
-    /// of another module's checked data.
-    fn classifyEmptyBinders(
-        self: *Rehearsal,
-        defining: direct_translate.ModuleCursor,
-        scheme: checked.CheckedTypeScheme,
-        imported: bool,
-    ) void {
-        if (self.schemeRootReachesVariable(defining.view, scheme.root)) {
-            census.bump("rehearsal_env_no_binders_root_variable");
-        } else {
-            census.bump("rehearsal_env_no_binders_root_ground");
-        }
-        switch (scheme.owner_kind) {
-            .top_level_def => census.bump("rehearsal_env_no_binders_owner_top_level"),
-            .nested_def => census.bump("rehearsal_env_no_binders_owner_nested"),
-            .required_type => census.bump("rehearsal_env_no_binders_owner_required"),
-            .synthetic => census.bump("rehearsal_env_no_binders_owner_synthetic"),
-        }
-        if (scheme.snapshotRoot() == null) {
-            census.bump("rehearsal_env_no_binders_snapshot_absent");
-        } else {
-            census.bump("rehearsal_env_no_binders_snapshot_present");
-        }
-        if (imported) census.bump("rehearsal_env_no_binders_imported");
     }
 
     /// Whether a checked scheme root reaches any checked variable payload —
@@ -6757,36 +5225,6 @@ pub const Rehearsal = struct {
         var reason: direct_translate.SkipReason = undefined;
         return self.translator.translateUnderEnvironment(caller, env, owner_node, actual, &reason) catch |err| switch (err) {
             error.Skip => {
-                census.bump("rehearsal_skip_actual_untranslatable");
-                if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                    std.debug.print("ACTUAL-SKIP actual={d} reason={s} env={s} payload={s}", .{
-                        @intFromEnum(actual),
-                        @tagName(reason),
-                        if (env == null) "null" else "present",
-                        @tagName(caller.view.payload(actual)),
-                    });
-                    switch (caller.view.payload(actual)) {
-                        .rigid, .flex => |v| {
-                            std.debug.print(" phase={s} constraints={d}", .{
-                                if (v.numeric_default_phase) |phase| @tagName(phase) else "-",
-                                v.constraints.len,
-                            });
-                            for (caller.view.schemes) |scheme| {
-                                for (scheme.generalizedVars(caller.view)) |binder| {
-                                    if (binder == actual) {
-                                        std.debug.print(" owner_scheme={d}/gv{d}/owner_node={d}", .{
-                                            @intFromEnum(scheme.id),
-                                            scheme.gv_len,
-                                            scheme.owner_node,
-                                        });
-                                    }
-                                }
-                            }
-                        },
-                        else => {},
-                    }
-                    std.debug.print("\n", .{});
-                }
                 return null;
             },
             else => {
@@ -6800,16 +5238,13 @@ pub const Rehearsal = struct {
     /// or null when the caller is outside every active environment's module.
     fn callerFrameFor(self: *Rehearsal, module_bytes: [32]u8) ?*const Frame {
         if (self.frames.items.len == 0) {
-            census.bump("rehearsal_caller_env_no_frame");
             return null;
         }
         const frame = &self.frames.items[self.frames.items.len - 1];
         if (!frame.env_ready) {
-            census.bump("rehearsal_caller_env_frame_not_ready");
             return null;
         }
         if (!std.mem.eql(u8, &frame.env_module_bytes, &module_bytes)) {
-            census.bump("rehearsal_caller_env_other_module");
             return null;
         }
         return frame;
@@ -6855,49 +5290,6 @@ pub const Rehearsal = struct {
         /// The scheme owner the translation read residual dispositions under.
         owner_node: u32,
     };
-
-    /// Measure whether one constraint-replay site's two sides are ALREADY the
-    /// same type under directed translation, and record the answer in that site's
-    /// row of the census table (reunify.md sections 9, 13 Slice 7). The site's own
-    /// unification still runs and still decides lowering; this reads nothing from
-    /// the graph and selects nothing.
-    pub fn measureUnifySite(
-        self: *Rehearsal,
-        site: census.UnifySite,
-        left: UnifyOperand,
-        right: UnifyOperand,
-    ) void {
-        if (comptime !census.enabled) return;
-        if (self.disabled) return;
-        var blocker: census.UnifySiteBlocker = .operand_undescribed;
-        const resolved_left = self.resolveOperand(left, &blocker) orelse {
-            census.bumpUnifySite(site, .unmeasurable);
-            census.bumpUnifySiteBlocker(site, blocker);
-            return;
-        };
-        const resolved_right = self.resolveOperand(right, &blocker) orelse {
-            census.bumpUnifySite(site, .unmeasurable);
-            census.bumpUnifySiteBlocker(site, blocker);
-            return;
-        };
-        if (std.mem.eql(u8, &resolved_left.stored.bytes, &resolved_right.stored.bytes) or
-            std.mem.eql(u8, &resolved_left.unfolded.bytes, &resolved_right.unfolded.bytes))
-        {
-            census.bumpUnifySite(site, .redundant);
-            return;
-        }
-        if (self.representationDecisionCovers(resolved_left, resolved_right)) {
-            census.bumpUnifySite(site, .representation_decision);
-            return;
-        }
-        if (self.openGraphPositionsCover(resolved_left, resolved_right)) {
-            census.bumpUnifySite(site, .redundant);
-            census.bumpUnifySiteOpenOnImport(site);
-            return;
-        }
-        census.bumpUnifySite(site, .informative);
-        self.classifyInformativeSite(site, resolved_left, resolved_right);
-    }
 
     /// Whether every position this site's two sides differ at is one the
     /// graph-built side leaves open.
@@ -6994,11 +5386,8 @@ pub const Rehearsal = struct {
             // of its binders. Anything counted without one came from a path
             // that opened no callee binding at all.
             if (self.hasUnreadyCallee()) {
-                census.bump("rehearsal_binder_unbound_under_unready_callee");
             } else if (self.callees.items.len == 0) {
-                census.bump("rehearsal_binder_unbound_no_callee_open");
             } else {
-                census.bump("rehearsal_binder_unbound_callee_ready");
             }
         }
         census.bumpUnifySiteInformation(site, information);
@@ -7171,16 +5560,6 @@ pub const Rehearsal = struct {
         return .undisposed;
     }
 
-    /// Record that a site builds one graph node out of a placeholder and its
-    /// content rather than relating two independently derived types, so the table
-    /// keeps the node construction the flip deletes outright apart from the
-    /// constraints it has to account for.
-    pub fn noteUnifyConstruction(self: *Rehearsal, site: census.UnifySite) void {
-        if (comptime !census.enabled) return;
-        if (self.disabled) return;
-        census.bumpUnifySite(site, .construction);
-    }
-
     /// Which residual class one operand's empty-tag-union materialization falls
     /// in: `scheme_binder_unbound` when the first checked variable that operand
     /// reaches and this environment does not bind is a generalized binder of a
@@ -7204,9 +5583,7 @@ pub const Rehearsal = struct {
             }
         }
         if (owners > 1) {
-            census.bump("rehearsal_unbound_binder_owned_by_many_schemes");
         } else if (owners == 1) {
-            census.bump("rehearsal_unbound_binder_owned_by_one_scheme");
         }
         for (source.view.schemes) |scheme| {
             for (scheme.generalizedVars(source.view)) |binder| {
@@ -7217,16 +5594,13 @@ pub const Rehearsal = struct {
                 // binder the operand reaches from outside the bound scheme,
                 // which a call-site binding never states (reunify.md 7.3).
                 if (scheme.owner_node == source.owner_node) {
-                    census.bump("rehearsal_unbound_binder_of_translating_scheme");
                 } else if (self.frameForModule(source.module_bytes)) |frame| {
                     // Whether the unnamed binder is generalized by the scheme
                     // the REQUESTING frame specializes. A callee-attributed
                     // operand reaching one is a caller-side position described
                     // as the callee's, not a binding the callee lacks.
                     if (scheme.owner_node == frame.owner_node) {
-                        census.bump("rehearsal_unbound_binder_of_caller_frame_scheme");
                     } else {
-                        census.bump("rehearsal_unbound_binder_of_third_scheme");
                         // Whether the definition owning this binder is itself
                         // specializing somewhere in the active frame stack.
                         // `frameForModule` consults only the innermost frame,
@@ -7241,9 +5615,7 @@ pub const Rehearsal = struct {
                             break;
                         }
                         if (found_outer) {
-                            census.bump("rehearsal_unbound_binder_third_in_outer_frame");
                         } else {
-                            census.bump("rehearsal_unbound_binder_third_no_frame_anywhere");
                         }
                         // Whether the checked data names this definition's
                         // instantiation anywhere in the module the position
@@ -7259,7 +5631,6 @@ pub const Rehearsal = struct {
                                 }
                             }
                             if (named) {
-                                census.bump("rehearsal_unbound_binder_third_has_recorded_site");
                                 // Whether some use expression carries a site for
                                 // BOTH this definition and the scheme the
                                 // operand translates under. Where it does, one
@@ -7281,12 +5652,9 @@ pub const Rehearsal = struct {
                                     if (co_located) break;
                                 }
                                 if (co_located) {
-                                    census.bump("rehearsal_unbound_binder_third_co_located_use");
                                 } else {
-                                    census.bump("rehearsal_unbound_binder_third_separate_use");
                                 }
                             } else {
-                                census.bump("rehearsal_unbound_binder_third_has_no_recorded_site");
                             }
                         }
                         // What kind of definition that third scheme is, which
@@ -7294,15 +5662,13 @@ pub const Rehearsal = struct {
                         // inner generalization boundary, a platform requirement,
                         // or a template scheme with no source owner.
                         switch (scheme.owner_kind) {
-                            .top_level_def => census.bump("rehearsal_unbound_binder_third_top_level"),
-                            .nested_def => census.bump("rehearsal_unbound_binder_third_nested"),
-                            .required_type => census.bump("rehearsal_unbound_binder_third_required"),
-                            .synthetic => census.bump("rehearsal_unbound_binder_third_synthetic"),
+                            .top_level_def => {},
+                            .nested_def => {},
+                            .required_type => {},
+                            .synthetic => {},
                         }
-                        if (scheme.gv_len > 1) census.bump("rehearsal_unbound_binder_third_multi_binder");
                     }
                 } else {
-                    census.bump("rehearsal_unbound_binder_no_frame");
                 }
                 return .scheme_binder_unbound;
             }
@@ -7424,16 +5790,13 @@ pub const Rehearsal = struct {
             for (cursor.view.instantiationSites()) |candidate| {
                 if (candidate.scheme_owner_node != owner) continue;
                 if (found != null) {
-                    census.bump("unique_site_ambiguous");
                     return null;
                 }
                 found = candidate;
             }
             if (found == null) {
-                census.bump("unique_site_absent");
                 return null;
             }
-            census.bump("level_from_unique_site");
             break :site found.?;
         };
 
@@ -7457,7 +5820,6 @@ pub const Rehearsal = struct {
             .captured = &.{},
         }) orelse return null;
         defer chain.release(self.allocator);
-        census.bump("position_bound_by_edge_level");
         var reason: direct_translate.SkipReason = undefined;
         return self.translator.translateUnderEnvironment(
             cursor,
@@ -7694,7 +6056,6 @@ pub const Rehearsal = struct {
                 .missing_backing => Common.invariant("directed instantiation read a nominal with no backing source"),
                 .engine_input_needed => Common.invariant("directed instantiation left a representation position unemitted"),
                 .undisposed_residual => {
-                    census.bump("rehearsal_authoritative_unstated");
                     return null;
                 },
             },
@@ -7895,15 +6256,11 @@ pub const Rehearsal = struct {
         const index = self.siteIndexFor(caller) orelse return error.Unavailable;
         const key = siteKey(use_expr, scheme_owner_node);
         if (index.ambiguous.contains(key)) {
-            census.bump("rehearsal_skip_site_ambiguous");
             return error.SiteAmbiguous;
         }
         const site_index = index.by_edge.get(key) orelse {
-            census.bump("rehearsal_skip_no_site");
             if (index.used_exprs.contains(@intFromEnum(use_expr))) {
-                census.bump("rehearsal_no_site_use_owned_elsewhere");
             } else {
-                census.bump("rehearsal_no_site_use_unrecorded");
             }
             return error.NoSite;
         };
@@ -7971,18 +6328,15 @@ pub const Rehearsal = struct {
     ) void {
         var index: usize = 0;
         while (index < occurrences.overflow) : (index += 1) {
-            census.bump("rehearsal_type_skip_other_occurrence");
         }
         if (occurrences.len == 0) return;
 
         const cursor = self.lookup.cursor(address.module_bytes) orelse {
-            census.bump("rehearsal_type_skip_module_absent");
             return;
         };
         const in_env = std.mem.eql(u8, &address.module_bytes, &frame.env_module_bytes);
         const env_ptr: ?*const direct_translate.BindingEnvironment = if (in_env) frame.environment() else null;
         const owner_node = if (in_env) frame.owner_node else checked.checked_residual_disposition_module_body_owner;
-        if (!in_env) census.bump("rehearsal_type_outside_environment");
 
         var reason: direct_translate.SkipReason = undefined;
         const emitted = self.translator.translateUnderEnvironment(
@@ -7994,15 +6348,15 @@ pub const Rehearsal = struct {
         ) catch |err| switch (err) {
             error.Skip => {
                 switch (reason) {
-                    .engine_input_needed => census.bump("rehearsal_type_skip_engine_input_needed"),
-                    .open_row => census.bump("rehearsal_type_skip_open_row"),
-                    .recursive_cycle => census.bump("rehearsal_type_skip_recursive"),
-                    .pending_or_err => census.bump("rehearsal_type_skip_pending_or_err"),
-                    .numeric_default_unresolved => census.bump("rehearsal_type_skip_numeric_default"),
-                    .malformed_builtin_arity => census.bump("rehearsal_type_skip_malformed_arity"),
-                    .binder_not_found => census.bump("rehearsal_type_skip_binder_not_found"),
-                    .missing_backing => census.bump("rehearsal_type_skip_missing_backing"),
-                    .undisposed_residual => census.bump("rehearsal_type_skip_undisposed_residual"),
+                    .engine_input_needed => {},
+                    .open_row => {},
+                    .recursive_cycle => {},
+                    .pending_or_err => {},
+                    .numeric_default_unresolved => {},
+                    .malformed_builtin_arity => {},
+                    .binder_not_found => {},
+                    .missing_backing => {},
+                    .undisposed_residual => {},
                 }
                 return;
             },
@@ -8014,10 +6368,8 @@ pub const Rehearsal = struct {
         const emitted_digest = self.types.typeDigest(self.program_names, emitted);
         var matched = false;
         for (occurrences.ids[0..occurrences.len]) |sealed| {
-            census.bump("rehearsal_type_compared");
             const sealed_digest = self.types.typeDigest(self.program_names, sealed);
             if (std.mem.eql(u8, &emitted_digest.bytes, &sealed_digest.bytes)) {
-                census.bump("rehearsal_type_match");
                 matched = true;
                 continue;
             }
@@ -8033,12 +6385,10 @@ pub const Rehearsal = struct {
             const emitted_unfolded = self.types.unfoldedDigest(self.program_names, emitted);
             const sealed_unfolded = self.types.unfoldedDigest(self.program_names, sealed);
             if (std.mem.eql(u8, &emitted_unfolded.bytes, &sealed_unfolded.bytes)) {
-                census.bump("rehearsal_type_equal_under_rerooting");
                 matched = true;
                 continue;
             }
             if (matched) {
-                census.bump("rehearsal_type_skip_other_occurrence");
                 continue;
             }
             self.recordMismatch(frame, address, emitted, sealed, emitted_digest, sealed_digest);
@@ -8061,47 +6411,35 @@ pub const Rehearsal = struct {
         // stop the residual class from filling the file, not to hide the rest.
         var beyond_residual_class = true;
         if (representation) {
-            census.bump("rehearsal_type_mismatch_representation");
         } else {
-            census.bump("rehearsal_type_mismatch_logical");
             if (!difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
                 // Both sides carry content, so the comparison cannot say which
                 // is wrong. Checking is the authority on logical types, so ask
                 // whether the SEALED type still agrees with the head checking
                 // recorded at this position (reunify.md 15.1b).
-                self.noteSealedAgainstChecked(address, sealed);
             }
             if (difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
                 beyond_residual_class = false;
-                census.bump("rehearsal_type_mismatch_unbound_residual");
                 if (frame.binders.len == 0) {
-                    census.bump("rehearsal_unbound_residual_env_without_binders");
                 } else {
-                    census.bump("rehearsal_unbound_residual_env_with_binders");
                 }
                 switch (frame.residual_origin) {
-                    .absent => census.bump("rehearsal_unbound_origin_absent"),
-                    .unresolved_request_context => census.bump("rehearsal_unbound_origin_unresolved_context"),
-                    .scheme_binder => census.bump("rehearsal_unbound_origin_scheme_binder"),
-                    .disposed_here => census.bump("rehearsal_unbound_origin_disposed_here"),
-                    .disposed_elsewhere => census.bump("rehearsal_unbound_origin_disposed_elsewhere"),
-                    .undisposed => census.bump("rehearsal_unbound_origin_undisposed"),
-                    .closed_empty_row => census.bump("rehearsal_unbound_origin_closed_empty_row"),
+                    .absent => {},
+                    .unresolved_request_context => {},
+                    .scheme_binder => {},
+                    .disposed_here => {},
+                    .disposed_elsewhere => {},
+                    .undisposed => {},
+                    .closed_empty_row => {},
                 }
                 self.classifyUnboundPosition(frame, address);
-                self.noteWhetherAFrameWillBindIt(address, sealed);
             } else if (difference.left.tag != difference.right.tag) {
-                census.bump("rehearsal_type_mismatch_head_tag");
             } else if (difference.left.entries != difference.right.entries) {
-                census.bump("rehearsal_type_mismatch_row_width");
             } else if (difference.named_field != .not_named and difference.named_field != .equal) {
-                census.bump("rehearsal_type_mismatch_named_identity");
             } else if (difference.depth >= max_difference_depth and
                 difference.left_recursive and difference.right_recursive)
             {
-                census.bump("rehearsal_type_mismatch_recursive_beyond_depth");
             } else {
-                census.bump("rehearsal_type_mismatch_unclassified");
             }
         }
         if (!beyond_residual_class and self.details.items.len >= max_mismatch_details) return;
@@ -8133,13 +6471,11 @@ pub const Rehearsal = struct {
             @enumFromInt(address.type_id),
             if (in_env) frame.environment() else null,
         ) orelse {
-            census.bump("rehearsal_unbound_no_free_variable");
             return;
         };
         for (cursor.view.schemes) |scheme| {
             for (scheme.generalizedVars(cursor.view)) |binder| {
                 if (binder != free) continue;
-                census.bump("rehearsal_unbound_other_scheme_binder");
                 // Whether that scheme is on this frame's lexical chain says which
                 // half is missing: a chain level that does not name the binder
                 // means the level's own binding is short, while a scheme that is
@@ -8153,9 +6489,7 @@ pub const Rehearsal = struct {
                     on_chain = true;
                 }
                 if (on_chain) {
-                    census.bump("rehearsal_unbound_other_scheme_binder_on_chain");
                 } else {
-                    census.bump("rehearsal_unbound_other_scheme_binder_off_chain");
                     // Which direction the two schemes sit in: a scheme whose own
                     // captured pairs name this frame's scheme is nested INSIDE the
                     // specialized body, so its binders are bound by its own use
@@ -8170,9 +6504,7 @@ pub const Rehearsal = struct {
                         inner_of_frame = true;
                     }
                     if (inner_of_frame) {
-                        census.bump("rehearsal_unbound_binder_scheme_inside_frame");
                     } else {
-                        census.bump("rehearsal_unbound_binder_scheme_unrelated");
                     }
                 }
                 return;
@@ -8182,19 +6514,16 @@ pub const Rehearsal = struct {
             if (disposition.type_id != @intFromEnum(free)) continue;
             if (disposition.scheme_owner_node == frame.owner_node) {
                 switch (disposition.kind) {
-                    .contextual => census.bump("rehearsal_unbound_disposed_contextual"),
-                    .uninhabited => census.bump("rehearsal_unbound_disposed_uninhabited"),
+                    .contextual => {},
+                    .uninhabited => {},
                 }
                 return;
             }
             if (disposition.scheme_owner_node == checked.checked_residual_disposition_module_body_owner) {
-                census.bump("rehearsal_unbound_disposed_module_body");
                 return;
             }
-            census.bump("rehearsal_unbound_disposed_other_owner");
             return;
         }
-        census.bump("rehearsal_unbound_undisposed");
     }
 
     /// The first checked variable reachable from `root` that no level of `env`
@@ -8364,7 +6693,6 @@ pub const Rehearsal = struct {
             self.slot_descriptors.put(self.allocator, @intFromEnum(slot), shape.iterator.descriptor) catch return null;
         }
         self.slot_types.put(self.allocator, @intFromEnum(slot), ty) catch return null;
-        census.bump("rehearsal_slots_created");
         return slot;
     }
 
@@ -8417,17 +6745,14 @@ pub const Rehearsal = struct {
         const request_slot = self.slotForEmitted(requested, 0) orelse return;
         const declared_slot = self.slotForEmitted(declared, 0) orelse return;
         if (self.engine.related(request_slot, declared_slot)) {
-            census.bump("rehearsal_interface_already_related");
             return;
         }
         self.engine.relate(request_slot, declared_slot, .component_equality) catch |err| switch (err) {
             error.LogicallyUnequal => {
-                census.bump("rehearsal_interface_relate_rejected");
                 return;
             },
             else => return self.fail(),
         };
-        census.bump("rehearsal_interface_relate_applied");
         self.recordClassFinal(request_slot);
         self.recordClassFinal(declared_slot);
     }
@@ -8439,16 +6764,13 @@ pub const Rehearsal = struct {
     fn sealSlots(self: *Rehearsal) void {
         for (self.slots.items) |slot| {
             const representative = self.engine.find(slot);
-            census.bump("rehearsal_seal_positions");
-            if (representative != slot) census.bump("rehearsal_relations_applied");
             const emitted_descriptor = self.slot_descriptors.get(@intFromEnum(slot)) orelse continue;
             switch (self.engine.shapeOf(representative)) {
                 .iterator => |sealed| {
                     if (!descriptorsAgree(emitted_descriptor, sealed.descriptor)) {
-                        census.bump("rehearsal_seal_descriptor_moved");
                     }
                 },
-                else => census.bump("rehearsal_seal_descriptor_moved"),
+                else => {},
             }
         }
     }
@@ -8476,164 +6798,6 @@ pub const Rehearsal = struct {
         return @enumFromInt(gop.value_ptr.*);
     }
 
-    fn dumpUnresolved(self: *Rehearsal) void {
-        if (comptime !census.enabled) return;
-        if (self.unresolved_details.items.len == 0) return;
-        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
-        var text: std.ArrayList(u8) = .empty;
-        defer text.deinit(self.allocator);
-        for (self.unresolved_details.items) |detail| {
-            const line = std.fmt.allocPrint(
-                self.allocator,
-                "rehearsal_unresolved_detail name={s} module={s} binders={d} skip={s} rule={s}\n",
-                .{
-                    &detail.name,
-                    &std.fmt.bytesToHex(detail.template_module, .lower),
-                    detail.binders,
-                    @tagName(detail.skip),
-                    skipRuleName(detail.skip),
-                },
-            ) catch return;
-            defer self.allocator.free(line);
-            text.appendSlice(self.allocator, line) catch return;
-        }
-        census.appendToFile(raw_path, text.items);
-    }
-
-    /// One line per declared generated rule that produced any edge, so a rule
-    /// that binds and a rule that stays declared-but-unbound are read apart
-    /// (reunify.md section 9.6).
-    fn dumpGeneratedRules(self: *Rehearsal) void {
-        if (comptime !census.enabled) return;
-        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
-        var text: std.ArrayList(u8) = .empty;
-        defer text.deinit(self.allocator);
-        for (self.generated_outcomes, 0..) |outcome, index| {
-            if (outcome.isEmpty()) continue;
-            const rule: GeneratedInstantiationRule = @enumFromInt(index);
-            const line = std.fmt.allocPrint(
-                self.allocator,
-                "rehearsal_generated_rule rule={s} claimed={d} ground={d} unbound={d} witness_agrees={d} witness_differs={d} witness_absent={d} receiver_unusable={d}\n",
-                .{
-                    @tagName(rule),
-                    outcome.claimed,
-                    outcome.ground,
-                    outcome.unbound,
-                    outcome.witness_agrees,
-                    outcome.witness_differs,
-                    outcome.witness_absent,
-                    outcome.receiver_unusable,
-                },
-            ) catch return;
-            defer self.allocator.free(line);
-            text.appendSlice(self.allocator, line) catch return;
-        }
-        if (text.items.len == 0) return;
-        census.appendToFile(raw_path, text.items);
-    }
-
-    /// One line per constraint-replay site that came out informative in this
-    /// compilation, naming what its two sides disagreed about.
-    fn dumpUnifyDetails(self: *Rehearsal) void {
-        if (comptime !census.enabled) return;
-        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
-        var text: std.ArrayList(u8) = .empty;
-        defer text.deinit(self.allocator);
-        for (self.unify_details, 0..) |maybe_detail, index| {
-            const detail = maybe_detail orelse continue;
-            const site: census.UnifySite = @enumFromInt(index);
-            const line = std.fmt.allocPrint(
-                self.allocator,
-                "rehearsal_unify_detail site={s} information={s} left={s}:{d}/{d} right={s}:{d}/{d}" ++
-                    " differs_at_depth={d} {s}:{d}/{d}vs{s}:{d}/{d} named_field={s} recursive={d}/{d}" ++
-                    " residual_side={s} residual_origin={s} residual_state={s}" ++
-                    " residual_module={s} residual_checked_ty={d} residual_position={d}" ++
-                    " residual_rigid={d} residual_numeric_phase={d} residual_row_default={d}" ++
-                    " residual_constraints={d}\n",
-                .{
-                    @tagName(site),
-                    @tagName(detail.information),
-                    @tagName(detail.left.tag),
-                    detail.left.children,
-                    detail.left.entries,
-                    @tagName(detail.right.tag),
-                    detail.right.children,
-                    detail.right.entries,
-                    detail.difference.depth,
-                    @tagName(detail.difference.left.tag),
-                    detail.difference.left.children,
-                    detail.difference.left.entries,
-                    @tagName(detail.difference.right.tag),
-                    detail.difference.right.children,
-                    detail.difference.right.entries,
-                    @tagName(detail.difference.named_field),
-                    @intFromBool(detail.difference.left_recursive),
-                    @intFromBool(detail.difference.right_recursive),
-                    @tagName(detail.residual.side),
-                    @tagName(detail.residual.origin),
-                    @tagName(detail.residual.state),
-                    &std.fmt.bytesToHex(detail.residual.module_prefix, .lower),
-                    detail.residual.checked_ty,
-                    detail.residual.position,
-                    @intFromBool(detail.residual.defaults.rigid),
-                    @intFromBool(detail.residual.defaults.numeric_phase),
-                    @intFromBool(detail.residual.defaults.row),
-                    detail.residual.defaults.constraints,
-                },
-            ) catch return;
-            defer self.allocator.free(line);
-            text.appendSlice(self.allocator, line) catch return;
-        }
-        if (text.items.len == 0) return;
-        census.appendToFile(raw_path, text.items);
-    }
-
-    fn dumpDetails(self: *Rehearsal) void {
-        if (comptime !census.enabled) return;
-        self.dumpGeneratedRules();
-        self.dumpUnresolved();
-        self.dumpUnifyDetails();
-        if (self.details.items.len == 0) return;
-        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
-        var text: std.ArrayList(u8) = .empty;
-        defer text.deinit(self.allocator);
-        for (self.details.items) |detail| {
-            const module_hex = std.fmt.bytesToHex(detail.module_prefix, .lower);
-            const emitted_hex = std.fmt.bytesToHex(detail.rehearsal_digest.bytes[0..8].*, .lower);
-            const graph_hex = std.fmt.bytesToHex(detail.graph_digest.bytes[0..8].*, .lower);
-            const line = std.fmt.allocPrint(
-                self.allocator,
-                "rehearsal_mismatch_detail module={s} checked_ty={d} representation={d} binders={d} rehearsal={s}/{s}:{d}/{d} graph={s}/{s}:{d}/{d} differs_at_depth={d} {s}:{d}/{d}vs{s}:{d}/{d} named_field={s} recursive={d}/{d}\n",
-                .{
-                    &module_hex,
-                    detail.type_id,
-                    @intFromBool(detail.representation),
-                    detail.binder_count,
-                    &emitted_hex,
-                    @tagName(detail.rehearsal_head.tag),
-                    detail.rehearsal_head.children,
-                    detail.rehearsal_head.entries,
-                    &graph_hex,
-                    @tagName(detail.graph_head.tag),
-                    detail.graph_head.children,
-                    detail.graph_head.entries,
-                    detail.difference.depth,
-                    @tagName(detail.difference.left.tag),
-                    detail.difference.left.children,
-                    detail.difference.left.entries,
-                    @tagName(detail.difference.right.tag),
-                    detail.difference.right.children,
-                    detail.difference.right.entries,
-                    @tagName(detail.difference.named_field),
-                    @intFromBool(detail.difference.left_recursive),
-                    @intFromBool(detail.difference.right_recursive),
-                },
-            ) catch return;
-            defer self.allocator.free(line);
-            text.appendSlice(self.allocator, line) catch return;
-        }
-        census.appendToFile(raw_path, text.items);
-    }
 };
 
 /// How many positional arguments an emitted receiver carries, or null when the
@@ -9364,24 +7528,6 @@ test "only the declared rules that carry a checked receiver bind from one" {
     // Every declared rule is in exactly one of the two lists, so a rule added
     // later cannot slip in without declaring which it is.
     try testing.expectEqual(generated_rule_count, unbound.len + bound.len);
-}
-
-test "a seal trace joins one node's checked provenance to its sealed id" {
-    var trace = SealTrace.init(testing.allocator);
-    defer trace.deinit();
-
-    const address = CheckedAddress{ .module_bytes = [_]u8{3} ** 32, .type_id = 17 };
-    trace.noteProvenance(4, address);
-    trace.noteSealed(4, @enumFromInt(9));
-
-    // A repeated provenance keeps the first address; a repeated seal keeps the
-    // latest committed id, which is what lowering carries forward.
-    trace.noteProvenance(4, .{ .module_bytes = [_]u8{5} ** 32, .type_id = 18 });
-    trace.noteSealed(4, @enumFromInt(11));
-
-    const recorded = trace.provenance.get(4) orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(@as(u32, 17), recorded.type_id);
-    try testing.expectEqual(@as(Type.TypeId, @enumFromInt(11)), trace.sealed.get(4).?);
 }
 
 test "an edge identity key separates one use expression's callees" {

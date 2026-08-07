@@ -18,7 +18,6 @@ const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const census = @import("census.zig");
 const policy = @import("../representation_policy.zig");
-const representation_mirror = @import("representation_mirror.zig");
 const spec_rehearsal = @import("spec_rehearsal.zig");
 
 const Allocator = std.mem.Allocator;
@@ -414,22 +413,14 @@ pub const InstGraph = struct {
     /// slots proves that recursion grows the representation rather than merely
     /// recurring over a fixed iterator.
     recursive_argument_slots: std.ArrayList(NodeId),
-    /// Debug-only, env-gated shadow of the representation closure engine
-    /// (reunify.md section 10, Slice 7 Stage B). Null unless the shadow is
-    /// compiled in and `ROC_REUNIFY_SHADOW` is set. It mirrors this graph's
-    /// representation decisions into engine slots and Debug-asserts the sealed
-    /// outcome; it never selects lowering behavior.
-    mirror: ?*representation_mirror.RepresentationMirror = null,
     /// Debug-only, env-gated record of which checked type each instantiated node
     /// came from and which immutable id it sealed to (reunify.md section 11.2,
     /// Slice 7 flip-prep). The per-specialization rehearsal owns the storage and
     /// attaches it while this graph lowers; null on every other path, and read by
     /// nothing inside this module.
-    trace: ?*spec_rehearsal.SealTrace = null,
     /// Debug/probe-only: the rehearsal that owns `trace`, so the seal exit can
     /// compare what it produces against directed translation the same way the
     /// live exit does (reunify.md 13.2 step 2a).
-    seal_probe: ?*spec_rehearsal.Rehearsal = null,
 
     /// Allocation-free scratch for exact generated-private containment walks.
     /// Node ids are dense, so an epoch array replaces a fresh hash set on every
@@ -478,7 +469,6 @@ pub const InstGraph = struct {
             .generated_private_visit_epoch = 0,
             .generated_private_cache = collections.DenseMap(NodeId, GeneratedPrivateCacheEntry).init(allocator),
         };
-        graph.mirror = representation_mirror.RepresentationMirror.maybeCreate(graph);
         return graph;
     }
 
@@ -500,10 +490,6 @@ pub const InstGraph = struct {
 
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
-        if (self.mirror) |mirror| {
-            mirror.sealAndCompare();
-            mirror.destroy();
-        }
         var views = self.node_snapshots.valueIterator();
         while (views.next()) |list| {
             list.deinit(allocator);
@@ -764,7 +750,6 @@ pub const InstGraph = struct {
                 named.def.iterator_depth = item.depth;
                 try self.setContent(node, .{ .named = named });
             }
-            if (self.mirror) |mirror| mirror.producerFinalizedRepresentation(node);
         }
     }
 
@@ -1516,183 +1501,6 @@ pub const InstGraph = struct {
     pub fn classMemberIterator(self: *InstGraph, node: NodeId) ClassMemberIterator {
         const root = self.find(node);
         return .{ .graph = self, .current = self.class_member_head.items[@intFromEnum(root)] };
-    }
-
-    /// Debug/probe-only: the checked position and creation context recorded for
-    /// any node joined to this one, since unification means a read may be handed
-    /// any member of the class (reunify.md 13.2 step 2a).
-    pub fn classContexted(self: *InstGraph, node: NodeId) ?spec_rehearsal.ContextedProvenance {
-        const trace = self.trace orelse return null;
-        if (trace.contextedFor(@intFromEnum(node))) |record| return record;
-        var it = self.classMemberIterator(node);
-        while (it.next()) |member| {
-            if (trace.contextedFor(@intFromEnum(member))) |record| return record;
-        }
-        return null;
-    }
-
-    /// Debug/probe-only: compare the type this seal produces for a node against
-    /// what directed translation computes for the checked position the node
-    /// stands for. The seal exit is 553490 of the 628603 reads body lowering
-    /// makes, so leaving it unmeasured leaves the coverage claim mostly
-    /// unmade (reunify.md 13.2 step 2a).
-    pub fn noteSealExitRead(self: *InstGraph, node: NodeId, sealed: Type.TypeId) void {
-        if (comptime !census.enabled) return;
-        if (self.classNamesChecked(node)) {
-            census.bump("graph_exit_read_names_checked");
-        } else {
-            census.bump("graph_exit_read_derived");
-            self.noteDerivedReadKind(node);
-            return;
-        }
-        const probe = self.seal_probe orelse return;
-        const record = self.classContexted(node) orelse {
-            census.bump("exit_read_no_contexted_provenance");
-            return;
-        };
-        probe.compareSealedAgainstDirected(record, sealed, self, node);
-    }
-
-    /// Debug/probe-only: whether any node joined to this one stands for a
-    /// checked position. Unification means a read can land on any member of a
-    /// class, so asking only the node handed over understates how many reads
-    /// name a checked position (reunify.md 13.2 step 2a).
-    pub fn classNamesChecked(self: *InstGraph, node: NodeId) bool {
-        const trace = self.trace orelse return false;
-        if (trace.isFromChecked(@intFromEnum(node))) return true;
-        var it = self.classMemberIterator(node);
-        while (it.next()) |member| {
-            if (trace.isFromChecked(@intFromEnum(member))) return true;
-        }
-        return false;
-    }
-
-    /// Debug/probe-only: what a read that names no checked position actually
-    /// is. Naming the shapes says whether the remainder is the
-    /// compiler-generated content section 9.6 covers by declared rule, or
-    /// something the design has no account of (reunify.md 13.2 step 2a).
-    pub fn noteDerivedReadKind(self: *InstGraph, node: NodeId) void {
-        if (comptime !census.enabled) return;
-        self.noteDerivedReadComponents(node);
-        if (self.structureGroundsInChecked(node)) |grounded| {
-            if (grounded) {
-                census.bump("derived_structure_grounded");
-            } else {
-                census.bump("derived_structure_ungrounded");
-            }
-        } else {
-            census.bump("derived_structure_unallocatable");
-        }
-        switch (self.content(node)) {
-            .redirect => census.bump("derived_read_redirect"),
-            .unresolved => census.bump("derived_read_unresolved"),
-            .primitive => census.bump("derived_read_primitive"),
-            .list => census.bump("derived_read_list"),
-            .box => census.bump("derived_read_box"),
-            .tuple => census.bump("derived_read_tuple"),
-            .func => census.bump("derived_read_func"),
-            .tag_union => census.bump("derived_read_tag_union"),
-            .record => census.bump("derived_read_record"),
-            else => census.bump("derived_read_other"),
-        }
-    }
-
-    /// Debug/probe-only: whether a node's whole structure bottoms out in nodes
-    /// that name checked positions — itself nameable, or a composite every
-    /// component of which recursively satisfies the same. Iterative with an
-    /// explicit visited set, so a self-referential type is answered rather than
-    /// rejected by an arbitrary depth cap (reunify.md 15.10); revisiting a node
-    /// already on the walk is co-inductively grounded, since a cycle asks
-    /// nothing further. Returns null only if the probe could not allocate.
-    fn structureGroundsInChecked(self: *InstGraph, root: NodeId) ?bool {
-        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer visited.deinit();
-        var stack = std.ArrayList(NodeId).empty;
-        defer stack.deinit(self.allocator);
-        stack.append(self.allocator, root) catch return null;
-        while (stack.pop()) |node| {
-            const seen = visited.getOrPut(node) catch return null;
-            if (seen.found_existing) continue;
-            if (self.classNamesChecked(node)) continue;
-            switch (self.content(node)) {
-                .func => |function| {
-                    for (function.args) |arg| stack.append(self.allocator, arg) catch return null;
-                    stack.append(self.allocator, function.ret) catch return null;
-                },
-                .tuple => |items| for (items) |item| {
-                    stack.append(self.allocator, item) catch return null;
-                },
-                .record => |record| for (record.fields) |field| {
-                    stack.append(self.allocator, field.ty) catch return null;
-                },
-                .tag_union => |tag_row| for (tag_row.tags) |tag| for (tag.payloads) |payload| {
-                    stack.append(self.allocator, payload) catch return null;
-                },
-                .named => |named| {
-                    for (named.args) |arg| stack.append(self.allocator, arg) catch return null;
-                    if (named.backing) |backing| stack.append(self.allocator, backing.node) catch return null;
-                },
-                .list, .box => |elem| stack.append(self.allocator, elem) catch return null,
-                .primitive, .zst, .empty_record, .empty_tag_union, .erased => {},
-                else => return false,
-            }
-        }
-        return true;
-    }
-
-    /// Debug/probe-only: whether every component of a composite read that names
-    /// no checked position itself names one. A composite whose parts all name
-    /// positions is correct by construction once its parts are, so it owes no
-    /// declared rule; one with an unnameable part does (reunify.md 13.2 2a-i).
-    pub fn noteDerivedReadComponents(self: *InstGraph, node: NodeId) void {
-        if (comptime !census.enabled) return;
-        var total: usize = 0;
-        var nameable: usize = 0;
-        switch (self.content(node)) {
-            .func => |function| {
-                for (function.args) |arg| {
-                    total += 1;
-                    if (self.classNamesChecked(arg)) nameable += 1;
-                }
-                total += 1;
-                if (self.classNamesChecked(function.ret)) nameable += 1;
-            },
-            .tuple => |items| for (items) |item| {
-                total += 1;
-                if (self.classNamesChecked(item)) nameable += 1;
-            },
-            .record => |record| for (record.fields) |field| {
-                total += 1;
-                if (self.classNamesChecked(field.ty)) nameable += 1;
-            },
-            .tag_union => |tag_row| for (tag_row.tags) |tag| for (tag.payloads) |payload| {
-                total += 1;
-                if (self.classNamesChecked(payload)) nameable += 1;
-            },
-            .named => |named| {
-                for (named.args) |arg| {
-                    total += 1;
-                    if (self.classNamesChecked(arg)) nameable += 1;
-                }
-                if (named.backing) |backing| {
-                    total += 1;
-                    if (self.classNamesChecked(backing.node)) nameable += 1;
-                }
-            },
-            else => {
-                census.bump("derived_components_not_composite");
-                return;
-            },
-        }
-        if (total == 0) {
-            census.bump("derived_components_none");
-        } else if (nameable == total) {
-            census.bump("derived_components_all_nameable");
-        } else if (nameable == 0) {
-            census.bump("derived_components_none_nameable");
-        } else {
-            census.bump("derived_components_partly_nameable");
-        }
     }
 
     /// Collision authority for open function-interface lookup buckets.
@@ -2860,15 +2668,6 @@ pub const InstGraph = struct {
         // undisposed residual either side, changed nothing that a directed
         // read could not have stated on its own; the informative remainder is
         // what the residual resolver must keep (reunify.md 13.2e).
-        if (comptime census.enabled) {
-            if (self.find(a) == self.find(b)) {
-                census.bump("relation_noop_same_class");
-            } else if (self.classHasResidual(a) or self.classHasResidual(b)) {
-                census.bump("relation_resolves_residual");
-            } else {
-                census.bump("relation_joins_two_stated");
-            }
-        }
         try self.unifyRootsTransitively(a, b, false);
     }
 
@@ -3206,11 +3005,9 @@ pub const InstGraph = struct {
                         return;
                     }
                     const iterator_relation = self.iteratorRelation(left_named, right_named);
-                    if (self.mirror) |mirror| mirror.mirrorIteratorJoin(left, right, iterator_relation);
                     switch (iterator_relation) {
                         .ordinary => {},
                         .public_minted => {
-                            census.bump("iter_public_minted");
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
                                 Common.invariant("minted/public iterator pair reached Monotype instantiation without a public item argument");
                             }
@@ -3226,7 +3023,6 @@ pub const InstGraph = struct {
                             return;
                         },
                         .forced_dynamic => {
-                            census.bump("iter_forced_dynamic");
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
                                 Common.invariant("forced-dynamic iterator reached Monotype instantiation without a public item argument");
                             }
@@ -3242,7 +3038,6 @@ pub const InstGraph = struct {
                             return;
                         },
                         .minted_join => {
-                            census.bump("iter_minted_join");
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
                                 Common.invariant("minted iterator join reached Monotype instantiation without a public item argument");
                             }
@@ -3313,14 +3108,12 @@ pub const InstGraph = struct {
                                     // Two equal-identity nominals whose backings the
                                     // graph relates: the section 10.3 sanctioned
                                     // nominal-backing edge, mirrored into the engine.
-                                    if (self.mirror) |mirror| mirror.nominalBackingRelated(left, right);
                                     try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
                                 } else {
                                     // Same-identity named heads whose backing the
                                     // graph selects by producer authority rather
                                     // than relating: the section 10.3
                                     // generated-evidence selection.
-                                    if (self.mirror) |mirror| mirror.evidenceSelection(left, right);
                                     const private_is_left = left_backing.authority == .generated_private;
                                     const private_is_right = right_backing.authority == .generated_private;
                                     if (private_is_left == private_is_right) {
@@ -3413,12 +3206,10 @@ pub const InstGraph = struct {
         other: NodeId,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
-        census.bump("nominal_backing_root_join");
         // reunify.md section 10.5, Slice 7 Stage B: this generic
         // try-the-backing-on-head-mismatch path is dying bookkeeping the flip
         // deletes, not a section 10.3 edge, so it is counted when it fires
         // rather than mirrored into the representation closure engine.
-        census.bump("nominal_generic_mismatch_path_fired");
         if (named_content != .named) unreachable;
         const named = named_content.named;
         const declared_backing = named.backing orelse
@@ -3573,7 +3364,6 @@ pub const InstGraph = struct {
     fn unifyRowWithEmpty(self: *InstGraph, row: NodeId, empty: NodeId, kind: RowKind) Allocator.Error!void {
         switch (kind) {
             .tag_union => {
-                census.bump("empty_tag_union_yield");
                 const flat = try self.flattenTagRow(row);
                 if (flat.tags.len != 0) Common.invariant("instantiation unified a non-empty tag union with an empty tag union");
                 try self.unify(flat.ext, empty);
@@ -3783,15 +3573,12 @@ pub const InstGraph = struct {
             try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
         } else if (only_left.items.len == 0) {
             // Left lacks tags: its extension absorbs the right-only tags.
-            census.bump("one_sided_tag_row_merge");
             try self.writeOrQueueTagRest(flat_left.ext, only_right.items, flat_right.ext, pending);
             merged_ext = flat_right.ext;
         } else if (only_right.items.len == 0) {
-            census.bump("one_sided_tag_row_merge");
             try self.writeOrQueueTagRest(flat_right.ext, only_left.items, flat_left.ext, pending);
             merged_ext = flat_left.ext;
         } else {
-            census.bump("two_sided_tag_row_merge");
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
                 var rest = std.ArrayList(InstTag).empty;
@@ -3893,15 +3680,12 @@ pub const InstGraph = struct {
         if (only_left.items.len == 0 and only_right.items.len == 0) {
             try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
         } else if (only_left.items.len == 0) {
-            census.bump("one_sided_record_row_merge");
             try self.writeOrQueueRecordRest(flat_left.ext, only_right.items, flat_right.ext, pending);
             merged_ext = flat_right.ext;
         } else if (only_right.items.len == 0) {
-            census.bump("one_sided_record_row_merge");
             try self.writeOrQueueRecordRest(flat_right.ext, only_left.items, flat_left.ext, pending);
             merged_ext = flat_left.ext;
         } else {
-            census.bump("two_sided_record_row_merge");
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
                 var rest = std.ArrayList(InstField).empty;
@@ -4316,23 +4100,8 @@ pub const GraphTypeFinals = struct {
         return ty;
     }
 
-    /// Seal one node, and at a depth-zero entry compare the type it produces
-    /// against what directed translation computes for the position the node
-    /// stands for. The comparison uses the SEALED RESULT rather than asking the
-    /// graph again, because asking re-enters sealing (reunify.md 13.2 2a).
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
-        const outermost = census.enabled and self.seal_depth == 0;
-        if (comptime census.enabled) {
-            if (self.seal_depth == 0) census.bump("graph_exit_seal_entry");
-            census.bump("graph_exit_seal_node");
-            self.seal_depth += 1;
-        }
-        defer if (comptime census.enabled) {
-            self.seal_depth -= 1;
-        };
-        const sealed = try self.sealNodeInner(raw_node);
-        if (outermost) self.graph.noteSealExitRead(raw_node, sealed);
-        return sealed;
+        return try self.sealNodeInner(raw_node);
     }
 
     fn sealNodeInner(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
@@ -4371,7 +4140,6 @@ pub const GraphTypeFinals = struct {
                 if (occurrence_held) {
                     try self.graph.types.excludeFromDedup(built);
                     try self.graph.types.noteCommittedSeal(built);
-                    if (self.graph.trace) |trace| trace.noteSealed(@intFromEnum(node), built);
                     return built;
                 }
                 const shared = try self.graph.types.internFilledNode(self.graph.name_store, built);
@@ -4383,7 +4151,6 @@ pub const GraphTypeFinals = struct {
                 // Debug/probe-only: attribute the seal to the node that produced
                 // it, so the per-specialization rehearsal can join it to the
                 // checked position the node was instantiated from.
-                if (self.graph.trace) |trace| trace.noteSealed(@intFromEnum(node), shared);
                 return shared;
             },
         }
@@ -4947,7 +4714,6 @@ const OpenFunctionInterfaceShapeWriter = struct {
 
 fn materializeUnresolved(variable: InstVariable) Type.Content {
     if (variable.numeric_default_phase) |phase| {
-        census.bump("numeric_default_applied");
         const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
             Common.invariant("checking-finalized numeric variable reached Monotype unresolved");
         return switch (target) {
@@ -4956,7 +4722,6 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
         };
     }
     if (variable.row_default) |row_default| {
-        census.bump("row_default_applied");
         switch (row_default) {
             .empty_record => return .{ .record = Type.Span.empty() },
             .empty_tag_union => return .{ .tag_union = Type.Span.empty() },
@@ -4964,7 +4729,6 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
     }
     return switch (variable.origin) {
         .checked_variable => blk: {
-            census.bump("plain_variable_to_empty_tag_union");
             break :blk .{ .tag_union = Type.Span.empty() };
         },
         .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),

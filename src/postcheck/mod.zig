@@ -21,7 +21,6 @@ pub const Monotype = struct {
     /// Debug-only, env-gated shadow that drives the representation closure
     /// engine from the graph and Debug-asserts the sealed outcome (reunify.md
     /// section 10, Slice 7 Stage B). Off by default; never selects lowering.
-    pub const RepresentationMirror = @import("monotype/representation_mirror.zig");
     /// The parallel, lookup-inert FinalSpecId identity computed on the spec
     /// builder at markReady (reunify.md 11.1/11.5, Slice 7 Stage C). Never a
     /// reuse or cache key; carried as inert data the Stage D cache serializes.
@@ -60,8 +59,6 @@ pub const RepresentationClosure = @import("representation_closure.zig");
 /// Debug-only, state-isolated shadow of directed scheme instantiation
 /// (reunify.md Slice 5). Not wired into production output; off by default.
 pub const ReunifyShadow = struct {
-    pub const LogicalIdentity = @import("reunify_shadow/logical_identity.zig");
-    pub const Shadow = @import("reunify_shadow/shadow.zig");
 };
 /// Decision-tree match compiler shared by both LIR lowerers.
 pub const MatchTree = @import("match_tree.zig");
@@ -80,7 +77,6 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/specialize.zig"));
     std.testing.refAllDecls(@import("monotype/census.zig"));
     std.testing.refAllDecls(@import("monotype/direct_translate.zig"));
-    std.testing.refAllDecls(@import("monotype/representation_mirror.zig"));
     std.testing.refAllDecls(@import("monotype/final_spec_id.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/lift.zig"));
@@ -95,8 +91,6 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("lambda_mono/eval.zig"));
     std.testing.refAllDecls(@import("representation_policy.zig"));
     std.testing.refAllDecls(@import("representation_closure.zig"));
-    std.testing.refAllDecls(@import("reunify_shadow/logical_identity.zig"));
-    std.testing.refAllDecls(@import("reunify_shadow/shadow.zig"));
     std.testing.refAllDecls(@import("match_tree.zig"));
     std.testing.refAllDecls(@import("solved_inline.zig"));
     std.testing.refAllDecls(@import("solved_lir_lower.zig"));

@@ -33,10 +33,6 @@ const fsid = @import("final_spec_id.zig");
 
 const names = check.CheckedNames;
 
-/// Whether the parallel FinalSpecId identity is computed and censused. It is a
-/// measurement path (reunify.md Slice 7 Stage C): compiled in only where the
-/// census is, so release lowering carries the same zero-cost inert field.
-const final_spec_enabled = census.enabled;
 
 /// The collision witness the FinalSpecId census keeps per FinalSpecId: the
 /// erased solved logical skeleton the first record sealed. A later record with
@@ -261,10 +257,8 @@ pub const SpecBuilder = struct {
     refined_digest_shadow: if (identity_shadow_enabled) std.ArrayList(RefinedDigestShadow) else void,
     /// The parallel FinalSpecId computer (reunify.md Slice 7 Stage C). Its
     /// erasure store persists across records so solved skeletons compare by id.
-    final_spec_computer: if (final_spec_enabled) fsid.Computer else void,
     /// FinalSpecId -> the first record's collision witness, so a later record
     /// with the same FinalSpecId is classified equivalent or divergent.
-    final_spec_by_id: if (final_spec_enabled) std.AutoHashMap([32]u8, FinalWitness) else void,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -283,16 +277,10 @@ pub const SpecBuilder = struct {
             .counters = null,
             .reserved_identities = if (identity_shadow_enabled) .empty else {},
             .refined_digest_shadow = if (identity_shadow_enabled) .empty else {},
-            .final_spec_computer = if (final_spec_enabled) fsid.Computer.init(allocator) else {},
-            .final_spec_by_id = if (final_spec_enabled) std.AutoHashMap([32]u8, FinalWitness).init(allocator) else {},
         };
     }
 
     pub fn deinit(self: *SpecBuilder) void {
-        if (final_spec_enabled) {
-            self.final_spec_by_id.deinit();
-            self.final_spec_computer.deinit();
-        }
         if (identity_shadow_enabled) {
             self.refined_digest_shadow.deinit(self.allocator);
             self.reserved_identities.deinit(self.allocator);
@@ -522,14 +510,12 @@ pub const SpecBuilder = struct {
         {
             return;
         }
-        census.bump("request_refined");
         const digest_changed = !digestEql(record.request_fn_ty_digest, request_fn_ty_digest);
         record.request_fn_ty = request_fn_ty;
         record.request_fn_ty_digest = request_fn_ty_digest;
         record.solved_fn_ty = request_fn_ty;
         record.solved_fn_ty_digest = request_fn_ty_digest;
         if (digest_changed) {
-            census.bump("request_refined_digest_changed");
             if (identity_shadow_enabled) {
                 try self.refined_digest_shadow.append(self.allocator, .{ .spec = spec, .digest = request_fn_ty_digest });
             }
@@ -580,48 +566,7 @@ pub const SpecBuilder = struct {
         record.solved_fn_ty_digest = solved_fn_ty_digest;
         record.status = .ready;
         if (!digestEql(solved_fn_ty_digest, record.request_fn_ty_digest)) {
-            census.bump("solved_digest_differs_from_request");
             try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, solved_fn_ty_digest, spec);
-        }
-        try self.computeFinalSpec(record);
-    }
-
-    /// Compute the record's parallel, lookup-inert FinalSpecId and census it
-    /// (reunify.md 11.1/11.5, Slice 7 Stage C). Compiled out of builds without
-    /// the census, so release lowering carries the field as an unchanged zero.
-    /// The FinalSpecId is never a reuse or cache key.
-    fn computeFinalSpec(self: *SpecBuilder, record: *Ast.SpecRecord) std.mem.Allocator.Error!void {
-        if (comptime final_spec_enabled) {
-            var computed = (try self.final_spec_computer.compute(record.*, self.types, self.names)) orelse {
-                census.bump("final_spec_id_skipped");
-                return;
-            };
-            // The Stage C record carries only the scalar identity; the sealed
-            // input and output digest lists are Stage D cache data recomputed at
-            // serialize time, so they are released here.
-            defer computed.deinit(self.allocator);
-            record.final_spec = .{
-                .final_spec_id = computed.final_spec_id,
-                .logical_identity_digest = computed.logical_identity_digest,
-                .evidence_digest = .{},
-                .output_solved_digest = computed.output_solved_digest,
-                .computed = true,
-            };
-            census.bump("final_spec_id_computed");
-
-            const gop = try self.final_spec_by_id.getOrPut(computed.final_spec_id.bytes);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = .{ .solved_logical = computed.solved_logical };
-                return;
-            }
-            const prior = gop.value_ptr.*;
-            if (prior.solved_logical == null or computed.solved_logical == null) {
-                census.bump("final_spec_id_collisions_solved_skipped");
-            } else if (prior.solved_logical.? == computed.solved_logical.?) {
-                census.bump("final_spec_id_collisions_equivalent");
-            } else {
-                census.bump("final_spec_id_collisions_divergent");
-            }
         }
     }
 

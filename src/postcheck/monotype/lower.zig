@@ -16,7 +16,6 @@ const serialize = @import("serialize.zig");
 const census = @import("census.zig");
 const direct_translate = @import("direct_translate.zig");
 const spec_rehearsal = @import("spec_rehearsal.zig");
-const reunify_shadow = @import("../reunify_shadow/shadow.zig");
 
 const InstGraph = solve.InstGraph;
 const InstNode = solve.InstNode;
@@ -427,7 +426,6 @@ pub fn run(
     // store's committed-seal sink to the builder so the probe compares the full
     // sealed population (reunify.md section 9, Slice 7 Stage A). Disconnected on
     // every non-probe lowering, so seal collection stays inert.
-    if (reunify_shadow.shouldRun()) program.types.committed_census = &builder.sealed_population;
     // The sink points into the builder, which every exit of this function
     // deinitializes; disconnecting on every path keeps the pointer from
     // outliving it.
@@ -507,14 +505,12 @@ pub fn run(
     // Debug-only, state-isolated reunify shadow (reunify.md Slice 5): runs
     // strictly after the sealed program above, reads only immutable output, and
     // is off unless ROC_REUNIFY_SHADOW is set.
-    if (reunify_shadow.shouldRun()) builder.runReunifyShadow() catch {};
 
     // Debug-only, state-isolated directed stored-form translation probe
     // (reunify.md Slice 7 Stage A): runs after the sealed program above, emits
     // into a mutable snapshot of the output store so no id is allocated in the
     // authoritative pool, and only compares deterministic digests. Off unless
     // ROC_REUNIFY_SHADOW is set. Stage E repoints lowering onto direct_translate.
-    if (reunify_shadow.shouldRun()) builder.runDirectTranslateProbe() catch {};
 
     // Disconnect the probe sink so the returned program's type store never holds
     // a pointer into the builder's soon-freed population set.
@@ -3574,9 +3570,9 @@ const Builder = struct {
                 .template_scheme = template.schemeId(),
                 .stored_request_callable = lower_fn_ty,
             }),
-            .provided => rehearsal.attachSpecializationGraph(graph),
+            .provided => {},
         };
-        defer if (self.rehearsal) |rehearsal| rehearsal.endSpecialization(graph);
+        defer if (self.rehearsal) |rehearsal| rehearsal.endSpecialization();
         var body_draft_storage = BodyDraftStore.init(self.allocator);
         defer body_draft_storage.deinit();
         const body_draft = &body_draft_storage;
@@ -3614,7 +3610,6 @@ const Builder = struct {
         // Debug/probe-only: every position this specialization sealed is now
         // final, so compare it against the rehearsal's own emission before the
         // graph is destroyed (reunify.md Slice 7 flip-prep step b).
-        if (self.rehearsal) |rehearsal| rehearsal.compareSpecialization(graph);
         try self.finishReservedTemplateBody(pending, sealed.ids, sealed.root_ty.?);
         return reservation.def;
     }
@@ -3704,11 +3699,6 @@ const Builder = struct {
             if (self.rehearsal) |rehearsal| rehearsal.retractConsumerInputs(floor);
         };
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, lower_fn_ty);
-        // reunify.md section 11.1, Slice 7 Stage B: reserve argument/result
-        // representation slots before body discovery so the shadow can measure
-        // which reserved positions gain representation information as the body
-        // lowers. Debug-only, off unless ROC_REUNIFY_SHADOW.
-        if (graph.mirror) |mirror| mirror.reserveInterface(root_node);
         self.active_template_root = .{
             .graph = graph,
             .family = DraftTemplateFamilyAddress.init(template_ref, method_scope.key, source_fn_key),
@@ -3735,8 +3725,6 @@ const Builder = struct {
         // The comparison runs after the body: a mint the body produced has
         // reached the frame's return by now, which the start-of-frame
         // emission could not carry.
-        body_ctx.measureSpecRootParity(template.checked_fn_root, lower_fn_ty);
-        body_ctx.measureValueParity(lower_fn_ty);
         const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
@@ -3749,7 +3737,6 @@ const Builder = struct {
                 ),
             };
         };
-        if (graph.mirror) |mirror| mirror.measureInterfaceGain();
         return .{
             .reservation = reservation,
             .fn_template = fn_template,
@@ -3843,21 +3830,12 @@ const Builder = struct {
                 };
                 if (exact_interface or partial_recursive_allowed) {
                     if (active_recursive_edge) {
-                        // The specialization re-requested itself, so its interface
-                        // gains are recursive openness, not the non-recursive
-                        // openness the section 11 measurement isolates.
-                        if (source_ctx.graph.mirror) |mirror| mirror.markInterfaceRecursive();
                         try source_ctx.graph.unifyRecursiveFunctionInterface(
                             active_root.request_fn_node,
                             active_root.initial_request_arg_classes,
                             request_fn_node,
                         );
                     } else {
-                        source_ctx.noteUnifySite(
-                            .draft_template_recursive_root_to_request,
-                            active_root.request_fn_node,
-                            request_fn_node,
-                        );
                         try source_ctx.graph.unify(active_root.request_fn_node, request_fn_node);
                     }
                     if (!source_ctx.graph.sameFunctionInterface(active_root.request_fn_node, request_fn_node)) {
@@ -3905,9 +3883,7 @@ const Builder = struct {
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
         } else null;
         if (resolved_lookup_address != null) {
-            census.bump("template_dedup_request_resolved");
         } else {
-            census.bump("template_dedup_request_unresolved");
         }
         if (resolved_lookup_address) |address| {
             if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
@@ -3951,11 +3927,6 @@ const Builder = struct {
                     request_fn_node,
                 );
             } else {
-                source_ctx.noteUnifySite(
-                    .draft_template_spec_to_request,
-                    spec.request_fn_node,
-                    request_fn_node,
-                );
                 try source_ctx.graph.unify(spec.request_fn_node, request_fn_node);
             }
             if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
@@ -4109,7 +4080,6 @@ const Builder = struct {
                 }
                 try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
             } else {
-                source_ctx.noteUnifySite(.draft_template_root_to_request, root_node, request_fn_node);
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
@@ -4941,58 +4911,6 @@ const Builder = struct {
         Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
     }
 
-    /// Assemble the sealed inputs the reunify shadow reads and run it
-    /// (reunify.md Slice 5). Everything it touches is immutable output; it
-    /// writes to its own store only. Any resource failure ends the shadow with
-    /// no effect on the returned program.
-    fn runReunifyShadow(self: *Builder) Allocator.Error!void {
-        var modules = std.ArrayList(reunify_shadow.ShadowModule).empty;
-        defer modules.deinit(self.allocator);
-        var module_index = std.AutoHashMap([32]u8, usize).init(self.allocator);
-        defer module_index.deinit();
-
-        var roots = std.ArrayList(reunify_shadow.ConcreteRoot).empty;
-        defer roots.deinit(self.allocator);
-
-        var it = self.type_cache.iterator();
-        while (it.next()) |entry| {
-            const address = entry.key_ptr.*;
-            const gop = try module_index.getOrPut(address.module_bytes);
-            if (!gop.found_existing) {
-                const mv = self.moduleForDigest(.{ .bytes = address.module_bytes });
-                gop.value_ptr.* = modules.items.len;
-                try modules.append(self.allocator, .{
-                    .key_bytes = mv.key.bytes,
-                    .view = mv.types,
-                    .source_names = mv.names,
-                });
-            }
-            try roots.append(self.allocator, .{
-                .module_index = gop.value_ptr.*,
-                .checked_ty = @enumFromInt(address.type_id),
-                .mono_ty = entry.value_ptr.*,
-            });
-        }
-
-        var scheme_sources = [_]reunify_shadow.SchemeSource{.{
-            .module_bytes = self.root_view.key.bytes,
-            .store = &self.modules.root.module.checked_types,
-            .source_names = checked.importedNames(self.root_view),
-        }};
-
-        // An imported-scheme site resolves its defining scheme entirely from the
-        // consuming module's own checked store, via its projected imported-scheme
-        // table (reunify.md 7.1, Slice 6), so no defining-module view is carried here.
-        reunify_shadow.run(self.allocator, .{
-            .program_store = &self.program.types,
-            .program_names = &self.program.names,
-            .concrete_modules = modules.items,
-            .concrete_roots = roots.items,
-            .scheme_sources = &scheme_sources,
-            .program_specs = self.program.specsView(),
-        });
-    }
-
     /// Translate the module cursor a directed translation reads a module by from
     /// a Builder module view.
     fn directTranslateCursor(view: ModuleView) direct_translate.ModuleCursor {
@@ -5205,47 +5123,6 @@ const Builder = struct {
         }
     }
 
-    /// Record one checked position whose directed instantiation differs from the
-    /// type the graph solved for it, bounded so a corpus run cannot write an
-    /// unbounded log. Measurement only (reunify.md section 13 Slice 7).
-    fn noteSeamDivergence(
-        self: *Builder,
-        view: ModuleView,
-        checked_ty: checked.CheckedTypeId,
-        direct_ty: Type.TypeId,
-        graph_ty: Type.TypeId,
-        binding: spec_rehearsal.Rehearsal.PositionBinding,
-        callee_context: bool,
-    ) void {
-        if (comptime !census.enabled) return;
-        if (self.seam_divergences_noted >= 32) return;
-        self.seam_divergences_noted += 1;
-        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
-        const module_hex = std.fmt.bytesToHex(view.key.bytes[0..8].*, .lower);
-        var direct_text: std.ArrayList(u8) = .empty;
-        defer direct_text.deinit(self.allocator);
-        var graph_text: std.ArrayList(u8) = .empty;
-        defer graph_text.deinit(self.allocator);
-        self.describeMonoType(&direct_text, direct_ty, 0) catch return;
-        self.describeMonoType(&graph_text, graph_ty, 0) catch return;
-        const line = std.fmt.allocPrint(
-            self.allocator,
-            "seam_divergence module={s} name={s} checked_ty={d} payload={s} binding={s} callee_ctx={d} direct={s} graph={s}\n",
-            .{
-                &module_hex,
-                view.module_env.module_name,
-                @intFromEnum(checked_ty),
-                @tagName(checkedPayload(view, checked_ty)),
-                @tagName(binding),
-                @intFromBool(callee_context),
-                direct_text.items,
-                graph_text.items,
-            },
-        ) catch return;
-        defer self.allocator.free(line);
-        census.appendToFile(raw_path, line);
-    }
-
     fn monoTypeCarriesRepresentation(self: *Builder, root: Type.TypeId) Allocator.Error!bool {
         var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
         defer visited.deinit();
@@ -5337,135 +5214,6 @@ const Builder = struct {
                 .type_id = @intFromEnum(named.named_type.ty),
                 .from_type_cache = false,
             };
-        }
-    }
-
-    /// Directed stored-form translation probe (reunify.md Slice 7 Stage A). Over
-    /// the widened sealed population, translate each entry's concrete checked
-    /// source directly into a mutable snapshot of the output store and compare the
-    /// stored digest with the graph's. A mismatch on a representation-free type is
-    /// a translation bug (`mismatch_logical`, which must be zero); a mismatch on a
-    /// type carrying iterator/generated content is a representation difference
-    /// (`mismatch_representation`) that, with the `engine_input_needed` skip class,
-    /// bounds what step (b)'s closure engine must supply. State-isolated: the
-    /// snapshot owns its own storage and no id is allocated in the output pool.
-    fn runDirectTranslateProbe(self: *Builder) Allocator.Error!void {
-        var snapshot = try self.program.types.cloneMutable(self.allocator);
-        defer snapshot.deinit();
-
-        const resolver = direct_translate.Resolver{
-            .context = self,
-            .vtable = &direct_translate_vtable,
-        };
-        var translator = direct_translate.Translator.init(self.allocator, &snapshot, &self.program.names, resolver);
-        defer translator.deinit();
-
-        // The stored type cache is complete here, so the seam's diverging
-        // positions can now be told apart into ones this lowering instantiated
-        // and template positions a use edge's actuals make concrete.
-        if (self.rehearsal) |rehearsal| rehearsal.reportDivergedPositionKinds();
-
-        var population = std.AutoHashMap(Type.TypeId, ProbeEntry).init(self.allocator);
-        defer population.deinit();
-        try self.collectProbePopulation(&population);
-
-        var it = population.iterator();
-        while (it.next()) |entry| {
-            const mono_ty = entry.key_ptr.*;
-            const source = entry.value_ptr.*;
-            census.bump("direct_probe_population");
-
-            // A widened sealed variant is comparable only when its checked source
-            // is a concrete type lowering translated (a `type_cache` key). A sealed
-            // named type whose provenance is a scheme template node instead is not
-            // ground-translatable: the instantiation binding step (b) supplies is
-            // exactly what would make it concrete, so it is counted, not compared.
-            if (!source.from_type_cache and
-                !self.type_cache.contains(.{ .module_bytes = source.module_bytes, .type_id = source.type_id }))
-            {
-                census.bump("direct_stored_skip_uninstantiated_template");
-                if (try self.monoTypeCarriesRepresentation(mono_ty)) {
-                    census.bump("direct_stored_uninstantiated_carries_representation");
-                }
-                continue;
-            }
-
-            const view = self.moduleForDigestOrNull(source.module_bytes) orelse {
-                census.bump("direct_stored_skip_binder_not_found");
-                continue;
-            };
-            const cursor = directTranslateCursor(view);
-            const checked_ty: checked.CheckedTypeId = @enumFromInt(source.type_id);
-
-            // reunify.md section 10: whether this root's content includes
-            // representation the layer EMITTED, rather than content read out of
-            // the checked module. The comparison below then also states its
-            // outcome for exactly that population, so a sealed slot's stored type
-            // is compared against the graph's sealed type at the same position.
-            const opened_before = translator.representationPositionsOpened();
-            var reason: direct_translate.SkipReason = undefined;
-            const translated = translator.translateGroundRoot(cursor, checked_ty, &reason) catch |err| switch (err) {
-                error.Skip => {
-                    switch (reason) {
-                        .recursive_cycle => census.bump("direct_stored_skip_recursive"),
-                        .open_row => census.bump("direct_stored_skip_open_row"),
-                        .engine_input_needed => census.bump("direct_stored_skip_engine_input_needed"),
-                        .pending_or_err => census.bump("direct_stored_skip_pending_or_err"),
-                        .numeric_default_unresolved => census.bump("direct_stored_skip_numeric_default"),
-                        .malformed_builtin_arity => census.bump("direct_stored_skip_malformed_arity"),
-                        .binder_not_found => census.bump("direct_stored_skip_binder_not_found"),
-                        .missing_backing => census.bump("direct_stored_skip_missing_backing"),
-                        .undisposed_residual => census.bump("direct_stored_skip_undisposed_residual"),
-                    }
-                    continue;
-                },
-                else => |other| return other,
-            };
-
-            const emitted_representation = translator.representationPositionsOpened() != opened_before;
-            if (emitted_representation) census.bump("emission_root_compared");
-
-            const translated_digest = snapshot.typeDigest(&self.program.names, translated);
-            const graph_digest = self.program.types.typeDigest(&self.program.names, mono_ty);
-            if (std.mem.eql(u8, &translated_digest.bytes, &graph_digest.bytes)) {
-                census.bump("direct_stored_match");
-                if (emitted_representation) census.bump("emission_root_match");
-                continue;
-            }
-
-            // A stored digest encodes a recursive back reference by the position
-            // on the visiting stack the walk entered the cycle at, so one rooted
-            // graph reached through two entry paths digests two ways (reunify.md
-            // section 8.3). The graph roots such a knot wherever unification
-            // joined two nodes, which differs between call sites of one nominal;
-            // the directed translation roots it at the nominal every time. Equal
-            // unfoldings say the two are the same type under a different
-            // rooting, which is the same notion the rehearsal counts as
-            // `rehearsal_type_equal_under_rerooting`: a deliberate difference in
-            // the emitted stored form, not a content difference.
-            const translated_unfolded = snapshot.unfoldedDigest(&self.program.names, translated);
-            const graph_unfolded = self.program.types.unfoldedDigest(&self.program.names, mono_ty);
-            if (std.mem.eql(u8, &translated_unfolded.bytes, &graph_unfolded.bytes)) {
-                census.bump("direct_stored_equal_under_rerooting");
-                if (emitted_representation) census.bump("emission_root_equal_under_rerooting");
-                continue;
-            }
-
-            census.bump("direct_stored_mismatch");
-            if (emitted_representation) census.bump("emission_root_mismatch");
-            if (try self.monoTypeCarriesRepresentation(mono_ty)) {
-                census.bump("direct_stored_mismatch_representation");
-            } else if (source.from_type_cache) {
-                // The authoritative comparison: a concrete root's faithful ground
-                // translation differing with no representation content is a real
-                // translation bug. This counter must stay zero.
-                census.bump("direct_stored_mismatch_logical");
-            } else {
-                // A sealed variant of a faithful (type_cache-keyed) source that
-                // differs with no representation content used a different
-                // disposition context than the ground walk — not a translation bug.
-                census.bump("direct_stored_skip_context_variant");
-            }
         }
     }
 
@@ -6222,11 +5970,6 @@ const Builder = struct {
                     const anchor = &source_ctx.draft.nested_specs.items[anchor_raw];
                     const candidate_request = try source_ctx.graph.functionNodes(spec.request_fn_node);
                     try source_ctx.graph.markRecursiveValueSlot(candidate_request.ret);
-                    source_ctx.noteUnifySite(
-                        .draft_nested_capture_anchor_to_spec,
-                        anchor.request_fn_node,
-                        spec.request_fn_node,
-                    );
                     try source_ctx.graph.unify(anchor.request_fn_node, spec.request_fn_node);
                 } else {
                     capture_anchor = raw_spec;
@@ -6274,7 +6017,6 @@ const Builder = struct {
                 }
             } else {
                 const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
-                source_ctx.noteUnifySite(.draft_nested_spec_to_request, spec_fn_node, request_fn_node);
                 try source_ctx.graph.unify(spec_fn_node, request_fn_node);
                 if (!source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node)) {
                     Common.invariant("draft nested request did not join its complete function interface");
@@ -6369,16 +6111,13 @@ const Builder = struct {
         const nested_frame_open = if (self.rehearsal) |rehearsal| frame: {
             const nested_scheme = nested_scheme: {
                 if (source_ctx.view.types.schemeIdForOwnerNode(@intFromEnum(expr_id))) |scheme_id| {
-                    census.bump("rehearsal_nested_scheme_by_root");
                     break :nested_scheme scheme_id;
                 }
                 for (source_ctx.view.types.schemes) |scheme| {
                     if (scheme.root == source_fn_ty) {
-                        census.bump("rehearsal_nested_scheme_by_root");
                         break :nested_scheme scheme.id;
                     }
                 }
-                census.bump("rehearsal_nested_scheme_absent");
                 break :frame false;
             };
             _ = rehearsal.claimRequestEdgeForUse(@intFromEnum(fn_id), source_ctx.view.key.bytes, expr_id);
@@ -6400,7 +6139,6 @@ const Builder = struct {
         const root_node = try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
             const owned_body_node = try nested_ctx.lowerExprTypeNode(expr_id);
-            nested_ctx.noteUnifySite(.draft_nested_root_to_body, root_node, owned_body_node);
             try nested_ctx.graph.unify(root_node, owned_body_node);
             try nested_ctx.instantiateTemplateDispatchRelations(
                 nested_ctx.view.templates.get(nested_ctx.owner_template.template),
@@ -7325,11 +7063,9 @@ const Builder = struct {
                 // digests identically however its mints resolved.
                 if (self.rehearsal) |rehearsal| {
                     if (rehearsal.currentFrameRequestRoot()) |directed_root| {
-                        census.bump("deferred_identity_keyed_directed");
                         break :digest self.specializationTypeDigest(directed_root);
                     }
                 }
-                census.bump("deferred_identity_keyed_sealed");
                 break :digest sealed_request_digest;
             };
             spec.directed_request_digest = request_digest;
@@ -7402,33 +7138,6 @@ const Builder = struct {
                     .template_scheme = frame_template.schemeId(),
                     .stored_request_callable = fn_ty,
                 });
-                if (comptime census.enabled) {
-                    if (rehearsal.currentFrameRequestRoot()) |directed_root| {
-                        const directed_digest = self.specializationTypeDigest(directed_root);
-                        if (std.mem.eql(u8, &directed_digest.bytes, &sealed_request_digest.bytes)) {
-                            census.bump("deferred_identity_directed_agrees");
-                        } else if (self.program.types.typeEql(&self.program.names, directed_root, fn_ty) catch false) {
-                            census.bump("deferred_identity_directed_eql_not_digest");
-                        } else {
-                            census.bump("deferred_identity_directed_differs");
-                        }
-                        // The identity digest above erases representation by
-                        // design; this second comparison keeps it, so the
-                        // population whose requests carry representation the
-                        // directed statement does not — minted tiers, erased
-                        // callables — is measured rather than invisible
-                        // (reunify.md 13.2e).
-                        const directed_full = self.program.types.typeDigest(&self.program.names, directed_root);
-                        const sealed_full = self.program.types.typeDigest(&self.program.names, fn_ty);
-                        if (std.mem.eql(u8, &directed_full.bytes, &sealed_full.bytes)) {
-                            census.bump("deferred_representation_directed_agrees");
-                        } else {
-                            census.bump("deferred_representation_directed_differs");
-                        }
-                    } else {
-                        census.bump("deferred_identity_directed_absent");
-                    }
-                }
             }
 
             spec.resolved_slot = loaded_slot orelse blk: {
@@ -14043,21 +13752,7 @@ const BodyContext = struct {
     fn activeTypeFromNode(self: *BodyContext, node: NodeId) Allocator.Error!Type.TypeId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        // Debug/probe-only: one of the two exits by which body lowering obtains
-        // a Monotype from the graph (reunify.md 13.2 step 2a). Counting them is
-        // what makes seam coverage a fraction rather than a direction.
-        census.bump("graph_exit_active_type_view");
-        const graph_ty = try self.graph.activeTypeViewForNode(node);
-        if (comptime census.enabled) {
-            if (self.graph.classNamesChecked(node)) {
-                census.bump("graph_exit_read_names_checked");
-                self.measureExitRead(node, graph_ty);
-            } else {
-                census.bump("graph_exit_read_derived");
-                self.graph.noteDerivedReadKind(node);
-            }
-        }
-        return graph_ty;
+        return try self.graph.activeTypeViewForNode(node);
     }
 
     fn activeTypeFromCell(self: *BodyContext, cell: DraftTypeCell) Allocator.Error!Type.TypeId {
@@ -14437,25 +14132,9 @@ const BodyContext = struct {
     fn addExprWithTypeCell(self: *BodyContext, ty: DraftTypeCell, data: BodyExprData) Allocator.Error!DraftExprId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
-        // Birth-sealing was tried and refuted here: even a node that is
-        // resolved and snapshot-free at birth carries class membership that
-        // later unifications settle (the lift's capture-slot invariant caught
-        // the divergence), so a cell's value transfers at the SEAL — the
-        // freezing law at the cell layer. The Debug classification stays: the
-        // resolved-at-birth fraction is the population the deletion's
-        // recipe swap serves without any replacement computation.
-        if (comptime census.enabled) {
-            switch (ty) {
-                .graph_node => |node| {
-                    if (try self.graph.typeIsResolved(node)) {
-                        census.bump("cell_born_sealed_candidate");
-                    } else {
-                        census.bump("cell_born_open");
-                    }
-                },
-                else => {},
-            }
-        }
+        // A cell's value transfers at the SEAL, not at birth: even a node that
+        // is resolved and snapshot-free when the cell is created carries class
+        // membership that later unifications settle.
         const id = try self.draft.addExprWithSource(
             .{ .ty = ty, .data = data },
             self.builder.program.current_loc,
@@ -16192,41 +15871,6 @@ const BodyContext = struct {
         };
     }
 
-    /// Measure, before the constraint runs, whether directed translation already
-    /// makes this site's two sides one type (reunify.md section 13 Slice 7).
-    /// Measurement only: the constraint that follows still decides lowering, and
-    /// the answer recorded here can never select it.
-    fn measureUnifySite(
-        self: *BodyContext,
-        site: census.UnifySite,
-        left: spec_rehearsal.UnifyOperand,
-        right: spec_rehearsal.UnifyOperand,
-    ) void {
-        if (comptime !census.enabled) return;
-        const rehearsal = self.builder.rehearsal orelse return;
-        rehearsal.measureUnifySite(site, left, right);
-    }
-
-    /// Measure a site whose two sides are both graph nodes, reading each node's
-    /// directed description from the graph itself.
-    fn noteUnifySite(
-        self: *BodyContext,
-        site: census.UnifySite,
-        left_node: NodeId,
-        right_node: NodeId,
-    ) void {
-        if (comptime !census.enabled) return;
-        self.measureUnifySite(site, self.nodeUnifyOperand(left_node), self.nodeUnifyOperand(right_node));
-    }
-
-    /// Record that a site builds one graph node rather than relating two
-    /// independently derived types.
-    fn noteUnifyConstruction(self: *BodyContext, site: census.UnifySite) void {
-        if (comptime !census.enabled) return;
-        const rehearsal = self.builder.rehearsal orelse return;
-        rehearsal.noteUnifyConstruction(site);
-    }
-
     /// Constrain a checked type to a Monotype: instantiate the checked type
     /// into the graph and relate it to the (linked or imported) Monotype node.
     /// The relation routes a Monotype carrying generated-private
@@ -16239,11 +15883,6 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        self.measureUnifySite(
-            .constrain_checked_to_mono,
-            self.checkedUnifyOperand(checked_ty),
-            .{ .sealed = mono_ty },
-        );
         _ = try checkedMonoRequestNode(self.graph, try self.instNode(checked_ty), try self.graph.importMono(mono_ty));
     }
 
@@ -16263,16 +15902,13 @@ const BodyContext = struct {
 
     /// Constrain a checked type to a draft cell, naming which relation the
     /// constraint states and how directed translation reads the cell's side.
-    fn constrainTypeToCellAt(
+    fn constrainTypeToCell(
         self: *BodyContext,
-        site: census.UnifySite,
         checked_ty: checked.CheckedTypeId,
         cell: DraftTypeCell,
-        cell_operand: spec_rehearsal.UnifyOperand,
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        self.measureUnifySite(site, self.checkedUnifyOperand(checked_ty), cell_operand);
         try self.graph.unify(try self.instNode(checked_ty), try cell.toGraphNode(self.graph));
     }
 
@@ -16286,33 +15922,13 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         cell: DraftTypeCell,
     ) Allocator.Error!void {
-        try self.constrainCheckedInterfaceToCellAt(
-            .constrain_checked_to_cell,
-            checked_ty,
-            cell,
-            self.cellUnifyOperand(cell),
-        );
-    }
-
-    /// The same relation, with the caller naming which relation it states and
-    /// how directed translation reads the value side. A record field read is the
-    /// case that gains from this: the graph builds it as a node derived from the
-    /// receiver, while the directed side names it as the same read off the
-    /// receiver's own translation.
-    fn constrainCheckedInterfaceToCellAt(
-        self: *BodyContext,
-        site: census.UnifySite,
-        checked_ty: checked.CheckedTypeId,
-        cell: DraftTypeCell,
-        cell_operand: spec_rehearsal.UnifyOperand,
-    ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
         const value_node = try cell.toGraphNode(self.graph);
         if (try self.graph.containsGeneratedPrivate(value_node)) {
             try self.graph.relateOpaqueInterface(try self.freshInstNode(checked_ty), value_node);
         } else {
-            try self.constrainTypeToCellAt(site, checked_ty, cell, cell_operand);
+            try self.constrainTypeToCell(checked_ty, cell);
         }
     }
 
@@ -16329,11 +15945,6 @@ const BodyContext = struct {
         if (self.graph != right_ctx.graph) {
             Common.invariant("checked type relation crossed specialization graphs");
         }
-        self.measureUnifySite(
-            .constrain_checked_to_checked,
-            self.checkedUnifyOperand(left_ty),
-            right_ctx.checkedUnifyOperand(right_ty),
-        );
         try self.graph.unify(try self.instNode(left_ty), try right_ctx.instNode(right_ty));
     }
 
@@ -16481,7 +16092,6 @@ const BodyContext = struct {
         )) |final| {
             return .{ .sealed = final };
         }
-        census.bump("type_cell_graph_route");
         return DraftTypeCell.fromGraphNode(try self.instNode(checked_ty));
     }
 
@@ -16562,317 +16172,6 @@ const BodyContext = struct {
         );
     }
 
-    /// Debug/probe-only: whether directed emission of a specialization's own
-    /// checked function root, read under the frame that specialization holds,
-    /// states the very request function type the graph built for it. This is
-    /// the certification the request seam needs before its construction moves
-    /// off the graph: the request IS the callee's instantiated interface, so
-    /// agreement here says the whole per-argument relation the graph runs to
-    /// build one is redundant (reunify.md sections 7.2, 11).
-    /// Debug/probe-only: whether the frame's provisional request emission,
-    /// sealed through the class finals the body's relations recorded, states
-    /// the very request value the graph sealed — the value-side certification
-    /// the definition's recorded type needs before it moves off the graph
-    /// (reunify.md 10.6, 11.5).
-    fn measureValueParity(self: *BodyContext, request_fn_ty: Type.TypeId) void {
-        if (comptime !census.enabled) return;
-        const rehearsal = self.builder.rehearsal orelse return;
-        const sealed = rehearsal.currentFrameRequestSealed() orelse {
-            census.bump("value_parity_declined");
-            return;
-        };
-        const types = &self.builder.program.types;
-        const name_store = &self.builder.program.names;
-        const left = types.typeDigest(name_store, sealed);
-        const right = types.typeDigest(name_store, request_fn_ty);
-        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
-            census.bump("value_parity_agree");
-            return;
-        }
-        if (types.typeEql(name_store, sealed, request_fn_ty) catch false) {
-            census.bump("value_parity_eql_not_digest");
-            return;
-        }
-        census.bump("value_parity_diverge");
-        if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-            std.debug.print("VALUE-DIVERGE stage={s}\n  directed: ", .{
-                self.builder.rehearsal.?.currentFrameValueStage(),
-            });
-            debugTypeSummary(types, name_store, sealed, 0);
-            std.debug.print("\n  sealed:   ", .{});
-            debugTypeSummary(types, name_store, request_fn_ty, 0);
-            std.debug.print("\n", .{});
-        }
-    }
-
-    fn measureSpecRootParity(self: *BodyContext, checked_fn_root: checked.CheckedTypeId, request_fn_ty: Type.TypeId) void {
-        if (comptime !census.enabled) return;
-        const rehearsal = self.builder.rehearsal orelse return;
-        // The requesting context's own emission of this specialization's
-        // instantiated callable, resolved when its frame began from the
-        // claimed edge. An ambient innermost edge can belong to an unrelated
-        // deferred lowering, so only the frame's own emission answers here.
-        const directed = rehearsal.currentFrameRequestRootFinal() orelse {
-            census.bump("spec_root_parity_declined");
-            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                std.debug.print("PARITY-DECLINE checked_root={d} skip={s}\n", .{
-                    @intFromEnum(checked_fn_root),
-                    rehearsal.currentFrameSkipName(),
-                });
-            }
-            return;
-        };
-        const types = &self.builder.program.types;
-        const name_store = &self.builder.program.names;
-        const left = types.typeDigest(name_store, directed);
-        const right = types.typeDigest(name_store, request_fn_ty);
-        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
-            census.bump("spec_root_parity_agree");
-            return;
-        }
-        census.bump("spec_root_parity_diverge");
-        if (types.typeEql(name_store, directed, request_fn_ty) catch false) {
-            census.bump("spec_root_parity_eql_not_digest");
-            if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-                std.debug.print("PARITY-EQL-ONLY checked_root={d}\n  directed: ", .{@intFromEnum(checked_fn_root)});
-                debugTypeSummary(types, name_store, directed, 0);
-                std.debug.print("\n  sealed:   ", .{});
-                debugTypeSummary(types, name_store, request_fn_ty, 0);
-                std.debug.print("\n", .{});
-            }
-            return;
-        }
-        if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-            const ret_id: i64 = switch (checkedPayload(self.view, checked_fn_root)) {
-                .function => |f| @intFromEnum(f.ret),
-                else => -1,
-            };
-            std.debug.print("PARITY-DIVERGE checked_root={d} ret_id={d}\n  directed: ", .{ @intFromEnum(checked_fn_root), ret_id });
-            debugTypeSummary(types, name_store, directed, 0);
-            std.debug.print("\n  sealed:   ", .{});
-            debugTypeSummary(types, name_store, request_fn_ty, 0);
-            std.debug.print("\n", .{});
-        }
-    }
-
-    fn debugTypeSummary(types: *const Type.Store, name_store: *const names.NameStore, ty: Type.TypeId, depth: usize) void {
-        if (depth > 7) {
-            std.debug.print("..", .{});
-            return;
-        }
-        switch (types.get(ty)) {
-            .primitive => |primitive| {
-                std.debug.print("{s}", .{@tagName(primitive)});
-                return;
-            },
-            .tag_union => |span| {
-                std.debug.print("tu[", .{});
-                const tags = types.tagSpan(span);
-                const len = GuardedList.borrowLen(tags);
-                var index: usize = 0;
-                while (index < len) : (index += 1) {
-                    const tag = GuardedList.at(tags, index);
-                    if (index != 0) std.debug.print(" ", .{});
-                    std.debug.print("{s}(", .{name_store.tagLabelText(tag.name)});
-                    const payloads = types.span(tag.payloads);
-                    const plen = GuardedList.borrowLen(payloads);
-                    var pi: usize = 0;
-                    while (pi < plen) : (pi += 1) {
-                        if (pi != 0) std.debug.print(",", .{});
-                        debugTypeSummary(types, name_store, GuardedList.at(payloads, pi), depth + 1);
-                    }
-                    std.debug.print(")", .{});
-                }
-                std.debug.print("]", .{});
-                return;
-            },
-            else => {},
-        }
-        switch (types.get(ty)) {
-            .named => |named| {
-                std.debug.print("N[{s} ir={s} k={s} d={d} g={s} topo={s} args(", .{
-                    name_store.typeNameText(named.def.type_name),
-                    @tagName(named.def.iterator_representation),
-                    @tagName(named.def.iterator_kind),
-                    named.def.iterator_depth,
-                    if (named.def.generated != null) "y" else "-",
-                    if (named.def.iterator_topology != null) "y" else "-",
-                });
-                const args = types.span(named.args);
-                const len = GuardedList.borrowLen(args);
-                var index: usize = 0;
-                while (index < len) : (index += 1) {
-                    if (index != 0) std.debug.print(",", .{});
-                    debugTypeSummary(types, name_store, GuardedList.at(args, index), depth + 1);
-                }
-                std.debug.print(")]", .{});
-            },
-            .func => |func| {
-                std.debug.print("fn(", .{});
-                const args = types.span(func.args);
-                const len = GuardedList.borrowLen(args);
-                var index: usize = 0;
-                while (index < len) : (index += 1) {
-                    if (index != 0) std.debug.print(",", .{});
-                    debugTypeSummary(types, name_store, GuardedList.at(args, index), depth + 1);
-                }
-                std.debug.print(")->", .{});
-                debugTypeSummary(types, name_store, func.ret, depth + 1);
-            },
-            else => |payload| std.debug.print("{s}", .{@tagName(payload)}),
-        }
-    }
-
-    /// Debug/probe-only: measure one read at a graph exit against directed
-    /// translation, using the checked position the node was instantiated from
-    /// (reunify.md 13.2 step 2a). A node built under a different binding
-    /// context than the one this read holds is counted rather than translated,
-    /// because translating it under the wrong environment would compare against
-    /// a value the checker never assigned there.
-    fn measureExitRead(self: *BodyContext, node: NodeId, graph_ty: Type.TypeId) void {
-        if (comptime !census.enabled) return;
-        const record = self.graph.classContexted(node) orelse {
-            census.bump("exit_read_no_contexted_provenance");
-            return;
-        };
-        // A node made under a different binding context than this read holds is
-        // measured all the same. Refusing them cost 97.9% agreement on both
-        // corpora while hiding the rest, so the refusal protected nothing and
-        // suppressed coverage; a read whose directed answer differs is a
-        // divergence to explain, not one to decline (reunify.md 13.2 2a).
-        if (record.callee_context != self.callee_context or
-            record.scope_depth != @as(u32, @intCast(self.instantiation.decl_scopes.items.len)))
-        {
-            census.bump("exit_read_context_differed_measured");
-        }
-        if (!moduleBytesEqual(record.address.module_bytes, self.view.key.bytes)) {
-            // The position belongs to another module's checked store. Its own
-            // address names it, so it is measured under that address rather
-            // than declined; only rebuilding the address from this context's
-            // view would have been wrong (reunify.md 13.2 2a).
-            census.bump("exit_read_module_differed_measured");
-        }
-        self.measureSeamReadAtAddress(
-            record.address,
-            graph_ty,
-            record.inside_request_edge,
-            record.request_edge,
-        );
-    }
-
-    /// Debug/probe-only: the seam comparison for a position named by its own
-    /// checked address rather than by one rebuilt from this body's view.
-    fn measureSeamReadAtAddress(
-        self: *BodyContext,
-        address: spec_rehearsal.CheckedAddress,
-        graph_ty: Type.TypeId,
-        inside_edge: ?bool,
-        entering_edge: ?spec_rehearsal.RequestEdgeName,
-    ) void {
-        if (comptime !census.enabled) return;
-        const instantiation = self.builder.rehearsal orelse return;
-        var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
-        const probed = instantiation.typeForCheckedPositionWithEdge(
-            address,
-            self.callee_context,
-            &binding,
-            entering_edge,
-        ) catch null;
-        const direct_ty = probed orelse {
-            census.bump("seam_direct_absent");
-            return;
-        };
-        const types = &self.builder.program.types;
-        const name_store = &self.builder.program.names;
-        const left = types.typeDigest(name_store, direct_ty);
-        const right = types.typeDigest(name_store, graph_ty);
-        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
-            census.bump("seam_direct");
-            return;
-        }
-        const left_unfolded = types.unfoldedDigest(name_store, direct_ty);
-        const right_unfolded = types.unfoldedDigest(name_store, graph_ty);
-        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
-            census.bump("seam_direct");
-            return;
-        }
-        census.bump("seam_direct_diverged");
-        if (inside_edge) |inside| {
-            if (inside) {
-                census.bump("diverged_node_inside_request_edge");
-            } else {
-                census.bump("diverged_node_outside_request_edge");
-            }
-        }
-        instantiation.noteDivergenceEdgeSite(address, self.callee_context, entering_edge);
-        instantiation.noteDivergenceFreeVariableClass(address, graph_ty);
-    }
-
-    /// Debug/probe-only: compare what directed translation computes for one
-    /// checked position against what this specialization's graph gives it, for
-    /// every read that resolves a checked type to a Monotype (reunify.md
-    /// sections 9, 13 Slice 7). Reads nothing back into lowering.
-    fn measureSeamRead(self: *BodyContext, checked_ty: checked.CheckedTypeId, graph_ty: Type.TypeId) void {
-        self.measureSeamReadCorrelated(checked_ty, graph_ty, null, null);
-    }
-
-    /// The same comparison, additionally reporting whether a read that diverged
-    /// was of a node made inside an edge-naming request scope — the correlation
-    /// that says whether carrying the binding from that edge could close the
-    /// gap (reunify.md 13.2 2a).
-    fn measureSeamReadCorrelated(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        graph_ty: Type.TypeId,
-        inside_edge: ?bool,
-        entering_edge: ?spec_rehearsal.RequestEdgeName,
-    ) void {
-        if (comptime census.enabled) {
-            if (self.builder.rehearsal) |instantiation| {
-                const address: spec_rehearsal.CheckedAddress = .{
-                    .module_bytes = self.view.key.bytes,
-                    .type_id = @intFromEnum(checked_ty),
-                };
-                var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
-                const probed = instantiation.typeForCheckedPositionWithEdge(
-                    address,
-                    self.callee_context,
-                    &binding,
-                    entering_edge,
-                ) catch null;
-                if (probed) |direct_ty| {
-                    const types = &self.builder.program.types;
-                    const name_store = &self.builder.program.names;
-                    const left = types.typeDigest(name_store, direct_ty);
-                    const right = types.typeDigest(name_store, graph_ty);
-                    if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
-                        census.bump("seam_direct");
-                    } else {
-                        const left_unfolded = types.unfoldedDigest(name_store, direct_ty);
-                        const right_unfolded = types.unfoldedDigest(name_store, graph_ty);
-                        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
-                            census.bump("seam_direct");
-                        } else {
-                            census.bump("seam_direct_diverged");
-                            if (inside_edge) |inside| {
-                                if (inside) {
-                                    census.bump("diverged_node_inside_request_edge");
-                                } else {
-                                    census.bump("diverged_node_outside_request_edge");
-                                }
-                            }
-                            instantiation.noteDivergenceEdgeSite(address, self.callee_context, entering_edge);
-                            instantiation.noteDivergenceFreeVariableClass(address, graph_ty);
-                            self.builder.noteSeamDivergence(self.view, checked_ty, direct_ty, graph_ty, binding, self.callee_context);
-                        }
-                    }
-                } else {
-                    census.bump("seam_direct_absent");
-                }
-            }
-        }
-    }
-
     fn graphFunctionNode(
         self: *BodyContext,
         args: []const NodeId,
@@ -16918,51 +16217,12 @@ const BodyContext = struct {
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        const address = self.typeAddress(checked_ty);
-        // Debug/probe-only: remember which checked position this node stands for,
-        // so the per-specialization rehearsal can compare its own emission
-        // against whatever this node seals to (reunify.md Slice 7 flip-prep).
-        // Only this specialization's own root context qualifies: a nested
-        // instantiation scope or a per-call context binds the same checked id
-        // under a different binding, which this specialization's environment
-        // does not describe.
-        const entering_edge = if (self.builder.rehearsal) |rehearsal|
-            rehearsal.innermostRequestEdge()
-        else
-            null;
-        const inside_edge = entering_edge != null;
-        if (self.graph.trace) |trace| {
-            trace.noteFromChecked(@intFromEnum(placeholder));
-            trace.noteContexted(@intFromEnum(placeholder), .{
-                .address = .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
-                .callee_context = self.callee_context,
-                .scope_depth = @intCast(self.instantiation.decl_scopes.items.len),
-                .inside_request_edge = inside_edge,
-                .request_edge = entering_edge,
-            });
-        }
-        if (self.spec_root_context and self.instantiation.decl_scopes.items.len == 0) {
-            if (self.graph.trace) |trace| trace.noteProvenance(@intFromEnum(placeholder), .{
-                .module_bytes = address.module_bytes,
-                .type_id = address.type_id,
-            });
-        }
         try self.putScopedNode(scoped_ty, placeholder);
         const built = try self.instNodeContent(checked_ty);
         // Both nodes stand for this checked position: the placeholder the
         // scope memoizes and the content it unifies with. A read can land on
         // either representative, so marking only one understates how many
         // reads name a checked position (reunify.md 13.2 step 2a).
-        if (self.graph.trace) |trace| {
-            trace.noteFromChecked(@intFromEnum(built));
-            trace.noteContexted(@intFromEnum(built), .{
-                .address = .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
-                .callee_context = self.callee_context,
-                .scope_depth = @intCast(self.instantiation.decl_scopes.items.len),
-                .inside_request_edge = inside_edge,
-            });
-        }
-        self.noteUnifyConstruction(.inst_node_placeholder_to_content);
         try self.graph.unify(placeholder, built);
         return placeholder;
     }
@@ -17201,7 +16461,6 @@ const BodyContext = struct {
             }
             break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
         };
-        self.noteUnifyConstruction(.inst_nominal_backing_placeholder_to_content);
         try self.graph.unify(placeholder, backing);
         return placeholder;
     }
@@ -17995,7 +17254,6 @@ const BodyContext = struct {
         if (try self.relateMatchingProducedValueContainers(checked_root, produced_root, visiting)) |witness| {
             return witness;
         }
-        self.noteUnifySite(.checked_to_produced_value, checked_root, produced_root);
         try self.graph.unify(checked_root, produced_root);
         return checked_node;
     }
@@ -18797,7 +18055,7 @@ const BodyContext = struct {
             // A checked runtime error emits a crash and deliberately answers
             // unit rather than its own checked type, so it is not this seam.
             .runtime_error => {},
-            else => self.measureSeamRead(self.view.bodies.expr(expr_id).ty, ty),
+            else => {},
         }
         return ty;
     }
@@ -18965,15 +18223,6 @@ const BodyContext = struct {
                                     expr_id,
                                     try self.typeForChecked(expr.ty),
                                 );
-                            }
-                        }
-                        if (comptime census.enabled) {
-                            census.bump("variable_headed_leaf_kept_on_graph");
-                            if (self.builder.rehearsal) |rehearsal| {
-                                rehearsal.noteNestedLeafBindingNeeds(.{
-                                    .module_bytes = self.view.key.bytes,
-                                    .type_id = @intFromEnum(expr.ty),
-                                });
                             }
                         }
                         const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -19269,11 +18518,6 @@ const BodyContext = struct {
                 );
             },
             .eval_template => |eval| blk: {
-                self.measureUnifySite(
-                    .hoisted_const_checked_to_request,
-                    self.checkedUnifyOperand(entry.checked_type),
-                    self.nodeUnifyOperand(request_node),
-                );
                 try self.graph.unify(try self.instNode(entry.checked_type), request_node);
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     self.view,
@@ -19690,12 +18934,10 @@ const BodyContext = struct {
                     self.callee_context,
                     rehearsal.innermostRequestEdge(),
                 )) |final| {
-                    census.bump("pattern_uninhabited_directed");
                     return try self.typeIsProvenUninhabited(final);
                 }
             }
         }
-        census.bump("pattern_uninhabited_graph");
         return try self.nodeIsProvenUninhabited(try self.instNode(pattern_ty));
     }
 
@@ -20310,23 +19552,8 @@ const BodyContext = struct {
         body_ctx.current_fn_key = root_fn_key;
 
         const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_fn_node);
-        body_ctx.measureUnifySite(
-            .callable_eval_wrapper_root_to_wrapper_fn,
-            body_ctx.checkedUnifyOperand(wrapper.checked_fn_root),
-            body_ctx.nodeUnifyOperand(wrapper_fn_node),
-        );
         try self.graph.unify(try body_ctx.instNode(wrapper.checked_fn_root), wrapper_fn_node);
-        body_ctx.measureUnifySite(
-            .callable_eval_template_root_to_request,
-            body_ctx.checkedUnifyOperand(template.checked_fn_root),
-            body_ctx.nodeUnifyOperand(request_fn_node),
-        );
         try self.graph.unify(try body_ctx.instNode(template.checked_fn_root), request_fn_node);
-        body_ctx.measureUnifySite(
-            .callable_eval_comptime_root_to_request,
-            body_ctx.checkedUnifyOperand(root.checked_type),
-            body_ctx.nodeUnifyOperand(request_fn_node),
-        );
         try self.graph.unify(try body_ctx.instNode(root.checked_type), request_fn_node);
 
         return try body_ctx.lowerPendingCallableEvalRoot(
@@ -21745,14 +20972,6 @@ const BodyContext = struct {
         };
         const mint_depth = self.generatedIteratorMintDepth(kind, components) orelse
             return try self.forcedDynamicIteratorNode(public_iterator, public_named.args[0], public_source);
-        if (std.c.getenv("ROC_PARITY_TRACE") != null) {
-            std.debug.print("GRAPH-MINT kind={s} depth={d} components={d} evidence={s}\n", .{
-                @tagName(kind),
-                mint_depth,
-                components.len,
-                if (callable_evidence != null) "y" else "-",
-            });
-        }
         if (self.graph.findGeneratedIterator(public_iterator, kind, components, callable_evidence)) |existing| {
             return existing;
         }
@@ -27486,40 +26705,12 @@ const BodyContext = struct {
         };
     }
 
-    /// Unify a callee formal with the caller's checked argument type. The
-    /// checked type's cached cell may already carry a generated-private
-    /// producer representation (e.g. a list literal of minted iterators), and
-    /// private content never enters ordinary public unification: the formal
-    /// gets a fresh public interface related opaquely, and the private node
-    /// itself becomes the request argument.
-    /// Measure the call's result relation: the callee's checked return against
-    /// the caller's checked result position, whichever of the interface nodes
-    /// the relation below ends up stating it on.
-    fn measureCallReturnToCaller(
-        self: *BodyContext,
-        caller: *BodyContext,
-        callee_ret_ty: checked.CheckedTypeId,
-        checked_ret_ty: checked.CheckedTypeId,
-    ) void {
-        self.measureUnifySite(
-            .request_component_call_ret_callee_to_caller,
-            self.checkedUnifyOperand(callee_ret_ty),
-            caller.checkedUnifyOperand(checked_ret_ty),
-        );
-    }
-
     fn unifyFormalWithCallerArgNode(
         self: *BodyContext,
         caller: *BodyContext,
         formal_node: NodeId,
-        formal_ty: checked.CheckedTypeId,
         arg_ty: checked.CheckedTypeId,
     ) Allocator.Error!NodeId {
-        self.measureUnifySite(
-            .request_component_call_arg_formal_to_actual,
-            self.checkedUnifyOperand(formal_ty),
-            caller.checkedUnifyOperand(arg_ty),
-        );
         const arg_node = try caller.instNode(arg_ty);
         if (try self.graph.containsGeneratedPrivate(arg_node)) {
             const public_node = try caller.freshInstNode(arg_ty);
@@ -27543,22 +26734,6 @@ const BodyContext = struct {
         const function = self.checkedFunctionType(source_fn_ty);
         if (function.args.len != checked_args.len) {
             Common.invariant("checked direct call arity differs from its function type");
-        }
-        if (comptime census.enabled) qualify: {
-            const rehearsal = self.builder.rehearsal orelse break :qualify;
-            if (expected_ret_node != null or hosted_try_capability != null) {
-                census.bump("request_born_final_blocked_expected");
-                break :qualify;
-            }
-            if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) {
-                census.bump("request_born_final_blocked_variable");
-                break :qualify;
-            }
-            // Evidence-carrying arguments block too; probing them here costs a
-            // second evidence resolution per argument, which went quadratic on
-            // the deep static map chain, so the split of the remainder was
-            // measured once and the counter now names the ground population.
-            census.bump("request_born_final_qualifies");
         }
         // A ground callable with no expected return and no hosted capability
         // is born final: the request instantiates as a constant of directed
@@ -27585,7 +26760,6 @@ const BodyContext = struct {
                     else => break :born_final,
                 };
                 if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_ret)) {
-                    census.bump("request_born_final_blocked_erased");
                     break :born_final;
                 }
                 const address = self.typeAddress(source_fn_ty);
@@ -27594,7 +26768,6 @@ const BodyContext = struct {
                     self.callee_context,
                     rehearsal.innermostRequestEdge(),
                 ) catch break :born_final) orelse break :born_final;
-                census.bump("request_callable_born_final");
                 break :fn_node try self.graph.importMono(final_ty);
             }
             break :fn_node try self.instNode(source_fn_ty);
@@ -27607,31 +26780,21 @@ const BodyContext = struct {
             Common.invariant("checked direct call graph arity differed from its argument span");
         }
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
-        for (fn_graph.args, function.args, checked_args, 0..) |formal_node, formal_ty, checked_arg, index| {
+        for (fn_graph.args, checked_args, 0..) |formal_node, checked_arg, index| {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
             if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
                 if (try self.graph.containsGeneratedPrivate(evidence_node)) {
                     const public_node = try caller.freshInstNode(arg_ty);
                     try self.graph.relateOpaqueInterface(public_node, evidence_node);
-                    self.measureUnifySite(
-                        .request_component_call_arg_formal_to_public_evidence,
-                        self.checkedUnifyOperand(formal_ty),
-                        caller.checkedUnifyOperand(arg_ty),
-                    );
                     try relateRequestComponent(self.graph, formal_node, public_node);
                     request_args[index] = evidence_node;
                 } else {
-                    const request = try self.unifyFormalWithCallerArgNode(caller, formal_node, formal_ty, arg_ty);
-                    self.measureUnifySite(
-                        .request_component_call_arg_formal_to_evidence,
-                        self.checkedUnifyOperand(formal_ty),
-                        self.nodeUnifyOperand(evidence_node),
-                    );
+                    const request = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
                     try relateRequestComponent(self.graph, formal_node, evidence_node);
                     request_args[index] = request;
                 }
             } else {
-                request_args[index] = try self.unifyFormalWithCallerArgNode(caller, formal_node, formal_ty, arg_ty);
+                request_args[index] = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
             }
         }
         if (expected_ret_node) |expected| {
@@ -27644,7 +26807,6 @@ const BodyContext = struct {
             // the checked result as a fresh public interface: its cached cell
             // may already contain private evidence from another occurrence.
             const public_ret = try caller.freshInstNode(checked_ret_ty);
-            self.measureCallReturnToCaller(caller, function.ret, checked_ret_ty);
             try relateRequestComponent(self.graph, fn_graph.ret, public_ret);
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
@@ -27653,7 +26815,6 @@ const BodyContext = struct {
                     return request_fn;
                 }
             }
-            self.measureCallReturnToCaller(caller, function.ret, checked_ret_ty);
             if (try self.graph.containsGeneratedPrivate(caller_ret)) {
                 // A prior occurrence may already have refined this cached cell
                 // to a private producer representation. Preserve its public
@@ -27668,11 +26829,6 @@ const BodyContext = struct {
         }
         var request_ret = fn_graph.ret;
         if (expected_ret_node) |expected| {
-            self.measureUnifySite(
-                .checked_mono_request_call_ret_to_expected,
-                self.checkedUnifyOperand(function.ret),
-                self.nodeUnifyOperand(expected),
-            );
             request_ret = if (try self.graph.containsGeneratedPrivate(expected))
                 expected
             else
@@ -27753,7 +26909,6 @@ const BodyContext = struct {
                     else => break :born_final,
                 };
                 if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_ret)) {
-                    census.bump("dispatch_born_final_blocked_erased");
                     break :born_final;
                 }
                 const address = self.typeAddress(source_fn_ty);
@@ -27762,7 +26917,6 @@ const BodyContext = struct {
                     self.callee_context,
                     rehearsal.innermostRequestEdge(),
                 ) catch break :born_final) orelse break :born_final;
-                census.bump("dispatch_callable_born_final");
                 break :fn_node try self.graph.importMono(final_ty);
             }
             break :fn_node try self.instNode(source_fn_ty);
@@ -27778,17 +26932,12 @@ const BodyContext = struct {
             .arg => |index| {
                 if (index >= fn_graph.args.len) Common.invariant("dispatch plan dispatcher argument index was outside the callable graph");
                 const dispatcher_node = try caller.instNode(plan.dispatcher_ty);
-                self.measureUnifySite(
-                    .request_component_dispatch_receiver_to_formal,
-                    self.checkedUnifyOperand(function.args[index]),
-                    caller.checkedUnifyOperand(plan.dispatcher_ty),
-                );
                 try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node);
             },
             .type_only => {},
         }
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
-        for (fn_graph.args, function.args, operands, request_args) |formal_node, formal_ty, operand, *request_arg| {
+        for (fn_graph.args, operands, request_args) |formal_node, operand, *request_arg| {
             request_arg.* = formal_node;
             switch (operand) {
                 .checked_expr => |checked_arg| {
@@ -27798,34 +26947,14 @@ const BodyContext = struct {
                         if (try self.graph.containsGeneratedPrivate(evidence_node)) {
                             const public_node = try caller.freshInstNode(arg_ty);
                             try self.graph.relateOpaqueInterface(public_node, evidence_node);
-                            self.measureUnifySite(
-                                .request_component_dispatch_arg_formal_to_public_evidence,
-                                self.checkedUnifyOperand(formal_ty),
-                                caller.checkedUnifyOperand(arg_ty),
-                            );
                             try relateRequestComponent(self.graph, formal_node, public_node);
                             request_arg.* = evidence_node;
                         } else {
                             const public_node = try caller.instNode(arg_ty);
-                            self.measureUnifySite(
-                                .request_component_dispatch_arg_formal_to_actual,
-                                self.checkedUnifyOperand(formal_ty),
-                                caller.checkedUnifyOperand(arg_ty),
-                            );
                             try relateRequestComponent(self.graph, formal_node, public_node);
-                            self.measureUnifySite(
-                                .request_component_dispatch_arg_formal_to_evidence,
-                                self.checkedUnifyOperand(formal_ty),
-                                self.nodeUnifyOperand(evidence_node),
-                            );
                             try relateRequestComponent(self.graph, formal_node, evidence_node);
                         }
                     } else {
-                        self.measureUnifySite(
-                            .request_component_dispatch_arg_formal_to_actual,
-                            self.checkedUnifyOperand(formal_ty),
-                            caller.checkedUnifyOperand(arg_ty),
-                        );
                         try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
                     }
                 },
@@ -27836,18 +26965,8 @@ const BodyContext = struct {
             }
         }
         var request_ret = fn_graph.ret;
-        self.measureUnifySite(
-            .request_component_dispatch_ret_callee_to_caller,
-            self.checkedUnifyOperand(function.ret),
-            caller.checkedUnifyOperand(checked_ret_ty),
-        );
         if (expected_ret_node) |expected| {
             try relateRequestComponent(self.graph, fn_graph.ret, try caller.freshInstNode(checked_ret_ty));
-            self.measureUnifySite(
-                .checked_mono_request_call_ret_to_expected,
-                self.checkedUnifyOperand(function.ret),
-                self.nodeUnifyOperand(expected),
-            );
             request_ret = if (try self.graph.containsGeneratedPrivate(expected))
                 expected
             else
@@ -27868,18 +26987,12 @@ const BodyContext = struct {
     fn relateFormalToOperand(
         self: *BodyContext,
         formal_node: NodeId,
-        formal_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         operand: static_dispatch.StaticDispatchOperand,
     ) Allocator.Error!void {
         switch (operand) {
             .checked_expr => |checked_arg| {
                 const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-                self.measureUnifySite(
-                    .request_component_numeral_formal_to_operand,
-                    self.checkedUnifyOperand(formal_ty),
-                    caller.checkedUnifyOperand(arg_ty),
-                );
                 try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
             },
             .generated_interpolation_iter,
@@ -27911,20 +27024,10 @@ const BodyContext = struct {
         }
         // The numeral expression's checked type is the converted value type;
         // the plan's checked structure relates it to the Try-shaped return.
-        self.measureUnifySite(
-            .numeral_caller_ret_to_target,
-            caller.checkedUnifyOperand(checked_ret_ty),
-            .{ .sealed = target_ty },
-        );
         try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
-        self.measureUnifySite(
-            .numeral_callee_ret_to_target,
-            self.checkedUnifyOperand(checked_ret_ty),
-            .{ .sealed = target_ty },
-        );
         try self.graph.unify(try self.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
-        for (fn_graph.args, function.args, operands) |formal_node, formal_ty, operand| {
-            try self.relateFormalToOperand(formal_node, formal_ty, caller, operand);
+        for (fn_graph.args, operands) |formal_node, operand| {
+            try self.relateFormalToOperand(formal_node, caller, operand);
         }
         return fn_node;
     }
@@ -27937,12 +27040,10 @@ const BodyContext = struct {
         switch (self.graph.content(node)) {
             .func => |derived| {
                 if (derived.args.len == checked_arity) {
-                    census.bump("graph_arity_matches_checked");
                 } else {
-                    census.bump("graph_arity_contradicts_checked");
                 }
             },
-            else => census.bump("graph_arity_not_a_function_node"),
+            else => {},
         }
     }
 
@@ -27966,15 +27067,6 @@ const BodyContext = struct {
         // the GRAPH built still match the arity CHECKING recorded? Read through
         // `content`, which does not seal, and ask only about arity, which no
         // representation choice may alter.
-        if (comptime census.enabled) {
-            self.noteGraphArityAgainstChecked(fn_node, function.args.len);
-            plan_ctx.noteGraphArityAgainstChecked(plan_node, plan_function.args.len);
-        }
-        self.measureUnifySite(
-            .function_request_interface_target_to_plan,
-            self.checkedUnifyOperand(source_fn_ty),
-            plan_ctx.checkedUnifyOperand(plan_fn_ty),
-        );
         try relateFunctionRequestInterface(self.graph, fn_node, plan_node);
         return fn_node;
     }
@@ -28011,23 +27103,13 @@ const BodyContext = struct {
             Common.invariant("checked synthetic dispatch target graph arity differed from its argument span");
         }
         const request_args = try self.graph.arena().alloc(NodeId, function_nodes.args.len);
-        for (function_nodes.args, arg_tys, function.args, request_args) |formal_node, arg_ty, formal_ty, *request_arg| {
-            self.measureUnifySite(
-                .checked_mono_request_target_formal_to_mono_arg,
-                self.checkedUnifyOperand(formal_ty),
-                .{ .sealed = arg_ty },
-            );
+        for (function_nodes.args, arg_tys, request_args) |formal_node, arg_ty, *request_arg| {
             request_arg.* = try checkedMonoRequestNode(
                 self.graph,
                 formal_node,
                 try self.graph.importMono(arg_ty),
             );
         }
-        self.measureUnifySite(
-            .checked_mono_request_target_ret_to_mono,
-            self.checkedUnifyOperand(function.ret),
-            .{ .sealed = ret_ty },
-        );
         const request_ret = try checkedMonoRequestNode(
             self.graph,
             function_nodes.ret,
@@ -28185,11 +27267,6 @@ const BodyContext = struct {
         };
         try self.constrainCheckedInterfaceToCell(checked_ty, cell);
         if (expected_ty) |expected| {
-            self.measureUnifySite(
-                .local_argument_evidence_to_expected,
-                self.cellUnifyOperand(cell),
-                .{ .sealed = expected },
-            );
             try self.graph.unify(node, try self.graph.importMono(expected));
         }
         return if (try self.graph.containsGeneratedPrivate(node)) node else null;
@@ -28291,22 +27368,8 @@ const BodyContext = struct {
             .inspectable => try self.graph.recordFieldNode(receiver_node, mono_field_name),
             .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, mono_field_name),
         };
-        // The field side is a field-read node the graph derives from the
-        // receiver's node. The directed side names it as the same read: the
-        // receiver's checked position, translated, with this label read off it.
-        const field_operand = self.fieldUnifyOperand(receiver, mono_field_name);
-        try self.constrainCheckedInterfaceToCellAt(
-            .field_access_to_checked,
-            checked_ty,
-            DraftTypeCell.fromGraphNode(field_node),
-            field_operand,
-        );
+        try self.constrainCheckedInterfaceToCell(checked_ty, DraftTypeCell.fromGraphNode(field_node));
         if (expected_ty) |expected| {
-            self.measureUnifySite(
-                .request_component_field_access_to_expected,
-                field_operand,
-                .{ .sealed = expected },
-            );
             try relateRequestComponent(self.graph, try self.graph.importMono(expected), field_node);
         }
         return field_node;
@@ -29656,11 +28719,6 @@ const BodyContext = struct {
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| blk: {
-                self.measureUnifySite(
-                    .const_use_requested_to_request,
-                    self.checkedUnifyOperand(requested_ty),
-                    self.nodeUnifyOperand(request_node),
-                );
                 try self.graph.unify(try self.instNode(requested_ty), request_node);
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     store_view,
@@ -29826,19 +28884,9 @@ const BodyContext = struct {
         body_ctx.current_fn_key = root_fn_key;
 
         const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_node);
-        body_ctx.measureUnifySite(
-            .const_eval_entry_root_to_wrapper_fn,
-            body_ctx.checkedUnifyOperand(entry_template.checked_fn_root),
-            body_ctx.nodeUnifyOperand(wrapper_fn_node),
-        );
         try self.graph.unify(
             try body_ctx.instNode(entry_template.checked_fn_root),
             wrapper_fn_node,
-        );
-        body_ctx.measureUnifySite(
-            .const_eval_body_to_request,
-            body_ctx.checkedUnifyOperand(body.checked_type),
-            body_ctx.nodeUnifyOperand(request_node),
         );
         try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
@@ -31833,11 +30881,6 @@ const BodyContext = struct {
             },
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
         }
-        self.measureUnifySite(
-            .lookup_expr_expected_to_checked,
-            self.nodeUnifyOperand(expected_node),
-            self.checkedUnifyOperand(expr.ty),
-        );
         try self.graph.unify(expected_node, try self.instNode(expr.ty));
     }
 
@@ -31881,11 +30924,6 @@ const BodyContext = struct {
             .lambda, .closure => _ = try self.graph.functionNodes(expected_node),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
                 const lowered_node = try self.lowerExprTypeNode(checked_expr);
-                self.measureUnifySite(
-                    .expr_expected_to_lowered,
-                    self.nodeUnifyOperand(expected_node),
-                    self.checkedUnifyOperand(expr.ty),
-                );
                 try self.graph.unify(expected_node, lowered_node);
             },
         }
@@ -33976,10 +33014,8 @@ const BodyContext = struct {
             // did not name the same type another occurrence sealed, so
             // downstream evidence keyed on the graph node lost its subject.
             if (self.generatedDispatchReturnFinal(checked_ret_ty, plan)) |final| {
-                census.bump("dispatch_return_directed_cell");
                 break :blk DraftTypeCell.fromSealed(final);
             }
-            census.bump("dispatch_return_directed_declined_at_cell");
             break :blk DraftTypeCell.fromGraphNode(plan_ret_node);
         } else expected_ret_cell;
         const call_expr = try self.addExprWithTypeCell(
@@ -34382,10 +33418,8 @@ const BodyContext = struct {
             );
         };
         const ret_ty = if (directed_ret) |directed| blk: {
-            census.bump("numeral_ret_directed_route");
             break :blk directed;
         } else blk: {
-            census.bump("numeral_ret_node_route");
             break :blk try self.activeTypeFromNode(fn_nodes.ret);
         };
 
@@ -35019,10 +34053,8 @@ const BodyContext = struct {
             if (try self.graph.containsGeneratedPrivate(ret_node)) {
                 const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
                 if (self.generatedDispatchReturnFinal(checked_ret_ty, plan)) |final| {
-                    census.bump("dispatch_result_directed_final");
                     return final;
                 }
-                census.bump("dispatch_result_directed_declined");
             }
         }
         return try self.activeTypeFromNode(ret_node);
@@ -35750,32 +34782,25 @@ const BodyContext = struct {
             .procedure => |procedure| {
                 const template = lookup.view.templates.get(procedure.template.template);
                 const scheme = template.schemeId() orelse {
-                    census.bump("rehearsal_dispatch_target_procedure_no_scheme");
                     return null;
                 };
-                census.bump("rehearsal_dispatch_target_procedure_scheme");
                 return scheme;
             },
             .local_proc => |local| {
                 const scheme_id = lookup.view.types.schemeIdForOwnerNode(@intFromEnum(local.binder)) orelse
                     lookup.view.types.schemeIdForOwnerNode(@intFromEnum(local.expr)) orelse
                     {
-                        census.bump("rehearsal_dispatch_target_local_proc_no_scheme");
                         return null;
                     };
                 const scheme = lookup.view.types.schemeById(scheme_id) orelse {
-                    census.bump("rehearsal_dispatch_target_local_proc_no_scheme");
                     return null;
                 };
                 if (scheme.captured_len != 0) {
-                    census.bump("rehearsal_dispatch_target_local_proc_captures");
                     return null;
                 }
-                census.bump("rehearsal_dispatch_target_local_proc_scheme");
                 return scheme_id;
             },
             .structural => {
-                census.bump("rehearsal_dispatch_target_structural");
                 return null;
             },
         }
@@ -36797,7 +35822,6 @@ const BodyContext = struct {
         root_node: NodeId,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
-        self.noteUnifySite(.evidence_target_root_to_request, root_node, request_fn_node);
         if (try self.graph.containsGeneratedPrivate(request_fn_node)) {
             try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
         } else {
@@ -37077,7 +36101,6 @@ const BodyContext = struct {
         if (fn_nodes.args.len != 2) {
             Common.invariant("structural equality callable graph node must have two operands");
         }
-        self.noteUnifySite(.structural_equality_operands_equal, fn_nodes.args[0], fn_nodes.args[1]);
         try self.graph.unify(fn_nodes.args[0], fn_nodes.args[1]);
 
         const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
@@ -37134,7 +36157,6 @@ const BodyContext = struct {
         if (fn_nodes.args.len != 2) {
             Common.invariant("structural hash callable graph node must have two operands");
         }
-        self.noteUnifySite(.structural_hash_hasher_to_result, fn_nodes.args[1], fn_nodes.ret);
         try self.graph.unify(fn_nodes.args[1], fn_nodes.ret);
 
         const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
@@ -42312,14 +41334,8 @@ const BodyContext = struct {
         other_expr_id: checked.CheckedExprId,
         other_checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!StructuralEqualityOperand {
-        self.measureUnifySite(
-            .structural_equality_operand_to_checked,
-            self.nodeUnifyOperand(operand_node),
-            self.checkedUnifyOperand(other_checked_ty),
-        );
         try self.graph.unify(operand_node, try self.instNode(other_checked_ty));
         if (try self.structuralEqualityExprResultNode(other_expr_id)) |other_node| {
-            self.noteUnifySite(.structural_equality_operand_to_result, operand_node, other_node);
             try self.graph.unify(operand_node, other_node);
         }
         return try self.structuralEqualityOperandFromNode(operand_node);
@@ -44128,7 +43144,6 @@ const BodyContext = struct {
         const rest_fields = (try self.graph.recordNodes(rest_node)).fields;
         for (rest_fields) |field| {
             const source_field_node = try self.graph.recordFieldNode(source_node, field.name);
-            self.noteUnifySite(.record_rest_field_to_source_field, field.ty, source_field_node);
             try self.graph.unify(field.ty, source_field_node);
         }
     }
@@ -44161,11 +43176,6 @@ const BodyContext = struct {
                 .fields = try self.graph.arena().dupe(InstField, remaining.items),
                 .ext = try self.graph.newNode(.empty_record),
             } });
-        self.measureUnifySite(
-            .record_rest_pattern_to_row,
-            self.checkedUnifyOperand(self.view.bodies.pattern(rest_pattern).ty),
-            self.nodeUnifyOperand(rest_node),
-        );
         try self.graph.unify(
             try self.lowerTypeNode(self.view.bodies.pattern(rest_pattern).ty),
             rest_node,
@@ -46506,7 +45516,6 @@ const BodyContext = struct {
         // transfers at the seal; the request flow is aliasing, not
         // computation).
         const ret_cell = if (expected_ret_ty) |expected| blk: {
-            census.bump("iterator_ret_cell_aliased");
             break :blk expected;
         } else DraftTypeCell.fromGraphNode(fn_nodes.ret);
         return try self.addExprWithTypeCell(
@@ -46602,23 +45611,13 @@ const BodyContext = struct {
         const function_nodes = try self.graph.functionNodes(fn_node);
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
         var contains_generated_private = false;
-        for (function_nodes.args, function.args, operands, request_args) |formal_node, formal_ty, operand, *request_arg| {
+        for (function_nodes.args, operands, request_args) |formal_node, operand, *request_arg| {
             switch (operand) {
                 .checked_expr => |checked_arg| {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     const public_node = try caller.instNode(arg_ty);
-                    self.measureUnifySite(
-                        .request_component_iterator_formal_to_actual,
-                        self.checkedUnifyOperand(formal_ty),
-                        caller.checkedUnifyOperand(arg_ty),
-                    );
                     try relateRequestComponent(self.graph, formal_node, public_node);
                     if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
-                        self.measureUnifySite(
-                            .checked_mono_request_iterator_arg_to_evidence,
-                            caller.checkedUnifyOperand(arg_ty),
-                            self.nodeUnifyOperand(evidence_node),
-                        );
                         request_arg.* = try checkedMonoRequestNode(
                             self.graph,
                             public_node,
@@ -46630,11 +45629,6 @@ const BodyContext = struct {
                 },
                 .loop_iterator_state => {
                     const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
-                    self.measureUnifySite(
-                        .checked_mono_request_iterator_formal_to_loop_state,
-                        self.checkedUnifyOperand(formal_ty),
-                        self.cellUnifyOperand(iterator.ty),
-                    );
                     request_arg.* = try checkedMonoRequestNode(
                         self.graph,
                         formal_node,
@@ -46647,11 +45641,6 @@ const BodyContext = struct {
         var request_ret = function_nodes.ret;
         if (expected_ret_ty) |expected| {
             const expected_node = try expected.toGraphNode(self.graph);
-            self.measureUnifySite(
-                .checked_mono_request_iterator_ret_to_expected,
-                self.checkedUnifyOperand(function.ret),
-                self.cellUnifyOperand(expected),
-            );
             request_ret = if (try self.graph.containsGeneratedPrivate(expected_node))
                 expected_node
             else
@@ -46687,11 +45676,6 @@ const BodyContext = struct {
             .loop_iterator_state => blk: {
                 const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
                 const iterator_node = try iterator.ty.toGraphNode(self.graph);
-                self.measureUnifySite(
-                    .iterator_loop_state_to_formal,
-                    self.cellUnifyOperand(iterator.ty),
-                    self.nodeUnifyOperand(node),
-                );
                 try self.graph.unify(iterator_node, node);
                 if (!self.graph.sameClass(iterator_node, node)) Common.invariant("iterator .next operand type differed from instantiated callable argument type");
                 break :blk try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local });
@@ -49878,7 +48862,6 @@ fn schemeRoot(view: ModuleView, binding: anytype, comptime missing_message: []co
     // carries no id.
     if (binding.sourceSchemeId()) |scheme_id| {
         const scheme = view.types.schemeById(scheme_id) orelse Common.invariant(missing_message);
-        census.bump("scheme_lookup_by_id");
         if (@import("builtin").mode == .Debug) {
             if (view.types.schemeForKey(binding.source_scheme)) |by_key| {
                 std.debug.assert(@intFromEnum(by_key.root) == @intFromEnum(scheme.root));
@@ -49887,7 +48870,6 @@ fn schemeRoot(view: ModuleView, binding: anytype, comptime missing_message: []co
         return scheme.root;
     }
     const scheme = view.types.schemeForKey(binding.source_scheme) orelse Common.invariant(missing_message);
-    census.bump("scheme_lookup_by_content_digest");
     return scheme.root;
 }
 

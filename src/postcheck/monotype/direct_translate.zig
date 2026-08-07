@@ -495,7 +495,6 @@ const Emission = struct {
         args: []const TypeId,
         backing: ?TypeId,
     ) Allocator.Error!?closure.RepresentationSlotId {
-        census.bump("emission_joinable_slots_opened");
         const identity = identityDigest(store, name_store, declared, args);
         const token = try self.tokenForDigest(identity);
         const shape = try self.shapeAt(store, name_store, declared, token, args, backing);
@@ -517,7 +516,6 @@ const Emission = struct {
         args: []const TypeId,
         backing: ?TypeId,
     ) Allocator.Error!SealedPosition {
-        census.bump("emission_positions_opened");
         self.positions_opened +%= 1;
         const identity = identityDigest(store, name_store, declared, args);
         const token = try self.tokenForDigest(identity);
@@ -527,7 +525,6 @@ const Emission = struct {
 
         var produced_stands = false;
         if (input) |stated| {
-            census.bump("emission_input_declared");
             produced_stands = try self.applyInput(store, name_store, slot, token, declared, stated, args, backing);
         }
 
@@ -538,11 +535,8 @@ const Emission = struct {
         // are deliberately outside the identity the slot was opened with.
         const sealed_identity = identityDigest(store, name_store, sealed, args);
         if (!std.mem.eql(u8, &sealed_identity, &identity)) {
-            census.bump("emission_seal_identity_lost");
             return .{ .def = declared.def };
         }
-        census.bump("emission_slots_sealed");
-        if (!encodingEql(sealed.def, declared.def)) census.bump("emission_seal_moved");
         // The producer-placed content that changes the position's own shape rides
         // out with the sealed definition, and only while the class still carries
         // the producer's own representation after the relation settled.
@@ -593,11 +587,9 @@ const Emission = struct {
             .ordinary => {
                 self.engine.adoptProducerRepresentation(slot, produced) catch |err| switch (err) {
                     error.NotAProducerRepresentation => {
-                        census.bump("emission_input_not_modelled");
                         return false;
                     },
                     error.TierMovedDown => {
-                        census.bump("emission_input_refused_tier");
                         return false;
                     },
                 };
@@ -609,7 +601,6 @@ const Emission = struct {
         const peer = try self.engine.createSlot(token, self.freshProducer(), peer_shape);
         self.engine.relate(slot, peer, rule) catch |err| switch (err) {
             error.LogicallyUnequal => {
-                census.bump("emission_input_refused_identity");
                 return false;
             },
             else => |other| return other,
@@ -1153,7 +1144,6 @@ pub const Translator = struct {
             .emitting_representation = true,
         };
         defer walk.active.deinit();
-        census.bump("emission_drafts_built");
         return try walk.node(root);
     }
 
@@ -1715,15 +1705,6 @@ const Walk = struct {
                 .empty_record => try self.build_store.internRecord(self.owner.target_names, &.{}),
                 .empty_tag_union => try self.build_store.internTagUnion(self.owner.target_names, &.{}),
             };
-        }
-        if (comptime census.enabled) {
-            if (self.dispositionFor(checked_ty) != null) {
-                census.bump("residual_had_disposition");
-            } else if (self.cursor.view.residualDispositions().len == 0) {
-                census.bump("residual_module_has_no_dispositions");
-            } else {
-                census.bump("residual_absent_from_table");
-            }
         }
         if (self.dispose_residual_as_uninhabited) {
             return try self.build_store.internTagUnion(self.owner.target_names, &.{});
