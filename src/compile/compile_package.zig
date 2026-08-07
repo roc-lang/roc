@@ -156,17 +156,26 @@ fn importedArtifactsCoverImportedEnvs(
     return true;
 }
 
-fn buildCheckOwnerEnvs(
+/// Build the semantic module-owner closure available while checking a module.
+pub fn buildCheckOwnerEnvs(
     allocator: Allocator,
     imported_envs: []const *ModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    platform_requirements: ?Check.PlatformRequirementInput,
 ) Allocator.Error![]const *const ModuleEnv {
     var owner_envs = std.ArrayList(*const ModuleEnv).empty;
     errdefer owner_envs.deinit(allocator);
 
     for (imported_envs) |env| {
         try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, env);
+    }
+
+    if (platform_requirements) |requirements| {
+        try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, requirements.env);
+        for (requirements.owner_modules) |owner_env| {
+            try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, owner_env);
+        }
     }
 
     var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
@@ -519,7 +528,13 @@ pub fn typeCheckModule(
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
     errdefer module_envs_map.deinit();
 
-    const owner_envs = try buildCheckOwnerEnvs(check_alloc, imported_envs, imported_artifacts, available_artifacts);
+    const owner_envs = try buildCheckOwnerEnvs(
+        check_alloc,
+        imported_envs,
+        imported_artifacts,
+        available_artifacts,
+        platform_requirements,
+    );
     defer check_alloc.free(owner_envs);
 
     var checker = try Check.initWithOwnerModules(
