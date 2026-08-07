@@ -6361,7 +6361,15 @@ fn evaluateLirImageEntrypoint(
             }
             unreachable;
         },
-        error.OutOfMemory, error.RuntimeError, error.ComptimeExhaustiveness, error.DivisionByZero, error.Crash, error.ExpectErr => {
+        error.OutOfMemory,
+        error.RuntimeError,
+        error.ComptimeExhaustiveness,
+        error.DivisionByZero,
+        error.Crash,
+        error.ExpectErr,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
+        => {
             reportCliInterpreterError(ops, &interpreter, @errorCast(err));
             return;
         },
@@ -11815,7 +11823,6 @@ fn copyCliTestTranscriptEventsFromEval(
             .dbg => |message| .{ .stream = .stderr, .kind = .dbg, .payload = message },
             .expect_failed => |message| .{ .stream = .stderr, .kind = .expect_failed, .payload = message },
             .crashed => |message| .{ .stream = .stderr, .kind = .crashed, .payload = message },
-            .effect => unreachable,
         };
         copied[index] = .{
             .stream = parts.stream,
@@ -12011,8 +12018,10 @@ fn runInterpreterTestRoots(
                 error.ComptimeExhaustiveness,
                 error.Crash,
                 error.DivisionByZero,
+                error.InvalidHostedFunctionSignature,
                 error.OutOfMemory,
                 error.RuntimeError,
+                error.UnsupportedHostedFunction,
                 => run.region,
             };
             const message = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err);
@@ -12028,8 +12037,10 @@ fn runInterpreterTestRoots(
                 error.ComptimeExhaustiveness,
                 error.DivisionByZero,
                 error.ExpectErr,
+                error.InvalidHostedFunctionSignature,
                 error.OutOfMemory,
                 error.RuntimeError,
+                error.UnsupportedHostedFunction,
                 => blk: {
                     message_owned = false;
                     break :blk message;
@@ -12251,6 +12262,7 @@ fn runCompiledTestRoots(
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
         error.InvalidLirImage,
         error.InvalidUtf8,
         error.IsDir,
@@ -12304,6 +12316,7 @@ fn runCompiledTestRoots(
         error.TypeCheckError,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
@@ -12548,6 +12561,7 @@ fn runLlvmLoweredTestModulesOnce(
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
         error.InvalidLirImage,
         error.InvalidUtf8,
         error.IsDir,
@@ -12601,6 +12615,7 @@ fn runLlvmLoweredTestModulesOnce(
         error.TypeCheckError,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,

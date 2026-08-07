@@ -610,8 +610,10 @@ fn runLoweredWithHostEvents(
         error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
+        error.InvalidHostedFunctionSignature,
         error.OutOfMemory,
         error.RuntimeError,
+        error.UnsupportedHostedFunction,
         => return err,
     };
     switch (result) {
@@ -635,7 +637,7 @@ fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) Te
     for (expected, run.events) |expected_event, actual_event| {
         switch (actual_event) {
             .dbg => |msg| try std.testing.expectEqualStrings(expected_event, msg),
-            .expect_failed, .crashed => return error.TestUnexpectedResult,
+            .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
         }
     }
 }
@@ -3504,15 +3506,15 @@ fn expectOptimizedHostEvents(
         switch (expected_event) {
             .dbg => |expected_msg| switch (actual_event) {
                 .dbg => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
-                .expect_failed, .crashed => return error.TestUnexpectedResult,
+                .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
             },
             .expect_failed => switch (actual_event) {
                 .expect_failed => {},
-                .dbg, .crashed => return error.TestUnexpectedResult,
+                .dbg, .crashed, .effect => return error.TestUnexpectedResult,
             },
             .crashed => |expected_msg| switch (actual_event) {
                 .crashed => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
-                .dbg, .expect_failed => return error.TestUnexpectedResult,
+                .dbg, .expect_failed, .effect => return error.TestUnexpectedResult,
             },
         }
     }
@@ -7712,6 +7714,7 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
         error.InvalidLirImage,
         error.InvalidUtf8,
         error.IsDir,
@@ -7771,6 +7774,7 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.ThreadQuotaExceeded,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
