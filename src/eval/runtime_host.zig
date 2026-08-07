@@ -35,11 +35,13 @@ pub const Termination = enum {
     crashed,
 };
 
+/// An owned one-way effect emitted by a run: its name and payload bytes.
 pub const EffectEvent = struct {
     name: []u8,
     payload: []u8,
 };
 
+/// Borrowed view of an `EffectEvent`, valid only while the run owns it.
 pub const EffectEventView = struct {
     name: []const u8,
     payload: []const u8,
@@ -511,6 +513,6 @@ test "RuntimeHostEnv records and snapshots structured effects in order" {
             try std.testing.expectEqualStrings("toast", effect.name);
             try std.testing.expectEqualStrings("hello", effect.payload);
         },
-        else => return error.TestUnexpectedResult,
+        .dbg, .expect_failed, .crashed => return error.TestUnexpectedResult,
     }
 }

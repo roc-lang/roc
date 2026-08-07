@@ -69,6 +69,8 @@ pub const StepResult = union(enum) {
     }
 };
 
+/// Why a REPL input failed, so a frontend can decide whether to keep reading
+/// (incomplete input) or report the failure.
 pub const LanguageDiagnosticKind = enum {
     incomplete_input,
     parse_error,
@@ -76,12 +78,14 @@ pub const LanguageDiagnosticKind = enum {
     unsupported_file_import,
 };
 
+/// A rendered REPL failure plus enough structure for a frontend to route it.
 pub const LanguageDiagnostic = struct {
     kind: LanguageDiagnosticKind,
     input: ?InputInfo,
     message: []u8,
 };
 
+/// Metadata for a definition the session just accepted into its scope.
 pub const DefinitionCommit = struct {
     name: []const u8,
     kind: DefinitionKind,
@@ -911,7 +915,14 @@ pub fn inspectExpressionType(
                     if (function.args.len() != 0) return error.Internal;
                     break function.ret;
                 },
-                else => return error.Internal,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return error.Internal,
             },
             .err, .flex, .rigid => return error.Internal,
         }
@@ -922,6 +933,8 @@ pub fn inspectExpressionType(
     return .{ .output = try self.allocator.dupe(u8, tw.get()) };
 }
 
+/// One completion candidate: the identifier, what kind of definition it is,
+/// and its rendered type when the session could infer one.
 pub const CompletionItem = struct {
     label: []u8,
     kind: DefinitionKind,
@@ -1010,11 +1023,14 @@ pub fn completionItems(self: *ReplSession) ReplStepError![]CompletionItem {
     return items.toOwnedSlice(self.allocator);
 }
 
+/// Release a completion list returned by `completionItems`.
 pub fn freeCompletionItems(self: *ReplSession, items: []CompletionItem) void {
     for (items) |*item| item.deinit(self.allocator);
     self.allocator.free(items);
 }
 
+/// A definition currently held by the session, with the source text that
+/// created it so a frontend can re-display or persist the session.
 pub const StoredDefinition = struct {
     name: []u8,
     source: []u8,
@@ -1051,15 +1067,18 @@ pub fn storedDefinitions(self: *const ReplSession) Allocator.Error![]StoredDefin
     return stored;
 }
 
+/// Release a definition list returned by `storedDefinitions`.
 pub fn freeStoredDefinitions(self: *const ReplSession, stored: []StoredDefinition) void {
     for (stored) |*definition| definition.deinit(self.allocator);
     self.allocator.free(stored);
 }
 
+/// Number of definitions currently in the session scope.
 pub fn definitionCount(self: *const ReplSession) usize {
     return self.definitions.count();
 }
 
+/// A module the session serves from memory instead of the filesystem.
 pub const StoredVirtualModule = struct {
     name: []u8,
     source: []u8,
@@ -1088,6 +1107,7 @@ pub fn storedVirtualModules(self: *const ReplSession, allocator: Allocator) Allo
     return modules;
 }
 
+/// Release a virtual-module list returned by `storedVirtualModules`.
 pub fn freeStoredVirtualModules(_: *const ReplSession, allocator: Allocator, modules: []StoredVirtualModule) void {
     for (modules) |*module| module.deinit(allocator);
     allocator.free(modules);
@@ -1844,6 +1864,7 @@ fn trimOwnedRight(allocator: Allocator, raw: []u8) Allocator.Error![]u8 {
     return result;
 }
 
+/// Whether a REPL line binds a name or is evaluated for its value.
 pub const InputKind = enum {
     definition,
     expression,
@@ -1857,6 +1878,7 @@ pub const DefinitionKind = enum {
     import,
 };
 
+/// What the session made of an input line, used to label transcript entries.
 pub const InputInfo = struct {
     kind: InputKind,
     definition_kind: DefinitionKind = .value,
@@ -2355,7 +2377,7 @@ test "Repl - special commands" {
     defer help_result.deinit(testing.allocator);
     switch (help_result) {
         .output => |output| try testing.expect(std.mem.find(u8, output, "Enter an expression") != null),
-        else => return error.TestUnexpectedResult,
+        .diagnostic, .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
     }
 
     const exit_result = try repl.executeCommandWithConfig(.exit, reporting.ReportingConfig.initForTesting());
@@ -2378,7 +2400,7 @@ test "Repl - language stepping returns structured definition metadata" {
             try testing.expectEqualStrings("answer", definition.name);
             try testing.expectEqual(DefinitionKind.value, definition.kind);
         },
-        else => return error.TestUnexpectedResult,
+        .expression, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 }
 
@@ -2396,7 +2418,7 @@ test "Repl - virtual session records ordered one-way effects" {
             std.debug.print("Repl import failed:\n{s}\n", .{diagnostic.message});
             return error.TestUnexpectedResult;
         },
-        else => return error.TestUnexpectedResult,
+        .expression, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const inspected = try repl.inspectExpressionType(
@@ -2410,7 +2432,7 @@ test "Repl - virtual session records ordered one-way effects" {
             std.debug.print("Repl emit inspection failed:\n{s}\n", .{diagnostic});
             return error.TestUnexpectedResult;
         },
-        else => return error.TestUnexpectedResult,
+        .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
     }
 
     const emitted = try repl.stepLanguageWithConfig(
@@ -2424,7 +2446,7 @@ test "Repl - virtual session records ordered one-way effects" {
             std.debug.print("Repl emit failed:\n{s}\n", .{diagnostic.message});
             return error.TestUnexpectedResult;
         },
-        else => return error.TestUnexpectedResult,
+        .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const events = repl.takeEvents();
@@ -2438,7 +2460,7 @@ test "Repl - virtual session records ordered one-way effects" {
             try testing.expectEqualStrings("log", effect.name);
             try testing.expectEqualStrings("a long runtime-allocated effect payload", effect.payload);
         },
-        else => return error.TestUnexpectedResult,
+        .dbg, .expect_failed, .crashed => return error.TestUnexpectedResult,
     }
 }
 
@@ -2451,14 +2473,14 @@ test "Repl - failed annotated value restores the exact pending annotation state"
     defer annotation.deinit(testing.allocator);
     switch (annotation) {
         .definition => |definition| try testing.expectEqual(DefinitionKind.annotation, definition.kind),
-        else => return error.TestUnexpectedResult,
+        .expression, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const failed_value = try repl.stepLanguageWithConfig("pending = 42", config);
     defer failed_value.deinit(testing.allocator);
     switch (failed_value) {
         .diagnostic => |diagnostic| try testing.expectEqual(LanguageDiagnosticKind.compile_error, diagnostic.kind),
-        else => return error.TestUnexpectedResult,
+        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const stored = try repl.storedDefinitions();

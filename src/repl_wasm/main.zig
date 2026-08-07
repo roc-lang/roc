@@ -13,6 +13,8 @@ var allocator: Allocator = std.heap.wasm_allocator;
 var repl_session: ?ReplSession = null;
 var session_revision: u32 = 0;
 
+/// Silence logging in the freestanding wasm build; the host only sees the
+/// JSON protocol on stdout-equivalent buffers, never Zig log output.
 pub const std_options: std.Options = .{
     .log_level = .warn,
     .logFn = if (builtin.target.os.tag == .freestanding) quietLog else std.log.defaultLog,
@@ -251,7 +253,7 @@ fn expressionType(arena: Allocator, session: *ReplSession, source: []const u8) !
     defer inspected.deinit(allocator);
     return switch (inspected) {
         .output => |type_name| arenaDupe(arena, type_name),
-        else => error.ExpressionTypeUnavailable,
+        .diagnostic, .runtime_crash, .none, .exit => error.ExpressionTypeUnavailable,
     };
 }
 
@@ -260,7 +262,7 @@ fn parseDiagnosticMessage(arena: Allocator, session: *ReplSession, source: []con
     defer step_result.deinit(allocator);
     return switch (step_result) {
         .diagnostic => |diagnostic| arenaDupe(arena, diagnostic.message),
-        else => error.ParseDiagnosticUnavailable,
+        .expression, .definition, .runtime_crash, .none => error.ParseDiagnosticUnavailable,
     };
 }
 
@@ -448,7 +450,7 @@ fn inspect(request: Request, arena: Allocator) ![]u8 {
             .revision = session_revision,
         }),
         .diagnostic => |message| inspectDiagnosticResponse(request, arena, source, "type_error", message),
-        else => errorResponse(request.id, "inspect_failed", "Expression inspection did not produce a type."),
+        .runtime_crash, .none, .exit => errorResponse(request.id, "inspect_failed", "Expression inspection did not produce a type."),
     };
 }
 
