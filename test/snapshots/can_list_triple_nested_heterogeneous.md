@@ -11,7 +11,7 @@ type=expr
 TYPE MISMATCH - can_list_triple_nested_heterogeneous.md:1:23:1:30
 # PROBLEMS
 
--- ❌ TYPE MISMATCH -------------- can_list_triple_nested_heterogeneous.md:1:23
+-- [×] type mismatch -------------- can_list_triple_nested_heterogeneous.md:1:23
 
 This string literal is being used where a non-string type is needed.
 

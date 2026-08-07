@@ -16,7 +16,7 @@ f = |x| match x {
 REDUNDANT PATTERN - match_redundant_exact_numeral.md:2:9:6:2
 # PROBLEMS
 
--- ⚠️ REDUNDANT PATTERN ------------------ match_redundant_exact_numeral.md:2:9
+-- [Δ] redundant pattern ------------------ match_redundant_exact_numeral.md:2:9
 
 The second branch of this `match` is redundant.
 

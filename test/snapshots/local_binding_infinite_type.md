@@ -14,7 +14,7 @@ f = |_x| {
 INFINITE TYPE - local_binding_infinite_type.md:2:5:2:8
 # PROBLEMS
 
--- ❌ INFINITE TYPE ------------------------ local_binding_infinite_type.md:2:5
+-- [×] infinite type ------------------------ local_binding_infinite_type.md:2:5
 
 I am inferring a weird self-referential type.
 

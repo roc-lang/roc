@@ -15,7 +15,7 @@ TYPE APPLICATION NEEDS PARENTHESES - stmt_import.md:1:27:1:28
 DUPLICATE DEFINITION - stmt_import.md:1:1:1:17
 # PROBLEMS
 
--- ❌ UNEXPECTED STATEMENT -------------------------------- stmt_import.md:1:18
+-- [×] unexpected statement -------------------------------- stmt_import.md:1:18
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -30,7 +30,7 @@ For example:
 
 I found `[` here.
 
--- ❌ UNEXPECTED STATEMENT -------------------------------- stmt_import.md:1:19
+-- [×] unexpected statement -------------------------------- stmt_import.md:1:19
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -47,7 +47,7 @@ I found `foo` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT -------------------------------- stmt_import.md:1:22
+-- [×] unexpected statement -------------------------------- stmt_import.md:1:22
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -63,7 +63,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ------------------ stmt_import.md:1:27
+-- [×] type application needs parentheses ------------------ stmt_import.md:1:27
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -81,7 +81,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ⚠️ DUPLICATE DEFINITION --------------------------------- stmt_import.md:1:1
+-- [Δ] duplicate definition --------------------------------- stmt_import.md:1:1
 
 The name `Json` is being redeclared here:
 

@@ -807,7 +807,7 @@ POLYMORPHIC VALUE - associated_items_complete_all_patterns.md:51:9:51:13
 MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 # PROBLEMS
 
--- ❌ UNEXPECTED STATEMENT ------ associated_items_complete_all_patterns.md:2:1
+-- [×] unexpected statement ------ associated_items_complete_all_patterns.md:2:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -824,7 +824,7 @@ I found `d1_forward` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:2:12
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:2:12
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -839,7 +839,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:2:15
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:2:15
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -854,7 +854,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:2:17
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:2:17
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -872,7 +872,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:2:18
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:2:18
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -887,7 +887,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:2:19
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:2:19
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -902,7 +902,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ------ associated_items_complete_all_patterns.md:5:1
+-- [×] unexpected statement ------ associated_items_complete_all_patterns.md:5:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -919,7 +919,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ------ associated_items_complete_all_patterns.md:8:1
+-- [×] unexpected statement ------ associated_items_complete_all_patterns.md:8:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -936,7 +936,7 @@ I found `d1_scope` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:8:10
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:8:10
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -951,7 +951,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:8:13
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:8:13
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -966,7 +966,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:8:15
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:8:15
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -984,7 +984,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:8:16
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:8:16
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -999,7 +999,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:8:17
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:8:17
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1014,7 +1014,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:10:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:10:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1031,7 +1031,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:13:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:13:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1048,7 +1048,7 @@ I found `d2_inner_first` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:13:16
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:13:16
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1063,7 +1063,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:13:19
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:13:19
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1078,7 +1078,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:13:21
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:13:21
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1096,7 +1096,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:13:22
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:13:22
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1111,7 +1111,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:13:23
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:13:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1126,7 +1126,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:19:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:19:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1143,7 +1143,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:21:22
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:21:22
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -1162,7 +1162,7 @@ I found `.Inner` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:23:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:23:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1179,7 +1179,7 @@ I found `d2_outer_val_middle` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:23:21
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:23:21
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1194,7 +1194,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:23:24
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:23:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1209,7 +1209,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:23:26
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:23:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1227,7 +1227,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:23:27
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:23:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1242,7 +1242,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:23:28
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:23:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1257,7 +1257,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:29:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:29:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1274,7 +1274,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:30:27
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:30:27
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -1293,7 +1293,7 @@ I found `.Inner` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:32:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:32:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1310,7 +1310,7 @@ I found `d2_outer_refs_inner` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:32:21
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:32:21
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1325,7 +1325,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:32:24
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:32:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1340,7 +1340,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:32:26
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:32:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1358,7 +1358,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:32:27
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:32:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1373,7 +1373,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:32:28
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:32:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1388,7 +1388,7 @@ For example:
 
 I found `{` here.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:33:36
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:33:36
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -1407,7 +1407,7 @@ I found `.Inner` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:38:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:38:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1424,7 +1424,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:41:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:41:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1441,7 +1441,7 @@ I found `d2_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:41:20
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:41:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1456,7 +1456,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:41:23
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:41:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1471,7 +1471,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:41:25
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:41:25
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1489,7 +1489,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:41:26
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:41:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1504,7 +1504,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:41:27
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:41:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1519,7 +1519,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:47:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:47:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1536,7 +1536,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:49:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:49:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1553,7 +1553,7 @@ I found `d2_siblings` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:49:13
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:49:13
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1568,7 +1568,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:49:16
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:49:16
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1583,7 +1583,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:49:18
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:49:18
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1601,7 +1601,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:49:19
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:49:19
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1616,7 +1616,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:49:20
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:49:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1631,7 +1631,7 @@ For example:
 
 I found `{` here.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:51:27
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:51:27
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -1650,7 +1650,7 @@ I found `.InnerB` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:57:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:57:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1667,7 +1667,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:58:19
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:58:19
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -1686,7 +1686,7 @@ I found `.InnerA` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:60:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:60:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1703,7 +1703,7 @@ I found `d3_types_then_vals` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:60:20
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:60:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1718,7 +1718,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:60:23
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:60:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1733,7 +1733,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:60:25
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:60:25
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1751,7 +1751,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:60:26
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:60:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1766,7 +1766,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:60:27
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:60:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1781,7 +1781,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:70:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:70:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1798,7 +1798,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:72:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:72:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -1817,7 +1817,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:73:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:73:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -1836,7 +1836,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:73:29
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:73:29
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -1855,7 +1855,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:75:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:75:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1872,7 +1872,7 @@ I found `d3_vals_then_types` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:75:20
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:75:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1887,7 +1887,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:75:23
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:75:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1902,7 +1902,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:75:25
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:75:25
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1920,7 +1920,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:75:26
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:75:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1935,7 +1935,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:75:27
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:75:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1950,7 +1950,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:85:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:85:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -1967,7 +1967,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:87:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:87:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -1986,7 +1986,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:88:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:88:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2005,7 +2005,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:88:29
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:88:29
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2024,7 +2024,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:90:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:90:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2041,7 +2041,7 @@ I found `d3_l1_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:90:23
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:90:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2056,7 +2056,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:90:26
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:90:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2071,7 +2071,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:90:28
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:90:28
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2089,7 +2089,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:90:29
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:90:29
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2104,7 +2104,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:90:30
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:90:30
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2119,7 +2119,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----- associated_items_complete_all_patterns.md:98:1
+-- [×] unexpected statement ----- associated_items_complete_all_patterns.md:98:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2136,7 +2136,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:100:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:100:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2153,7 +2153,7 @@ I found `d3_l2_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:100:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:100:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2168,7 +2168,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:100:26
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:100:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2183,7 +2183,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:100:28
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:100:28
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2201,7 +2201,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:100:29
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:100:29
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2216,7 +2216,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:100:30
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:100:30
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2231,7 +2231,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:108:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:108:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2248,7 +2248,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:110:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:110:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2265,7 +2265,7 @@ I found `d3_val_after_nested` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:110:21
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:110:21
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2280,7 +2280,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:110:24
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:110:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2295,7 +2295,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:110:27
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:110:27
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2313,7 +2313,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:110:28
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:110:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2328,7 +2328,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:110:29
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:110:29
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2343,7 +2343,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:120:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:120:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2360,7 +2360,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:122:27
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:122:27
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2379,7 +2379,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:123:27
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:123:27
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2398,7 +2398,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:123:30
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:123:30
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2417,7 +2417,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:125:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:125:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2434,7 +2434,7 @@ I found `d4_all_types_then_vals` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:125:24
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:125:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2449,7 +2449,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:125:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:125:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2464,7 +2464,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:125:30
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:125:30
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2482,7 +2482,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:125:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:125:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2497,7 +2497,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:125:32
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:125:32
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2512,7 +2512,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:139:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:139:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2529,7 +2529,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:140:30
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:140:30
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2548,7 +2548,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:140:33
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:140:33
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2567,7 +2567,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:140:36
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:140:36
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2586,7 +2586,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:142:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:142:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2603,7 +2603,7 @@ I found `d4_all_vals_then_types` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:142:24
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:142:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2618,7 +2618,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:142:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:142:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2633,7 +2633,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:142:30
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:142:30
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2651,7 +2651,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:142:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:142:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2666,7 +2666,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:142:32
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:142:32
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2681,7 +2681,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:156:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:156:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2698,7 +2698,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:157:30
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:157:30
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2717,7 +2717,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:157:33
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:157:33
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2736,7 +2736,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:157:36
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:157:36
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2755,7 +2755,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:159:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:159:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2772,7 +2772,7 @@ I found `d4_reverse_types` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:159:18
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:159:18
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2787,7 +2787,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:159:21
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:159:21
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2802,7 +2802,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:159:24
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:159:24
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2820,7 +2820,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:159:25
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:159:25
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2835,7 +2835,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:159:26
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:159:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2850,7 +2850,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:173:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:173:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2867,7 +2867,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:174:24
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:174:24
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2886,7 +2886,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:174:27
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:174:27
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2905,7 +2905,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:174:30
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:174:30
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -2924,7 +2924,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:176:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:176:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2941,7 +2941,7 @@ I found `d4_interleaved` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:176:16
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:176:16
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2956,7 +2956,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:176:19
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:176:19
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -2971,7 +2971,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:176:22
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:176:22
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2989,7 +2989,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:176:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:176:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3004,7 +3004,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:176:24
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:176:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3019,7 +3019,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:190:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:190:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3036,7 +3036,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:191:22
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:191:22
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3055,7 +3055,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:191:25
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:191:25
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3074,7 +3074,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:191:28
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:191:28
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3093,7 +3093,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:193:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:193:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3110,7 +3110,7 @@ I found `d4_l3_val_after_l4` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:193:20
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:193:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3125,7 +3125,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:193:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:193:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3140,7 +3140,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:193:26
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:193:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3158,7 +3158,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:193:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:193:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3173,7 +3173,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:193:28
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:193:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3188,7 +3188,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:202:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:202:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3205,7 +3205,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:203:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:203:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3224,7 +3224,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:203:29
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:203:29
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3243,7 +3243,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:203:32
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:203:32
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3262,7 +3262,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:205:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:205:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3279,7 +3279,7 @@ I found `d4_l2_val_after_l3` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:205:20
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:205:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3294,7 +3294,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:205:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:205:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3309,7 +3309,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:205:26
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:205:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3327,7 +3327,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:205:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:205:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3342,7 +3342,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:205:28
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:205:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3357,7 +3357,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:217:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:217:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3374,7 +3374,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:218:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:218:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3393,7 +3393,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:218:29
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:218:29
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3412,7 +3412,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:218:32
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:218:32
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3431,7 +3431,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:220:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:220:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3448,7 +3448,7 @@ I found `d4_l1_val_after_l2` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:220:20
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:220:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3463,7 +3463,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:220:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:220:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3478,7 +3478,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:220:26
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:220:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3496,7 +3496,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:220:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:220:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3511,7 +3511,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:220:28
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:220:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3526,7 +3526,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:234:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:234:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3543,7 +3543,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:235:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:235:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3562,7 +3562,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:235:29
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:235:29
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3581,7 +3581,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:235:32
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:235:32
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -3600,7 +3600,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:237:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:237:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3617,7 +3617,7 @@ I found `d4_l1_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:237:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:237:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3632,7 +3632,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:237:26
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:237:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3647,7 +3647,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:237:29
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:237:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3665,7 +3665,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:237:30
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:237:30
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3680,7 +3680,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:237:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:237:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3695,7 +3695,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:247:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:247:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3712,7 +3712,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:249:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:249:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3729,7 +3729,7 @@ I found `d4_l2_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:249:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:249:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3744,7 +3744,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:249:26
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:249:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3759,7 +3759,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:249:29
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:249:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3777,7 +3777,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:249:30
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:249:30
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3792,7 +3792,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:249:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:249:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3807,7 +3807,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:259:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:259:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3824,7 +3824,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:261:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:261:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3841,7 +3841,7 @@ I found `d4_l3_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:261:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:261:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3856,7 +3856,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:261:26
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:261:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3871,7 +3871,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:261:29
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:261:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3889,7 +3889,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:261:30
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:261:30
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3904,7 +3904,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:261:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:261:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3919,7 +3919,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:271:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:271:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3936,7 +3936,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:273:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:273:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3953,7 +3953,7 @@ I found `d5_all_types_then_vals` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:273:24
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:273:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3968,7 +3968,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:273:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:273:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -3983,7 +3983,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:273:30
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:273:30
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4001,7 +4001,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:273:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:273:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4016,7 +4016,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:273:32
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:273:32
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4031,7 +4031,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:291:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:291:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4048,7 +4048,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:292:30
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:292:30
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4067,7 +4067,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:292:33
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:292:33
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4086,7 +4086,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:292:36
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:292:36
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4105,7 +4105,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:292:39
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:292:39
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4124,7 +4124,7 @@ I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:294:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:294:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4141,7 +4141,7 @@ I found `d5_all_vals_then_types` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:294:24
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:294:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4156,7 +4156,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:294:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:294:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4171,7 +4171,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:294:30
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:294:30
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4189,7 +4189,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:294:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:294:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4204,7 +4204,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:294:32
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:294:32
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4219,7 +4219,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:312:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:312:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4236,7 +4236,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:313:30
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:313:30
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4255,7 +4255,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:313:33
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:313:33
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4274,7 +4274,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:313:36
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:313:36
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4293,7 +4293,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:313:39
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:313:39
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4312,7 +4312,7 @@ I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:315:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:315:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4329,7 +4329,7 @@ I found `d5_deep_interleave` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:315:20
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:315:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4344,7 +4344,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:315:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:315:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4359,7 +4359,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:315:26
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:315:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4377,7 +4377,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:315:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:315:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4392,7 +4392,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:315:28
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:315:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4407,7 +4407,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:333:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:333:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4424,7 +4424,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:334:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:334:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4443,7 +4443,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:334:29
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:334:29
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4462,7 +4462,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:334:32
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:334:32
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4481,7 +4481,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:334:35
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:334:35
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4500,7 +4500,7 @@ I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:336:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:336:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4517,7 +4517,7 @@ I found `d5_l4_val_after_l5` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:336:20
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:336:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4532,7 +4532,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:336:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:336:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4547,7 +4547,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:336:26
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:336:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4565,7 +4565,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:336:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:336:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4580,7 +4580,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:336:28
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:336:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4595,7 +4595,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:348:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:348:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4612,7 +4612,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:349:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:349:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4631,7 +4631,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:349:29
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:349:29
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4650,7 +4650,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:349:32
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:349:32
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4669,7 +4669,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:349:35
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:349:35
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4688,7 +4688,7 @@ I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:351:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:351:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4705,7 +4705,7 @@ I found `d5_l3_val_after_l4` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:351:20
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:351:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4720,7 +4720,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:351:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:351:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4735,7 +4735,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:351:26
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:351:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4753,7 +4753,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:351:27
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:351:27
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4768,7 +4768,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:351:28
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:351:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4783,7 +4783,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:365:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:365:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4800,7 +4800,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:366:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:366:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4819,7 +4819,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:366:29
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:366:29
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4838,7 +4838,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:366:32
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:366:32
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4857,7 +4857,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:366:35
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:366:35
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -4876,7 +4876,7 @@ I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:368:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:368:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4893,7 +4893,7 @@ I found `d5_l1_val_last` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:368:16
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:368:16
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4908,7 +4908,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:368:19
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:368:19
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4923,7 +4923,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:368:22
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:368:22
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4941,7 +4941,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:368:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:368:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4956,7 +4956,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:368:24
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:368:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4971,7 +4971,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:386:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:386:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -4988,7 +4988,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:388:22
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:388:22
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5007,7 +5007,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:389:22
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:389:22
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5026,7 +5026,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:389:25
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:389:25
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5045,7 +5045,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:390:22
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:390:22
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5064,7 +5064,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:390:25
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:390:25
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5083,7 +5083,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:390:28
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:390:28
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5102,7 +5102,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:391:23
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:391:23
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5121,7 +5121,7 @@ I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:391:26
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:391:26
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5140,7 +5140,7 @@ I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:391:29
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:391:29
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5159,7 +5159,7 @@ I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ EXPECTED RECORD ACCESSOR ----- associated_items_complete_all_patterns.md:391:32
+-- [×] expected record accessor ----- associated_items_complete_all_patterns.md:391:32
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -5178,7 +5178,7 @@ I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:393:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:393:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5195,7 +5195,7 @@ I found `d5_l1_to_l5_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:393:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:393:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5210,7 +5210,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:393:26
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:393:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5225,7 +5225,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:393:29
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:393:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -5243,7 +5243,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:393:30
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:393:30
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5258,7 +5258,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:393:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:393:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5273,7 +5273,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:405:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:405:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5290,7 +5290,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:407:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:407:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5307,7 +5307,7 @@ I found `d5_l3_to_l5_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:407:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:407:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5322,7 +5322,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:407:26
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:407:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5337,7 +5337,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:407:29
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:407:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -5355,7 +5355,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:407:30
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:407:30
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5370,7 +5370,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:407:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:407:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5385,7 +5385,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:419:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:419:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5402,7 +5402,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:421:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:421:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5419,7 +5419,7 @@ I found `d5_l4_to_l5_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:421:23
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:421:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5434,7 +5434,7 @@ For example:
 
 I found `:=` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:421:26
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:421:26
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5449,7 +5449,7 @@ For example:
 
 I found `[` here.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- associated_items_complete_all_patterns.md:421:29
+-- [×] type application needs parentheses ----- associated_items_complete_all_patterns.md:421:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -5467,7 +5467,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:421:30
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:421:30
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5482,7 +5482,7 @@ For example:
 
 I found `.` here.
 
--- ❌ UNEXPECTED STATEMENT --- associated_items_complete_all_patterns.md:421:31
+-- [×] unexpected statement --- associated_items_complete_all_patterns.md:421:31
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5497,7 +5497,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ---- associated_items_complete_all_patterns.md:433:1
+-- [×] unexpected statement ---- associated_items_complete_all_patterns.md:433:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -5514,7 +5514,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ NAME NOT IN SCOPE --------- associated_items_complete_all_patterns.md:6:8
+-- [×] name not in scope --------- associated_items_complete_all_patterns.md:6:8
 
 Nothing is named `d1_forward` in this scope.
 
@@ -5523,7 +5523,7 @@ d1_1 = d1_forward.first
 
 Is it misspelled, or is there an import missing?
 
--- ❌ NAME NOT IN SCOPE -------- associated_items_complete_all_patterns.md:11:8
+-- [×] name not in scope -------- associated_items_complete_all_patterns.md:11:8
 
 Nothing is named `d1_scope` in this scope.
 
@@ -5532,7 +5532,7 @@ d1_2 = d1_scope.inner
 
 Is it misspelled, or is there an import missing?
 
--- ❌ NAME NOT IN SCOPE -------- associated_items_complete_all_patterns.md:20:8
+-- [×] name not in scope -------- associated_items_complete_all_patterns.md:20:8
 
 Nothing is named `d2_inner_first` in this scope.
 
@@ -5541,7 +5541,7 @@ d2_1 = d2_inner_first.outer_val
 
 Is it misspelled, or is there an import missing?
 
--- ❌ UNRECOGNIZED SYNTAX ------ associated_items_complete_all_patterns.md:21:8
+-- [×] unrecognized syntax ------ associated_items_complete_all_patterns.md:21:8
 
 I don't recognize this syntax.
 
@@ -5550,7 +5550,7 @@ d2_2 = d2_inner_first.Inner.inner_val
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED ---------- associated_items_complete_all_patterns.md:24:5
+-- [×] type redeclared ---------- associated_items_complete_all_patterns.md:24:5
 
 The type `Inner` is being redeclared.
 
@@ -5567,7 +5567,7 @@ Inner := [D].{
     inner_val = outer_val
 }
 
--- ⚠️ DUPLICATE DEFINITION ----- associated_items_complete_all_patterns.md:28:5
+-- [Δ] duplicate definition ----- associated_items_complete_all_patterns.md:28:5
 
 The name `outer_val` is being redeclared here:
 
@@ -5580,7 +5580,7 @@ In this scope, `outer_val` was already defined here (associated_items_complete_a
 inner_val = outer_val
             ^^^^^^^^^
 
--- ❌ UNRECOGNIZED SYNTAX ------ associated_items_complete_all_patterns.md:30:8
+-- [×] unrecognized syntax ------ associated_items_complete_all_patterns.md:30:8
 
 I don't recognize this syntax.
 
@@ -5589,7 +5589,7 @@ d2_3 = d2_outer_val_middle.Inner.inner_val
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ⚠️ DUPLICATE DEFINITION ----- associated_items_complete_all_patterns.md:33:5
+-- [Δ] duplicate definition ----- associated_items_complete_all_patterns.md:33:5
 
 The name `outer_val` is being redeclared here:
 
@@ -5602,7 +5602,7 @@ In this scope, `outer_val` was already defined here (associated_items_complete_a
 outer_val = 500
 ^^^^^^^^^
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:33:17
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:33:17
 
 I don't recognize this syntax.
 
@@ -5611,7 +5611,7 @@ outer_val = d2_outer_refs_inner.Inner.inner_val
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED ---------- associated_items_complete_all_patterns.md:35:5
+-- [×] type redeclared ---------- associated_items_complete_all_patterns.md:35:5
 
 The type `Inner` is being redeclared.
 
@@ -5628,7 +5628,7 @@ Inner := [D].{
     inner_val = outer_val
 }
 
--- ❌ NAME NOT IN SCOPE -------- associated_items_complete_all_patterns.md:39:8
+-- [×] name not in scope -------- associated_items_complete_all_patterns.md:39:8
 
 Nothing is named `d2_outer_refs_inner` in this scope.
 
@@ -5637,7 +5637,7 @@ d2_4 = d2_outer_refs_inner.outer_val
 
 Is it misspelled, or is there an import missing?
 
--- ❌ TYPE REDECLARED ---------- associated_items_complete_all_patterns.md:42:5
+-- [×] type redeclared ---------- associated_items_complete_all_patterns.md:42:5
 
 The type `Inner` is being redeclared.
 
@@ -5654,7 +5654,7 @@ Inner := [D].{
     inner_val = outer_val
 }
 
--- ❌ NAME NOT IN SCOPE ------- associated_items_complete_all_patterns.md:46:26
+-- [×] name not in scope ------- associated_items_complete_all_patterns.md:46:26
 
 Nothing is named `inner_private` in this scope.
 
@@ -5663,7 +5663,7 @@ outer_trying_inner = inner_private
 
 Is it misspelled, or is there an import missing?
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:51:16
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:51:16
 
 I don't recognize this syntax.
 
@@ -5672,7 +5672,7 @@ valA = d2_siblings.InnerB.valB + 1
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ UNRECOGNIZED SYNTAX ------ associated_items_complete_all_patterns.md:58:8
+-- [×] unrecognized syntax ------ associated_items_complete_all_patterns.md:58:8
 
 I don't recognize this syntax.
 
@@ -5681,7 +5681,7 @@ d2_5 = d2_siblings.InnerA.valA
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ NAME NOT IN SCOPE -------- associated_items_complete_all_patterns.md:71:8
+-- [×] name not in scope -------- associated_items_complete_all_patterns.md:71:8
 
 Nothing is named `d3_types_then_vals` in this scope.
 
@@ -5690,7 +5690,7 @@ d3_1 = d3_types_then_vals.val1
 
 Is it misspelled, or is there an import missing?
 
--- ❌ UNRECOGNIZED SYNTAX ------ associated_items_complete_all_patterns.md:72:8
+-- [×] unrecognized syntax ------ associated_items_complete_all_patterns.md:72:8
 
 I don't recognize this syntax.
 
@@ -5699,7 +5699,7 @@ d3_2 = d3_types_then_vals.L2.val2
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ UNRECOGNIZED SYNTAX ------ associated_items_complete_all_patterns.md:73:8
+-- [×] unrecognized syntax ------ associated_items_complete_all_patterns.md:73:8
 
 I don't recognize this syntax.
 
@@ -5708,7 +5708,7 @@ d3_3 = d3_types_then_vals.L2.L3.val3
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ⚠️ DUPLICATE DEFINITION ----- associated_items_complete_all_patterns.md:76:5
+-- [Δ] duplicate definition ----- associated_items_complete_all_patterns.md:76:5
 
 The name `val1` is being redeclared here:
 
@@ -5721,7 +5721,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val3 = val1 + val2
        ^^^^
 
--- ❌ TYPE REDECLARED ---------- associated_items_complete_all_patterns.md:78:5
+-- [×] type redeclared ---------- associated_items_complete_all_patterns.md:78:5
 
 The type `L2` is being redeclared.
 
@@ -5746,7 +5746,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ NAME NOT IN SCOPE -------- associated_items_complete_all_patterns.md:86:8
+-- [×] name not in scope -------- associated_items_complete_all_patterns.md:86:8
 
 Nothing is named `d3_vals_then_types` in this scope.
 
@@ -5755,7 +5755,7 @@ d3_4 = d3_vals_then_types.val1
 
 Is it misspelled, or is there an import missing?
 
--- ❌ UNRECOGNIZED SYNTAX ------ associated_items_complete_all_patterns.md:87:8
+-- [×] unrecognized syntax ------ associated_items_complete_all_patterns.md:87:8
 
 I don't recognize this syntax.
 
@@ -5764,7 +5764,7 @@ d3_5 = d3_vals_then_types.L2.val2
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ UNRECOGNIZED SYNTAX ------ associated_items_complete_all_patterns.md:88:8
+-- [×] unrecognized syntax ------ associated_items_complete_all_patterns.md:88:8
 
 I don't recognize this syntax.
 
@@ -5773,7 +5773,7 @@ d3_6 = d3_vals_then_types.L2.L3.val3
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED ---------- associated_items_complete_all_patterns.md:91:5
+-- [×] type redeclared ---------- associated_items_complete_all_patterns.md:91:5
 
 The type `L2` is being redeclared.
 
@@ -5796,7 +5796,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ NAME NOT IN SCOPE ------- associated_items_complete_all_patterns.md:97:14
+-- [×] name not in scope ------- associated_items_complete_all_patterns.md:97:14
 
 Nothing is named `l3_private` in this scope.
 
@@ -5805,7 +5805,7 @@ bad_l1 = l3_private
 
 Is it misspelled, or is there an import missing?
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:101:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:101:5
 
 The type `L2` is being redeclared.
 
@@ -5830,7 +5830,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:111:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:111:5
 
 The type `L2` is being redeclared.
 
@@ -5855,7 +5855,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:119:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:119:5
 
 The name `val1` is being redeclared here:
 
@@ -5868,7 +5868,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 30
 ^^^^
 
--- ❌ NAME NOT IN SCOPE ------- associated_items_complete_all_patterns.md:121:8
+-- [×] name not in scope ------- associated_items_complete_all_patterns.md:121:8
 
 Nothing is named `d3_val_after_nested` in this scope.
 
@@ -5877,7 +5877,7 @@ d3_7 = d3_val_after_nested.val1
 
 Is it misspelled, or is there an import missing?
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:122:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:122:8
 
 I don't recognize this syntax.
 
@@ -5886,7 +5886,7 @@ d3_8 = d3_val_after_nested.L2.val2
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:123:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:123:8
 
 I don't recognize this syntax.
 
@@ -5895,7 +5895,7 @@ d3_9 = d3_val_after_nested.L2.L3.val3
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:126:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:126:5
 
 The type `L2` is being redeclared.
 
@@ -5924,7 +5924,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:138:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:138:5
 
 The name `val1` is being redeclared here:
 
@@ -5937,7 +5937,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 5
 ^^^^
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:140:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:140:8
 
 I don't recognize this syntax.
 
@@ -5946,7 +5946,7 @@ d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:143:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:143:5
 
 The name `val1` is being redeclared here:
 
@@ -5959,7 +5959,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 1
 ^^^^
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:145:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:145:5
 
 The type `L2` is being redeclared.
 
@@ -5988,7 +5988,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:157:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:157:8
 
 I don't recognize this syntax.
 
@@ -5997,7 +5997,7 @@ d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:160:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:160:5
 
 The type `L2` is being redeclared.
 
@@ -6026,7 +6026,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:172:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:172:5
 
 The name `val1` is being redeclared here:
 
@@ -6039,7 +6039,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 10
 ^^^^
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:174:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:174:8
 
 I don't recognize this syntax.
 
@@ -6048,7 +6048,7 @@ d4_3 = d4_reverse_types.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:177:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:177:5
 
 The name `val1` is being redeclared here:
 
@@ -6061,7 +6061,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 7
 ^^^^
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:179:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:179:5
 
 The type `L2` is being redeclared.
 
@@ -6090,7 +6090,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:191:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:191:8
 
 I don't recognize this syntax.
 
@@ -6099,7 +6099,7 @@ d4_4 = d4_interleaved.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:194:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:194:5
 
 The type `L2` is being redeclared.
 
@@ -6125,7 +6125,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:203:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:203:8
 
 I don't recognize this syntax.
 
@@ -6134,7 +6134,7 @@ d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:206:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:206:5
 
 The type `L2` is being redeclared.
 
@@ -6163,7 +6163,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:218:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:218:8
 
 I don't recognize this syntax.
 
@@ -6172,7 +6172,7 @@ d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:221:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:221:5
 
 The type `L2` is being redeclared.
 
@@ -6201,7 +6201,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:233:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:233:5
 
 The name `val1` is being redeclared here:
 
@@ -6214,7 +6214,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 15
 ^^^^
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:235:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:235:8
 
 I don't recognize this syntax.
 
@@ -6223,7 +6223,7 @@ d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:238:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:238:5
 
 The type `L2` is being redeclared.
 
@@ -6248,7 +6248,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ NAME NOT IN SCOPE ------ associated_items_complete_all_patterns.md:246:11
+-- [×] name not in scope ------ associated_items_complete_all_patterns.md:246:11
 
 Nothing is named `l4_val` in this scope.
 
@@ -6257,7 +6257,7 @@ bad = l4_val
 
 Is it misspelled, or is there an import missing?
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:250:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:250:5
 
 The type `L2` is being redeclared.
 
@@ -6284,7 +6284,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:262:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:262:5
 
 The type `L2` is being redeclared.
 
@@ -6311,7 +6311,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:274:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:274:5
 
 The type `L2` is being redeclared.
 
@@ -6344,7 +6344,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:290:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:290:5
 
 The name `val1` is being redeclared here:
 
@@ -6357,7 +6357,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 3
 ^^^^
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:292:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:292:8
 
 I don't recognize this syntax.
 
@@ -6366,7 +6366,7 @@ d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:295:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:295:5
 
 The name `val1` is being redeclared here:
 
@@ -6379,7 +6379,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 1
 ^^^^
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:297:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:297:5
 
 The type `L2` is being redeclared.
 
@@ -6412,7 +6412,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:313:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:313:8
 
 I don't recognize this syntax.
 
@@ -6421,7 +6421,7 @@ d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:316:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:316:5
 
 The name `val1` is being redeclared here:
 
@@ -6434,7 +6434,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 100
 ^^^^
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:318:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:318:5
 
 The type `L2` is being redeclared.
 
@@ -6467,7 +6467,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:334:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:334:8
 
 I don't recognize this syntax.
 
@@ -6476,7 +6476,7 @@ d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:337:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:337:5
 
 The type `L2` is being redeclared.
 
@@ -6505,7 +6505,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:349:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:349:8
 
 I don't recognize this syntax.
 
@@ -6514,7 +6514,7 @@ d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:352:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:352:5
 
 The type `L2` is being redeclared.
 
@@ -6545,7 +6545,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:366:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:366:8
 
 I don't recognize this syntax.
 
@@ -6554,7 +6554,7 @@ d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:369:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:369:5
 
 The type `L2` is being redeclared.
 
@@ -6587,7 +6587,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:385:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:385:5
 
 The name `val1` is being redeclared here:
 
@@ -6600,7 +6600,7 @@ In this scope, `val1` was already defined here (associated_items_complete_all_pa
 val1 = 2
 ^^^^
 
--- ❌ NAME NOT IN SCOPE ------- associated_items_complete_all_patterns.md:387:8
+-- [×] name not in scope ------- associated_items_complete_all_patterns.md:387:8
 
 Nothing is named `d5_l1_val_last` in this scope.
 
@@ -6609,7 +6609,7 @@ d5_6 = d5_l1_val_last.val1
 
 Is it misspelled, or is there an import missing?
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:388:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:388:8
 
 I don't recognize this syntax.
 
@@ -6618,7 +6618,7 @@ d5_7 = d5_l1_val_last.L2.val2
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:389:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:389:8
 
 I don't recognize this syntax.
 
@@ -6627,7 +6627,7 @@ d5_8 = d5_l1_val_last.L2.L3.val3
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:390:8
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:390:8
 
 I don't recognize this syntax.
 
@@ -6636,7 +6636,7 @@ d5_9 = d5_l1_val_last.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ UNRECOGNIZED SYNTAX ----- associated_items_complete_all_patterns.md:391:9
+-- [×] unrecognized syntax ----- associated_items_complete_all_patterns.md:391:9
 
 I don't recognize this syntax.
 
@@ -6645,7 +6645,7 @@ d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:394:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:394:5
 
 The type `L2` is being redeclared.
 
@@ -6672,7 +6672,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ⚠️ DUPLICATE DEFINITION ---- associated_items_complete_all_patterns.md:404:5
+-- [Δ] duplicate definition ---- associated_items_complete_all_patterns.md:404:5
 
 The name `bad` is being redeclared here:
 
@@ -6685,7 +6685,7 @@ In this scope, `bad` was already defined here (associated_items_complete_all_pat
 bad = l4_val
 ^^^
 
--- ❌ NAME NOT IN SCOPE ------ associated_items_complete_all_patterns.md:404:11
+-- [×] name not in scope ------ associated_items_complete_all_patterns.md:404:11
 
 Nothing is named `deep_secret` in this scope.
 
@@ -6694,7 +6694,7 @@ bad = deep_secret
 
 Is it misspelled, or is there an import missing?
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:408:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:408:5
 
 The type `L2` is being redeclared.
 
@@ -6723,7 +6723,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ TYPE REDECLARED --------- associated_items_complete_all_patterns.md:422:5
+-- [×] type redeclared --------- associated_items_complete_all_patterns.md:422:5
 
 The type `L2` is being redeclared.
 
@@ -6752,7 +6752,7 @@ L2 := [Q].{
     val2 = 20
 }
 
--- ❌ TYPE MOD MISSING MATCHING TYPE ----- associated_items_complete_all_patterns.md:2:1
+-- [×] type mod missing matching type ----- associated_items_complete_all_patterns.md:2:1
 
 Type mods must have a nominal type declaration matching the mod name.
 
@@ -7197,7 +7197,7 @@ Add a nominal type like:
 or:
 `Test :: ...` (opaque nominal type)
 
--- ❌ POLYMORPHIC VALUE -------- associated_items_complete_all_patterns.md:51:9
+-- [×] polymorphic value -------- associated_items_complete_all_patterns.md:51:9
 
 This top-level value still has an unresolved polymorphic type.
 
@@ -7208,7 +7208,7 @@ Its type is:
 a where [a.plus : a, Dec -> a]
 Add an annotation or use this value in a way that fixes its concrete type.
 
--- ❌ MISSING METHOD ---------- associated_items_complete_all_patterns.md:51:16
+-- [×] missing method ---------- associated_items_complete_all_patterns.md:51:16
 
 This is trying to use the `+` operator on a value whose type is an unresolved
 type variable, which has no methods.

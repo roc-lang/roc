@@ -27,7 +27,7 @@ type=expr
 TYPE MISMATCH - binops.md:16:5:16:5
 # PROBLEMS
 
--- ❌ TYPE MISMATCH -------------------------------------------- binops.md:16:5
+-- [×] type mismatch -------------------------------------------- binops.md:16:5
 
 The first pattern in this `match` is incompatible.
 

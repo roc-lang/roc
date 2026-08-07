@@ -11,7 +11,7 @@ match 42 {}
 EMPTY MATCH - empty_match.md:1:1:1:6
 # PROBLEMS
 
--- ❌ EMPTY MATCH ------------------------------------------ empty_match.md:1:1
+-- [×] empty match ------------------------------------------ empty_match.md:1:1
 
 I was parsing a match expression, but it has no branches.
 

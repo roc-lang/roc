@@ -12,7 +12,7 @@ x }
 UNEXPECTED ASSOCIATED EXPRESSION - nominal_associated_with_final_expression.md:2:1:2:2
 # PROBLEMS
 
--- ❌ UNEXPECTED ASSOCIATED EXPRESSION ----- nominal_associated_with_final_expression.md:2:1
+-- [×] unexpected associated expression ----- nominal_associated_with_final_expression.md:2:1
 
 I was parsing associated items for a nominal type, and I found a plain final
 expression.

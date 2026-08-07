@@ -11,7 +11,7 @@ type=expr
 INVALID NUMBER - can_list_number_doesnt_fit.md:1:14:1:17
 # PROBLEMS
 
--- ❌ INVALID NUMBER ----------------------- can_list_number_doesnt_fit.md:1:14
+-- [×] invalid number ----------------------- can_list_number_doesnt_fit.md:1:14
 
 This number literal does not fit in the inferred type.
 

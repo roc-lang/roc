@@ -11,7 +11,7 @@ I.5
 INVALID TUPLE ACCESS - mod_dot_tuple.md:1:1:1:4
 # PROBLEMS
 
--- ❌ INVALID TUPLE ACCESS ---------------------------- mod_dot_tuple.md:1:1
+-- [×] invalid tuple access ---------------------------- mod_dot_tuple.md:1:1
 
 This value is not a tuple, so it has no .5 element.
 

@@ -22,7 +22,7 @@ type=expr
 MISSING METHOD - tag_applications_simple.md:2:10:2:12
 # PROBLEMS
 
--- ❌ MISSING METHOD -------------------------- tag_applications_simple.md:2:10
+-- [×] missing method -------------------------- tag_applications_simple.md:2:10
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.

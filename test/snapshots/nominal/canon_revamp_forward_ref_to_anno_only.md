@@ -17,7 +17,7 @@ NAME NOT IN SCOPE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
 DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
 # PROBLEMS
 
--- ❌ NAME NOT IN SCOPE --------- canon_revamp_forward_ref_to_anno_only.md:3:14
+-- [×] name not in scope --------- canon_revamp_forward_ref_to_anno_only.md:3:14
 
 Nothing is named `absent` in this scope.
 
@@ -26,7 +26,7 @@ callMe = absent
 
 Is it misspelled, or is there an import missing?
 
--- ⚠️ DECLARATION HAS NO VALUE --- canon_revamp_forward_ref_to_anno_only.md:5:5
+-- [Δ] declaration has no value --- canon_revamp_forward_ref_to_anno_only.md:5:5
 
 This declaration has a type annotation but no implementation.
 

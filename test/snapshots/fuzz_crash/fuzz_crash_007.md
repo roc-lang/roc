@@ -13,7 +13,7 @@ UNEXPECTED STATEMENT - fuzz_crash_007.md:1:4:1:6
 UNEXPECTED STATEMENT - fuzz_crash_007.md:1:6:1:8
 # PROBLEMS
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_007.md:1:1
+-- [×] unexpected statement ------------------------------ fuzz_crash_007.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -30,7 +30,7 @@ I found `ff8` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_007.md:1:4
+-- [×] unexpected statement ------------------------------ fuzz_crash_007.md:1:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -45,7 +45,7 @@ For example:
 
 I found `.8` here.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_007.md:1:6
+-- [×] unexpected statement ------------------------------ fuzz_crash_007.md:1:6
 
 I was parsing a statement, and this token cannot start a statement here.
 

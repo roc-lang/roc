@@ -13,7 +13,7 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:5:1:12
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 # PROBLEMS
 
--- ❌ TYPE MISMATCH ---------------- can_list_mismatch_then_nested_error.md:1:2
+-- [×] type mismatch ---------------- can_list_mismatch_then_nested_error.md:1:2
 
 This number is being used where a non-number type is needed.
 
@@ -33,7 +33,7 @@ Other code expects this to have the type:
         a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
       ]
 
--- ❌ TYPE MISMATCH ---------------- can_list_mismatch_then_nested_error.md:1:5
+-- [×] type mismatch ---------------- can_list_mismatch_then_nested_error.md:1:5
 
 This string literal is being used where a non-string type is needed.
 
@@ -48,7 +48,7 @@ The type was determined to be:
         a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
       ]
 
--- ❌ TYPE MISMATCH --------------- can_list_mismatch_then_nested_error.md:1:18
+-- [×] type mismatch --------------- can_list_mismatch_then_nested_error.md:1:18
 
 This string literal is being used where a non-string type is needed.
 

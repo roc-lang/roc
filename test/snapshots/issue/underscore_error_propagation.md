@@ -25,7 +25,7 @@ TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
 TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 # PROBLEMS
 
--- ❌ UNDERSCORE IN TYPE ALIAS ------------ underscore_error_propagation.md:1:1
+-- [×] underscore in type alias ------------ underscore_error_propagation.md:1:1
 
 Underscores are not allowed in type alias declarations.
 
@@ -36,7 +36,7 @@ Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
 
--- ❌ TYPE MISMATCH ----------------------- underscore_error_propagation.md:6:9
+-- [×] type mismatch ----------------------- underscore_error_propagation.md:6:9
 
 This string literal is being used where a non-string type is needed.
 
@@ -47,7 +47,7 @@ The type was determined to be:
 
     BadDerived
 
--- ❌ TYPE MISMATCH --------------------- underscore_error_propagation.md:13:13
+-- [×] type mismatch --------------------- underscore_error_propagation.md:13:13
 
 This string literal is being used where a non-string type is needed.
 

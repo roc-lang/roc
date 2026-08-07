@@ -37,7 +37,7 @@ UNUSED VARIABLE - test_exact_pattern_crash.md:19:5:19:7
 TOO MANY ARGS - test_exact_pattern_crash.md:23:10:23:50
 # PROBLEMS
 
--- ⚠️ UNUSED VARIABLE ------------------------ test_exact_pattern_crash.md:19:5
+-- [Δ] unused variable ------------------------ test_exact_pattern_crash.md:19:5
 
 Variable `p1` is defined here and then never used:
 
@@ -47,7 +47,7 @@ p1 = swap_pair((1, 2))
 If you don't need this variable, prefix it with an underscore like `_p1` to
 suppress this warning.
 
--- ❌ TOO MANY ARGS ------------------------- test_exact_pattern_crash.md:23:10
+-- [×] too many args ------------------------- test_exact_pattern_crash.md:23:10
 
 The `map_pair` function expects 3 arguments, but it got 4 instead.
 

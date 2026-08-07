@@ -16,7 +16,7 @@ match data {
 POLYMORPHIC VALUE - mixed_pattern_scoping.md:1:1:6:2
 # PROBLEMS
 
--- ❌ POLYMORPHIC VALUE -------------------------- mixed_pattern_scoping.md:1:1
+-- [×] polymorphic value -------------------------- mixed_pattern_scoping.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
 

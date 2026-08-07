@@ -55,7 +55,7 @@ UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
 
--- ⚠️ BUILTIN TYPE SHADOWED ---------------------------- type_alias_decl.md:7:1
+-- [Δ] builtin type shadowed ---------------------------- type_alias_decl.md:7:1
 
 The type `Try` shadows a builtin type.
 
@@ -66,7 +66,7 @@ This may make the builtin type inaccessible in this scope.
 
 The new declaration is here:
 
--- ❌ OPEN EXT NOT ALLOWED IN TYPE DECLARATION ------- type_alias_decl.md:22:18
+-- [×] open ext not allowed in type declaration ------- type_alias_decl.md:22:18
 
 You cannot use a `..` inside a type declaration.
 
@@ -75,7 +75,7 @@ Letters : [A, B, ..]
 
 Hint: You need a named variable, like `..others`, to use this here.
 
--- ⚠️ UNUSED VARIABLE --------------------------------- type_alias_decl.md:36:5
+-- [Δ] unused variable --------------------------------- type_alias_decl.md:36:5
 
 Variable `person` is defined here and then never used:
 
@@ -85,7 +85,7 @@ person = { name: "Alice", age: 30 }
 If you don't need this variable, prefix it with an underscore like `_person` to
 suppress this warning.
 
--- ⚠️ UNUSED VARIABLE --------------------------------- type_alias_decl.md:39:5
+-- [Δ] unused variable --------------------------------- type_alias_decl.md:39:5
 
 Variable `color` is defined here and then never used:
 

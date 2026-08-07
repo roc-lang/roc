@@ -18,7 +18,7 @@ type=expr
 UNCONDITIONAL CONDITION - single_field_record_else_single_brace.md:3:5:3:9
 # PROBLEMS
 
--- ⚠️ UNCONDITIONAL CONDITION ---- single_field_record_else_single_brace.md:3:5
+-- [Δ] unconditional condition ---- single_field_record_else_single_brace.md:3:5
 
 This if condition is known at compile time, so this conditional will always
 make the same choice.

@@ -26,7 +26,7 @@ main! = |_| {
 EFFECTFUL FUNCTION NAME - effectful_annotation_recursive_no_name_warning.md:11:1:11:7
 # PROBLEMS
 
--- ⚠️ EFFECTFUL FUNCTION NAME ----- effectful_annotation_recursive_no_name_warning.md:11:1
+-- [Δ] effectful function name ----- effectful_annotation_recursive_no_name_warning.md:11:1
 
 This function performs an effect, so its name must end in `!`.
 

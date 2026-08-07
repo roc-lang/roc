@@ -17,7 +17,7 @@ Outer := [A].{
 NAME NOT IN SCOPE - simple_scope_test.md:6:17:6:26
 # PROBLEMS
 
--- ❌ NAME NOT IN SCOPE ----------------------------- simple_scope_test.md:6:17
+-- [×] name not in scope ----------------------------- simple_scope_test.md:6:17
 
 Nothing is named `inner_val` in this scope.
 

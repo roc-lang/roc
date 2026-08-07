@@ -5464,7 +5464,7 @@ fn renderSummaryHeaderLine(
     path: []const u8,
     config: reporting.ReportingConfig,
 ) !void {
-    const cyan = if (use_color) ansi_term.cyan else "";
+
     const red = if (use_color) ansi_term.red else "";
     const yellow = if (use_color) ansi_term.yellow else "";
     const reset = if (use_color) ansi_term.reset else "";
@@ -5478,9 +5478,9 @@ fn renderSummaryHeaderLine(
     var warn_buf: [32]u8 = undefined;
     const warn_str = std.fmt.bufPrint(&warn_buf, "{} warning{s}", .{ warning_count, warning_suffix }) catch "";
 
-    const total_w = @min(config.getMaxLineWidth(), 120) -| 1;
-    const icon_w: usize = 2;
-    const prefix_w = 3 + icon_w + 1 + 6 + err_str.len + 5 + warn_str.len + 1;
+    const total_w = @min(config.getMaxLineWidth(), 120);
+    const icon_w: usize = 3;
+    const prefix_w = 3 + icon_w + 7 + err_str.len + 5 + warn_str.len + 1;
 
     const sanitised_path = reporting.sanitisePathForSnapshots(path);
     const loc_w = if (sanitised_path.len > 0) 1 + sanitised_path.len else 0;
@@ -5488,19 +5488,24 @@ fn renderSummaryHeaderLine(
     const dashes = if (total_w > prefix_w + loc_w) (total_w - prefix_w - loc_w) else 5;
 
     try writer.writeByte('\n');
-    try writer.writeAll(cyan);
-    try writer.writeAll("-- 📊 Found ");
+    const cyan = if (use_color) ansi_term.cyan else "";
+    const dim_gray = if (use_color) ansi_term.bright_black else "";
+    try writer.writeAll(dim_gray);
+    try writer.writeAll("-- ");
+    try writer.writeAll(reset);
+    try writer.writeAll("[Σ] found ");
     try writer.writeAll(red);
     try writer.writeAll(err_str);
-    try writer.writeAll(cyan);
+    try writer.writeAll(reset);
     try writer.writeAll(" and ");
     try writer.writeAll(yellow);
     try writer.writeAll(warn_str);
-    try writer.writeAll(cyan);
+    try writer.writeAll(dim_gray);
     try writer.writeByte(' ');
     try writer.splatBytesAll("-", dashes);
     if (sanitised_path.len > 0) {
         try writer.writeByte(' ');
+        try writer.writeAll(cyan);
         try writer.writeAll(sanitised_path);
     }
     try writer.writeAll(reset);

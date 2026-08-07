@@ -20,7 +20,7 @@ UNEXPECTED STATEMENT - fuzz_crash_021.md:1:16:1:16
 EXPECTED TYPE SEPARATOR - fuzz_crash_021.md:3:1:3:5
 # PROBLEMS
 
--- ❌ UNCLOSED STRING ---------------------------------- fuzz_crash_021.md:1:13
+-- [×] unclosed string ---------------------------------- fuzz_crash_021.md:1:13
 
 This string is missing a closing quote.
 
@@ -28,7 +28,7 @@ Fli/main.roc" }
             ^^^
 
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ---------------- fuzz_crash_021.md:1:4
+-- [×] type application needs parentheses ---------------- fuzz_crash_021.md:1:4
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -44,7 +44,7 @@ For example:
 
 I found `/` here.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_021.md:1:5
+-- [×] unexpected statement ------------------------------ fuzz_crash_021.md:1:5
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -61,7 +61,7 @@ I found `main` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_021.md:1:9
+-- [×] unexpected statement ------------------------------ fuzz_crash_021.md:1:9
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -78,7 +78,7 @@ I found `.roc` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_021.md:1:13
+-- [×] unexpected statement ----------------------------- fuzz_crash_021.md:1:13
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -93,7 +93,7 @@ For example:
 
 I found `"` here.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_021.md:1:14
+-- [×] unexpected statement ----------------------------- fuzz_crash_021.md:1:14
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -108,7 +108,7 @@ For example:
 
 I found ` }` here.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_021.md:1:16
+-- [×] unexpected statement ----------------------------- fuzz_crash_021.md:1:16
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -123,7 +123,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
--- ❌ EXPECTED TYPE SEPARATOR --------------------------- fuzz_crash_021.md:3:1
+-- [×] expected type separator --------------------------- fuzz_crash_021.md:3:1
 
 I was parsing type parameters, and I expected `,` or `)`.
 

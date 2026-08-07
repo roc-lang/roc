@@ -16,7 +16,7 @@ ASCII CONTROL CHARACTER
 ASCII control characters are not allowed in Roc source code.
 
 
--- ❌ INCOMPLETE IMPORT -------------------------------- fuzz_crash_046.md:1:20
+-- [×] incomplete import -------------------------------- fuzz_crash_046.md:1:20
 
 I was parsing an import, and the mod path is incomplete.
 

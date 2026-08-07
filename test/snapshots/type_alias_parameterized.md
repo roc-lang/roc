@@ -18,7 +18,7 @@ main! = |_| swapPair(1, 2)
 TOO MANY ARGS - type_alias_parameterized.md:8:13:8:27
 # PROBLEMS
 
--- ❌ TOO MANY ARGS -------------------------- type_alias_parameterized.md:8:13
+-- [×] too many args -------------------------- type_alias_parameterized.md:8:13
 
 The `swapPair` function expects 1 argument, but it got 2 instead.
 

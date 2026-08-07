@@ -19,7 +19,7 @@ EFFECTFUL FUNCTION NAME - repro_issue_9962_effectful_local_function_name.md:1:1:
 EFFECTFUL FUNCTION NAME - repro_issue_9962_effectful_local_function_name.md:4:5:4:10
 # PROBLEMS
 
--- ⚠️ EFFECTFUL FUNCTION NAME ----- repro_issue_9962_effectful_local_function_name.md:1:1
+-- [Δ] effectful function name ----- repro_issue_9962_effectful_local_function_name.md:1:1
 
 This function performs an effect, so its name must end in `!`.
 
@@ -28,7 +28,7 @@ topThunk = || echo!("top")
 
 Add a trailing `!` to this function name.
 
--- ⚠️ EFFECTFUL FUNCTION NAME ----- repro_issue_9962_effectful_local_function_name.md:4:5
+-- [Δ] effectful function name ----- repro_issue_9962_effectful_local_function_name.md:4:5
 
 This function performs an effect, so its name must end in `!`.
 

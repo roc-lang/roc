@@ -15,7 +15,7 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:1:1:2:50
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:4:1:4:47
 # PROBLEMS
 
--- ❌ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ----- where_clauses_1.md:1:1
+-- [×] where clause not allowed in type declaration ----- where_clauses_1.md:1:1
 
 You cannot define a `where` clause inside a type declaration.
 
@@ -24,7 +24,7 @@ Hash(a, hasher) : a
 
 You're attempting do this here:
 
--- ❌ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ----- where_clauses_1.md:4:1
+-- [×] where clause not allowed in type declaration ----- where_clauses_1.md:4:1
 
 You cannot define a `where` clause inside a type declaration.
 

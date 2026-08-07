@@ -486,7 +486,7 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:20:167:2
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:31
 # PROBLEMS
 
--- ❌ NAME NOT IN SCOPE -------- associated_items_truly_comprehensive.md:382:20
+-- [×] name not in scope -------- associated_items_truly_comprehensive.md:382:20
 
 Nothing is named `val4` in this scope.
 
@@ -495,7 +495,7 @@ val3 = val4 + 1                                 # Unqualified
 
 Is it misspelled, or is there an import missing?
 
--- ❌ NAME NOT IN SCOPE -------- associated_items_truly_comprehensive.md:388:12
+-- [×] name not in scope -------- associated_items_truly_comprehensive.md:388:12
 
 Nothing is named `val2` in this scope.
 
@@ -504,7 +504,7 @@ val1 = val2 + 1                                         # Unqualified
 
 Is it misspelled, or is there an import missing?
 
--- ❌ CIRCULAR VALUE DEFINITION ----- associated_items_truly_comprehensive.md:167:13
+-- [×] circular value definition ----- associated_items_truly_comprehensive.md:167:13
 
 The value `associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3` is part
 of a recursive non-function definition cycle.
@@ -515,7 +515,7 @@ val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualifie
 Only functions can be recursive. Non-function top-level values must be fully
 computable without depending on themselves through other values.
 
--- ❌ CIRCULAR VALUE DEFINITION ----- associated_items_truly_comprehensive.md:167:20
+-- [×] circular value definition ----- associated_items_truly_comprehensive.md:167:20
 
 The value `associated_items_truly_comprehensive.D3_Pattern2.L2.val2` is part of
 a recursive non-function definition cycle.
@@ -526,7 +526,7 @@ val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualifie
 Only functions can be recursive. Non-function top-level values must be fully
 computable without depending on themselves through other values.
 
--- ❌ CIRCULAR VALUE DEFINITION ----- associated_items_truly_comprehensive.md:167:27
+-- [×] circular value definition ----- associated_items_truly_comprehensive.md:167:27
 
 The value `associated_items_truly_comprehensive.D3_Pattern2.val1` is part of a
 recursive non-function definition cycle.

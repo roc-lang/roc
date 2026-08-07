@@ -21,7 +21,7 @@ UNEXPECTED STATEMENT - fuzz_crash_044.md:4:2:4:2
 UNEXPECTED STATEMENT - fuzz_crash_044.md:4:2:4:3
 # PROBLEMS
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_044.md:1:20
+-- [×] unexpected statement ----------------------------- fuzz_crash_044.md:1:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -36,7 +36,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_044.md:1:21
+-- [×] unexpected statement ----------------------------- fuzz_crash_044.md:1:21
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -51,7 +51,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_044.md:1:22
+-- [×] unexpected statement ----------------------------- fuzz_crash_044.md:1:22
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -66,7 +66,7 @@ For example:
 
 I found `0` here.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_044.md:2:1
+-- [×] unexpected statement ------------------------------ fuzz_crash_044.md:2:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -83,7 +83,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_044.md:2:2
+-- [×] unexpected statement ------------------------------ fuzz_crash_044.md:2:2
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -100,7 +100,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_044.md:4:1
+-- [×] unexpected statement ------------------------------ fuzz_crash_044.md:4:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -115,7 +115,7 @@ For example:
 
 I found `"` here.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_044.md:4:2
+-- [×] unexpected statement ------------------------------ fuzz_crash_044.md:4:2
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -130,7 +130,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_044.md:4:2
+-- [×] unexpected statement ------------------------------ fuzz_crash_044.md:4:2
 
 I was parsing a statement, and this token cannot start a statement here.
 

@@ -11,7 +11,7 @@ t=0->(0)()
 MISSING METHOD - fuzz_crash_095.md:1:7:1:8
 # PROBLEMS
 
--- ❌ MISSING METHOD ------------------------------------ fuzz_crash_095.md:1:7
+-- [×] missing method ------------------------------------ fuzz_crash_095.md:1:7
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.

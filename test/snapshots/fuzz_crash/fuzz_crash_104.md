@@ -12,7 +12,7 @@ e={0#
 UNRECOGNIZED SYNTAX - fuzz_crash_104.md:1:4:2:6
 # PROBLEMS
 
--- ❌ UNRECOGNIZED SYNTAX ------------------------------- fuzz_crash_104.md:1:4
+-- [×] unrecognized syntax ------------------------------- fuzz_crash_104.md:1:4
 
 I don't recognize this syntax.
 

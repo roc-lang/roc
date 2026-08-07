@@ -19,7 +19,7 @@ UNEXPECTED STATEMENT - type_function_multi_arg.md:3:42:3:43
 MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 # PROBLEMS
 
--- ❌ EXPECTED CLOSING PARENTHESIS ------------ type_function_multi_arg.md:3:27
+-- [×] expected closing parenthesis ------------ type_function_multi_arg.md:3:27
 
 I was parsing a parenthesized type, and I expected `)`.
 
@@ -33,7 +33,7 @@ For example:
 
 I found `(` here.
 
--- ❌ UNEXPECTED STATEMENT -------------------- type_function_multi_arg.md:3:40
+-- [×] unexpected statement -------------------- type_function_multi_arg.md:3:40
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -48,7 +48,7 @@ For example:
 
 I found `_c` here.
 
--- ❌ UNEXPECTED STATEMENT -------------------- type_function_multi_arg.md:3:42
+-- [×] unexpected statement -------------------- type_function_multi_arg.md:3:42
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -65,7 +65,7 @@ I found `)` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ MALFORMED TYPE -------------------------- type_function_multi_arg.md:3:27
+-- [×] malformed type -------------------------- type_function_multi_arg.md:3:27
 
 This type annotation is malformed or contains invalid syntax.
 

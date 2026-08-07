@@ -22,7 +22,7 @@ main = {
 MISSING METHOD - StructuralMethodError.md:11:7:11:12
 # PROBLEMS
 
--- ❌ MISSING METHOD ---------------------------- StructuralMethodError.md:11:7
+-- [×] missing method ---------------------------- StructuralMethodError.md:11:7
 
 This `greet` method is being called on a value whose type doesn't have that
 method.

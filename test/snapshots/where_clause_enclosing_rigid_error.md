@@ -16,7 +16,7 @@ outer = |value| {
 UNBOUND WHERE RECEIVER - where_clause_enclosing_rigid_error.md:3:29:3:46
 # PROBLEMS
 
--- ❌ UNBOUND WHERE RECEIVER ------- where_clause_enclosing_rigid_error.md:3:29
+-- [×] unbound where receiver ------- where_clause_enclosing_rigid_error.md:3:29
 
 The type variable `a` is not introduced by this annotation's type or a
 connected method constraint, so this where clause cannot add the `show` method

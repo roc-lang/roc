@@ -11,7 +11,7 @@ Foo : [A, B, C].{ x = 5 }
 TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_associated.md:1:16:1:17
 # PROBLEMS
 
--- ❌ TYPE ALIAS WITH ASSOCIATED ITEMS ----- type_alias_with_associated.md:1:16
+-- [×] type alias with associated items ----- type_alias_with_associated.md:1:16
 
 I was parsing a type alias, but only nominal types can have associated items.
 

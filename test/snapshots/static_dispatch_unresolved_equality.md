@@ -13,7 +13,7 @@ result = poly() == poly()
 MISSING METHOD - static_dispatch_unresolved_equality.md:3:10:3:16
 # PROBLEMS
 
--- ❌ MISSING METHOD -------------- static_dispatch_unresolved_equality.md:3:10
+-- [×] missing method -------------- static_dispatch_unresolved_equality.md:3:10
 
 This is trying to compare values with `==`, but their type is an unresolved
 type variable, which has no methods.

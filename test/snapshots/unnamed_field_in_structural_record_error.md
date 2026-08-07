@@ -11,7 +11,7 @@ Bad : { x : U8, _ : U8 }
 UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD - unnamed_field_in_structural_record_error.md:1:17:1:23
 # PROBLEMS
 
--- ❌ UNNAMED FIELD NOT ALLOWED IN STRUCTURAL RECORD ----- unnamed_field_in_structural_record_error.md:1:17
+-- [×] unnamed field not allowed in structural record ----- unnamed_field_in_structural_record_error.md:1:17
 
 Unnamed fields (written `_` or `_name`) are only allowed in nominal record type
 declarations, not in structural record types.
