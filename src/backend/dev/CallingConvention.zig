@@ -41,6 +41,10 @@ pub const CallingConvention = struct {
     /// Whether x64 Windows ABI special rules apply.
     /// Note: Windows aarch64 follows AAPCS64 in this backend.
     is_windows: bool,
+    /// Whether overflow arguments pack on the stack at their natural size and
+    /// alignment instead of each taking a full eightbyte slot. Apple's arm64
+    /// ABI packs; AAPCS64 everywhere else and both x86_64 conventions do not.
+    packs_stack_args: bool,
 
     pub const ParamReg = union(enum) {
         x86_64: x86_64.GeneralReg,
@@ -70,6 +74,7 @@ pub const CallingConvention = struct {
                     .return_by_ptr_threshold = 8,
                     .pass_by_ptr_threshold = 8, // Only 1,2,4,8 byte structs by value
                     .is_windows = true,
+                    .packs_stack_args = false,
                 }
             else
                 CallingConvention{
@@ -79,6 +84,7 @@ pub const CallingConvention = struct {
                     .return_by_ptr_threshold = 16,
                     .pass_by_ptr_threshold = std.math.maxInt(usize),
                     .is_windows = false,
+                    .packs_stack_args = false,
                 },
             .aarch64, .aarch64_be => CallingConvention{
                 .param_regs = .{ .aarch64 = &AAPCS64_PARAM_REGS },
@@ -87,6 +93,7 @@ pub const CallingConvention = struct {
                 .return_by_ptr_threshold = 16,
                 .pass_by_ptr_threshold = std.math.maxInt(usize),
                 .is_windows = false,
+                .packs_stack_args = target.isMacOS(),
             },
             .arm, .wasm32, .other => unsupportedArchCallingConvention(target),
         };
@@ -179,6 +186,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
     const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
     const is_windows = roc_target.isWindows();
     const uses_position_based_float_args = is_x86_64 and is_windows;
+    // Apple's arm64 ABI packs overflow arguments on the stack at their natural
+    // size and alignment; AAPCS64 elsewhere and both x86_64 conventions give
+    // each one a full eightbyte slot.
+    const packs_stack_args = is_aarch64 and roc_target.isMacOS();
 
     // Represents a deferred argument source (used for both stack and register args)
     const ArgSource = union(enum) {
@@ -222,6 +233,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Float argument index (separate from int_arg_index on System V, same on Windows)
         float_arg_index: usize = 0,
         stack_arg_count: usize = 0,
+        /// Overflow arguments added one-per-parameter through
+        /// `addImplicitStackArg`. Repacking to a packed-stack ABI is only
+        /// defined when every stack argument was placed that way.
+        implicit_stack_arg_count: usize = 0,
         stack_arg_size: u16 = 0,
         stack_args: [MAX_STACK_ARGS]StackArg = undefined,
         return_by_ptr: bool = false,
@@ -378,6 +393,42 @@ pub fn CallBuilder(comptime EmitType: type) type {
         fn addImplicitStackArg(self: *Self, src: ArgSource) void {
             const byte_offset = std.mem.alignForward(u16, self.stack_arg_size, 8);
             self.addStackArg(byte_offset, 8, src);
+            self.implicit_stack_arg_count += 1;
+        }
+
+        /// Re-place the overflow arguments for a C callee whose parameter ABI
+        /// sizes are `param_abi_sizes`, one entry per declared parameter in
+        /// order. On a packed-stack ABI a sub-word parameter occupies only its
+        /// own bytes, so the eightbyte slots assigned while arguments were
+        /// added put every later argument at the wrong offset. On every other
+        /// ABI the slots are already right and this does nothing.
+        ///
+        /// Only defined when each overflow argument was added one-per-parameter
+        /// and all parameters are integer class, which is what the boxy runtime
+        /// entrypoints are.
+        pub fn packStackArgsForCAbi(self: *Self, param_abi_sizes: []const u8) void {
+            if (comptime !packs_stack_args) return;
+            if (self.stack_arg_count == 0) return;
+            std.debug.assert(self.stack_arg_count == self.implicit_stack_arg_count);
+            std.debug.assert(self.float_arg_index == 0);
+
+            const first_stack_param = param_abi_sizes.len - self.stack_arg_count;
+            std.debug.assert(first_stack_param == CC_EMIT.PARAM_REGS.len);
+
+            var cursor: u16 = 0;
+            for (self.stack_args[0..self.stack_arg_count], 0..) |*arg, i| {
+                const size = param_abi_sizes[first_stack_param + i];
+                std.debug.assert(size == 1 or size == 2 or size == 4 or size == 8);
+                // A pointer-valued argument is always a full eightbyte, so a
+                // narrower declared size would mean the table and the emitted
+                // argument disagree about what is being passed.
+                std.debug.assert(arg.src != .from_lea or size == 8);
+                cursor = std.mem.alignForward(u16, cursor, size);
+                arg.byte_offset = cursor;
+                arg.size = size;
+                cursor += size;
+            }
+            self.stack_arg_size = std.mem.alignForward(u16, cursor, 8);
         }
 
         fn addDeferredRegArg(self: *Self, register_index: usize, src: ArgSource) void {
@@ -601,18 +652,29 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Store the low `size` bytes of `reg` into the outgoing argument area.
+        /// A packed-stack ABI gives a sub-word argument only its own bytes, so
+        /// a wider store would overwrite the argument that follows it.
+        fn storeNarrowedAarch64(self: *Self, reg: GeneralReg, size: u8, stack_offset: i32) Allocator.Error!void {
+            switch (size) {
+                1 => try self.emit.strbRegMemSoff(reg, CC_EMIT.STACK_PTR, stack_offset),
+                2 => try self.emit.strhRegMemSoff(reg, CC_EMIT.STACK_PTR, stack_offset),
+                4 => try self.emit.strRegMemSoff(.w32, reg, CC_EMIT.STACK_PTR, stack_offset),
+                8 => try self.emit.strRegMemSoff(.w64, reg, CC_EMIT.STACK_PTR, stack_offset),
+                else => unreachable,
+            }
+        }
+
         /// Emit one byte-exact stack argument piece for AArch64.
         fn emitStackArgAarch64(self: *Self, arg: StackArg) Allocator.Error!void {
             const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + arg.byte_offset);
             switch (arg.src) {
                 .from_reg => |reg| {
-                    std.debug.assert(arg.size == 8);
-                    try self.emit.strRegMemSoff(.w64, reg, CC_EMIT.STACK_PTR, stack_offset);
+                    try storeNarrowedAarch64(self, reg, arg.size, stack_offset);
                 },
                 .from_imm => |value| {
-                    std.debug.assert(arg.size == 8);
                     try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(value));
-                    try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, stack_offset);
+                    try storeNarrowedAarch64(self, CC_EMIT.SCRATCH_REG, arg.size, stack_offset);
                 },
                 .from_lea => |lea| {
                     std.debug.assert(arg.size == 8);

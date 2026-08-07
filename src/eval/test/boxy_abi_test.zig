@@ -6,6 +6,7 @@
 //! value bytes, and checks refcount balance through the allocation tracker.
 
 const std = @import("std");
+const backend = @import("backend");
 const base = @import("base");
 const layout_mod = @import("layout");
 const lir = @import("lir");
@@ -1953,4 +1954,38 @@ test "boxy abi sidecar view initializes the global runtime from image bytes" {
         @intFromEnum(layout_mod.Idx.u64),
         &view.tables.type_descs[0],
     ));
+}
+
+test "boxy builtin parameter ABI sizes match the wrapper declarations" {
+    const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
+
+    // Apple's arm64 ABI packs overflow arguments on the stack at their natural
+    // size, so the dev backend places them from `paramAbiSizes`. A row that
+    // drifts from the wrapper it describes would silently misplace every
+    // argument after the first sub-word one, so check every row here. A
+    // wrapper may omit its row only when all of its parameters reach the
+    // callee in registers on every supported target.
+    const max_int_param_regs = 8; // AAPCS64; x86_64 has fewer
+
+    inline for (std.meta.fields(BoxyBuiltinFn)) |field| {
+        const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+        const params = @typeInfo(@TypeOf(@field(eval.boxy_abi, boxy_fn.symbolName()))).@"fn".params;
+
+        if (boxy_fn.paramAbiSizes()) |sizes| {
+            try std.testing.expectEqual(params.len, sizes.len);
+            inline for (params, 0..) |param, i| {
+                errdefer std.debug.print(
+                    "{s} parameter {d} is {s}\n",
+                    .{ boxy_fn.symbolName(), i, @typeName(param.type.?) },
+                );
+                try std.testing.expectEqual(@as(u8, @sizeOf(param.type.?)), sizes[i]);
+            }
+        } else {
+            errdefer std.debug.print(
+                "{s} takes {d} parameters and needs a paramAbiSizes row\n",
+                .{ boxy_fn.symbolName(), params.len },
+            );
+            try std.testing.expect(params.len <= max_int_param_regs);
+        }
+    }
 }

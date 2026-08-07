@@ -335,6 +335,59 @@ pub const BoxyBuiltinFn = enum {
             .list_release_excess_capacity => "roc_boxy_list_release_excess_capacity",
         };
     }
+
+    /// The ABI size of each declared parameter of the wrapper, in order, or
+    /// null for the wrappers whose parameters all reach the callee in
+    /// registers on every supported target.
+    ///
+    /// Apple's arm64 ABI packs overflow arguments on the stack at their
+    /// natural size, so placing them needs each parameter's width. Every
+    /// wrapper listed here takes more integer parameters than AAPCS64 has
+    /// argument registers; `boxy_abi_test` checks each row against the real
+    /// declaration in `src/eval/boxy_abi.zig`.
+    pub fn paramAbiSizes(self: BoxyBuiltinFn) ?[]const u8 {
+        const p = 8; // pointer, usize, or u64
+        return switch (self) {
+            .register_erased_proc => &.{ p, 4, 4, 4, 4, 4, 4, 4, 4 },
+            .call_erased => &.{ p, p, 1, p, p, p, p, p, p, p, 4, p, 4, 4, 4, 4 },
+            .tag_payload => &.{ p, p, p, 4, p, 4, 4, 4, 1 },
+            .call_dict => &.{ p, p, p, p, 4, 4, p, p, p, p, p, 4 },
+            .list_concat => &.{ p, p, p, p, p, p, p, 4, p, 4, p, p, p },
+            .list_prepend => &.{ p, p, p, p, 4, p, p, 4, p, 1, p },
+            .list_sublist => &.{ p, p, p, p, 4, p, p, p, 4, p, 1, p },
+            .list_drop_at => &.{ p, p, p, p, 4, p, p, 4, p, 1, p },
+            .list_replace => &.{ p, p, p, p, 4, p, p, p, p, 4, p, 1, p },
+            .list_set => &.{ p, p, p, p, 4, p, p, p, 4, p, 1, p },
+            .list_swap => &.{ p, p, p, p, 4, p, p, p, 4, p, 1, p },
+            .list_reverse => &.{ p, p, p, p, 4, p, 4, p, 1, p },
+            .list_reserve => &.{ p, p, p, p, 4, p, p, 4, p, 1, p },
+            .list_release_excess_capacity => &.{ p, p, p, p, 4, p, 4, p, 1, p },
+            .static_desc,
+            .static_dict,
+            .dict_method_arg_desc,
+            .dict_method_hidden_desc,
+            .nested_desc,
+            .box_payload_desc,
+            .tag_payload_desc,
+            .tag_ext_desc,
+            .tag_residual_desc,
+            .inspect,
+            .box,
+            .unbox,
+            .adapt,
+            .tag,
+            .eq,
+            .drop,
+            .tag_match,
+            .desc_copy,
+            .dynamic_num_literal,
+            .dynamic_num_literal_ref,
+            .dynamic_frac_literal_ref,
+            .materialize_call_result,
+            .register_proc,
+            => null,
+        };
+    }
 };
 
 /// Number of boxy runtime C-ABI wrappers the dev backend can call.
@@ -17470,6 +17523,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// only reachable through the machine-code shim's symbol resolution.
         fn callBoxyBuiltin(self: *Self, builder: *Builder, boxy_fn: BoxyBuiltinFn) Allocator.Error!void {
             self.boxy_runtime_used = true;
+            if (boxy_fn.paramAbiSizes()) |sizes| {
+                builder.packStackArgsForCAbi(sizes);
+            } else if (builtin.mode == .Debug and builder.stack_arg_count > 0) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: {s} overflowed {d} arguments onto the stack without declared parameter ABI sizes",
+                    .{ boxy_fn.symbolName(), builder.stack_arg_count },
+                );
+            }
             switch (self.generation_mode) {
                 .shim_execution, .object_file => {
                     try builder.callRelocatable(boxy_fn.symbolName(), self.allocator, &self.codegen.relocations);
