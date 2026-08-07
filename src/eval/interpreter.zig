@@ -4084,8 +4084,15 @@ pub const Interpreter = struct {
         proc_arg_layouts[reuse_index] = self.store.getLocal(GuardedList.at(proc_arg_locals, reuse_index)).layout_idx;
 
         const descriptor_bindings = try self.erasedDescriptorBindingsFromCapture(proc_spec, capture_value_ptr);
+        // A consuming call transfers ownership of the callable allocation to the
+        // callee (the host passes the payload as `reuse_ptr`), so evaluating the
+        // proc can free the allocation that `context` points into. Read the
+        // context's result descriptor before the call so the post-call fixup,
+        // which uses it when the proc returns no descriptor of its own, never
+        // dereferences freed memory.
+        const context_result_desc = context.result_desc;
         const result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
-        out_desc.* = @ptrCast(result.desc orelse context.result_desc);
+        out_desc.* = @ptrCast(result.desc orelse context_result_desc);
         const ret_size = self.helper.sizeOf(proc_spec.ret_layout);
         if (ret_size > 0) {
             const ret_ptr = ret orelse {
