@@ -19231,23 +19231,6 @@ const BodyContext = struct {
         };
     }
 
-    fn isIteratorInterfaceNode(self: *BodyContext, node: NodeId) bool {
-        return switch (self.graph.content(node)) {
-            .named => |named| if (named.builtin_owner) |owner|
-                static_dispatch.isIteratorOwner(owner)
-            else
-                false,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
-        };
-    }
-
-    fn isForcedDynamicIteratorNode(self: *BodyContext, node: NodeId) bool {
-        return switch (self.graph.content(node)) {
-            .named => |named| named.def.iterator_representation == .forced_dynamic,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
-        };
-    }
-
     fn isGeneratedPrivateRootNode(self: *BodyContext, node: NodeId) bool {
         return switch (self.graph.content(node)) {
             .named => |named| if (named.backing) |backing|

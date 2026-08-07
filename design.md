@@ -2625,7 +2625,7 @@ projected, and which operands meet at a concrete storage boundary. Monotype
 lowers those operands once before constructing the result cell: `box_unbox`
 and `list_get_unsafe` project the actual operand, list-preserving operations
 return the actual list cell, and insertion, concatenation, and replacement
-select an exact element representation at their declared storage boundary.
+select an exact item representation at their declared storage boundary.
 The checked exact-result-flow pass consumes the same metadata. It must not
 maintain a second handwritten classification or stamp the low-level result
 with the checker-public type and ask Lambda Solved to repair it.
