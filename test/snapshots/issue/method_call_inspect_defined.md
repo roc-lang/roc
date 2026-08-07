@@ -63,13 +63,9 @@ EndOfFile,
 			(e-literal (string "hello"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(e-dispatch-call (method "inspect") (constraint-fn-var 209)
-		(receiver
-			(e-lookup-local
-				(p-assign (ident "x"))))
-		(args)))
+	(e-runtime-error (tag "erroneous_value_expr")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "_a"))
 ~~~

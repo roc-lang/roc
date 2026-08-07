@@ -21020,6 +21020,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const method_binding = method_lookup.binding;
                     const def_idx = method_binding.def_idx;
                     const def = method_env.store.getDef(def_idx);
+                    if (method_env.store.getExpr(def.expr) == .e_anno_only) {
+                        try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
+                        try self.markStaticDispatchRejected(constraint);
+                        continue;
+                    }
                     // Track whether we just processed or referenced a cycle participant.
                     var cycle_method_expr_var: ?Var = null;
 
