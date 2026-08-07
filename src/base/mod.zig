@@ -143,6 +143,7 @@ pub const Numeral = union(enum) {
 };
 
 test "base tests" {
+    std.testing.refAllDecls(@import("byte_encoding.zig"));
     std.testing.refAllDecls(@import("CommonEnv.zig"));
     std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
