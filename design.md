@@ -3011,7 +3011,11 @@ A procedure specialization retains its exact checked source scheme and the
 explicit substitution from that scheme to its exact argument and result types.
 Input and output identities therefore remain distinct when the source signature
 uses one public `Iter` type variable for both; no source-interface graph is
-merged with the produced function graph.
+merged with the produced function graph. Every call and dispatch boundary that
+creates a specialization request records that checked source on the request's
+structural function root. Named callable wrappers are normalized to that root
+before provenance is recorded, so body lowering consumes the explicit source
+mapping instead of reconstructing it from the request shape.
 
 Match lowering projects exact field and payload cells from the exact scrutinee
 and binds its pre-registered locals to those cells before the guard or branch

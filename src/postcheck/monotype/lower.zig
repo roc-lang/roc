@@ -33797,11 +33797,21 @@ const BodyContext = struct {
 
     /// Apply a checked target root to its live call request after any
     /// checker-authored evidence paths have retained their component nodes.
+    /// A dispatch-created request may be the target type itself rather than a
+    /// request built by `functionRequestNode`; record the target root as its
+    /// checked source at this same explicit boundary.
     fn relateEvidenceTargetRootToRequest(
         self: *BodyContext,
         root_node: NodeId,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
+        const request_root = try self.graph.functionRequestRoot(request_fn_node);
+        if (self.graph.requestCheckedSource(request_root) == null) {
+            try self.graph.registerRequestCheckedSource(
+                request_root,
+                try self.graph.functionRequestRoot(root_node),
+            );
+        }
         try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
     }
 
