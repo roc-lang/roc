@@ -1075,58 +1075,19 @@ fn interpreterErasedCallable(_: ?*anyopaque, data_ptr: [*]u8) ErasedCallableReso
 fn writePackedScalar(out: []u8, element: const_store.ConstPackedScalar, scalar: checked.ConstScalar) void {
     if (out.len != element.byteWidth()) writerInvariant("packed scalar output width disagreed with its encoding");
     switch (element) {
-        .u8 => out[0] = switch (scalar) {
-            .u8 => |value| value,
-            else => writerInvariant("packed U8 list element had different scalar data"),
-        },
-        .i8 => out[0] = @bitCast(switch (scalar) {
-            .i8 => |value| value,
-            else => writerInvariant("packed I8 list element had different scalar data"),
-        }),
-        .u16 => std.mem.writeInt(u16, out[0..2], switch (scalar) {
-            .u16 => |value| value,
-            else => writerInvariant("packed U16 list element had different scalar data"),
-        }, .little),
-        .i16 => std.mem.writeInt(i16, out[0..2], switch (scalar) {
-            .i16 => |value| value,
-            else => writerInvariant("packed I16 list element had different scalar data"),
-        }, .little),
-        .u32 => std.mem.writeInt(u32, out[0..4], switch (scalar) {
-            .u32 => |value| value,
-            else => writerInvariant("packed U32 list element had different scalar data"),
-        }, .little),
-        .i32 => std.mem.writeInt(i32, out[0..4], switch (scalar) {
-            .i32 => |value| value,
-            else => writerInvariant("packed I32 list element had different scalar data"),
-        }, .little),
-        .u64 => std.mem.writeInt(u64, out[0..8], switch (scalar) {
-            .u64 => |value| value,
-            else => writerInvariant("packed U64 list element had different scalar data"),
-        }, .little),
-        .i64 => std.mem.writeInt(i64, out[0..8], switch (scalar) {
-            .i64 => |value| value,
-            else => writerInvariant("packed I64 list element had different scalar data"),
-        }, .little),
-        .u128 => writePackedU128(out, switch (scalar) {
-            .u128 => |value| value,
-            else => writerInvariant("packed U128 list element had different scalar data"),
-        }),
-        .i128 => std.mem.writeInt(i128, out[0..16], switch (scalar) {
-            .i128 => |value| value,
-            else => writerInvariant("packed I128 list element had different scalar data"),
-        }, .little),
-        .f32 => std.mem.writeInt(u32, out[0..4], switch (scalar) {
-            .f32_bits => |value| value,
-            else => writerInvariant("packed F32 list element had different scalar data"),
-        }, .little),
-        .f64 => std.mem.writeInt(u64, out[0..8], switch (scalar) {
-            .f64_bits => |value| value,
-            else => writerInvariant("packed F64 list element had different scalar data"),
-        }, .little),
-        .dec => std.mem.writeInt(i128, out[0..16], switch (scalar) {
-            .dec_bits => |value| value,
-            else => writerInvariant("packed Dec list element had different scalar data"),
-        }, .little),
+        .u8 => out[0] = packedScalarValue(.u8, scalar, "packed U8 list element had different scalar data"),
+        .i8 => out[0] = @bitCast(packedScalarValue(.i8, scalar, "packed I8 list element had different scalar data")),
+        .u16 => std.mem.writeInt(u16, out[0..2], packedScalarValue(.u16, scalar, "packed U16 list element had different scalar data"), .little),
+        .i16 => std.mem.writeInt(i16, out[0..2], packedScalarValue(.i16, scalar, "packed I16 list element had different scalar data"), .little),
+        .u32 => std.mem.writeInt(u32, out[0..4], packedScalarValue(.u32, scalar, "packed U32 list element had different scalar data"), .little),
+        .i32 => std.mem.writeInt(i32, out[0..4], packedScalarValue(.i32, scalar, "packed I32 list element had different scalar data"), .little),
+        .u64 => std.mem.writeInt(u64, out[0..8], packedScalarValue(.u64, scalar, "packed U64 list element had different scalar data"), .little),
+        .i64 => std.mem.writeInt(i64, out[0..8], packedScalarValue(.i64, scalar, "packed I64 list element had different scalar data"), .little),
+        .u128 => writePackedU128(out, packedScalarValue(.u128, scalar, "packed U128 list element had different scalar data")),
+        .i128 => std.mem.writeInt(i128, out[0..16], packedScalarValue(.i128, scalar, "packed I128 list element had different scalar data"), .little),
+        .f32 => std.mem.writeInt(u32, out[0..4], packedScalarValue(.f32_bits, scalar, "packed F32 list element had different scalar data"), .little),
+        .f64 => std.mem.writeInt(u64, out[0..8], packedScalarValue(.f64_bits, scalar, "packed F64 list element had different scalar data"), .little),
+        .dec => std.mem.writeInt(i128, out[0..16], packedScalarValue(.dec_bits, scalar, "packed Dec list element had different scalar data"), .little),
         .u8x16,
         .i8x16,
         .u16x8,
@@ -1135,11 +1096,17 @@ fn writePackedScalar(out: []u8, element: const_store.ConstPackedScalar, scalar: 
         .i32x4,
         .u64x2,
         .i64x2,
-        => writePackedU128(out, switch (scalar) {
-            .u128 => |value| value,
-            else => writerInvariant("packed vector list element had different scalar data"),
-        }),
+        => writePackedU128(out, packedScalarValue(.u128, scalar, "packed vector list element had different scalar data")),
     }
+}
+
+fn packedScalarValue(
+    comptime tag: std.meta.Tag(checked.ConstScalar),
+    scalar: checked.ConstScalar,
+    comptime mismatch_message: []const u8,
+) @FieldType(checked.ConstScalar, @tagName(tag)) {
+    if (std.meta.activeTag(scalar) != tag) writerInvariant(mismatch_message);
+    return @field(scalar, @tagName(tag));
 }
 
 fn writePackedU128(out: []u8, value: u128) void {

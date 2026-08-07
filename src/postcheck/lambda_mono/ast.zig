@@ -44,6 +44,7 @@ pub const LocalId = enum(u32) { _ };
 pub const JoinPointId = Lifted.JoinPointId;
 /// Owned string literal id shared with the lifted stage.
 pub const StringLiteralId = Lifted.StringLiteralId;
+/// Packed scalar list literal shared with monotype IR.
 pub const PackedListLiteral = Mono.PackedListLiteral;
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };

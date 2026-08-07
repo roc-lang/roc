@@ -337,6 +337,7 @@ pub const ConstBlob = struct {
     len: u32,
 };
 
+/// String view into immutable shared backing bytes.
 pub const ConstStr = ConstBlob;
 
 /// Packed scalar list whose bytes use the canonical encoding named by
@@ -347,6 +348,7 @@ pub const ConstPackedList = struct {
     element: ConstPackedScalar,
 };
 
+/// List data stored either as child nodes or packed scalar bytes.
 pub const ConstList = union(enum) {
     nodes: []const ConstNodeId,
     scalar_bytes: ConstPackedList,

@@ -327,6 +327,7 @@ pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLi
     return try self.insertStringAligned(text, 1);
 }
 
+/// Interns string backing bytes with the requested minimum alignment.
 pub fn insertStringAligned(self: *Self, text: []const u8, alignment: u32) Allocator.Error!base.StringLiteral.Idx {
     self.assertStringsInsertable();
     return self.string_builder.insertAligned(&self.strings, self.allocator, text, alignment);
