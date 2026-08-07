@@ -3319,13 +3319,26 @@ const hot_reload_host_c_source =
     \\"    value = 8\n"
     \\"}\n";
     \\
-    \\static int write_bytes(const char *path, const char *bytes) {
-    \\    FILE *file = fopen(path, "wb");
+    \\// `roc --watch` rebuilds whenever a watched input's content hash changes, and it
+    \\// hashes the file shortly after the change event arrives. Truncating a watched file
+    \\// in place therefore exposes an empty intermediate state that the watcher can hash
+    \\// and rebuild from, which would make the hot reload generation count depend on
+    \\// scheduling. Writing a temp file and renaming it into place keeps every state the
+    \\// watcher can observe a complete edit, since rename is atomic.
+    \\static int write_file_atomically(const char *path, const char *first, const char *second) {
+    \\    char temp_path[4096];
+    \\    int temp_len = snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+    \\    if (temp_len < 0 || (size_t)temp_len >= sizeof(temp_path)) {
+    \\        fprintf(stderr, "temp path too long for %s\n", path);
+    \\        return 1;
+    \\    }
+    \\
+    \\    FILE *file = fopen(temp_path, "wb");
     \\    if (file == NULL) {
     \\        perror("fopen");
     \\        return 1;
     \\    }
-    \\    if (fputs(bytes, file) < 0) {
+    \\    if (fputs(first, file) < 0 || (second != NULL && fputs(second, file) < 0)) {
     \\        perror("fputs");
     \\        fclose(file);
     \\        return 1;
@@ -3334,25 +3347,19 @@ const hot_reload_host_c_source =
     \\        perror("fclose");
     \\        return 1;
     \\    }
+    \\    if (rename(temp_path, path) != 0) {
+    \\        perror("rename");
+    \\        return 1;
+    \\    }
     \\    return 0;
     \\}
     \\
+    \\static int write_bytes(const char *path, const char *bytes) {
+    \\    return write_file_atomically(path, bytes, NULL);
+    \\}
+    \\
     \\static int write_app(const char *path, const char *body) {
-    \\    FILE *file = fopen(path, "wb");
-    \\    if (file == NULL) {
-    \\        perror("fopen app");
-    \\        return 1;
-    \\    }
-    \\    if (fputs(app_header, file) < 0 || fputs(body, file) < 0) {
-    \\        perror("fputs app");
-    \\        fclose(file);
-    \\        return 1;
-    \\    }
-    \\    if (fclose(file) != 0) {
-    \\        perror("fclose app");
-    \\        return 1;
-    \\    }
-    \\    return 0;
+    \\    return write_file_atomically(path, app_header, body);
     \\}
     \\
     \\uint64_t roc_host_edit_app_and_sleep(uint64_t value) {
@@ -3367,24 +3374,6 @@ const hot_reload_host_c_source =
     \\    uint64_t *result = (uint64_t *)arg;
     \\    *result = roc_main(0);
     \\    return NULL;
-    \\}
-    \\
-    \\static int append_bytes(const char *path, const char *bytes) {
-    \\    FILE *file = fopen(path, "ab");
-    \\    if (file == NULL) {
-    \\        perror("fopen append");
-    \\        return 1;
-    \\    }
-    \\    if (fputs(bytes, file) < 0) {
-    \\        perror("fputs append");
-    \\        fclose(file);
-    \\        return 1;
-    \\    }
-    \\    if (fclose(file) != 0) {
-    \\        perror("fclose append");
-    \\        return 1;
-    \\    }
-    \\    return 0;
     \\}
     \\
     \\static int wait_for_value(const char *label, uint64_t expected) {
@@ -3876,8 +3865,17 @@ const hot_reload_model_host_c_source =
     \\"value : Model -> U64\n"
     \\"value = |model| model.value + model.extra\n";
     \\
+    \\// Renamed into place rather than truncated in place so `roc --watch` never hashes a
+    \\// partially written app and rebuilds from it; see the dev-shim host for details.
     \\static int write_app(const char *path, const char *body) {
-    \\    FILE *file = fopen(path, "wb");
+    \\    char temp_path[4096];
+    \\    int temp_len = snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+    \\    if (temp_len < 0 || (size_t)temp_len >= sizeof(temp_path)) {
+    \\        fprintf(stderr, "temp path too long for %s\n", path);
+    \\        return 1;
+    \\    }
+    \\
+    \\    FILE *file = fopen(temp_path, "wb");
     \\    if (file == NULL) {
     \\        perror("fopen app");
     \\        return 1;
@@ -3889,6 +3887,10 @@ const hot_reload_model_host_c_source =
     \\    }
     \\    if (fclose(file) != 0) {
     \\        perror("fclose app");
+    \\        return 1;
+    \\    }
+    \\    if (rename(temp_path, path) != 0) {
+    \\        perror("rename app");
     \\        return 1;
     \\    }
     \\    return 0;
