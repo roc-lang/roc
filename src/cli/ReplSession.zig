@@ -1507,8 +1507,10 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
 
     // Keep the expression inside the explicit zero-argument root so `dbg`,
     // failed `expect`, and crash callbacks occur during inspected execution,
-    // not while checking finalizes a top-level value.
-    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect(({{ {s} }}))\n", .{ definitions, expr });
+    // not while checking finalizes a top-level value. Do not add a `{ }` block
+    // around the expression: blocking a generalized where-clause helper leaves
+    // its instantiation graph node unresolved and panics Monotype lowering.
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect(({s}))\n", .{ definitions, expr });
     defer self.allocator.free(source);
 
     const import_sources = switch (try self.resolveImports()) {
