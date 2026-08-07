@@ -36247,9 +36247,9 @@ fn constListElemType(module: ProcedureModuleView, checked_ty: checked.CheckedTyp
 
 /// Decode one element of a packed scalar constant list into the same
 /// `ConstScalar` a `.scalar` child node would have carried. Multi-byte values
-/// use the canonical little-endian encoding recorded by the ConstStore writer;
-/// vector elements are read as their 16-byte value into `u128`, matching how
-/// the writer stores a standalone vector scalar.
+/// use the little-endian encoding recorded by the ConstStore writer; vector
+/// elements are read as their 16-byte value into `u128`, matching how the
+/// writer stores a standalone vector scalar.
 fn packedConstListElementScalar(
     element: check.ConstStore.ConstPackedScalar,
     bytes: []const u8,
