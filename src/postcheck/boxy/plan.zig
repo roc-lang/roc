@@ -1564,13 +1564,18 @@ const Builder = struct {
                     try self.analyzeStaticConstNode(store_view, node, nominal_rep, null, visited);
                 }
             },
-            .list => |children| {
+            .list => |list_value| {
                 const elem_rep = requiredSingleChild(&self.plan, rep_id, .list_elem).rep;
                 const elem_type = if (const_type) |stored_type| switch (store.type_store.get(stored_type)) {
                     .list => |element| element,
                     .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => boxyPlanInvariant("stored list node had a non-list stored type"),
                 } else null;
-                for (children) |child| try self.analyzeStaticConstNode(store_view, child, elem_rep, elem_type, visited);
+                switch (list_value) {
+                    // Packed scalar elements carry no nested ConstStore nodes, so
+                    // there is nothing further to analyze for representation.
+                    .scalar_bytes => {},
+                    .nodes => |children| for (children) |child| try self.analyzeStaticConstNode(store_view, child, elem_rep, elem_type, visited),
+                }
             },
             .tuple, .record => |children| {
                 var child_index: usize = 0;

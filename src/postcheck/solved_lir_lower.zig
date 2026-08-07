@@ -2694,10 +2694,30 @@ const Lowerer = struct {
                 } });
             },
             .bytes_lit => |literal| blk: {
-                const bytes_lit = self.stringLiteral(literal);
+                const bytes_lit = self.stringLiteral(literal.literal);
+                const elem_layout = self.localListElemLayout(target);
+                const elem_size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(elem_layout));
+                const elem_size: u32 = elem_size_align.size;
+                const elem_alignment: u32 = @intCast(@max(elem_size_align.alignment.toByteUnits(), 1));
+                const expected_bytes = std.math.mul(u32, literal.len, elem_size) catch
+                    Common.invariant("packed list literal byte length overflowed");
+                if (expected_bytes != bytes_lit.len) {
+                    Common.invariant("packed list literal byte length did not match its element layout");
+                }
+                if (bytes_lit.offset % elem_alignment != 0) {
+                    Common.invariant("packed list literal view was not aligned for its element layout");
+                }
                 break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
                     .target = target,
-                    .value = .{ .bytes_literal = try self.result.store.insertStringView(bytes_lit.backing, bytes_lit.offset, bytes_lit.len) },
+                    .value = .{ .bytes_literal = .{
+                        .bytes = try self.result.store.insertStringViewAligned(
+                            bytes_lit.backing,
+                            bytes_lit.offset,
+                            bytes_lit.len,
+                            elem_alignment,
+                        ),
+                        .len = literal.len,
+                    } },
                     .next = next,
                 } });
             },

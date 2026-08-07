@@ -2512,6 +2512,7 @@ pub const ConstNodeId = const_store.ConstNodeId;
 pub const ConstFnId = const_store.ConstFnId;
 pub const ConstValue = const_store.ConstValue;
 pub const ConstScalar = const_store.ConstScalar;
+pub const ConstList = const_store.ConstList;
 pub const ConstNamedType = const_store.NamedType;
 pub const CheckedTypeSchemeId = checked_ids.CheckedTypeSchemeId;
 pub const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
@@ -32087,8 +32088,8 @@ test "checked module keeps current compile-time ownership tables" {
     try std.testing.expect(@hasField(ConstTemplateTable, "templates"));
     try std.testing.expect(@hasField(ConstStore, "values"));
     try std.testing.expect(@hasField(ConstStore, "fns"));
-    try std.testing.expect(@hasField(ConstStore, "str_backing"));
-    try std.testing.expect(@hasField(ConstStore, "str_views"));
+    try std.testing.expect(@hasField(ConstStore, "blob_backing"));
+    try std.testing.expect(@hasField(ConstStore, "blob_views"));
 }
 
 fn testIndexId(comptime Id: type, index: usize) Id {
@@ -33624,8 +33625,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xFD, 0xB3, 0x8A, 0x2B, 0xDC, 0x1E, 0x62, 0x5E, 0x96, 0xDB, 0x91, 0xD4, 0x40, 0x7F, 0x29, 0x60,
-        0xFA, 0x1C, 0x17, 0x6E, 0x72, 0xE2, 0x77, 0x61, 0xD2, 0xAE, 0x42, 0x36, 0x54, 0xF8, 0xB2, 0x46,
+        0x57, 0xB2, 0x53, 0x2B, 0x91, 0x98, 0xC4, 0xD7, 0x8B, 0x1B, 0xFA, 0x0C, 0xDB, 0x84, 0x19, 0x2A,
+        0x30, 0x45, 0x56, 0x5A, 0x69, 0xC9, 0xAC, 0x85, 0x61, 0x8B, 0xF5, 0x8D, 0x3C, 0x8F, 0xAF, 0x5B,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

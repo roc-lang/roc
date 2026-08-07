@@ -14645,7 +14645,7 @@ const ProcBodyBuilder = struct {
             .pending => boxyLowerInvariant("pending ConstStore node reached runtime boxy lowering"),
             .zst => try self.assignZst(target, next),
             .scalar => |scalar| try self.assignConstScalar(target, scalar, next),
-            .str => |str| try self.assignStringBytesView(target, store_module.const_store.strData(str.data), str.offset, str.len, next),
+            .str => |str| try self.assignStringBytesView(target, store_module.const_store.blobData(str.data), str.offset, str.len, next),
             .crash => |str| try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
             } }),
@@ -14730,7 +14730,7 @@ const ProcBodyBuilder = struct {
             .pending => boxyLowerInvariant("pending ConstStore node reached runtime boxy lowering"),
             .zst => try self.assignZst(target, next),
             .scalar => |scalar| try self.assignConstScalar(target, scalar, next),
-            .str => |str| try self.assignStringBytesView(target, store_module.const_store.strData(str.data), str.offset, str.len, next),
+            .str => |str| try self.assignStringBytesView(target, store_module.const_store.blobData(str.data), str.offset, str.len, next),
             .crash => |str| try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
             } }),
@@ -14779,7 +14779,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         store_module: ProcedureModuleView,
-        items: []const checked.ConstNodeId,
+        list: checked.ConstList,
         stored_type: check.ConstStore.ConstTypeId,
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
@@ -14790,22 +14790,40 @@ const ProcBodyBuilder = struct {
         };
         const elem_rep = self.requiredSingleChild(rep_id, .list_elem).rep;
         const elem_layout = self.localListElemLayout(target);
-        const elems = try self.parent.allocator.alloc(LIR.LocalId, items.len);
+        const list_len: usize = switch (list) {
+            .nodes => |items| items.len,
+            .scalar_bytes => |packed_list| packed_list.len,
+        };
+        const elems = try self.parent.allocator.alloc(LIR.LocalId, list_len);
         defer self.parent.allocator.free(elems);
         for (elems) |*elem| elem.* = try self.addFrameLocal(elem_layout);
 
         var continuation = try self.assignList(target, elems, next);
-        var index = items.len;
-        while (index > 0) {
-            index -= 1;
-            continuation = try self.restoreStoredConstIntoStorageRep(
-                elems[index],
-                store_module,
-                items[index],
-                elem_type,
-                elem_rep,
-                continuation,
-            );
+        switch (list) {
+            .nodes => |items| {
+                var index = items.len;
+                while (index > 0) {
+                    index -= 1;
+                    continuation = try self.restoreStoredConstIntoStorageRep(
+                        elems[index],
+                        store_module,
+                        items[index],
+                        elem_type,
+                        elem_rep,
+                        continuation,
+                    );
+                }
+            },
+            .scalar_bytes => |packed_list| {
+                const bytes = store_module.const_store.blobBytes(packed_list.bytes);
+                const width: usize = packed_list.element.byteWidth();
+                var index: usize = packed_list.len;
+                while (index > 0) {
+                    index -= 1;
+                    const scalar = packedConstListElementScalar(packed_list.element, bytes[index * width ..][0..width]);
+                    continuation = try self.assignConstScalar(elems[index], scalar, continuation);
+                }
+            },
         }
         return continuation;
     }
@@ -15057,7 +15075,7 @@ const ProcBodyBuilder = struct {
         target: LIR.LocalId,
         store_module: ProcedureModuleView,
         type_module: ProcedureModuleView,
-        items: []const checked.ConstNodeId,
+        list: checked.ConstList,
         checked_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -15069,9 +15087,13 @@ const ProcBodyBuilder = struct {
         const source_elem_rep = self.repForModuleType(type_module, elem_ty);
         _ = try self.reserveDescriptorLocalForRep(target_elem_rep);
         const elem_layout = self.localListElemLayout(target);
-        const elem_locals = try self.parent.allocator.alloc(LIR.LocalId, items.len);
+        const list_len: usize = switch (list) {
+            .nodes => |items| items.len,
+            .scalar_bytes => |packed_list| packed_list.len,
+        };
+        const elem_locals = try self.parent.allocator.alloc(LIR.LocalId, list_len);
         defer self.parent.allocator.free(elem_locals);
-        const source_locals = try self.parent.allocator.alloc(?LIR.LocalId, items.len);
+        const source_locals = try self.parent.allocator.alloc(?LIR.LocalId, list_len);
         defer self.parent.allocator.free(source_locals);
         const source_layout = self.workerRuntimeLayoutForType(elem_ty).layoutIdx();
 
@@ -15088,26 +15110,59 @@ const ProcBodyBuilder = struct {
         var continuation = try self.assignList(target, elem_locals, next);
         continuation = try self.prependConstructedDescriptorRebindForRep(list_rep, continuation);
         continuation = try self.prependDescriptorRebindForRepFromRep(target_elem_rep, source_elem_rep, continuation);
-        var index = items.len;
-        while (index > 0) {
-            index -= 1;
-            if (source_locals[index]) |source| {
-                const payload_desc = try self.descriptorRefForKnownRep(source_elem_rep);
-                self.parent.result.store.setLocalBoxyDesc(elem_locals[index], payload_desc);
-                continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
-                    .target = elem_locals[index],
-                    .payload = source,
-                    .payload_layout = self.parent.result.store.getLocal(source).layout_idx,
-                    .payload_desc = payload_desc,
-                    .payload_mode = .move,
-                    .next = continuation,
-                } });
-                continuation = try self.restoreConstNodeInto(source, store_module, type_module, items[index], elem_ty, continuation);
-            } else {
-                continuation = try self.restoreConstNodeInto(elem_locals[index], store_module, type_module, items[index], elem_ty, continuation);
-            }
+
+        switch (list) {
+            .nodes => |items| {
+                var index = items.len;
+                while (index > 0) {
+                    index -= 1;
+                    if (source_locals[index]) |source| {
+                        continuation = try self.prependConstListElementBox(elem_locals[index], source, source_elem_rep, continuation);
+                        continuation = try self.restoreConstNodeInto(source, store_module, type_module, items[index], elem_ty, continuation);
+                    } else {
+                        continuation = try self.restoreConstNodeInto(elem_locals[index], store_module, type_module, items[index], elem_ty, continuation);
+                    }
+                }
+            },
+            .scalar_bytes => |packed_list| {
+                const bytes = store_module.const_store.blobBytes(packed_list.bytes);
+                const width: usize = packed_list.element.byteWidth();
+                var index: usize = packed_list.len;
+                while (index > 0) {
+                    index -= 1;
+                    const scalar = packedConstListElementScalar(packed_list.element, bytes[index * width ..][0..width]);
+                    if (source_locals[index]) |source| {
+                        continuation = try self.prependConstListElementBox(elem_locals[index], source, source_elem_rep, continuation);
+                        continuation = try self.assignConstScalar(source, scalar, continuation);
+                    } else {
+                        continuation = try self.assignConstScalar(elem_locals[index], scalar, continuation);
+                    }
+                }
+            },
         }
         return continuation;
+    }
+
+    /// Emit the boxy box that moves a restored element `source` (in its source
+    /// representation) into the list element slot `elem_local`, tagging the
+    /// slot with `source_elem_rep`'s runtime descriptor.
+    fn prependConstListElementBox(
+        self: *ProcBodyBuilder,
+        elem_local: LIR.LocalId,
+        source: LIR.LocalId,
+        source_elem_rep: Plan.TypeRepId,
+        continuation: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const payload_desc = try self.descriptorRefForKnownRep(source_elem_rep);
+        self.parent.result.store.setLocalBoxyDesc(elem_local, payload_desc);
+        return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
+            .target = elem_local,
+            .payload = source,
+            .payload_layout = self.parent.result.store.getLocal(source).layout_idx,
+            .payload_desc = payload_desc,
+            .payload_mode = .move,
+            .next = continuation,
+        } });
     }
 
     fn restoreConstBoxInto(
@@ -36188,6 +36243,41 @@ fn constListElemType(module: ProcedureModuleView, checked_ty: checked.CheckedTyp
         boxyLowerInvariant("ConstStore list restored with a non-list checked type");
     }
     return nominal.args[0];
+}
+
+/// Decode one element of a packed scalar constant list into the same
+/// `ConstScalar` a `.scalar` child node would have carried. Multi-byte values
+/// use the canonical little-endian encoding recorded by the ConstStore writer;
+/// vector elements are read as their 16-byte value into `u128`, matching how
+/// the writer stores a standalone vector scalar.
+fn packedConstListElementScalar(
+    element: check.ConstStore.ConstPackedScalar,
+    bytes: []const u8,
+) checked.ConstScalar {
+    return switch (element) {
+        .i8 => .{ .i8 = @bitCast(bytes[0]) },
+        .u8 => .{ .u8 = bytes[0] },
+        .i16 => .{ .i16 = std.mem.readInt(i16, bytes[0..2], .little) },
+        .u16 => .{ .u16 = std.mem.readInt(u16, bytes[0..2], .little) },
+        .i32 => .{ .i32 = std.mem.readInt(i32, bytes[0..4], .little) },
+        .u32 => .{ .u32 = std.mem.readInt(u32, bytes[0..4], .little) },
+        .i64 => .{ .i64 = std.mem.readInt(i64, bytes[0..8], .little) },
+        .u64 => .{ .u64 = std.mem.readInt(u64, bytes[0..8], .little) },
+        .i128 => .{ .i128 = std.mem.readInt(i128, bytes[0..16], .little) },
+        .u128 => .{ .u128 = std.mem.readInt(u128, bytes[0..16], .little) },
+        .f32 => .{ .f32_bits = std.mem.readInt(u32, bytes[0..4], .little) },
+        .f64 => .{ .f64_bits = std.mem.readInt(u64, bytes[0..8], .little) },
+        .dec => .{ .dec_bits = std.mem.readInt(i128, bytes[0..16], .little) },
+        .u8x16,
+        .i8x16,
+        .u16x8,
+        .i16x8,
+        .u32x4,
+        .i32x4,
+        .u64x2,
+        .i64x2,
+        => .{ .u128 = std.mem.readInt(u128, bytes[0..16], .little) },
+    };
 }
 
 fn constBoxPayloadType(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {

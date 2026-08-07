@@ -11,10 +11,11 @@
 
 const std = @import("std");
 
+const Base = @import("base");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const SourceLoc = lir.SourceLoc;
-const LowLevelBuiltins = @import("base").LowLevelBuiltins;
+const LowLevelBuiltins = Base.LowLevelBuiltins;
 const builtins = @import("builtins");
 const shim_symbols = builtins.shim_symbols;
 const BoxyBuiltinFn = @import("backend").LirCodeGenMod.BoxyBuiltinFn;
@@ -290,6 +291,7 @@ pub const MonoLlvmCodeGen = struct {
     /// under. Non-zero routes builtin calls through preserve_most shims.
     cold_depth: u32 = 0,
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
+    static_refcounted_backings: std.AutoHashMap(u32, LlvmBuilder.Value),
     static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
@@ -472,6 +474,7 @@ pub const MonoLlvmCodeGen = struct {
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .cold_shims = std.StringHashMap(ColdShim).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
+            .static_refcounted_backings = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
             .static_data_globals = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
             .boxy_capture_drop_helpers = std.AutoHashMap(u64, BoxyCaptureDropHelper).init(allocator),
@@ -530,6 +533,7 @@ pub const MonoLlvmCodeGen = struct {
         self.cold_shims.deinit();
         self.clearStaticBytes();
         self.static_bytes.deinit();
+        self.static_refcounted_backings.deinit();
         self.static_data_globals.deinit();
         self.rc_helpers.deinit();
         self.boxy_capture_drop_helpers.deinit();
@@ -549,6 +553,7 @@ pub const MonoLlvmCodeGen = struct {
         self.cold_shims.clearRetainingCapacity();
         self.cold_depth = 0;
         self.clearStaticBytes();
+        self.static_refcounted_backings.clearRetainingCapacity();
         self.static_data_globals.clearRetainingCapacity();
         self.rc_helpers.clearRetainingCapacity();
         self.boxy_capture_drop_helpers.clearRetainingCapacity();
@@ -7902,27 +7907,27 @@ pub const MonoLlvmCodeGen = struct {
         return value;
     }
 
-    fn emitBytesLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, literal: StrLiteral) Error!void {
+    fn emitBytesLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, literal: lir.LIR.ListLiteral) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        const bytes = self.store.getStringLiteral(literal);
+        const bytes = self.store.getStringLiteral(literal.bytes);
         if (bytes.len == 0) {
             try self.storeListFields(out, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, 0, 0);
             return;
         }
 
-        const backing_bytes = self.store.getStringLiteralBacking(literal);
-        const whole_backing = literal.offset == 0 and @as(usize, literal.len) == backing_bytes.len;
-        const backing_ptr = try self.staticRefcountedBytes(backing_bytes);
+        const backing_bytes = self.store.getStringLiteralBacking(literal.bytes);
+        const whole_backing = literal.bytes.offset == 0 and @as(usize, literal.bytes.len) == backing_bytes.len;
+        const backing_ptr = try self.staticRefcountedBytes(literal.bytes.backing);
         const bytes_ptr = try self.offsetPtrValue(
             backing_ptr,
-            builder.intValue(self.ptrSizedIntType(), literal.offset) catch return error.OutOfMemory,
+            builder.intValue(self.ptrSizedIntType(), literal.bytes.offset) catch return error.OutOfMemory,
         );
 
         try self.storePointer(out, bytes_ptr);
-        try self.storeListLen(out, builder.intValue(self.ptrSizedIntType(), bytes.len) catch return error.OutOfMemory);
+        try self.storeListLen(out, builder.intValue(self.ptrSizedIntType(), literal.len) catch return error.OutOfMemory);
         if (whole_backing) {
-            try self.storeListCapacity(out, builder.intValue(self.ptrSizedIntType(), bytes.len << 1) catch return error.OutOfMemory);
+            try self.storeListCapacity(out, builder.intValue(self.ptrSizedIntType(), @as(u64, literal.len) << 1) catch return error.OutOfMemory);
         } else {
             const backing_int = wip.cast(.ptrtoint, backing_ptr, self.ptrSizedIntType(), "") catch return error.OutOfMemory;
             const alloc_ptr = wip.bin(.add, backing_int, builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
@@ -7950,14 +7955,20 @@ pub const MonoLlvmCodeGen = struct {
         return value;
     }
 
-    fn staticRefcountedBytes(self: *MonoLlvmCodeGen, bytes: []const u8) Error!LlvmBuilder.Value {
+    fn staticRefcountedBytes(self: *MonoLlvmCodeGen, backing: Base.StringLiteral.Idx) Error!LlvmBuilder.Value {
+        const key: u32 = @intFromEnum(backing);
+        if (self.static_refcounted_backings.get(key)) |existing| return existing;
+
         const builder = self.builder orelse return error.CompilationFailed;
         const word_size: usize = self.targetWordSize();
-        const storage = self.allocator.alloc(u8, word_size + bytes.len) catch return error.OutOfMemory;
+        const backing_alignment = @max(word_size, @as(usize, self.store.strings.alignment(backing)));
+        const data_offset = std.mem.alignForward(usize, word_size, backing_alignment);
+        const bytes = self.store.getString(backing);
+        const storage = self.allocator.alloc(u8, data_offset + bytes.len) catch return error.OutOfMemory;
         defer self.allocator.free(storage);
 
-        @memset(storage[0..word_size], 0);
-        @memcpy(storage[word_size..][0..bytes.len], bytes);
+        @memset(storage[0..data_offset], 0);
+        @memcpy(storage[data_offset..][0..bytes.len], bytes);
 
         const arr_ty = builder.arrayType(storage.len, .i8) catch return error.OutOfMemory;
         const name = builder.strtabStringFmt(".roc.refcounted_bytes.{d}", .{self.string_counter}) catch return error.OutOfMemory;
@@ -7965,11 +7976,13 @@ pub const MonoLlvmCodeGen = struct {
         const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
         variable.ptrConst(builder).global.setLinkage(.internal, builder);
         variable.setMutability(.constant, builder);
-        variable.setAlignment(self.targetPointerAlignment(), builder);
+        variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(backing_alignment), builder);
         variable.setInitializer(builder.stringConst(builder.string(storage) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
 
         const base = variable.toValue(builder);
-        return try self.offsetPtrValue(base, builder.intValue(self.ptrSizedIntType(), word_size) catch return error.OutOfMemory);
+        const value = try self.offsetPtrValue(base, builder.intValue(self.ptrSizedIntType(), data_offset) catch return error.OutOfMemory);
+        try self.static_refcounted_backings.put(key, value);
+        return value;
     }
 
     fn emitStrByteSliceForLocal(self: *MonoLlvmCodeGen, local: LocalId) Error!StrByteSlice {

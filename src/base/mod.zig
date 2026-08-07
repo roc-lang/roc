@@ -48,6 +48,8 @@ pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
 pub const roc_version = @import("roc_version.zig");
 pub const doc_comment = @import("doc_comment.zig");
+/// Canonical byte encodings shared across compiler stages.
+pub const byte_encoding = @import("byte_encoding.zig");
 
 /// The default general-purpose allocator for the current target (fast, not leak-checking).
 /// Prefers libc's malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths
@@ -142,6 +144,7 @@ pub const Numeral = union(enum) {
 };
 
 test "base tests" {
+    std.testing.refAllDecls(@import("byte_encoding.zig"));
     std.testing.refAllDecls(@import("CommonEnv.zig"));
     std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));

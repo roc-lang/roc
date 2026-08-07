@@ -1810,7 +1810,7 @@ fn appendCrashConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
-    const data = try module.const_store.addStrData(message);
+    const data = try module.const_store.addBlobData(message);
     return try module.const_store.append(.{ .crash = .{
         .data = data,
         .offset = 0,
