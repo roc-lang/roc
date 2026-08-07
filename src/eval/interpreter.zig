@@ -640,8 +640,8 @@ pub const Interpreter = struct {
     }
 
     /// Construct an interpreter with an explicit hosted-call dependency. When
-    /// present, every hosted call is routed exclusively through this handler;
-    /// the RocOps function table is not consulted as a fallback.
+    /// present, every hosted call is routed exclusively through this handler
+    /// and the RocOps function table is never consulted.
     pub fn initWithHostedCallHandler(
         allocator: Allocator,
         store: *const LirStore,
