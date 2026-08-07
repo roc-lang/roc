@@ -678,10 +678,16 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 },
                 .from_lea => |lea| {
                     std.debug.assert(arg.size == 8);
-                    if (lea.offset >= 0)
-                        try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset))
-                    else
+                    // `add`/`sub` reach 4095 bytes; a frame larger than that
+                    // needs the displacement materialized into a register.
+                    if (lea.offset >= 0 and lea.offset <= 4095) {
+                        try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset));
+                    } else if (lea.offset < 0 and -lea.offset <= 4095) {
                         try self.emit.subRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(-lea.offset));
+                    } else {
+                        try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(@as(i64, lea.offset)));
+                        try self.emit.addRegRegReg(.w64, CC_EMIT.SCRATCH_REG, lea.base, CC_EMIT.SCRATCH_REG);
+                    }
                     try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, stack_offset);
                 },
                 .from_mem => |mem| {

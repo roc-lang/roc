@@ -8686,7 +8686,7 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "pub unsafe fn decref_box_with",
         "pub unsafe fn allocate_box",
         "pub unsafe fn decref_erased_callable",
-        "pub type RocErasedCallableFn = extern \"C\" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8);",
+        "pub type RocErasedCallableFn = extern \"C\" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8, *mut *const c_void);",
         "pub unsafe fn borrow_payload_",
         "pub unsafe fn take_payload_",
         "core::mem::ManuallyDrop::take",
