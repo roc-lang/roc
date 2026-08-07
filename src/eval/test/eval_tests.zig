@@ -4134,6 +4134,21 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: control flow joins distinct exact iterator implementations",
+        .source_kind = .module,
+        .source =
+        \\choose = |condition|
+        \\    if condition {
+        \\        [1.I64, 2, 3].iter()
+        \\    } else {
+        \\        [4.I64, 5, 6].iter().map(|value| value)
+        \\    }
+        \\collect = |condition| Iter.fold(choose(condition), [], |out, value| out.append(value))
+        \\main = (collect(True), collect(False))
+        ,
+        .expected = .{ .inspect_str = "([1, 2, 3], [4, 5, 6])" },
+    },
+    .{
         .name = "inspect: local attached procedure preserves exact iterator result",
         .source_kind = .module,
         .source =
