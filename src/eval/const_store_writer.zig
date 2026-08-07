@@ -1129,7 +1129,7 @@ test "const store writer declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) !checked.CheckedModuleArtifact {
+fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.Error!checked.CheckedModuleArtifact {
     var names = check.CanonicalNames.CanonicalNameStore.init(allocator);
     const module_name = try names.internModuleName("Test");
     return .{

@@ -3030,14 +3030,14 @@ allocation.
 Strings and flat scalar lists use one shared content-interned blob store.
 `List(U8)` therefore has the same constant-storage cost as a `Str` containing
 the same bytes, and equal string/list contents reuse one blob. A packed list
-view records its scalar encoding and element count separately from its byte
-view. Lists whose elements contain pointers or structured values remain
+view records its scalar encoding and item count separately from its byte
+view. Lists whose items contain pointers or structured values remain
 explicit child-node lists so their graph edges and sharing stay visible.
 
 When packed list views reach LIR, the shared literal backing records the maximum
 alignment required by every view. Each view offset must also satisfy its own
-element alignment. Static-data materialization aligns the backing to that
-maximum while keeping the Roc list length and capacity in elements rather than
+item alignment. Static-data materialization aligns the backing to that
+maximum while keeping the Roc list length and capacity in items rather than
 bytes.
 
 The direct LIR const plan also records the root's exact Monotype return type.
@@ -6746,7 +6746,7 @@ const ConstValue = union(enum) {
         scalar_bytes: struct {
             bytes: ConstBlobView,
             len: u32,
-            element: ConstPackedScalar,
+            item: ConstPackedScalar,
         },
     },
     tuple: Span(ConstNodeId),
