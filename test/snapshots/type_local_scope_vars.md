@@ -42,7 +42,7 @@ main! = |_| {}
 TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 # PROBLEMS
 
--- ❌ TYPE MISMATCH ---------------------------- type_local_scope_vars.md:19:16
+-- [×] type mismatch ---------------------------- type_local_scope_vars.md:19:16
 
 The first argument being passed to this function has the wrong type.
 

@@ -21,7 +21,7 @@ main! = |_| {}
 TYPE MISMATCH - generalize_annotated_value_unannotated_not_generalized.md:9:8:9:12
 # PROBLEMS
 
--- ❌ TYPE MISMATCH ----- generalize_annotated_value_unannotated_not_generalized.md:9:8
+-- [×] type mismatch ----- generalize_annotated_value_unannotated_not_generalized.md:9:8
 
 This expression is used in an unexpected way.
 

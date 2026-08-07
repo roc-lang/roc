@@ -18,7 +18,7 @@ MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
 
--- ❌ MISSING METHOD ----------------- lambda_annotation_mismatch_error.md:3:23
+-- [×] missing method ----------------- lambda_annotation_mismatch_error.md:3:23
 
 The value before this `+` operator has a type that doesn't have a `plus` method.
 
@@ -32,7 +32,7 @@ The value's type, which does not have a method named `plus`, is:
 Hint: The `+` operator calls a method named `plus` on the value preceding it,
 passing the value after the operator as the one argument.
 
--- ❌ INVALID NUMBER ----------------- lambda_annotation_mismatch_error.md:7:31
+-- [×] invalid number ----------------- lambda_annotation_mismatch_error.md:7:31
 
 This number literal does not fit in the inferred type.
 

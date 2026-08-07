@@ -14,7 +14,7 @@ world = "World"
 NAME NOT IN SCOPE - simple_mod_no_blanks.md:2:10:2:22
 # PROBLEMS
 
--- ❌ NAME NOT IN SCOPE ----------------------- simple_mod_no_blanks.md:2:10
+-- [×] name not in scope ----------------------- simple_mod_no_blanks.md:2:10
 
 Nothing is named `line!` in this scope.
 

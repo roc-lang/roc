@@ -11,7 +11,7 @@ person.@
 EXPECTED RECORD ACCESSOR - error_bad_record_accessor.md:1:7:1:8
 # PROBLEMS
 
--- ❌ EXPECTED RECORD ACCESSOR --------------- error_bad_record_accessor.md:1:7
+-- [×] expected record accessor --------------- error_bad_record_accessor.md:1:7
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 

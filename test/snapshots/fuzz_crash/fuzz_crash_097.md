@@ -13,7 +13,7 @@ MISSING METHOD - fuzz_crash_097.md:1:4:1:5
 TYPE MISMATCH - fuzz_crash_097.md:1:4:2:4
 # PROBLEMS
 
--- ❌ MISSING METHOD ------------------------------------ fuzz_crash_097.md:1:4
+-- [×] missing method ------------------------------------ fuzz_crash_097.md:1:4
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.
@@ -26,7 +26,7 @@ The value's type, which does not have a method named `from_numeral`, is:
     [X(b), ..] -> _ret
       where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
 
--- ❌ TYPE MISMATCH ------------------------------------- fuzz_crash_097.md:1:4
+-- [×] type mismatch ------------------------------------- fuzz_crash_097.md:1:4
 
 This is not a record, so it does not have any fields to access.
 

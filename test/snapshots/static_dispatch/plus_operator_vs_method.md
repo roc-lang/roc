@@ -32,7 +32,7 @@ MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 # PROBLEMS
 
--- ❌ MISSING METHOD ------------------------- plus_operator_vs_method.md:11:11
+-- [×] missing method ------------------------- plus_operator_vs_method.md:11:11
 
 The value before this `+` operator has a type that doesn't have a `plus` method.
 
@@ -46,7 +46,7 @@ The value's type, which does not have a method named `plus`, is:
 Hint: The `+` operator calls a method named `plus` on the value preceding it,
 passing the value after the operator as the one argument.
 
--- ❌ MISSING METHOD ------------------------- plus_operator_vs_method.md:21:13
+-- [×] missing method ------------------------- plus_operator_vs_method.md:21:13
 
 This `plus` method is being called on a value whose type doesn't have that
 method.

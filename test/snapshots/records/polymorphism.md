@@ -17,7 +17,7 @@ type=expr
 MISSING METHOD - polymorphism.md:6:29:6:35
 # PROBLEMS
 
--- ❌ MISSING METHOD ------------------------------------- polymorphism.md:6:29
+-- [×] missing method ------------------------------------- polymorphism.md:6:29
 
 This `to_str` method is being called on a value whose type doesn't have that
 method.

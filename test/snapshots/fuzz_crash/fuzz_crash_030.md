@@ -37,7 +37,7 @@ UNEXPECTED STATEMENT - fuzz_crash_030.md:15:3:15:4
 UNEXPECTED STATEMENT - fuzz_crash_030.md:16:3:16:4
 # PROBLEMS
 
--- ❌ EXPECTED EXPOSED NAME ----------------------------- fuzz_crash_030.md:8:5
+-- [×] expected exposed name ----------------------------- fuzz_crash_030.md:8:5
 
 I was parsing an exposing list, and I expected an exposed name.
 
@@ -52,7 +52,7 @@ For example:
 
 I found `.` here.
 
--- ❌ EXPECTED CLOSING BRACE --------------------------- fuzz_crash_030.md:11:3
+-- [×] expected closing brace --------------------------- fuzz_crash_030.md:11:3
 
 I was parsing a `packages` record, and I expected a closing `}`.
 
@@ -66,7 +66,7 @@ For example:
 
 I found `{` here.
 
--- ❌ EXPECTED PROVIDES -------------------------------- fuzz_crash_030.md:12:9
+-- [×] expected provides -------------------------------- fuzz_crash_030.md:12:9
 
 I was parsing a platform header, and I expected the `provides` section.
 
@@ -80,7 +80,7 @@ For example:
 
 I found `..c` here.
 
--- ❌ UNEXPECTED STATEMENT ---------------------------- fuzz_crash_030.md:12:12
+-- [×] unexpected statement ---------------------------- fuzz_crash_030.md:12:12
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -95,7 +95,7 @@ For example:
 
 I found `"` here.
 
--- ❌ UNEXPECTED STATEMENT ---------------------------- fuzz_crash_030.md:12:13
+-- [×] unexpected statement ---------------------------- fuzz_crash_030.md:12:13
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -111,7 +111,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- ❌ UNEXPECTED STATEMENT ---------------------------- fuzz_crash_030.md:12:15
+-- [×] unexpected statement ---------------------------- fuzz_crash_030.md:12:15
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -128,7 +128,7 @@ I found `mm` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ---------------------------- fuzz_crash_030.md:12:17
+-- [×] unexpected statement ---------------------------- fuzz_crash_030.md:12:17
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -145,7 +145,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_030.md:13:2
+-- [×] unexpected statement ----------------------------- fuzz_crash_030.md:13:2
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -161,7 +161,7 @@ For example:
 I found `provides` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_030.md:14:3
+-- [×] unexpected statement ----------------------------- fuzz_crash_030.md:14:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -176,7 +176,7 @@ For example:
 
 I found `[` here.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_030.md:15:1
+-- [×] unexpected statement ----------------------------- fuzz_crash_030.md:15:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -193,7 +193,7 @@ I found `ar` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_030.md:15:3
+-- [×] unexpected statement ----------------------------- fuzz_crash_030.md:15:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -209,7 +209,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_030.md:16:3
+-- [×] unexpected statement ----------------------------- fuzz_crash_030.md:16:3
 
 I was parsing a statement, and this token cannot start a statement here.
 

@@ -20,7 +20,7 @@ EXPOSED BUT NOT DEFINED - platform_str.md:7:16:7:50
 DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 # PROBLEMS
 
--- ❌ EXPOSED BUT NOT DEFINED ---------------------------- platform_str.md:7:16
+-- [×] exposed but not defined ---------------------------- platform_str.md:7:16
 
 The mod header says that `processString` is exposed, but it is not defined
 anywhere in this mod.
@@ -31,7 +31,7 @@ provides { "roc_processString": processString }
 You can fix this by either defining `processString` in this mod, or by
 removing it from the list of exposed values.
 
--- ⚠️ DECLARATION HAS NO VALUE ---------------------------- platform_str.md:9:1
+-- [Δ] declaration has no value ---------------------------- platform_str.md:9:1
 
 This declaration has a type annotation but no implementation.
 

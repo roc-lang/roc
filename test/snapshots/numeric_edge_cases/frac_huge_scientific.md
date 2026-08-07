@@ -11,7 +11,7 @@ type=expr
 INVALID NUMBER - frac_huge_scientific.md:1:1:1:8
 # PROBLEMS
 
--- ❌ INVALID NUMBER ------------------------------ frac_huge_scientific.md:1:1
+-- [×] invalid number ------------------------------ frac_huge_scientific.md:1:1
 
 This number literal does not fit in the inferred type.
 

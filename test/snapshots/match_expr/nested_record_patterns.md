@@ -17,7 +17,7 @@ match ... {
 UNCONDITIONAL CONDITION - nested_record_patterns.md:1:7:1:10
 # PROBLEMS
 
--- ⚠️ UNCONDITIONAL CONDITION ------------------- nested_record_patterns.md:1:7
+-- [Δ] unconditional condition ------------------- nested_record_patterns.md:1:7
 
 This match value is known at compile time, so this match will always inspect
 the same value.

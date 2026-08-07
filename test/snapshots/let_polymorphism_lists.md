@@ -47,7 +47,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
 
--- ❌ UNEXPECTED EXPRESSION SYNTAX ------------ let_polymorphism_lists.md:12:26
+-- [×] unexpected expression syntax ------------ let_polymorphism_lists.md:12:26
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -62,7 +62,7 @@ For example:
 
 I found `+` here.
 
--- ❌ UNEXPECTED STATEMENT -------------------- let_polymorphism_lists.md:12:28
+-- [×] unexpected statement -------------------- let_polymorphism_lists.md:12:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -79,7 +79,7 @@ I found `my_empty_list` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED EXPRESSION SYNTAX ------------ let_polymorphism_lists.md:13:26
+-- [×] unexpected expression syntax ------------ let_polymorphism_lists.md:13:26
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -94,7 +94,7 @@ For example:
 
 I found `+` here.
 
--- ❌ UNEXPECTED STATEMENT -------------------- let_polymorphism_lists.md:13:28
+-- [×] unexpected statement -------------------- let_polymorphism_lists.md:13:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -111,7 +111,7 @@ I found `my_empty_list` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED EXPRESSION SYNTAX ------------ let_polymorphism_lists.md:14:30
+-- [×] unexpected expression syntax ------------ let_polymorphism_lists.md:14:30
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -126,7 +126,7 @@ For example:
 
 I found `+` here.
 
--- ❌ UNEXPECTED STATEMENT -------------------- let_polymorphism_lists.md:14:32
+-- [×] unexpected statement -------------------- let_polymorphism_lists.md:14:32
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -143,7 +143,7 @@ I found `my_empty_list` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNRECOGNIZED SYNTAX --------------------- let_polymorphism_lists.md:12:16
+-- [×] unrecognized syntax --------------------- let_polymorphism_lists.md:12:16
 
 I don't recognize this syntax.
 
@@ -152,7 +152,7 @@ all_int_list = int_list ++ my_empty_list
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ UNRECOGNIZED SYNTAX --------------------- let_polymorphism_lists.md:13:16
+-- [×] unrecognized syntax --------------------- let_polymorphism_lists.md:13:16
 
 I don't recognize this syntax.
 
@@ -161,7 +161,7 @@ all_str_list = str_list ++ my_empty_list
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
--- ❌ UNRECOGNIZED SYNTAX --------------------- let_polymorphism_lists.md:14:18
+-- [×] unrecognized syntax --------------------- let_polymorphism_lists.md:14:18
 
 I don't recognize this syntax.
 

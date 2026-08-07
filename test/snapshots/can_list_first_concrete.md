@@ -11,7 +11,7 @@ type=expr
 TYPE MISMATCH - can_list_first_concrete.md:1:6:1:13
 # PROBLEMS
 
--- ❌ TYPE MISMATCH ---------------------------- can_list_first_concrete.md:1:6
+-- [×] type mismatch ---------------------------- can_list_first_concrete.md:1:6
 
 This string literal is being used where a non-string type is needed.
 

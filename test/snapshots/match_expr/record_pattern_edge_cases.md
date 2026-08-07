@@ -19,7 +19,7 @@ match ... {
 UNCONDITIONAL CONDITION - record_pattern_edge_cases.md:1:7:1:10
 # PROBLEMS
 
--- ⚠️ UNCONDITIONAL CONDITION ---------------- record_pattern_edge_cases.md:1:7
+-- [Δ] unconditional condition ---------------- record_pattern_edge_cases.md:1:7
 
 This match value is known at compile time, so this match will always inspect
 the same value.

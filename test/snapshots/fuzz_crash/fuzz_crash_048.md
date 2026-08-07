@@ -30,7 +30,7 @@ ASCII CONTROL CHARACTER
 ASCII control characters are not allowed in Roc source code.
 
 
--- ❌ UNDECLARED TYPE ----------------------------------- fuzz_crash_048.md:2:7
+-- [×] undeclared type ----------------------------------- fuzz_crash_048.md:2:7
 
 The type `Thing` is not declared in this scope.
 
@@ -38,7 +38,7 @@ bar : Thing(a, b, _)
       ^^^^^
 
 
--- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_048.md:6:14
+-- [×] undeclared type ---------------------------------- fuzz_crash_048.md:6:14
 
 The type `String` is not declared in this scope.
 
@@ -46,7 +46,7 @@ main! : List(String) -> Try({}, _)
              ^^^^^^
 
 
--- ❌ UNDECLARED TYPE ---------------------------------- fuzz_crash_048.md:7:13
+-- [×] undeclared type ---------------------------------- fuzz_crash_048.md:7:13
 
 The type `Value` is not declared in this scope.
 
@@ -54,7 +54,7 @@ tag_tuple : Value((a, b, c))
             ^^^^^
 
 
--- ⚠️ DECLARATION HAS NO VALUE -------------------------- fuzz_crash_048.md:1:1
+-- [Δ] declaration has no value -------------------------- fuzz_crash_048.md:1:1
 
 This declaration has a type annotation but no implementation.
 
@@ -64,7 +64,7 @@ foo : U64
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- ⚠️ DECLARATION HAS NO VALUE -------------------------- fuzz_crash_048.md:2:1
+-- [Δ] declaration has no value -------------------------- fuzz_crash_048.md:2:1
 
 This declaration has a type annotation but no implementation.
 
@@ -74,7 +74,7 @@ bar : Thing(a, b, _)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- ⚠️ DECLARATION HAS NO VALUE -------------------------- fuzz_crash_048.md:3:1
+-- [Δ] declaration has no value -------------------------- fuzz_crash_048.md:3:1
 
 This declaration has a type annotation but no implementation.
 
@@ -84,7 +84,7 @@ biz : (a, b, c)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- ⚠️ DECLARATION HAS NO VALUE -------------------------- fuzz_crash_048.md:4:1
+-- [Δ] declaration has no value -------------------------- fuzz_crash_048.md:4:1
 
 This declaration has a type annotation but no implementation.
 
@@ -94,7 +94,7 @@ U8, U16 -> U32)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- ⚠️ DECLARATION HAS NO VALUE -------------------------- fuzz_crash_048.md:6:1
+-- [Δ] declaration has no value -------------------------- fuzz_crash_048.md:6:1
 
 This declaration has a type annotation but no implementation.
 
@@ -104,7 +104,7 @@ main! : List(String) -> Try({}, _)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- ⚠️ DECLARATION HAS NO VALUE -------------------------- fuzz_crash_048.md:7:1
+-- [Δ] declaration has no value -------------------------- fuzz_crash_048.md:7:1
 
 This declaration has a type annotation but no implementation.
 

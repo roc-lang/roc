@@ -17,7 +17,7 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_105.md:2:46:2:47
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_105.md:2:55:2:57
 # PROBLEMS
 
--- ❌ UNDECLARED TYPE VARIABLE -------------------------- fuzz_crash_105.md:2:3
+-- [×] undeclared type variable -------------------------- fuzz_crash_105.md:2:3
 
 The type variable `a` is not declared in this scope.
 
@@ -26,7 +26,7 @@ A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
 
 Type variables must be introduced in a type annotation before they can be used.
 
--- ❌ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ------ fuzz_crash_105.md:2:1
+-- [×] where clause not allowed in type declaration ------ fuzz_crash_105.md:2:1
 
 You cannot define a `where` clause inside a type declaration.
 
@@ -35,7 +35,7 @@ A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
 
 You're attempting do this here:
 
--- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_105.md:2:30
+-- [×] undeclared type variable ------------------------- fuzz_crash_105.md:2:30
 
 The type variable `b` is not declared in this scope.
 
@@ -44,7 +44,7 @@ A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
 
 Type variables must be introduced in a type annotation before they can be used.
 
--- ❌ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ----- fuzz_crash_105.md:2:28
+-- [×] where clause not allowed in type declaration ----- fuzz_crash_105.md:2:28
 
 You cannot define a `where` clause inside a type declaration.
 
@@ -53,7 +53,7 @@ A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
 
 You're attempting do this here:
 
--- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_105.md:2:46
+-- [×] undeclared type variable ------------------------- fuzz_crash_105.md:2:46
 
 The type variable `e` is not declared in this scope.
 
@@ -62,7 +62,7 @@ A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
 
 Type variables must be introduced in a type annotation before they can be used.
 
--- ❌ EMPTY TUPLE NOT ALLOWED -------------------------- fuzz_crash_105.md:2:55
+-- [×] empty tuple not allowed -------------------------- fuzz_crash_105.md:2:55
 
 I am part way through parsing this tuple, but it is empty.
 

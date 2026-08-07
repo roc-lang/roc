@@ -26,7 +26,7 @@ DEPRECATED NUMBER SUFFIX - issue_8899.md:11:27:11:32
 DEPRECATED NUMBER SUFFIX - issue_8899.md:11:34:11:39
 # PROBLEMS
 
--- ❌ DEPRECATED NUMBER SUFFIX ----------------------------- issue_8899.md:3:22
+-- [×] deprecated number suffix ----------------------------- issue_8899.md:3:22
 
 This number literal uses an old suffix syntax.
 
@@ -35,7 +35,7 @@ var $total = 0i64
 
 The suffix `i64` is deprecated. Write `0.I64` instead.
 
--- ❌ DEPRECATED NUMBER SUFFIX ----------------------------- issue_8899.md:4:21
+-- [×] deprecated number suffix ----------------------------- issue_8899.md:4:21
 
 This number literal uses an old suffix syntax.
 
@@ -44,7 +44,7 @@ var $acc = [0i64]
 
 The suffix `i64` is deprecated. Write `0.I64` instead.
 
--- ❌ DEPRECATED NUMBER SUFFIX ---------------------------- issue_8899.md:11:20
+-- [×] deprecated number suffix ---------------------------- issue_8899.md:11:20
 
 This number literal uses an old suffix syntax.
 
@@ -53,7 +53,7 @@ sum_with_last([10i64, 20i64, 30i64])
 
 The suffix `i64` is deprecated. Write `10.I64` instead.
 
--- ❌ DEPRECATED NUMBER SUFFIX ---------------------------- issue_8899.md:11:27
+-- [×] deprecated number suffix ---------------------------- issue_8899.md:11:27
 
 This number literal uses an old suffix syntax.
 
@@ -62,7 +62,7 @@ sum_with_last([10i64, 20i64, 30i64])
 
 The suffix `i64` is deprecated. Write `20.I64` instead.
 
--- ❌ DEPRECATED NUMBER SUFFIX ---------------------------- issue_8899.md:11:34
+-- [×] deprecated number suffix ---------------------------- issue_8899.md:11:34
 
 This number literal uses an old suffix syntax.
 

@@ -142,7 +142,7 @@ DECLARATION HAS NO VALUE - everything.md:62:1:66:3
 NON EXHAUSTIVE MATCH - everything.md:94:2:117:3
 # PROBLEMS
 
--- ❌ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION --------- everything.md:12:1
+-- [×] where clause not allowed in type declaration --------- everything.md:12:1
 
 You cannot define a `where` clause inside a type declaration.
 
@@ -160,7 +160,7 @@ A(a) : a
 
 You're attempting do this here:
 
--- ❌ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION --------- everything.md:24:1
+-- [×] where clause not allowed in type declaration --------- everything.md:24:1
 
 You cannot define a `where` clause inside a type declaration.
 
@@ -178,7 +178,7 @@ B(b) : b
 
 You're attempting do this here:
 
--- ⚠️ UNUSED VARIABLE -------------------------------------- everything.md:98:5
+-- [Δ] unused variable -------------------------------------- everything.md:98:5
 
 Variable `b` is defined here and then never used:
 
@@ -188,7 +188,7 @@ b,
 If you don't need this variable, prefix it with an underscore like `_b` to
 suppress this warning.
 
--- ⚠️ UNUSED VARIABLE ------------------------------------- everything.md:103:4
+-- [Δ] unused variable ------------------------------------- everything.md:103:4
 
 Variable `b` is defined here and then never used:
 
@@ -198,7 +198,7 @@ b,
 If you don't need this variable, prefix it with an underscore like `_b` to
 suppress this warning.
 
--- ⚠️ UNUSED VARIABLE ------------------------------------- everything.md:108:5
+-- [Δ] unused variable ------------------------------------- everything.md:108:5
 
 Variable `b` is defined here and then never used:
 
@@ -208,7 +208,7 @@ b,
 If you don't need this variable, prefix it with an underscore like `_b` to
 suppress this warning.
 
--- ⚠️ UNUSED VARIABLE ------------------------------------- everything.md:114:5
+-- [Δ] unused variable ------------------------------------- everything.md:114:5
 
 Variable `b` is defined here and then never used:
 
@@ -218,7 +218,7 @@ b,
 If you don't need this variable, prefix it with an underscore like `_b` to
 suppress this warning.
 
--- ⚠️ UNUSED VARIABLE -------------------------------------- everything.md:69:2
+-- [Δ] unused variable -------------------------------------- everything.md:69:2
 
 Variable `h1` is defined here and then never used:
 
@@ -228,7 +228,7 @@ h1 = {
 If you don't need this variable, prefix it with an underscore like `_h1` to
 suppress this warning.
 
--- ⚠️ UNUSED VARIABLE -------------------------------------- everything.md:77:2
+-- [Δ] unused variable -------------------------------------- everything.md:77:2
 
 Variable `h2` is defined here and then never used:
 
@@ -238,7 +238,7 @@ h2 = h(
 If you don't need this variable, prefix it with an underscore like `_h2` to
 suppress this warning.
 
--- ⚠️ UNUSED VARIABLE -------------------------------------- everything.md:81:2
+-- [Δ] unused variable -------------------------------------- everything.md:81:2
 
 Variable `h3` is defined here and then never used:
 
@@ -248,7 +248,7 @@ h3 = A(
 If you don't need this variable, prefix it with an underscore like `_h3` to
 suppress this warning.
 
--- ⚠️ UNUSED VARIABLE -------------------------------------- everything.md:85:2
+-- [Δ] unused variable -------------------------------------- everything.md:85:2
 
 Variable `h4` is defined here and then never used:
 
@@ -258,7 +258,7 @@ h4 = [
 If you don't need this variable, prefix it with an underscore like `_h4` to
 suppress this warning.
 
--- ⚠️ UNUSED VARIABLE -------------------------------------- everything.md:89:2
+-- [Δ] unused variable -------------------------------------- everything.md:89:2
 
 Variable `h5` is defined here and then never used:
 
@@ -268,7 +268,7 @@ h5 = (
 If you don't need this variable, prefix it with an underscore like `_h5` to
 suppress this warning.
 
--- ❌ NOT A WHERE ALIAS ------------------------------------ everything.md:64:4
+-- [×] not a where alias ------------------------------------ everything.md:64:4
 
 A where clause can only name a where alias, but A is a type.
 
@@ -279,7 +279,7 @@ A where alias names a set of method constraints, declared like `a.Sortable :
 where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as `where
 [a.Sortable]`
 
--- ❌ NOT A WHERE ALIAS ------------------------------------ everything.md:65:4
+-- [×] not a where alias ------------------------------------ everything.md:65:4
 
 A where clause can only name a where alias, but B is a type.
 
@@ -290,7 +290,7 @@ A where alias names a set of method constraints, declared like `a.Sortable :
 where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as `where
 [a.Sortable]`
 
--- ⚠️ DECLARATION HAS NO VALUE ----------------------------- everything.md:62:1
+-- [Δ] declaration has no value ----------------------------- everything.md:62:1
 
 This declaration has a type annotation but no implementation.
 
@@ -303,7 +303,7 @@ g : e -> e
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- ❌ NON EXHAUSTIVE MATCH --------------------------------- everything.md:94:2
+-- [×] non exhaustive match --------------------------------- everything.md:94:2
 
 This match expression doesn't cover all possible cases.
 

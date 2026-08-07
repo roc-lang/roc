@@ -20,7 +20,7 @@ main = run(Wrap.W(42.U8))
 MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:3:28:3:38
 # PROBLEMS
 
--- ❌ MISSING METHOD ----- where_clause_nested_obligation_missing_method_issue_9892.md:3:28
+-- [×] missing method ----- where_clause_nested_obligation_missing_method_issue_9892.md:3:28
 
 This `frobnicate` method is being called on a value whose type doesn't have
 that method.

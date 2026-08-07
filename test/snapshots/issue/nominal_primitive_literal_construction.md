@@ -27,7 +27,7 @@ TYPE MISMATCH - nominal_primitive_literal_construction.md:9:9:9:14
 TYPE MISMATCH - nominal_primitive_literal_construction.md:15:13:15:19
 # PROBLEMS
 
--- ❌ TYPE MISMATCH ------------- nominal_primitive_literal_construction.md:4:7
+-- [×] type mismatch ------------- nominal_primitive_literal_construction.md:4:7
 
 This number is being used where a non-number type is needed.
 
@@ -38,7 +38,7 @@ Other code expects this to have the type:
 
     UserId
 
--- ❌ TYPE MISMATCH ------------- nominal_primitive_literal_construction.md:9:9
+-- [×] type mismatch ------------- nominal_primitive_literal_construction.md:9:9
 
 This string literal is being used where a non-string type is needed.
 
@@ -49,7 +49,7 @@ The type was determined to be:
 
     Token
 
--- ❌ TYPE MISMATCH ----------- nominal_primitive_literal_construction.md:15:13
+-- [×] type mismatch ----------- nominal_primitive_literal_construction.md:15:13
 
 This string literal is being used where a non-string type is needed.
 

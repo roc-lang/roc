@@ -13,7 +13,7 @@ result = poly().to_i128()
 MISSING METHOD - static_dispatch_unresolved_method.md:3:10:3:16
 # PROBLEMS
 
--- ❌ MISSING METHOD ---------------- static_dispatch_unresolved_method.md:3:10
+-- [×] missing method ---------------- static_dispatch_unresolved_method.md:3:10
 
 This is trying to dispatch a method named `to_i128` on an unresolved type
 variable, but unresolved type variables have no methods.

@@ -21,7 +21,7 @@ UNEXPECTED STATEMENT - fuzz_crash_009.md:1:5:1:6
 UNEXPECTED STATEMENT - fuzz_crash_009.md:2:6:2:7
 # PROBLEMS
 
--- ❌ UNCLOSED STRING ----------------------------------- fuzz_crash_009.md:6:5
+-- [×] unclosed string ----------------------------------- fuzz_crash_009.md:6:5
 
 This string is missing a closing quote.
 
@@ -29,7 +29,7 @@ This string is missing a closing quote.
 ^^^^^^^
 
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_009.md:1:2
+-- [×] unexpected statement ------------------------------ fuzz_crash_009.md:1:2
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -46,7 +46,7 @@ I found `f` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_009.md:1:3
+-- [×] unexpected statement ------------------------------ fuzz_crash_009.md:1:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -61,7 +61,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_009.md:1:4
+-- [×] unexpected statement ------------------------------ fuzz_crash_009.md:1:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -78,7 +78,7 @@ I found `o` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_009.md:1:5
+-- [×] unexpected statement ------------------------------ fuzz_crash_009.md:1:5
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -94,7 +94,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_009.md:2:6
+-- [×] unexpected statement ------------------------------ fuzz_crash_009.md:2:6
 
 I was parsing a statement, and this token cannot start a statement here.
 

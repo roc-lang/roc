@@ -19,7 +19,7 @@ UNEXPECTED STATEMENT - fuzz_crash_094.md:1:17:1:18
 UNEXPECTED STATEMENT - fuzz_crash_094.md:1:18:1:19
 # PROBLEMS
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_094.md:1:1
+-- [×] unexpected statement ------------------------------ fuzz_crash_094.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -36,7 +36,7 @@ I found `dapkage` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_094.md:1:8
+-- [×] unexpected statement ------------------------------ fuzz_crash_094.md:1:8
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -51,7 +51,7 @@ For example:
 
 I found `[` here.
 
--- ❌ UNEXPECTED STATEMENT ------------------------------ fuzz_crash_094.md:1:9
+-- [×] unexpected statement ------------------------------ fuzz_crash_094.md:1:9
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -68,7 +68,7 @@ I found `e` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_094.md:1:10
+-- [×] unexpected statement ----------------------------- fuzz_crash_094.md:1:10
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -84,7 +84,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES --------------- fuzz_crash_094.md:1:12
+-- [×] type application needs parentheses --------------- fuzz_crash_094.md:1:12
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -102,7 +102,7 @@ I found `.a` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_094.md:1:14
+-- [×] unexpected statement ----------------------------- fuzz_crash_094.md:1:14
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -117,7 +117,7 @@ For example:
 
 I found `.*` here.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_094.md:1:16
+-- [×] unexpected statement ----------------------------- fuzz_crash_094.md:1:16
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -134,7 +134,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_094.md:1:17
+-- [×] unexpected statement ----------------------------- fuzz_crash_094.md:1:17
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -149,7 +149,7 @@ For example:
 
 I found `{` here.
 
--- ❌ UNEXPECTED STATEMENT ----------------------------- fuzz_crash_094.md:1:18
+-- [×] unexpected statement ----------------------------- fuzz_crash_094.md:1:18
 
 I was parsing a statement, and this token cannot start a statement here.
 

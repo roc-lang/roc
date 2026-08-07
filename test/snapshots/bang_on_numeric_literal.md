@@ -11,7 +11,7 @@ type=expr
 MISSING METHOD - bang_on_numeric_literal.md:1:1:1:3
 # PROBLEMS
 
--- ❌ MISSING METHOD --------------------------- bang_on_numeric_literal.md:1:1
+-- [×] missing method --------------------------- bang_on_numeric_literal.md:1:1
 
 This `not` method is being called on a value whose type doesn't have that
 method.

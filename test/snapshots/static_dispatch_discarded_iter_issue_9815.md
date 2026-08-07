@@ -15,7 +15,7 @@ run = || {
 MISSING METHOD - static_dispatch_discarded_iter_issue_9815.md:3:9:3:53
 # PROBLEMS
 
--- ❌ MISSING METHOD --------- static_dispatch_discarded_iter_issue_9815.md:3:9
+-- [×] missing method --------- static_dispatch_discarded_iter_issue_9815.md:3:9
 
 This is trying to dispatch a method named `from_iter` on an unresolved type
 variable, but unresolved type variables have no methods.

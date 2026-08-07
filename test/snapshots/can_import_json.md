@@ -14,7 +14,7 @@ DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
 NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
 # PROBLEMS
 
--- ⚠️ DUPLICATE DEFINITION ----------------------------- can_import_json.md:1:1
+-- [Δ] duplicate definition ----------------------------- can_import_json.md:1:1
 
 The name `Json` is being redeclared here:
 
@@ -27,7 +27,7 @@ In this scope, `Json` was already defined here (can_import_json.md:1:1):
 import json.Json
 ^
 
--- ❌ NAME NOT IN SCOPE -------------------------------- can_import_json.md:3:8
+-- [×] name not in scope -------------------------------- can_import_json.md:3:8
 
 Nothing is named `utf8` in this scope.
 

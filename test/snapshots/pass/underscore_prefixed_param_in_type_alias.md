@@ -21,7 +21,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:5:12:5:14
 UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
 # PROBLEMS
 
--- ❌ UNDERSCORE IN TYPE ALIAS ----- underscore_prefixed_param_in_type_alias.md:2:11
+-- [×] underscore in type alias ----- underscore_prefixed_param_in_type_alias.md:2:11
 
 Underscores are not allowed in type alias declarations.
 
@@ -32,7 +32,7 @@ Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
 
--- ❌ UNDERSCORE IN TYPE ALIAS ----- underscore_prefixed_param_in_type_alias.md:2:17
+-- [×] underscore in type alias ----- underscore_prefixed_param_in_type_alias.md:2:17
 
 Underscores are not allowed in type alias declarations.
 
@@ -43,7 +43,7 @@ Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
 
--- ❌ UNDERSCORE IN TYPE ALIAS ----- underscore_prefixed_param_in_type_alias.md:5:12
+-- [×] underscore in type alias ----- underscore_prefixed_param_in_type_alias.md:5:12
 
 Underscores are not allowed in type alias declarations.
 
@@ -54,7 +54,7 @@ Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
 
--- ❌ UNDERSCORE IN TYPE ALIAS ----- underscore_prefixed_param_in_type_alias.md:8:15
+-- [×] underscore in type alias ----- underscore_prefixed_param_in_type_alias.md:8:15
 
 Underscores are not allowed in type alias declarations.
 

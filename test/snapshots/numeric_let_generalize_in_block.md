@@ -16,7 +16,7 @@ type=expr
 TYPE MISMATCH - numeric_let_generalize_in_block.md:4:20:4:21
 # PROBLEMS
 
--- ❌ TYPE MISMATCH ------------------- numeric_let_generalize_in_block.md:4:20
+-- [×] type mismatch ------------------- numeric_let_generalize_in_block.md:4:20
 
 The first argument being passed to this function has the wrong type.
 

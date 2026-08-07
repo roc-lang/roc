@@ -21,7 +21,7 @@ UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:46:3:48
 UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
 
--- ❌ AMBIGUOUS FUNCTION TYPE --------- type_higher_order_multiple_vars.md:3:36
+-- [×] ambiguous function type --------- type_higher_order_multiple_vars.md:3:36
 
 I was parsing a function type, and multiple arrows need parentheses.
 
@@ -35,7 +35,7 @@ For example:
     a -> (b -> c)
     (a -> b) -> c
 
--- ❌ UNEXPECTED STATEMENT ------------ type_higher_order_multiple_vars.md:3:39
+-- [×] unexpected statement ------------ type_higher_order_multiple_vars.md:3:39
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -50,7 +50,7 @@ For example:
 
 I found `(` here.
 
--- ❌ UNEXPECTED STATEMENT ------------ type_higher_order_multiple_vars.md:3:40
+-- [×] unexpected statement ------------ type_higher_order_multiple_vars.md:3:40
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -65,7 +65,7 @@ For example:
 
 I found `_a` here.
 
--- ❌ AMBIGUOUS FUNCTION TYPE --------- type_higher_order_multiple_vars.md:3:43
+-- [×] ambiguous function type --------- type_higher_order_multiple_vars.md:3:43
 
 I was parsing a function type, and multiple arrows need parentheses.
 
@@ -79,7 +79,7 @@ For example:
     a -> (b -> c)
     (a -> b) -> c
 
--- ❌ UNEXPECTED STATEMENT ------------ type_higher_order_multiple_vars.md:3:46
+-- [×] unexpected statement ------------ type_higher_order_multiple_vars.md:3:46
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -94,7 +94,7 @@ For example:
 
 I found `_c` here.
 
--- ❌ UNEXPECTED STATEMENT ------------ type_higher_order_multiple_vars.md:3:48
+-- [×] unexpected statement ------------ type_higher_order_multiple_vars.md:3:48
 
 I was parsing a statement, and this token cannot start a statement here.
 

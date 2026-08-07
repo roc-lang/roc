@@ -19,7 +19,7 @@ UNUSED VARIABLE - var_polymorphic_annotation_rejected.md:5:5:5:16
 POLYMORPHIC VAR - var_polymorphic_annotation_rejected.md:4:5:4:17
 # PROBLEMS
 
--- ⚠️ UNUSED VARIABLE -------------- var_polymorphic_annotation_rejected.md:5:5
+-- [Δ] unused variable -------------- var_polymorphic_annotation_rejected.md:5:5
 
 Variable `xs` is defined here and then never used:
 
@@ -29,7 +29,7 @@ var xs = []
 If you don't need this variable, prefix it with an underscore like `_xs` to
 suppress this warning.
 
--- ❌ POLYMORPHIC VAR -------------- var_polymorphic_annotation_rejected.md:4:5
+-- [×] polymorphic var -------------- var_polymorphic_annotation_rejected.md:4:5
 
 This var is declared with a polymorphic type annotation, but a mutable variable
 must have a single concrete type.

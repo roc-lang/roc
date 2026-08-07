@@ -35,7 +35,7 @@ main! = |_| {}
 BUILTIN TYPE SHADOWED - type_tag_union_complex.md:7:1:7:52
 # PROBLEMS
 
--- ⚠️ BUILTIN TYPE SHADOWED --------------------- type_tag_union_complex.md:7:1
+-- [Δ] builtin type shadowed --------------------- type_tag_union_complex.md:7:1
 
 The type `Try` shadows a builtin type.
 

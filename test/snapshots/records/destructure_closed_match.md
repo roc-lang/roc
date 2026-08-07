@@ -14,7 +14,7 @@ describe = |rec| match rec {
 TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 # PROBLEMS
 
--- ❌ TYPE MISMATCH --------------------------- destructure_closed_match.md:2:5
+-- [×] type mismatch --------------------------- destructure_closed_match.md:2:5
 
 The first pattern in this `match` is incompatible.
 

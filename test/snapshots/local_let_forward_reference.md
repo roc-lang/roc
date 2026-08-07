@@ -16,7 +16,7 @@ canonicalize_diagnostics=true
 USED BEFORE DEFINITION - local_let_forward_reference.md:2:13:2:14
 # PROBLEMS
 
--- ❌ USED BEFORE DEFINITION -------------- local_let_forward_reference.md:2:13
+-- [×] used before definition -------------- local_let_forward_reference.md:2:13
 
 The name `f` is used before it is defined.
 

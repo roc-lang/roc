@@ -13,7 +13,7 @@ TOO FEW ARGS - type_annotation_missing_parens.md:1:8:1:12
 DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 # PROBLEMS
 
--- ❌ TYPE APPLICATION NEEDS PARENTHESES ----- type_annotation_missing_parens.md:2:1
+-- [×] type application needs parentheses ----- type_annotation_missing_parens.md:2:1
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -29,7 +29,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
--- ❌ TOO FEW ARGS ---------------------- type_annotation_missing_parens.md:1:8
+-- [×] too few args ---------------------- type_annotation_missing_parens.md:1:8
 
 The type List expects 1 argument, but got 0 instead.
 
@@ -37,7 +37,7 @@ nums : List U8
        ^^^^
 
 
--- ⚠️ DECLARATION HAS NO VALUE ---------- type_annotation_missing_parens.md:1:1
+-- [Δ] declaration has no value ---------- type_annotation_missing_parens.md:1:1
 
 This declaration has a type annotation but no implementation.
 

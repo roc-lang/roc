@@ -156,12 +156,21 @@ pub fn renderReportToBoxPlain(report: *const Report, writer: *std.Io.Writer, con
 /// The thin red rule under the offending span.
 const box_underline = "^";
 
-fn getSeverityIcon(severity: @import("severity.zig").Severity, title: []const u8) []const u8 {
-    if (std.mem.eql(u8, title, "FAIL")) return "❌";
+const IconAndColor = struct {
+    icon: []const u8,
+    color: []const u8,
+};
+
+fn getSeverityIcon(severity: @import("severity.zig").Severity, title: []const u8, palette: ColorPalette) IconAndColor {
+    const red = if (palette.reset.len > 0) AnsiCodes.RED else "";
+    const yellow = if (palette.reset.len > 0) AnsiCodes.YELLOW else "";
+    const cyan = if (palette.reset.len > 0) AnsiCodes.CYAN else "";
+    
+    if (std.mem.eql(u8, title, "FAIL")) return .{ .icon = "[×]", .color = red };
     return switch (severity) {
-        .fatal, .runtime_error => "❌",
-        .warning => "⚠️",
-        .info => "ℹ️",
+        .fatal, .runtime_error => .{ .icon = "[×]", .color = red },
+        .warning => .{ .icon = "[Δ]", .color = yellow },
+        .info => .{ .icon = "[i]", .color = cyan },
     };
 }
 
@@ -397,6 +406,15 @@ pub fn writeShouted(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}!vo
     }
 }
 
+/// Write `s` to `writer`, converting ASCII characters to lowercase. Used for
+/// the header text. Titles are validated as ASCII, so a byte
+/// iterator suffices.
+pub fn writeLowercased(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}!void {
+    for (s) |c| {
+        try writer.writeByte(std.ascii.toLower(c));
+    }
+}
+
 /// Pad with spaces and write the right wall `│` at column `rw`.
 fn closeRow(writer: *std.Io.Writer, palette: ColorPalette, col: usize, rw: usize) error{WriteFailed}!void {
     try writer.splatByteAll(' ', (rw -| 1) -| col);
@@ -483,7 +501,7 @@ fn renderHeaderLine(
     writer: *std.Io.Writer,
     palette: ColorPalette,
     config: ReportingConfig,
-    icon: []const u8,
+    icon_info: IconAndColor,
     title: []const u8,
     filename: ?[]const u8,
     start_line: u32,
@@ -491,8 +509,8 @@ fn renderHeaderLine(
     leading_newline: bool,
 ) error{WriteFailed}!void {
     if (leading_newline) try writer.writeByte('\n');
-    const total_w = @min(config.getMaxLineWidth(), 120) -| 1;
-    const icon_w: usize = 2;
+    const total_w = @min(config.getMaxLineWidth(), 120);
+    const icon_w: usize = 3;
     const prefix_w = 3 + icon_w + 1 + title.len + 1;
 
     var loc_len: usize = 0;
@@ -502,13 +520,16 @@ fn renderHeaderLine(
     }
 
     const dashes = if (total_w > prefix_w + loc_len) (total_w - prefix_w - loc_len) else 5;
+    const dim_gray = if (palette.reset.len > 0) AnsiCodes.BRIGHT_BLACK else "";
 
-    try writer.writeAll(palette.primary);
+    try writer.writeAll(dim_gray);
     try writer.writeAll("-- ");
-    try writer.writeAll(icon);
+    try writer.writeAll(icon_info.color);
+    try writer.writeAll(icon_info.icon);
     try writer.writeByte(' ');
-    try writeShouted(writer, title);
+    try writeLowercased(writer, title);
     try writer.writeByte(' ');
+    try writer.writeAll(dim_gray);
     try writer.splatBytesAll("-", dashes);
     if (fname) |f| {
         try writer.writeByte(' ');
@@ -550,9 +571,9 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     }
     const summary = std.mem.trim(u8, summary_buf.items, " ");
     const title = report.title;
-    const icon = getSeverityIcon(report.severity, title);
+    const icon_info = getSeverityIcon(report.severity, title, palette);
 
-    try renderHeaderLine(writer, palette, config, icon, title, region.filename, region.start_line, region.start_column, true);
+    try renderHeaderLine(writer, palette, config, icon_info, title, region.filename, region.start_line, region.start_column, true);
 
     if (summary.len > 0) {
         try writer.writeByte('\n');
@@ -788,8 +809,7 @@ fn renderEmbeddedBox(
         }
 
         if (ends_with_colon) {
-            const dim_gray = if (palette.reset.len > 0) AnsiCodes.BRIGHT_BLACK else "";
-            try writer.writeAll(dim_gray);
+            try writer.writeAll(palette.reset);
             try writer.writeAll(":");
         }
 
@@ -1676,7 +1696,8 @@ fn renderSourceLocationHeader(
     start_line: u32,
     start_column: u32,
 ) error{WriteFailed}!void {
-    try renderHeaderLine(writer, palette, config, "ℹ️", "LOCATION", filename, start_line, start_column, true);
+    const cyan = if (palette.reset.len > 0) AnsiCodes.CYAN else "";
+    try renderHeaderLine(writer, palette, config, .{ .icon = "[i]", .color = cyan }, "LOCATION", filename, start_line, start_column, true);
 }
 
 /// Number of decimal digits needed to print `n` (e.g. 1 for 7, 4 for 1242).

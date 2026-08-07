@@ -31,7 +31,7 @@ use_it = {
 MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:12:9:12:24
 # PROBLEMS
 
--- ❌ MISSING METHOD -- static_dispatch_where_forced_numeric_issue_9657.md:12:9
+-- [×] missing method -- static_dispatch_where_forced_numeric_issue_9657.md:12:9
 
 This is trying to dispatch a method named `encode` on an unresolved type
 variable, but unresolved type variables have no methods.

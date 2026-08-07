@@ -16,7 +16,7 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_085.md:1:27:1:28
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_085.md:1:32:1:34
 # PROBLEMS
 
--- ❌ UNDERSCORE IN TYPE ALIAS -------------------------- fuzz_crash_085.md:1:3
+-- [×] underscore in type alias -------------------------- fuzz_crash_085.md:1:3
 
 Underscores are not allowed in type alias declarations.
 
@@ -27,7 +27,7 @@ Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
 
--- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_085.md:1:14
+-- [×] undeclared type variable ------------------------- fuzz_crash_085.md:1:14
 
 The type variable `a` is not declared in this scope.
 
@@ -36,7 +36,7 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
 
 Type variables must be introduced in a type annotation before they can be used.
 
--- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_085.md:1:16
+-- [×] undeclared type variable ------------------------- fuzz_crash_085.md:1:16
 
 The type variable `b` is not declared in this scope.
 
@@ -45,7 +45,7 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
 
 Type variables must be introduced in a type annotation before they can be used.
 
--- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_085.md:1:23
+-- [×] undeclared type variable ------------------------- fuzz_crash_085.md:1:23
 
 The type variable `r` is not declared in this scope.
 
@@ -54,7 +54,7 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
 
 Type variables must be introduced in a type annotation before they can be used.
 
--- ❌ UNDECLARED TYPE VARIABLE ------------------------- fuzz_crash_085.md:1:27
+-- [×] undeclared type variable ------------------------- fuzz_crash_085.md:1:27
 
 The type variable `e` is not declared in this scope.
 
@@ -63,7 +63,7 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
 
 Type variables must be introduced in a type annotation before they can be used.
 
--- ❌ EMPTY TUPLE NOT ALLOWED -------------------------- fuzz_crash_085.md:1:32
+-- [×] empty tuple not allowed -------------------------- fuzz_crash_085.md:1:32
 
 I am part way through parsing this tuple, but it is empty.
 
