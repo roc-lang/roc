@@ -4849,7 +4849,15 @@ const Builder = struct {
             .crash,
             => true,
             .box => |child| try self.constNodeHasStableStaticDataRepresentation(view, child),
-            .list,
+            .list => |list| switch (list) {
+                .scalar_bytes => true,
+                .nodes => |children| blk: {
+                    for (children) |child| {
+                        if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
+                    }
+                    break :blk true;
+                },
+            },
             .tuple,
             .record,
             => |children| blk: {
@@ -4879,7 +4887,10 @@ const Builder = struct {
             => false,
             .str => |str| self.constStrNeedsStaticData(view, str),
             .fn_value => bare_fn == .allow,
-            .list => |items| items.len != 0,
+            .list => |list| switch (list) {
+                .nodes => |items| items.len != 0,
+                .scalar_bytes => |scalar_bytes| scalar_bytes.len != 0,
+            },
             .box => true,
             .tuple,
             .record,
@@ -4891,7 +4902,7 @@ const Builder = struct {
 
     fn constStrNeedsStaticData(self: *Builder, view: ModuleView, str: check.ConstStore.ConstStr) bool {
         const str_bytes = view.const_store.strBytes(str);
-        const backing = view.const_store.strData(str.data);
+        const backing = view.const_store.blobData(str.data);
         const roc_str_size = self.target_usize.size() * 3;
         return backing.len >= roc_str_size or str_bytes.len >= roc_str_size;
     }
@@ -8057,16 +8068,16 @@ const Builder = struct {
             .zst => .unit,
             .scalar => |scalar| restoreScalar(scalar),
             .str => |str| .{ .str_lit = try self.program.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
             .crash => |str| .{ .crash = try self.program.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
-            .list => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
+            .list => |list| try self.restoreConstListData(store_view, type_view, ty, list, static_data_const_locator),
             .box => |payload| blk: {
                 const child = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, self.constBoxPayloadType(ty), static_data_const_locator);
                 break :blk .{ .low_level = .{
@@ -8100,6 +8111,28 @@ const Builder = struct {
             lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
         }
         return try self.program.addExprSpan(lowered);
+    }
+
+    fn restoreConstListData(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        ty: Type.TypeId,
+        list: checked.ConstList,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!Ast.ExprData {
+        return switch (list) {
+            .nodes => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
+            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
+                .literal = try self.program.addStringView(
+                    store_view.const_store.blobData(scalar_bytes.bytes.data),
+                    scalar_bytes.bytes.offset,
+                    scalar_bytes.bytes.len,
+                ),
+                .len = scalar_bytes.len,
+                .element = scalar_bytes.element,
+            } },
+        };
     }
 
     fn restoreConstTuple(
@@ -9374,7 +9407,7 @@ const DraftExprData = union(enum(u8)) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: DraftStringLiteralId,
-    bytes_lit: DraftStringLiteralId,
+    bytes_lit: DraftPackedListLiteral,
     static_data_candidate: DraftStaticDataCandidate,
     list: DraftSpan(DraftExprId),
     tuple: DraftSpan(DraftExprId),
@@ -10472,6 +10505,12 @@ const DraftStringLiteral = struct {
     backing: DraftSpan(u8),
     offset: u32,
     len: u32,
+};
+
+const DraftPackedListLiteral = struct {
+    literal: DraftStringLiteralId,
+    len: u32,
+    element: check.ConstStore.ConstPackedScalar,
 };
 
 const DraftOwner = union(enum(u8)) {
@@ -11924,7 +11963,11 @@ const BodyDraftStore = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |literal| .{ .str_lit = ids.stringLiteral(literal) },
-            .bytes_lit => |literal| .{ .bytes_lit = ids.stringLiteral(literal) },
+            .bytes_lit => |literal| .{ .bytes_lit = .{
+                .literal = ids.stringLiteral(literal.literal),
+                .len = literal.len,
+                .element = literal.element,
+            } },
             .static_data_candidate => |candidate| .{ .static_data_candidate = .{
                 .static_data = candidate.static_data,
                 .runtime_expr = ids.expr(candidate.runtime_expr),
@@ -17598,7 +17641,14 @@ const BodyContext = struct {
                 return try self.lowerQuoteExpr(expr.ty, quote, ty);
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
-            .bytes_literal => |str| .{ .bytes_lit = try self.lowerStringLiteral(str) },
+            .bytes_literal => |str| blk: {
+                const literal = try self.lowerStringLiteral(str);
+                break :blk .{ .bytes_lit = .{
+                    .literal = literal,
+                    .len = @intCast(self.view.bodies.stringLiteral(str).len),
+                    .element = .u8,
+                } };
+            },
             .empty_list => .{ .list = .empty() },
             .empty_record => return try self.addConstructorExpr(ty, .{ .record = .empty() }),
             .str => |segments| try self.lowerStr(segments),
@@ -28051,22 +28101,22 @@ const BodyContext = struct {
             .zst => .unit,
             .scalar => |scalar| restoreScalarBody(scalar),
             .str => |str| .{ .str_lit = try self.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
             .crash => |str| .{ .crash = try self.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
-            .list => |items| .{ .list = try self.restoreConstListAtNode(
+            .list => |list| try self.restoreConstListDataAtNode(
                 store_view,
                 type_view,
                 request_node,
-                items,
+                list,
                 static_data_const_locator,
-            ) },
+            ),
             .box => |payload| blk: {
                 const child = try self.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
@@ -28130,6 +28180,34 @@ const BodyContext = struct {
             );
         }
         return try self.addExprSpan(lowered);
+    }
+
+    fn restoreConstListDataAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        request_node: NodeId,
+        list: checked.ConstList,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!BodyExprData {
+        return switch (list) {
+            .nodes => |items| .{ .list = try self.restoreConstListAtNode(
+                store_view,
+                type_view,
+                request_node,
+                items,
+                static_data_const_locator,
+            ) },
+            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
+                .literal = try self.addStringView(
+                    store_view.const_store.blobData(scalar_bytes.bytes.data),
+                    scalar_bytes.bytes.offset,
+                    scalar_bytes.bytes.len,
+                ),
+                .len = scalar_bytes.len,
+                .element = scalar_bytes.element,
+            } },
+        };
     }
 
     fn restoreConstTupleAtNode(
@@ -28236,16 +28314,16 @@ const BodyContext = struct {
             .zst => .unit,
             .scalar => |scalar| restoreScalarBody(scalar),
             .str => |str| .{ .str_lit = try self.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
             .crash => |str| .{ .crash = try self.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
-            .list => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
+            .list => |list| try self.restoreConstListData(store_view, type_view, ty, list, static_data_const_locator),
             .box => |payload| blk: {
                 const child = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, self.constBoxPayloadType(ty), static_data_const_locator);
                 break :blk .{ .low_level = .{
@@ -28279,6 +28357,28 @@ const BodyContext = struct {
             lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
         }
         return try self.addExprSpan(lowered);
+    }
+
+    fn restoreConstListData(
+        self: *BodyContext,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        ty: Type.TypeId,
+        list: checked.ConstList,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!BodyExprData {
+        return switch (list) {
+            .nodes => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
+            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
+                .literal = try self.addStringView(
+                    store_view.const_store.blobData(scalar_bytes.bytes.data),
+                    scalar_bytes.bytes.offset,
+                    scalar_bytes.bytes.len,
+                ),
+                .len = scalar_bytes.len,
+                .element = scalar_bytes.element,
+            } },
+        };
     }
 
     fn restoreConstTuple(

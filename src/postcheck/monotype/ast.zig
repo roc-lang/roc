@@ -77,6 +77,13 @@ pub const StringLiteral = struct {
     }
 };
 
+/// Readonly packed scalar-list data carried without one expression per item.
+pub const PackedListLiteral = struct {
+    literal: StringLiteralId,
+    len: u32,
+    element: check.ConstStore.ConstPackedScalar,
+};
+
 /// Slice descriptor over one of the program side arrays.
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -698,7 +705,7 @@ pub const ExprData = union(enum(u8)) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
-    bytes_lit: StringLiteralId,
+    bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
     list: Span(ExprId),
     tuple: Span(ExprId),

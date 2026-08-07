@@ -410,7 +410,7 @@ const StaticInitializerMachine = struct {
             .dec_literal => |dec| std.mem.writeInt(i128, value.bytes[0..16], dec, .little),
             .str_literal => |str| return try self.evalStr(str, target_layout),
             .static_data => |id| return try self.cloneValueAs(try self.evaluateStatic(id), target_layout),
-            .bytes_literal => |str| return try self.evalBytes(str, target_layout),
+            .bytes_literal => |list| return try self.evalBytes(list, target_layout),
             .null_ptr => {},
             .proc_ref => |proc| try value.relocations.append(self.allocator(), .{
                 .offset = 0,
@@ -588,27 +588,27 @@ const StaticInitializerMachine = struct {
 
     fn evalBytes(
         self: *StaticInitializerMachine,
-        literal: lir.LIR.StrLiteral,
+        literal: lir.LIR.ListLiteral,
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {
         const result = try self.newValue(target_layout);
-        const backing = self.store().getStringLiteralBacking(literal);
-        const bytes = self.validateLiteralView(literal);
+        const backing = self.store().getStringLiteralBacking(literal.bytes);
+        const bytes = self.validateLiteralView(literal.bytes);
         if (bytes.len == 0) return result;
 
-        const allocation = try self.stringBacking(literal.backing);
+        const allocation = try self.stringBacking(literal.bytes.backing);
         try result.relocations.append(self.allocator(), .{
             .offset = 0,
             .target = .{ .allocation = allocation },
-            .addend = literal.offset,
+            .addend = literal.bytes.offset,
         });
-        self.writeTargetWord(result.bytes, self.word_size, bytes.len);
-        const whole_backing = literal.offset == 0 and @as(usize, literal.len) == backing.len;
+        self.writeTargetWord(result.bytes, self.word_size, literal.len);
+        const whole_backing = literal.bytes.offset == 0 and @as(usize, literal.bytes.len) == backing.len;
         if (whole_backing) {
             self.writeTargetWord(
                 result.bytes,
                 self.word_size * 2,
-                builtins.list.RocList.encodeCapacityForWidth(bytes.len),
+                builtins.list.RocList.encodeCapacityForWidth(literal.len),
             );
         } else {
             try result.relocations.append(self.allocator(), .{

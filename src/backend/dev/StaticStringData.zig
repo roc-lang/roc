@@ -83,14 +83,14 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
         var symbol_owned = true;
         errdefer if (symbol_owned) allocator.free(symbol_name);
 
-        const data_offset = staticDataPtrOffset(word_size, word_size, false);
-        const bytes = switch (word_size) {
-            4 => try allocator.alignedAlloc(u8, .@"4", data_offset + entry.bytes.len),
-            8 => try allocator.alignedAlloc(u8, .@"8", data_offset + entry.bytes.len),
-            else => unreachable,
-        };
+        const backing_alignment = @max(word_size, entry.alignment);
+        const data_offset = staticDataPtrOffset(word_size, backing_alignment, false);
+        const allocation_alignment = std.mem.Alignment.fromByteUnits(backing_alignment);
+        const bytes_ptr = allocator.rawAlloc(data_offset + entry.bytes.len, allocation_alignment, @returnAddress()) orelse
+            return error.OutOfMemory;
+        const bytes = bytes_ptr[0 .. data_offset + entry.bytes.len];
         var bytes_owned = true;
-        errdefer if (bytes_owned) allocator.free(bytes);
+        errdefer if (bytes_owned) allocator.rawFree(bytes, allocation_alignment, @returnAddress());
         @memset(bytes, 0);
         writeSignedWord(word_size, bytes, data_offset - word_size, 0);
         @memcpy(bytes[data_offset..][0..entry.bytes.len], entry.bytes);
@@ -103,7 +103,7 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
             .symbol_name = symbol_name,
             .bytes = bytes,
             .symbol_offset = data_offset,
-            .alignment = word_size,
+            .alignment = backing_alignment,
             .is_global = false,
             .is_exported = false,
             .relocations = relocations,
@@ -163,6 +163,7 @@ test "build emits all literal backing with static refcount headers" {
 
     const small = try store.insertString("small");
     const large = try store.insertString("this string is longer than twenty three bytes");
+    try std.testing.expectEqual(small, try store.insertStringAligned("small", 16));
 
     var table = try build(allocator, &store, .x64linux);
     defer table.deinit();
@@ -177,10 +178,15 @@ test "build emits all literal backing with static refcount headers" {
         const static_export = for (table.exports) |candidate| {
             if (std.mem.eql(u8, candidate.symbol_name, entry.symbol_name)) break candidate;
         } else return error.MissingStaticDataExport;
+        const expected_alignment = @max(@as(u32, 8), store.strings.alignment(entry.id));
+        const expected_offset: u32 = @intCast(std.mem.alignForward(usize, 8, expected_alignment));
+        const expected_offset_usize: usize = expected_offset;
 
-        try std.testing.expectEqual(@as(u32, 8), static_export.symbol_offset);
-        try std.testing.expectEqual(@as(usize, 8 + text.len), static_export.bytes.len);
-        try std.testing.expectEqual(@as(i64, 0), std.mem.readInt(i64, static_export.bytes[0..8], .little));
-        try std.testing.expectEqualSlices(u8, text, static_export.bytes[8..]);
+        try std.testing.expectEqual(expected_alignment, static_export.alignment);
+        try std.testing.expectEqual(expected_offset, static_export.symbol_offset);
+        try std.testing.expectEqual(expected_offset_usize + text.len, static_export.bytes.len);
+        try std.testing.expectEqual(@as(i64, 0), std.mem.readInt(i64, static_export.bytes[expected_offset_usize - 8 ..][0..8], .little));
+        try std.testing.expectEqualSlices(u8, text, static_export.bytes[expected_offset_usize..]);
+        try std.testing.expectEqual(@as(usize, 0), @intFromPtr(entry.bytes.ptr) % @as(usize, expected_alignment));
     }
 }

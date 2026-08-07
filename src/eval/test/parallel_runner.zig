@@ -176,7 +176,7 @@ fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.C
     };
 }
 
-fn constList(value: check.CheckedArtifact.ConstValue) ?[]const check.CheckedArtifact.ConstNodeId {
+fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstList {
     return switch (value) {
         .list => |items| items,
         .pending,
@@ -191,6 +191,56 @@ fn constList(value: check.CheckedArtifact.ConstValue) ?[]const check.CheckedArti
         .nominal,
         .fn_value,
         => null,
+    };
+}
+
+fn constF32ListMatches(
+    store: *const check.CheckedArtifact.ConstStore,
+    list: check.ConstStore.ConstList,
+    expected: []const u32,
+) bool {
+    return switch (list) {
+        .nodes => |items| blk: {
+            if (items.len != expected.len) break :blk false;
+            for (items, expected) |item, bits| {
+                if ((constF32Bits(store.get(item)) orelse break :blk false) != bits) break :blk false;
+            }
+            break :blk true;
+        },
+        .scalar_bytes => |scalar_bytes| blk: {
+            if (scalar_bytes.element != .f32 or scalar_bytes.len != expected.len) break :blk false;
+            const bytes = store.blobBytes(scalar_bytes.bytes);
+            if (bytes.len != expected.len * @sizeOf(u32)) break :blk false;
+            for (expected, 0..) |bits, i| {
+                if (std.mem.readInt(u32, bytes[i * 4 ..][0..4], .little) != bits) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn constF64ListMatches(
+    store: *const check.CheckedArtifact.ConstStore,
+    list: check.ConstStore.ConstList,
+    expected: []const u64,
+) bool {
+    return switch (list) {
+        .nodes => |items| blk: {
+            if (items.len != expected.len) break :blk false;
+            for (items, expected) |item, bits| {
+                if ((constF64Bits(store.get(item)) orelse break :blk false) != bits) break :blk false;
+            }
+            break :blk true;
+        },
+        .scalar_bytes => |scalar_bytes| blk: {
+            if (scalar_bytes.element != .f64 or scalar_bytes.len != expected.len) break :blk false;
+            const bytes = store.blobBytes(scalar_bytes.bytes);
+            if (bytes.len != expected.len * @sizeOf(u64)) break :blk false;
+            for (expected, 0..) |bits, i| {
+                if (std.mem.readInt(u64, bytes[i * 8 ..][0..8], .little) != bits) break :blk false;
+            }
+            break :blk true;
+        },
     };
 }
 
@@ -984,21 +1034,11 @@ fn runComptimeFloatBitsTest(
             false,
         .comptime_f32_list_bits => |expected_bits| blk: {
             const items = constList(stored) orelse break :blk false;
-            if (items.len != expected_bits.len) break :blk false;
-            for (items, expected_bits) |item, bits| {
-                const actual_bits = constF32Bits(const_store.get(item)) orelse break :blk false;
-                if (actual_bits != bits) break :blk false;
-            }
-            break :blk true;
+            break :blk constF32ListMatches(const_store, items, expected_bits);
         },
         .comptime_f64_list_bits => |expected_bits| blk: {
             const items = constList(stored) orelse break :blk false;
-            if (items.len != expected_bits.len) break :blk false;
-            for (items, expected_bits) |item, bits| {
-                const actual_bits = constF64Bits(const_store.get(item)) orelse break :blk false;
-                if (actual_bits != bits) break :blk false;
-            }
-            break :blk true;
+            break :blk constF64ListMatches(const_store, items, expected_bits);
         },
         .inspect_str,
         .allocations_at_most,
