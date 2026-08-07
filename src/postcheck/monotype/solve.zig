@@ -254,6 +254,11 @@ const ConcreteFunctionRequestReplacement = union(enum) {
     distinct,
 };
 
+const FunctionRequestOccurrence = enum {
+    existing_request,
+    completed_argument,
+};
+
 const FunctionRequestSubstitution = struct {
     replacements: collections.DenseMap(NodeId, NodeId),
     concrete_replacements: collections.DenseMap(NodeId, ConcreteFunctionRequestReplacement),
@@ -2455,11 +2460,27 @@ pub const InstGraph = struct {
         defer substitution.deinit();
 
         for (checked_fn.args, current_request_fn.args) |checked_arg, current_arg| {
-            try self.collectFunctionRequestSubstitutions(checked_arg, current_arg, &substitution);
+            try self.collectFunctionRequestSubstitutions(
+                checked_arg,
+                current_arg,
+                .existing_request,
+                &substitution,
+            );
         }
-        try self.collectFunctionRequestSubstitutions(checked_fn.ret, current_request_fn.ret, &substitution);
+        try self.collectFunctionRequestSubstitutions(
+            checked_fn.ret,
+            current_request_fn.ret,
+            .existing_request,
+            &substitution,
+        );
+        substitution.compared.clearRetainingCapacity();
         for (checked_fn.args, produced_args) |checked_arg, produced_arg| {
-            try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, &substitution);
+            try self.collectFunctionRequestSubstitutions(
+                checked_arg,
+                produced_arg,
+                .completed_argument,
+                &substitution,
+            );
         }
 
         const changed_args = try self.materializeFunctionRequestArgumentNodes(
@@ -2490,11 +2511,12 @@ pub const InstGraph = struct {
         self: *InstGraph,
         raw_checked: NodeId,
         raw_produced: NodeId,
+        occurrence: FunctionRequestOccurrence,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
         const checked_node = self.find(raw_checked);
         const produced_node = self.find(raw_produced);
-        if (checked_node == produced_node) return;
+        if (checked_node == produced_node and occurrence == .existing_request) return;
 
         const pair = NodePair{ .left = checked_node, .right = produced_node };
         const compared = try substitution.compared.getOrPut(pair);
@@ -2505,19 +2527,27 @@ pub const InstGraph = struct {
         const produced_content = self.nodes.items[@intFromEnum(produced_node)];
 
         if (checked_content == .unresolved) {
+            if (checked_node == produced_node) return;
             try self.recordFunctionRequestReplacement(checked_node, produced_node, substitution);
             return;
+        }
+
+        if (checked_content == .named and produced_content == .named and
+            sameTypeDef(checked_content.named.def, produced_content.named.def) and
+            (isGeneratedPrivateRootContent(produced_content) or
+                (occurrence == .completed_argument and isGeneratedIteratorPublicRootContent(checked_content))))
+        {
+            try self.recordConcreteFunctionRequestReplacement(checked_node, produced_node, substitution);
         }
 
         if (isGeneratedPrivateRootContent(produced_content) and checked_content == .named and
             sameTypeDef(checked_content.named.def, produced_content.named.def))
         {
-            try self.recordConcreteFunctionRequestReplacement(checked_node, produced_node, substitution);
             if (checked_content.named.args.len != produced_content.named.args.len) {
                 Common.invariant("generated-private function substitution changed public argument arity");
             }
             for (checked_content.named.args, produced_content.named.args) |checked_arg, produced_arg| {
-                try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
+                try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, occurrence, substitution);
             }
             return;
         }
@@ -2525,12 +2555,12 @@ pub const InstGraph = struct {
         if (checked_content == .named and produced_content != .named) {
             const backing = checked_content.named.backing orelse
                 Common.invariant("function substitution found a checked named view without backing");
-            return self.collectFunctionRequestSubstitutions(backing.node, produced_node, substitution);
+            return self.collectFunctionRequestSubstitutions(backing.node, produced_node, occurrence, substitution);
         }
         if (produced_content == .named and checked_content != .named) {
             const backing = produced_content.named.backing orelse
                 Common.invariant("function substitution found an exact named view without backing");
-            return self.collectFunctionRequestSubstitutions(checked_node, backing.node, substitution);
+            return self.collectFunctionRequestSubstitutions(checked_node, backing.node, occurrence, substitution);
         }
 
         switch (checked_content) {
@@ -2543,18 +2573,18 @@ pub const InstGraph = struct {
             },
             .list => |checked_elem| {
                 if (produced_content != .list) Common.invariant("function substitution received different type structure");
-                try self.collectFunctionRequestSubstitutions(checked_elem, produced_content.list, substitution);
+                try self.collectFunctionRequestSubstitutions(checked_elem, produced_content.list, occurrence, substitution);
             },
             .box => |checked_elem| {
                 if (produced_content != .box) Common.invariant("function substitution received different type structure");
-                try self.collectFunctionRequestSubstitutions(checked_elem, produced_content.box, substitution);
+                try self.collectFunctionRequestSubstitutions(checked_elem, produced_content.box, occurrence, substitution);
             },
             .tuple => |checked_items| {
                 if (produced_content != .tuple or checked_items.len != produced_content.tuple.len) {
                     Common.invariant("function substitution received tuples of different arity");
                 }
                 for (checked_items, produced_content.tuple) |checked_item, produced_item| {
-                    try self.collectFunctionRequestSubstitutions(checked_item, produced_item, substitution);
+                    try self.collectFunctionRequestSubstitutions(checked_item, produced_item, occurrence, substitution);
                 }
             },
             .func => |checked_function| {
@@ -2562,18 +2592,20 @@ pub const InstGraph = struct {
                     Common.invariant("function substitution received functions of different arity");
                 }
                 for (checked_function.args, produced_content.func.args) |checked_arg, produced_arg| {
-                    try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
+                    try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, occurrence, substitution);
                 }
-                try self.collectFunctionRequestSubstitutions(checked_function.ret, produced_content.func.ret, substitution);
+                try self.collectFunctionRequestSubstitutions(checked_function.ret, produced_content.func.ret, occurrence, substitution);
             },
             .tag_union => try self.collectFunctionRequestTagSubstitutions(
                 checked_node,
                 produced_node,
+                occurrence,
                 substitution,
             ),
             .record => try self.collectFunctionRequestRecordSubstitutions(
                 checked_node,
                 produced_node,
+                occurrence,
                 substitution,
             ),
             .empty_tag_union => if (produced_content != .empty_tag_union)
@@ -2590,7 +2622,7 @@ pub const InstGraph = struct {
                     Common.invariant("function substitution received different named types");
                 }
                 for (checked_named.args, produced_content.named.args) |checked_arg, produced_arg| {
-                    try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
+                    try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, occurrence, substitution);
                 }
             },
             .erased => |digest| {
@@ -2609,6 +2641,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         checked_node: NodeId,
         produced_node: NodeId,
+        occurrence: FunctionRequestOccurrence,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
         if (self.content(produced_node) != .tag_union) {
@@ -2623,13 +2656,13 @@ pub const InstGraph = struct {
                     Common.invariant("function substitution received one tag at two payload arities");
                 }
                 for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
-                    try self.collectFunctionRequestSubstitutions(checked_payload, produced_payload, substitution);
+                    try self.collectFunctionRequestSubstitutions(checked_payload, produced_payload, occurrence, substitution);
                 }
                 break;
             }
         }
         if (!self.sameClass(checked_row.ext, produced_row.ext)) {
-            try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_row.ext, substitution);
+            try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_row.ext, occurrence, substitution);
         }
     }
 
@@ -2637,6 +2670,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         checked_node: NodeId,
         produced_node: NodeId,
+        occurrence: FunctionRequestOccurrence,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
         if (self.content(produced_node) != .record) {
@@ -2647,12 +2681,12 @@ pub const InstGraph = struct {
         for (checked_row.fields) |checked_field| {
             for (produced_row.fields) |produced_field| {
                 if (!self.name_store.recordFieldLabelTextEql(checked_field.name, produced_field.name)) continue;
-                try self.collectFunctionRequestSubstitutions(checked_field.ty, produced_field.ty, substitution);
+                try self.collectFunctionRequestSubstitutions(checked_field.ty, produced_field.ty, occurrence, substitution);
                 break;
             }
         }
         if (!self.sameClass(checked_row.ext, produced_row.ext)) {
-            try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_row.ext, substitution);
+            try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_row.ext, occurrence, substitution);
         }
     }
 
@@ -5025,6 +5059,20 @@ pub const InstGraph = struct {
             false;
     }
 
+    fn isGeneratedIteratorPublicRootContent(node_content: InstNode) bool {
+        if (node_content != .named or
+            node_content.named.def.iterator_representation != .none)
+        {
+            return false;
+        }
+        const owner = node_content.named.builtin_owner orelse return false;
+        if (!static_dispatch.isIteratorOwner(owner)) return false;
+        return if (node_content.named.backing) |backing|
+            backing.authority == .checked_public
+        else
+            false;
+    }
+
     fn isActiveSnapshotType(self: *InstGraph, ty: Type.TypeId) bool {
         const raw_node = self.linked_type_nodes.get(ty) orelse return false;
         const views = self.node_snapshots.get(raw_node) orelse return false;
@@ -7123,7 +7171,7 @@ test "function request substitutes one exact generated type through every callab
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = null,
+        .builtin_owner = .iter,
         .args = try graph.arena().dupe(NodeId, &.{item}),
         .backing = .{ .node = public_backing, .use = .runtime_layout_only },
     } });
@@ -7131,7 +7179,7 @@ test "function request substitutes one exact generated type through every callab
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = null,
+        .builtin_owner = .iter,
         .args = try graph.arena().dupe(NodeId, &.{item}),
         .backing = .{
             .node = try graph.newNode(.empty_record),
@@ -7215,6 +7263,20 @@ test "function request substitutes one exact generated type through every callab
     try std.testing.expect(graph.sameClass(independent_request_fn.args[0], exact));
     try std.testing.expect(graph.sameClass(independent_request_fn.args[1], public));
     try std.testing.expect(graph.sameClass(independent_request_fn.ret, public));
+
+    const mixed_concrete_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ public, public }),
+        .ret = public,
+    } });
+    const mixed_concrete_request = try graph.functionRequestFromProducedArguments(
+        mixed_concrete_fn,
+        mixed_concrete_fn,
+        &.{ public, exact },
+    );
+    const mixed_concrete_request_fn = try graph.functionNodes(mixed_concrete_request);
+    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[0], public));
+    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[1], exact));
+    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.ret, public));
 
     var second_def = def;
     second_def.generated = .{ .bytes = [_]u8{0xA2} ** 32 };
