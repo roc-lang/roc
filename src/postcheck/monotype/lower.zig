@@ -18816,6 +18816,25 @@ const BodyContext = struct {
         };
     }
 
+    fn lowLevelForResolvedTarget(
+        self: *BodyContext,
+        target: checked.ResolvedValueId,
+    ) ?can.CIR.Expr.LowLevel {
+        const raw = @intFromEnum(target);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target is outside resolved value table");
+        }
+        return switch (self.view.resolved_refs.records[raw].ref) {
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .promoted_top_level_proc,
+            => |proc| proc.low_level,
+            .platform_required_proc => |proc| proc.procedure.low_level,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => null,
+        };
+    }
+
     fn resolvedTargetMayProduceExactGraph(
         self: *BodyContext,
         target: checked.ResolvedValueId,
@@ -25741,7 +25760,11 @@ const BodyContext = struct {
                 );
                 request_args[index] = evidence_node;
             } else {
-                request_args[index] = try caller.instNode(arg_ty);
+                // Every argument is a distinct runtime occurrence. Reusing
+                // the caller's cached checked root here lets an exact result
+                // selected for one occurrence preselect an unrelated argument
+                // with the same checked type before that argument is lowered.
+                request_args[index] = try caller.freshInstNode(arg_ty);
             }
         }
         const request_ret = if (expected_ret_node) |expected| blk: {
@@ -31300,6 +31323,14 @@ const BodyContext = struct {
         else
             try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, null)) |intrinsic|
             intrinsic
+        else if (if (call.direct_target) |target|
+            if (self.lowLevelForResolvedTarget(target)) |op|
+                try self.lowerProducedLowLevelExprAtNode(op, call.args, expected_node)
+            else
+                null
+        else
+            null) |low_level|
+            low_level
         else lowered: {
             // Preserve the expected result as an active graph relation. It may
             // contain unresolved payload cells here, so materializing it as a

@@ -506,6 +506,28 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "42.0" },
     },
     .{
+        .name = "inspect: list concat carries callable evidence from a nonempty input",
+        .source_kind = .module,
+        .source =
+        \\main = match List.concat([], [|x| x + 1]) {
+        \\    [f] => f(41)
+        \\    _ => 0
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: list append merges callable evidence from stored and inserted values",
+        .source_kind = .module,
+        .source =
+        \\main = match [|x| x + 1].append(|x| x + 2) {
+        \\    [f, g] => f(39) + g(0)
+        \\    _ => 0
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
         .name = "inspect: compile-time callable result reused through top-level data",
         .source_kind = .module,
         .source =

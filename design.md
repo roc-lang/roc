@@ -959,10 +959,12 @@ new post-check docs and code. Use the exact term instead: `authoritative` for so
 payloads, `TypeDef`/`NamedType` for named type definitions, and `TypeDigest` for
 structural checked-type digests.
 
-The suffixes `Key` and `Ref` are banned in new type names. Use `Id` for assigned
-identities, `Digest` for structural hashes, and a concrete domain noun for
-compound identities such as `TypeDef`, `FnDef`, `ProcTemplate`, or
-`CheckedModuleId`.
+The suffix `Ref` is banned in new type names. Use `Id` for assigned dense
+identities and `Digest` for structural hashes. Use `Key` only for the
+structural or cross-boundary identities described in "Dense IDs and structural
+keys," when no owner-relative dense ID can preserve the required identity.
+Concrete domain nouns such as `TypeDef`, `FnDef`, and `ProcTemplate` are
+preferred when they state the compound identity precisely.
 
 The term `runtime image` is banned in new post-check docs and code. Use
 `LirImage` for the contiguous, viewable ARC-inserted LIR image plus layout store
@@ -2616,11 +2618,11 @@ coalescing equal finalized content addresses as they go. They never search the
 full Monotype graph to rediscover which nodes are generated representations;
 unrelated graph nodes do no work in either pass.
 
-The durable generated-identity table owns one canonical Monotype tree per
+The durable generated-identity table owns one authoritative Monotype tree per
 finalized content address across body graphs. After identity finalization and
 before relation freezing, a graph whose generated root hits that table imports
-the canonical root and explicitly relates the complete canonical backing to the
-producer's live backing. Every imported descendant retains its canonical
+the authoritative root and explicitly relates the complete authoritative
+backing to the producer's live backing. Every imported descendant retains its
 `TypeId` through sealing. Reusing only the named root is invalid: an
 independently requested step function, state, or recursive-rest descendant
 would otherwise be sealed under a fresh identity and later callable solving
@@ -2659,6 +2661,17 @@ select an exact item representation at their declared storage boundary.
 The checked exact-result-flow pass consumes the same metadata. It must not
 maintain a second handwritten classification or stamp the low-level result
 with the checker-public type and ask Lambda Solved to repair it.
+
+Every checked procedure use that names a compiler-provided low-level operation
+records that exact operation in the checked artifact. A direct call to a
+representation-sensitive low-level procedure therefore lowers through
+`ProducedTypeFlow` immediately from its independently completed operands; it
+does not first specialize the source-level declaration as an ordinary
+procedure. This matters for operations such as list insertion: the existing
+list may still have a public element cell because it is empty, while the
+inserted item already has an exact generated representation. The storage
+operation, not a shared checked type variable in a wrapper signature, selects
+the resulting list element representation.
 
 Representation-determining input cells are producer provenance in the active
 Monotype graph, not nominal type arguments. A generated `Iter(item)` has exactly
@@ -3158,6 +3171,14 @@ Lambda Solved is an invariant violation: it means an earlier producer, call
 signature, binder, or join discarded its exact Monotype. Lambda Solved must not
 repair that loss by relating the two roots, walking their children, or copying
 generated backing evidence into the public type.
+
+Low-level list insertion, concatenation, replacement, and prepend operations
+can place callable values into storage without making their independently
+lowered input occurrences share one Lambda variable in advance. Lambda Solved
+relates the callable slots of two such occurrences only when their complete
+exact Monotypes are equal. A checker-public empty list and a list containing an
+exact generated item deliberately remain independent until Monotype selects
+the concrete storage representation.
 
 When a complete Monotype type clone contains a forced-dynamic iterator,
 Lambda Solved marks the callable in that iterator's backing as erased. The mark

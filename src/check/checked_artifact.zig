@@ -2485,6 +2485,10 @@ fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?Intr
     return static_dispatch.intrinsicForProcedureDef(module, def_idx);
 }
 
+fn lowLevelForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?CIR.Expr.LowLevel {
+    return module.moduleEnvConst().providedLowLevelForDef(def_idx);
+}
+
 fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
     return static_dispatch.iteratorProcedureForDef(module, def_idx);
 }
@@ -13747,6 +13751,11 @@ pub const ProcedureUseTemplate = struct {
     /// Post-check consumers must not derive this by walking binding bodies or
     /// exported template closures.
     intrinsic: ?IntrinsicId = null,
+    /// Producer-recorded primitive implementation for a compiler-provided
+    /// procedure. Monotype lowers representation-sensitive primitives from
+    /// their actual operands instead of specializing a checked wrapper whose
+    /// shared type variables would preselect those operand representations.
+    low_level: ?CIR.Expr.LowLevel = null,
     /// Producer-recorded checked role for compiler-owned iterator procedures.
     iterator_procedure: ?IteratorProcedureId = null,
     /// Checking proved that this procedure consumes or produces a runtime
@@ -14407,6 +14416,7 @@ fn categorizeTopLevelValueRef(
                 } },
                 .source_fn_ty_template = .{},
                 .intrinsic = intrinsicForProcedureDef(module, entry.def),
+                .low_level = lowLevelForProcedureDef(module, entry.def),
                 .iterator_procedure = iterator_procedure,
                 .graph_participating = iterator_procedure != null or
                     graphParticipatingDef(graph_participating_defs, entry.def),
@@ -15732,6 +15742,7 @@ fn categorizeImportedValueRef(
             .binding = .{ .imported = binding.binding },
             .source_fn_ty_template = .{},
             .intrinsic = binding.intrinsic,
+            .low_level = binding.low_level,
             .iterator_procedure = binding.iterator_procedure,
             .graph_participating = binding.graph_participating,
             .produces_exact_graph = binding.produces_exact_graph,
@@ -15782,6 +15793,7 @@ fn categorizeResolvedAssociatedValueRef(
             .binding = .{ .imported = binding.binding },
             .source_fn_ty_template = .{},
             .intrinsic = binding.intrinsic,
+            .low_level = binding.low_level,
             .iterator_procedure = binding.iterator_procedure,
             .graph_participating = binding.graph_participating,
             .produces_exact_graph = binding.produces_exact_graph,
@@ -22166,6 +22178,7 @@ fn clonePlatformRequiredValueUseWithRelation(
                 .source_fn_ty_template = relation.requested_source_ty,
                 .source_fn_ty_payload = relation.requested_source_ty_payload,
                 .intrinsic = proc_use.procedure.intrinsic,
+                .low_level = proc_use.procedure.low_level,
                 .iterator_procedure = proc_use.procedure.iterator_procedure,
                 .graph_participating = proc_use.procedure.graph_participating,
                 .produces_exact_graph = proc_use.procedure.produces_exact_graph,
@@ -22633,6 +22646,7 @@ fn platformRequiredProcedureUse(
         .source_fn_ty_template = requested_source_ty,
         .source_fn_ty_payload = null,
         .intrinsic = null,
+        .low_level = exported_binding.low_level,
         .iterator_procedure = exported_binding.iterator_procedure,
         .graph_participating = exported_binding.graph_participating,
         .produces_exact_graph = exported_binding.produces_exact_graph,
@@ -27502,6 +27516,7 @@ pub const ImportedProcedureBindingView = struct {
     source_scheme: canonical.CanonicalTypeSchemeKey,
     body: ImportedProcedureBindingBody,
     intrinsic: ?IntrinsicId = null,
+    low_level: ?CIR.Expr.LowLevel = null,
     iterator_procedure: ?IteratorProcedureId = null,
     graph_participating: bool = false,
     produces_exact_graph: bool = false,
@@ -27604,6 +27619,7 @@ pub const ExportedProcedureBindingTable = struct {
                 .source_scheme = binding.source_scheme,
                 .body = body,
                 .intrinsic = intrinsicForProcedureDef(module, def_idx),
+                .low_level = lowLevelForProcedureDef(module, def_idx),
                 .iterator_procedure = iterator_procedure,
                 .graph_participating = iterator_procedure != null or
                     graphParticipatingDef(graph_participating_defs, def_idx),
@@ -28591,7 +28607,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 59;
+    const serialized_layout_version: u32 = 60;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -34428,8 +34444,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x77, 0x32, 0x15, 0x1C, 0x58, 0x8F, 0x18, 0x75, 0xF7, 0x7B, 0xDE, 0x98, 0xB6, 0xFA, 0x0E, 0x11,
-        0xD7, 0x8C, 0xE4, 0x68, 0x13, 0xC8, 0x51, 0x5E, 0x2B, 0x21, 0xB2, 0xDD, 0x06, 0xE7, 0x7A, 0xBA,
+        0x6C, 0xB6, 0x0B, 0xBB, 0x00, 0xC9, 0xE4, 0x14, 0xFA, 0x81, 0x11, 0x6B, 0x52, 0xC1, 0x73, 0xCC,
+        0xC1, 0x58, 0x73, 0x0A, 0x99, 0x42, 0xCF, 0xB0, 0x89, 0xBB, 0x3D, 0xFD, 0x6A, 0x24, 0xC5, 0x70,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

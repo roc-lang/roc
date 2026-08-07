@@ -745,7 +745,7 @@ const Solver = struct {
                 for (args, 0..) |arg, i| {
                     arg_tys[i] = try self.inferExpr(arg);
                 }
-                try self.bindLowLevelTypes(call.op, expected, arg_tys);
+                try self.bindLowLevelTypes(call.op, expected, expr.ty, args, arg_tys);
             },
             .field_access => |field| {
                 const receiver_ty = try self.inferExpr(field.receiver);
@@ -1509,8 +1509,11 @@ const Solver = struct {
         self: *Solver,
         op: can.CIR.Expr.LowLevel,
         expected: Type.TypeVarId,
+        expected_mono: MonoType.TypeId,
+        arg_exprs: []const Lifted.ExprId,
         args: []const Type.TypeVarId,
     ) Allocator.Error!void {
+        if (arg_exprs.len != args.len) Common.invariant("low-level expression and type argument counts differed");
         const bound_op = std.meta.stringToEnum(BoundLowLevel, @tagName(op)) orelse return;
         switch (bound_op) {
             .box_box => {
@@ -1535,12 +1538,23 @@ const Solver = struct {
                 // public element representation (for example, appending to
                 // an empty list).
                 try self.unify(args[1], try self.listElem(expected));
+                try self.relateSameMonotypeOccurrences(
+                    expected,
+                    expected_mono,
+                    args[0],
+                    self.lifted.exprs[@intFromEnum(arg_exprs[0])].ty,
+                );
             },
             .list_concat => {
                 expectLowLevelArity(op, args, 2);
-                _ = try self.listElem(expected);
-                _ = try self.listElem(args[0]);
-                _ = try self.listElem(args[1]);
+                for (args, arg_exprs) |arg, arg_expr| {
+                    try self.relateSameMonotypeOccurrences(
+                        expected,
+                        expected_mono,
+                        arg,
+                        self.lifted.exprs[@intFromEnum(arg_expr)].ty,
+                    );
+                }
             },
             .list_reserve,
             .list_drop_at,
@@ -1562,6 +1576,12 @@ const Solver = struct {
             .list_set => {
                 expectLowLevelArity(op, args, 3);
                 try self.unify(args[2], try self.listElem(expected));
+                try self.relateSameMonotypeOccurrences(
+                    expected,
+                    expected_mono,
+                    args[0],
+                    self.lifted.exprs[@intFromEnum(arg_exprs[0])].ty,
+                );
             },
             .list_replace_unsafe => {
                 expectLowLevelArity(op, args, 3);
@@ -1576,6 +1596,12 @@ const Solver = struct {
             .list_prepend => {
                 expectLowLevelArity(op, args, 2);
                 try self.unify(args[1], try self.listElem(expected));
+                try self.relateSameMonotypeOccurrences(
+                    expected,
+                    expected_mono,
+                    args[0],
+                    self.lifted.exprs[@intFromEnum(arg_exprs[0])].ty,
+                );
             },
             .dict_pseudo_seed => expectLowLevelArity(op, args, 0),
             .hasher_finish => expectLowLevelArity(op, args, 1),
@@ -1607,6 +1633,25 @@ const Solver = struct {
             .hasher_write_bytes,
             .hasher_write_str,
             => expectLowLevelArity(op, args, 2),
+        }
+    }
+
+    /// Two runtime occurrences of one exact Monotype still receive separate
+    /// Lambda-Solved callable slots. Relate those slots at a low-level storage
+    /// boundary only when Monotype says the complete runtime types are equal.
+    /// A checked-public empty list and a list with an exact generated element
+    /// deliberately compare unequal and therefore remain independent.
+    fn relateSameMonotypeOccurrences(
+        self: *Solver,
+        left: Type.TypeVarId,
+        left_mono: MonoType.TypeId,
+        right: Type.TypeVarId,
+        right_mono: MonoType.TypeId,
+    ) Allocator.Error!void {
+        if (left_mono == right_mono or
+            try self.lifted.types.typeEql(self.allocator, self.lifted.names, left_mono, right_mono))
+        {
+            try self.unify(left, right);
         }
     }
 
