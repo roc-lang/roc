@@ -32,7 +32,9 @@ const glibc_cross_targets = [_]CrossTarget{
 /// Windows cross-compile targets
 const windows_cross_targets = [_]CrossTarget{
     .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc } },
+    .{ .name = "x64mingw", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
     .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
+    .{ .name = "arm64mingw", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
 };
 
 /// BSD cross-compile targets
@@ -6827,8 +6829,10 @@ fn addMainExe(
         .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
         .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
         .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
-        .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
-        .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
+        .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc } },
+        .{ .name = "x64mingw", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
+        .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
+        .{ .name = "arm64mingw", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
         .{ .name = "x64freebsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .freebsd, .abi = .none } },
         .{ .name = "x64openbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .openbsd, .abi = .none } },
         .{ .name = "x64netbsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .netbsd, .abi = .none } },
