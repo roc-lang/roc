@@ -420,14 +420,14 @@ pub const InstGraph = struct {
     /// an equivalent public shape.
     imported_monos: collections.DenseMap(NodeId, Type.TypeId),
     /// Finished generated roots encountered explicitly while importing a
-    /// Monotype. These need canonical descendant binding even when this graph
+    /// Monotype. These need authoritative descendant binding even when this graph
     /// does not own a corresponding representation producer.
     imported_generated_iterator_nodes: std.ArrayList(NodeId),
-    /// Canonical TypeIds imported from the generated-representation interner.
+    /// Authoritative TypeIds imported from the generated-representation interner.
     /// During binding these are keyed by permanent import nodes; after all
-    /// canonical relations are complete they are reindexed once by final
+    /// authoritative relations are complete they are reindexed once by final
     /// union-class root, giving sealing a direct lookup for every backing child.
-    generated_canonical_monos: collections.DenseMap(NodeId, Type.TypeId),
+    generated_authoritative_monos: collections.DenseMap(NodeId, Type.TypeId),
     /// Current extension root for each row root. This is the authority for
     /// maintaining `row_parents`; stale extension edges are removed when row
     /// content changes.
@@ -497,7 +497,7 @@ pub const InstGraph = struct {
             .linked_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .imported_generated_iterator_nodes = .empty,
-            .generated_canonical_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
+            .generated_authoritative_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .row_exts = .empty,
             .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
@@ -558,7 +558,7 @@ pub const InstGraph = struct {
         self.row_exts.deinit(allocator);
         self.imported_generated_iterator_nodes.deinit(allocator);
         self.imported_monos.deinit();
-        self.generated_canonical_monos.deinit();
+        self.generated_authoritative_monos.deinit();
         self.linked_type_nodes.deinit();
         self.produced_join_memo.deinit();
         self.produced_type_pending.deinit(allocator);
@@ -1469,24 +1469,24 @@ pub const InstGraph = struct {
             });
         }
 
-        var canonical_by_identity = std.HashMap(
+        var authoritative_by_identity = std.HashMap(
             names.TypeDigest,
             NodeId,
             GeneratedIteratorInternContext,
             80,
         ).init(self.allocator);
-        defer canonical_by_identity.deinit();
+        defer authoritative_by_identity.deinit();
         for (pending.items) |item| {
-            const entry = try canonical_by_identity.getOrPut(item.digest);
+            const entry = try authoritative_by_identity.getOrPut(item.digest);
             if (!entry.found_existing) {
                 entry.value_ptr.* = item.node;
                 continue;
             }
-            const canonical = self.find(entry.value_ptr.*);
+            const authoritative = self.find(entry.value_ptr.*);
             const duplicate = self.find(item.node);
-            if (canonical == duplicate) continue;
-            try self.unify(canonical, duplicate);
-            entry.value_ptr.* = self.find(canonical);
+            if (authoritative == duplicate) continue;
+            try self.unify(authoritative, duplicate);
+            entry.value_ptr.* = self.find(authoritative);
             self.countDiagnostic("generated_identity_roots_coalesced");
         }
 
@@ -1505,19 +1505,19 @@ pub const InstGraph = struct {
     }
 
     /// Relate every finalized graph-owned generated iterator whose durable
-    /// identity already exists to that canonical Monotype before relations are
+    /// identity already exists to that authoritative Monotype before relations are
     /// frozen. Importing and unifying the complete type preserves the exact
     /// backing correspondence; a root-only sealing shortcut would leave
     /// independently requested backing descendants free to acquire duplicate
     /// TypeIds.
-    pub fn bindGeneratedIteratorCanonicalTypes(
+    pub fn bindGeneratedIteratorAuthoritativeTypes(
         self: *InstGraph,
         generated_types_by_identity: *std.AutoHashMap(names.TypeDigest, Type.TypeId),
     ) Allocator.Error!void {
         self.requireRelationProduction();
 
         // A finished imported generated type is already a valid durable
-        // canonical tree. Publish it before binding graph-owned producers so a
+        // authoritative tree. Record it before binding graph-owned producers so a
         // graph that first encounters an identity through an import and also
         // produces that identity still chooses one tree before freezing.
         for (self.imported_generated_iterator_nodes.items) |registered_node| {
@@ -1529,11 +1529,11 @@ pub const InstGraph = struct {
             };
             const identity = imported_named.def.generated orelse
                 Common.invariant("imported generated iterator had no durable identity");
-            const canonical = try generated_types_by_identity.getOrPut(identity);
-            if (!canonical.found_existing) {
-                canonical.value_ptr.* = imported_ty;
-            } else if (canonical.value_ptr.* != imported_ty and
-                !try self.types.typeEql(self.name_store, canonical.value_ptr.*, imported_ty))
+            const authoritative = try generated_types_by_identity.getOrPut(identity);
+            if (!authoritative.found_existing) {
+                authoritative.value_ptr.* = imported_ty;
+            } else if (authoritative.value_ptr.* != imported_ty and
+                !try self.types.typeEql(self.name_store, authoritative.value_ptr.*, imported_ty))
             {
                 Common.invariant("one generated identity named different durable Monotypes");
             }
@@ -1551,10 +1551,10 @@ pub const InstGraph = struct {
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("registered generated iterator stopped being named"),
             };
             const identity = named.def.generated orelse
-                Common.invariant("generated iterator reached canonical binding without a finalized identity");
-            const canonical_ty = generated_types_by_identity.get(identity) orelse continue;
-            const canonical_node = try self.importGeneratedCanonicalMono(canonical_ty);
-            try self.unify(node, canonical_node);
+                Common.invariant("generated iterator reached authoritative binding without a finalized identity");
+            const authoritative_ty = generated_types_by_identity.get(identity) orelse continue;
+            const authoritative_node = try self.importGeneratedAuthoritativeMono(authoritative_ty);
+            try self.unify(node, authoritative_node);
             self.countDiagnostic("generated_type_store_hits");
         }
         const imported_count = self.imported_generated_iterator_nodes.items.len;
@@ -1570,33 +1570,33 @@ pub const InstGraph = struct {
             };
             const identity = named.def.generated orelse
                 Common.invariant("imported generated iterator had no durable identity");
-            const canonical_ty = generated_types_by_identity.get(identity) orelse continue;
-            const canonical_node = try self.importGeneratedCanonicalMono(canonical_ty);
-            try self.unify(node, canonical_node);
+            const authoritative_ty = generated_types_by_identity.get(identity) orelse continue;
+            const authoritative_node = try self.importGeneratedAuthoritativeMono(authoritative_ty);
+            try self.unify(node, authoritative_node);
         }
-        try self.indexGeneratedCanonicalMonosByRoot();
+        try self.indexGeneratedAuthoritativeMonosByRoot();
     }
 
-    fn indexGeneratedCanonicalMonosByRoot(self: *InstGraph) Allocator.Error!void {
+    fn indexGeneratedAuthoritativeMonosByRoot(self: *InstGraph) Allocator.Error!void {
         var by_root = collections.DenseMap(NodeId, Type.TypeId).init(self.allocator);
         errdefer by_root.deinit();
-        var imported = self.generated_canonical_monos.iterator();
+        var imported = self.generated_authoritative_monos.iterator();
         while (imported.next()) |entry| {
             const root = self.find(entry.key_ptr.*);
-            const canonical = try by_root.getOrPut(root);
-            if (!canonical.found_existing) {
-                canonical.value_ptr.* = entry.value_ptr.*;
-            } else if (canonical.value_ptr.* != entry.value_ptr.*) {
-                if (!try self.types.typeEql(self.name_store, canonical.value_ptr.*, entry.value_ptr.*)) {
-                    Common.invariant("one finalized graph class retained different canonical Monotypes");
+            const authoritative = try by_root.getOrPut(root);
+            if (!authoritative.found_existing) {
+                authoritative.value_ptr.* = entry.value_ptr.*;
+            } else if (authoritative.value_ptr.* != entry.value_ptr.*) {
+                if (!try self.types.typeEql(self.name_store, authoritative.value_ptr.*, entry.value_ptr.*)) {
+                    Common.invariant("one finalized graph class retained different authoritative Monotypes");
                 }
-                if (@intFromEnum(entry.value_ptr.*) < @intFromEnum(canonical.value_ptr.*)) {
-                    canonical.value_ptr.* = entry.value_ptr.*;
+                if (@intFromEnum(entry.value_ptr.*) < @intFromEnum(authoritative.value_ptr.*)) {
+                    authoritative.value_ptr.* = entry.value_ptr.*;
                 }
             }
         }
-        self.generated_canonical_monos.deinit();
-        self.generated_canonical_monos = by_root;
+        self.generated_authoritative_monos.deinit();
+        self.generated_authoritative_monos = by_root;
     }
 
     pub fn finalizesAsClosedEmptyTagUnion(self: *InstGraph, raw_node: NodeId) bool {
@@ -5334,7 +5334,7 @@ pub const InstGraph = struct {
         return try self.importMonoInner(ty, null);
     }
 
-    fn importGeneratedCanonicalMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
+    fn importGeneratedAuthoritativeMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         self.requireRelationProduction();
         var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer seen.deinit();
@@ -5344,22 +5344,22 @@ pub const InstGraph = struct {
     fn importMonoInner(
         self: *InstGraph,
         ty: Type.TypeId,
-        canonical_seen: ?*collections.DenseMap(Type.TypeId, void),
+        authoritative_seen: ?*collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!NodeId {
         self.countDiagnostic("mono_import_requests");
-        if (canonical_seen) |seen| {
+        if (authoritative_seen) |seen| {
             const entry = try seen.getOrPut(ty);
             if (entry.found_existing) {
                 const existing = self.linked_type_nodes.get(ty) orelse
-                    Common.invariant("recursive canonical Monotype child had not been linked");
+                    Common.invariant("recursive authoritative Monotype child had not been linked");
                 return self.find(existing);
             }
         }
         if (self.linked_type_nodes.get(ty)) |existing| {
             self.countDiagnostic("mono_import_hits");
-            if (canonical_seen) |seen| {
-                try self.recordGeneratedCanonicalMono(existing, ty);
-                try self.visitExistingGeneratedCanonicalMonoChildren(ty, seen);
+            if (authoritative_seen) |seen| {
+                try self.recordGeneratedAuthoritativeMono(existing, ty);
+                try self.visitExistingGeneratedAuthoritativeMonoChildren(ty, seen);
             }
             return self.find(existing);
         }
@@ -5372,17 +5372,17 @@ pub const InstGraph = struct {
         // every digest taken from it.
         try self.linked_type_nodes.put(ty, node);
         try self.imported_monos.put(node, ty);
-        if (canonical_seen != null) try self.recordGeneratedCanonicalMono(node, ty);
+        if (authoritative_seen != null) try self.recordGeneratedAuthoritativeMono(node, ty);
 
         const types = self.types;
         const imported: InstNode = switch (types.get(ty)) {
             .primitive => |primitive| .{ .primitive = primitive },
-            .list => |elem| .{ .list = try self.importMonoInner(elem, canonical_seen) },
-            .box => |elem| .{ .box = try self.importMonoInner(elem, canonical_seen) },
-            .tuple => |items| .{ .tuple = try self.importMonoSliceInner(types.span(items), canonical_seen) },
+            .list => |elem| .{ .list = try self.importMonoInner(elem, authoritative_seen) },
+            .box => |elem| .{ .box = try self.importMonoInner(elem, authoritative_seen) },
+            .tuple => |items| .{ .tuple = try self.importMonoSliceInner(types.span(items), authoritative_seen) },
             .func => |func| .{ .func = .{
-                .args = try self.importMonoSliceInner(types.span(func.args), canonical_seen),
-                .ret = try self.importMonoInner(func.ret, canonical_seen),
+                .args = try self.importMonoSliceInner(types.span(func.args), authoritative_seen),
+                .ret = try self.importMonoInner(func.ret, authoritative_seen),
             } },
             .tag_union => |tags| blk: {
                 const span = types.tagSpan(tags);
@@ -5395,7 +5395,7 @@ pub const InstGraph = struct {
                     inst_tags[index] = .{
                         .name = tag.name,
                         .checked_name = tag.checked_name,
-                        .payloads = try self.importMonoSliceInner(types.span(tag.payloads), canonical_seen),
+                        .payloads = try self.importMonoSliceInner(types.span(tag.payloads), authoritative_seen),
                     };
                 }
                 break :blk .{ .tag_union = .{
@@ -5411,7 +5411,7 @@ pub const InstGraph = struct {
                     const field = GuardedList.at(span, index);
                     inst_fields[index] = .{
                         .name = field.name,
-                        .ty = try self.importMonoInner(field.ty, canonical_seen),
+                        .ty = try self.importMonoInner(field.ty, authoritative_seen),
                     };
                 }
                 break :blk .{ .record = .{
@@ -5424,13 +5424,13 @@ pub const InstGraph = struct {
                 .def = named.def,
                 .kind = named.kind,
                 .builtin_owner = named.builtin_owner,
-                .args = try self.importMonoSliceInner(types.span(named.args), canonical_seen),
+                .args = try self.importMonoSliceInner(types.span(named.args), authoritative_seen),
                 .backing = if (named.backing) |backing| .{
-                    .node = try self.importMonoInner(backing.ty, canonical_seen),
+                    .node = try self.importMonoInner(backing.ty, authoritative_seen),
                     .use = backing.use,
                     .authority = backing.authority,
                 } else null,
-                .declared_order = try self.importDeclaredFieldsInner(named.declared_order, canonical_seen),
+                .declared_order = try self.importDeclaredFieldsInner(named.declared_order, authoritative_seen),
             } },
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
@@ -5448,18 +5448,18 @@ pub const InstGraph = struct {
         return node;
     }
 
-    fn recordGeneratedCanonicalMono(self: *InstGraph, raw_node: NodeId, ty: Type.TypeId) Allocator.Error!void {
-        const entry = try self.generated_canonical_monos.getOrPut(raw_node);
+    fn recordGeneratedAuthoritativeMono(self: *InstGraph, raw_node: NodeId, ty: Type.TypeId) Allocator.Error!void {
+        const entry = try self.generated_authoritative_monos.getOrPut(raw_node);
         if (!entry.found_existing) {
             entry.value_ptr.* = ty;
         } else if (entry.value_ptr.* != ty and
             !try self.types.typeEql(self.name_store, entry.value_ptr.*, ty))
         {
-            Common.invariant("one generated canonical graph node represented different Monotypes");
+            Common.invariant("one generated authoritative graph node represented different Monotypes");
         }
     }
 
-    fn visitExistingGeneratedCanonicalMonoChildren(
+    fn visitExistingGeneratedAuthoritativeMonoChildren(
         self: *InstGraph,
         ty: Type.TypeId,
         seen: *collections.DenseMap(Type.TypeId, void),
@@ -5468,9 +5468,9 @@ pub const InstGraph = struct {
             .primitive, .erased, .zst => {},
             .list => |elem| _ = try self.importMonoInner(elem, seen),
             .box => |elem| _ = try self.importMonoInner(elem, seen),
-            .tuple => |items| try self.visitExistingGeneratedCanonicalMonoSpan(items, seen),
+            .tuple => |items| try self.visitExistingGeneratedAuthoritativeMonoSpan(items, seen),
             .func => |func| {
-                try self.visitExistingGeneratedCanonicalMonoSpan(func.args, seen);
+                try self.visitExistingGeneratedAuthoritativeMonoSpan(func.args, seen);
                 _ = try self.importMonoInner(func.ret, seen);
             },
             .record => |fields| {
@@ -5482,11 +5482,11 @@ pub const InstGraph = struct {
             .tag_union => |tags| {
                 const tag_span = self.types.tagSpan(tags);
                 for (0..tag_span.len) |index| {
-                    try self.visitExistingGeneratedCanonicalMonoSpan(GuardedList.at(tag_span, index).payloads, seen);
+                    try self.visitExistingGeneratedAuthoritativeMonoSpan(GuardedList.at(tag_span, index).payloads, seen);
                 }
             },
             .named => |named| {
-                try self.visitExistingGeneratedCanonicalMonoSpan(named.args, seen);
+                try self.visitExistingGeneratedAuthoritativeMonoSpan(named.args, seen);
                 if (named.backing) |backing| {
                     _ = try self.importMonoInner(backing.ty, seen);
                 }
@@ -5501,7 +5501,7 @@ pub const InstGraph = struct {
         }
     }
 
-    fn visitExistingGeneratedCanonicalMonoSpan(
+    fn visitExistingGeneratedAuthoritativeMonoSpan(
         self: *InstGraph,
         span: Type.Span,
         seen: *collections.DenseMap(Type.TypeId, void),
@@ -5515,12 +5515,12 @@ pub const InstGraph = struct {
     fn importMonoSliceInner(
         self: *InstGraph,
         tys: anytype,
-        canonical_seen: ?*collections.DenseMap(Type.TypeId, void),
+        authoritative_seen: ?*collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error![]NodeId {
         const out = try self.arena().alloc(NodeId, tys.len);
         for (0..tys.len) |index| {
             const ty = GuardedList.at(tys, index);
-            out[index] = try self.importMonoInner(ty, canonical_seen);
+            out[index] = try self.importMonoInner(ty, authoritative_seen);
         }
         return out;
     }
@@ -5528,7 +5528,7 @@ pub const InstGraph = struct {
     fn importDeclaredFieldsInner(
         self: *InstGraph,
         span: Type.Span,
-        canonical_seen: ?*collections.DenseMap(Type.TypeId, void),
+        authoritative_seen: ?*collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error![]const InstDeclaredField {
         const fields = self.types.declaredFieldSpan(span);
         if (fields.len == 0) return &.{};
@@ -5537,7 +5537,7 @@ pub const InstGraph = struct {
             const field = GuardedList.at(fields, index);
             out[index] = switch (field) {
                 .named => |name| .{ .named = name },
-                .padding => |ty| .{ .padding = try self.importMonoInner(ty, canonical_seen) },
+                .padding => |ty| .{ .padding = try self.importMonoInner(ty, authoritative_seen) },
             };
         }
         return out;
@@ -5794,18 +5794,18 @@ pub const GraphTypeFinals = struct {
                 Common.invariant("active Monotype snapshot traversed a graph-owned generated iterator");
             }
         }
-        if (self.graph.generated_canonical_monos.get(node)) |canonical| {
+        if (self.graph.generated_authoritative_monos.get(node)) |authoritative| {
             if (generated_identity) |identity| {
                 const interner = self.generated_types_by_identity orelse
-                    Common.invariant("generated canonical root reached sealing without its interner");
+                    Common.invariant("generated authoritative root reached sealing without its interner");
                 const expected = interner.get(identity) orelse
-                    Common.invariant("generated canonical root was absent from its interner");
-                if (expected != canonical) {
-                    Common.invariant("generated canonical root retained the wrong durable TypeId");
+                    Common.invariant("generated authoritative root was absent from its interner");
+                if (expected != authoritative) {
+                    Common.invariant("generated authoritative root retained the wrong durable TypeId");
                 }
             }
-            try self.sealed.put(node, canonical);
-            return canonical;
+            try self.sealed.put(node, authoritative);
+            return authoritative;
         }
         if (generated_identity) |identity| {
             if (self.generated_types_by_identity) |interner| {
@@ -5838,11 +5838,11 @@ pub const GraphTypeFinals = struct {
         return sealed;
     }
 
-    /// Publish every graph-owned generated identity before sealing work can
+    /// Commit every graph-owned generated identity before sealing work can
     /// recursively lower another specialization. Without this barrier a
-    /// nested specialization can publish the same identity first, after this
+    /// nested specialization can commit the same identity first, after this
     /// graph's relations have already frozen and can no longer bind to it.
-    pub fn publishGeneratedIteratorRoots(self: *GraphTypeFinals) Allocator.Error!void {
+    pub fn commitGeneratedIteratorRoots(self: *GraphTypeFinals) Allocator.Error!void {
         var seen = collections.DenseMap(NodeId, void).init(self.graph.allocator);
         defer seen.deinit();
         for (self.graph.generated_iterator_nodes.items) |registered| {
@@ -8626,7 +8626,7 @@ test "generated iterator interning happens before backing work and survives late
     try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_identity_roots_coalesced);
 }
 
-test "generated iterator store interning preserves canonical backing TypeIds across graphs" {
+test "generated iterator store interning preserves authoritative backing TypeIds across graphs" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -8688,20 +8688,20 @@ test "generated iterator store interning preserves canonical backing TypeIds acr
         }
     };
 
-    var canonical_root: Type.TypeId = undefined;
-    var canonical_backing: Type.TypeId = undefined;
+    var authoritative_root: Type.TypeId = undefined;
+    var authoritative_backing: Type.TypeId = undefined;
     {
         const graph = try InstGraph.create(gpa, &type_store, &name_store);
         defer graph.destroy();
         const built = try Build.inGraph(graph, named_type, public_def);
         try graph.finalizeGeneratedIteratorRepresentations();
         try graph.finalizeGeneratedIteratorIdentities();
-        try graph.bindGeneratedIteratorCanonicalTypes(&generated_types_by_identity);
+        try graph.bindGeneratedIteratorAuthoritativeTypes(&generated_types_by_identity);
         try graph.freezeRelations();
         var sealer = GraphTypeFinals.initWithGeneratedTypeInterner(graph, &generated_types_by_identity);
         defer sealer.deinit();
-        canonical_root = try sealer.sealNode(built.root);
-        canonical_backing = try sealer.sealNode(built.backing);
+        authoritative_root = try sealer.sealNode(built.root);
+        authoritative_backing = try sealer.sealNode(built.backing);
     }
 
     {
@@ -8712,13 +8712,13 @@ test "generated iterator store interning preserves canonical backing TypeIds acr
         const built = try Build.inGraph(graph, named_type, public_def);
         try graph.finalizeGeneratedIteratorRepresentations();
         try graph.finalizeGeneratedIteratorIdentities();
-        try graph.bindGeneratedIteratorCanonicalTypes(&generated_types_by_identity);
+        try graph.bindGeneratedIteratorAuthoritativeTypes(&generated_types_by_identity);
         try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_type_store_hits);
         try graph.freezeRelations();
         var sealer = GraphTypeFinals.initWithGeneratedTypeInterner(graph, &generated_types_by_identity);
         defer sealer.deinit();
-        try std.testing.expectEqual(canonical_root, try sealer.sealNode(built.root));
-        try std.testing.expectEqual(canonical_backing, try sealer.sealNode(built.backing));
+        try std.testing.expectEqual(authoritative_root, try sealer.sealNode(built.root));
+        try std.testing.expectEqual(authoritative_backing, try sealer.sealNode(built.backing));
     }
 
     // A durable generated type can enter a fresh lowering run through an
@@ -8729,17 +8729,17 @@ test "generated iterator store interning preserves canonical backing TypeIds acr
     {
         const graph = try InstGraph.create(gpa, &type_store, &name_store);
         defer graph.destroy();
-        const imported_root = try graph.importMono(canonical_root);
+        const imported_root = try graph.importMono(authoritative_root);
         const built = try Build.inGraph(graph, named_type, public_def);
         try graph.finalizeGeneratedIteratorRepresentations();
         try graph.finalizeGeneratedIteratorIdentities();
-        try graph.bindGeneratedIteratorCanonicalTypes(&generated_types_by_identity);
+        try graph.bindGeneratedIteratorAuthoritativeTypes(&generated_types_by_identity);
         try std.testing.expect(graph.sameClass(imported_root, built.root));
         try graph.freezeRelations();
         var sealer = GraphTypeFinals.initWithGeneratedTypeInterner(graph, &generated_types_by_identity);
         defer sealer.deinit();
-        try std.testing.expectEqual(canonical_root, try sealer.sealNode(built.root));
-        try std.testing.expectEqual(canonical_backing, try sealer.sealNode(built.backing));
+        try std.testing.expectEqual(authoritative_root, try sealer.sealNode(built.root));
+        try std.testing.expectEqual(authoritative_backing, try sealer.sealNode(built.backing));
     }
 }
 

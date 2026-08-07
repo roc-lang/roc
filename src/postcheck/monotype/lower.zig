@@ -6759,7 +6759,7 @@ const Builder = struct {
         try self.prepareDraftDeferredExprs(body_draft, graph);
         try graph.finalizeGeneratedIteratorRepresentations();
         try graph.finalizeGeneratedIteratorIdentities();
-        try graph.bindGeneratedIteratorCanonicalTypes(&self.generated_types_by_identity);
+        try graph.bindGeneratedIteratorAuthoritativeTypes(&self.generated_types_by_identity);
         try graph.freezeRelations();
         var impossibility_evaluator = try FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, graph, body_draft);
         defer impossibility_evaluator.deinit(self.allocator);
@@ -6775,7 +6775,7 @@ const Builder = struct {
             &self.generated_types_by_identity,
         );
         defer sealer.deinit();
-        try sealer.publishGeneratedIteratorRoots();
+        try sealer.commitGeneratedIteratorRoots();
         try self.emitDraftDeferredStructuralSerializations(body_draft, graph, &sealer);
         try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &sealer);

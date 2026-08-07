@@ -14809,7 +14809,7 @@ const ExactGraphProducerAnalysis = struct {
                     try self.indexPatternValue(child, expr, projection);
                 },
                 // A record-rest pattern produces a new record assembled from
-                // several possible fields. Until checked output publishes
+                // several possible fields. Until checked output records
                 // that complete field set, retain the conservative root fact.
                 .rest => |child| try self.indexPatternValue(child, expr, projection),
             },
@@ -15219,7 +15219,7 @@ const ExactGraphProducerAnalysis = struct {
                     if (start >= items.len) break :blk false;
                     // A whole rest value contains every remaining item. A
                     // further projection is uncommon and remains conservative
-                    // until checked list-pattern output publishes its shape.
+                    // until checked list-pattern output records its shape.
                     for (items[start..]) |item| {
                         if (try self.exprProduces(item)) break :blk true;
                     }
@@ -15243,7 +15243,7 @@ const ExactGraphProducerAnalysis = struct {
             .dbg, .expect => |child| try self.exprProjectionStepProduces(child, step, rest),
             .expect_err => |expect_err| try self.exprProjectionStepProduces(expect_err.expr, step, rest),
             .return_ => |return_| try self.exprProjectionStepProduces(return_.expr, step, rest),
-            // Calls, parameters, and other opaque producers currently publish
+            // Calls, parameters, and other opaque producers currently record
             // a whole-result fact. Retaining it here is conservative; direct
             // constructors and projections above avoid marking unrelated
             // siblings in the common local cases.

@@ -2114,7 +2114,7 @@ const Solver = struct {
         );
     }
 
-    /// Publish the immutable expression inhabitance column with one memoized
+    /// Return the immutable expression inhabitance column with one memoized
     /// analysis over the finalized type stores. Expression types repeat
     /// heavily, so allocating and walking fresh maps per expression is pure
     /// post-check waste.

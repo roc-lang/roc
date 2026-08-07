@@ -2627,7 +2627,7 @@ backing to the producer's live backing. Every imported descendant retains its
 independently requested step function, state, or recursive-rest descendant
 would otherwise be sealed under a fresh identity and later callable solving
 would treat the apparent root and its actual backing as unrelated types. A
-cache miss seals and publishes the complete tree once; a cache hit preserves
+cache miss seals and commits the complete tree once; a cache hit preserves
 that tree's root and descendant identities without a late structural scan.
 
 For a minted iterator, the stable generated `TypeDigest` is SHA-256 over an
@@ -2783,7 +2783,7 @@ an independent unresolved variable. Consequently, later exact production at
 one occurrence cannot flow backward into another occurrence merely because
 their checked types shared a variable before lowering.
 Once a body's generated identities are final and its relations are frozen, it
-publishes those identities to the durable Monotype interner before lowering any
+commits those identities to the durable Monotype interner before lowering any
 deferred nested specialization. Nested lowering can therefore reuse the
 already-authoritative type; it cannot win an ordering race after the outer
 graph is no longer able to bind relations.
