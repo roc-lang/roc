@@ -38,6 +38,12 @@ comptime {
     std.testing.refAllDecls(fx_test_specs);
 }
 
+/// Whether the compiler declined a standalone boxy build because the host
+/// target is outside the set for which the boxy runtime object is shipped.
+fn isUnsupportedBoxyStandaloneTarget(stderr: []const u8) bool {
+    return std.mem.indexOf(u8, stderr, "generic (boxy) programs are not supported for the") != null;
+}
+
 fn runNativeBackendHostSelfTest(
     allocator: std.mem.Allocator,
     roc_file: []const u8,
@@ -93,6 +99,10 @@ fn runNativeBackendHostSelfTest(
     switch (build_result.term) {
         .exited => |code| {
             if (code != 0) {
+                // Boxy standalone executables are produced only for a subset of
+                // targets; elsewhere the compiler reports the limitation and this
+                // native-backend path cannot be exercised on the host.
+                if (isUnsupportedBoxyStandaloneTarget(build_result.stderr)) return error.SkipZigTest;
                 std.debug.print("roc build {s} failed with exit code {}\n", .{ opt_flag, code });
                 std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{build_result.stderr});
@@ -331,6 +341,7 @@ fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) Fx
     defer allocator.free(result.stderr);
 
     util.checkTestSuccess(result) catch |err| {
+        if (isUnsupportedBoxyStandaloneTarget(result.stderr)) return error.SkipZigTest;
         std.debug.print("\n[FAIL] {s} ({s}): {}\n", .{ spec.roc_file, opt_flag, err });
         if (spec.description.len > 0) {
             std.debug.print("       Description: {s}\n", .{spec.description});
