@@ -7410,3 +7410,70 @@ test "check type - finalize defaulting - heterogeneous multi-driver group at top
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }
+
+// OUTER-ROOTED DISPATCH CHAINS: a dispatch deferred on a flex receiver owned
+// by an OUTER scope (here the weak top-level value `top_str`, whose quote
+// literal stays open until module finalize so every def can constrain it) is a
+// unification-in-waiting. A literal argument trapped behind such a chain
+// (`.get(0)`'s index) must NOT be defaulted at the inner def's generalization
+// boundary: the chain, once its receiver resolves, pins the literal itself
+// (`List.get` wants U64). The boundary demotes every still-flex var reachable
+// from an outer-owned receiver's constraint signatures to the receiver's rank,
+// handing the whole chain to the outer scope's universe—the same rank
+// discipline an eagerly-fired dispatch would have imposed via unification.
+// Before that demotion pass, the literal looked locally unconstrained,
+// committed the canonical Dec default, and the finalize cascade then reported
+// `List(Str), U64 -> ...` against `List(Str), Dec -> ...`.
+test "check type - boundary defaulting - literal behind dispatch chain rooted at weak top-level value" {
+    const source =
+        \\top_str = "a,b,c"
+        \\get_first = |_x| top_str.split_on(",").get(0)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
+}
+
+// Nested-frame analogue of the test above—no top-level weak value involved:
+// `s` is owned by `outer`'s frame, and `inner`'s generalization boundary is a
+// frame deeper, so the chain root sits at an outer (but not outermost) rank.
+// The demotion hands `inner`'s trapped `0` to `outer`'s boundary, where `s`'s
+// quote commits Str and the cascade pins the index to U64.
+test "check type - boundary defaulting - literal behind dispatch chain rooted in enclosing frame" {
+    const source =
+        \\outer = |_a| {
+        \\    s = "a,b,c"
+        \\    inner = |_b| s.split_on(",").get(0)
+        \\    inner({})
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
+}
+
+// Guard: the demotion pass must not disturb weak top-level literal semantics.
+// A weak literal with only its literal-conversion constraint has no dispatch
+// chain (`rangeHasNonLiteralConstraint` is false), so it is never a demotion
+// root; it stays open and a later def's use pins it to exactly one type.
+test "check type - weak top-level literal pinned by cross-def use" {
+    const source =
+        \\n = 5
+        \\f : U8 -> U8
+        \\f = |x| x
+        \\use_n = f(n)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
+}
+
+// Guard: weak means weak—one concrete type module-wide. The first use pins
+// the literal; a second use at another type is a mismatch (the RFC 0010
+// number-literal generalization exception was deliberately not adopted).
+test "check type - weak top-level literal rejects second use at different type" {
+    const source =
+        \\n = 5
+        \\g : U8 -> U8
+        \\g = |x| x
+        \\h : I64 -> I64
+        \\h = |x| x
+        \\a = g(n)
+        \\b = h(n)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}

@@ -19541,6 +19541,56 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: 
     }
     if (!has_candidate) return;
 
+    // A dispatch deferred on a flex receiver OWNED BY AN OUTER SCOPE (a weak
+    // top-level value's still-open literal, an enclosing function's local) is a
+    // unification-in-waiting: when the receiver resolves—at an outer boundary
+    // or module finalize—the dispatch fires and pins its signature's vars
+    // exactly as an eager dispatch would have, and the eager unification would
+    // have min-ranked those vars down to the receiver's rank. Restore that rank
+    // discipline before this boundary acts: demote every still-flex var
+    // reachable from such a receiver's constraint signatures to the receiver's
+    // rank, moving it into the outer scope's universe (this boundary's gather
+    // and generalize are both rank-keyed, so demoted vars simply stop being
+    // this boundary's business). Without this, a literal argument of the
+    // pending chain looks locally unconstrained here and commits its canonical
+    // default (`top_str.split_on(",").get(0)` committed `0` to Dec) even
+    // though the chain, once its weak receiver resolves, demands another type
+    // (`List.get` wants U64).
+    //
+    // Outer-owned receivers are found in THIS rank's pool: a body that
+    // dispatches on an outer var registers that var here (lookup/monomorphic-
+    // reference bookkeeping), and `resolveVar` exposes the true (outer) rank.
+    // One pass suffices: `collectReachableVars` recurses through nested
+    // constraint signatures, so a multi-hop chain (`split_on`'s result carries
+    // the deferred `get`) is walked whole from its root, and a var reachable
+    // from several outer roots ends at the minimum of their ranks regardless
+    // of scan order (the `<=` guard lowers, never raises). Generalized
+    // receivers are per-use-instantiated schemes, not outer weak vars, so
+    // their chains are left alone. Scratch reuse is safe: both maps are
+    // cleared by every later user (`literal_defaulting_seen_roots` at each
+    // round's gather, `boundary_leak_vars` by each leak check).
+    self.literal_defaulting_seen_roots.clearRetainingCapacity();
+    for (pool_vars) |pool_var| {
+        const receiver = self.types.resolveVar(pool_var);
+        if (receiver.desc.content != .flex) continue;
+        const receiver_rank = receiver.desc.rank;
+        if (receiver_rank == .generalized) continue;
+        if (@intFromEnum(receiver_rank) >= @intFromEnum(rank)) continue;
+        const constraint_range = receiver.desc.content.flex.constraints;
+        if (!self.rangeHasNonLiteralConstraint(constraint_range)) continue;
+        if ((try self.literal_defaulting_seen_roots.getOrPut(receiver.var_)).found_existing) continue;
+        try self.collectConstraintSignatureReachable(constraint_range, &self.boundary_leak_vars);
+        var chain_iter = self.boundary_leak_vars.keyIterator();
+        while (chain_iter.next()) |chain_var| {
+            const chain_resolved = self.types.resolveVar(chain_var.*);
+            if (chain_resolved.desc.content != .flex) continue;
+            if (chain_resolved.desc.rank == .generalized) continue;
+            if (@intFromEnum(chain_resolved.desc.rank) <= @intFromEnum(receiver_rank)) continue;
+            try self.types.setDescRank(chain_resolved.desc_idx, receiver_rank);
+            try env.var_pool.addVarToRank(chain_resolved.var_, receiver_rank);
+        }
+    }
+
     // Collect the module's `.eql` edges once so the recursive-def pass and the
     // fixpoint below iterate just the edges, not the whole constraint list.
     // Safe to snapshot here: nothing between this point and the fixpoint adds an
