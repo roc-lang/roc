@@ -2753,7 +2753,9 @@ to the same callee add one propagation edge.
 Local procedures carry the same two result-flow facts. Their lexical evidence
 chain selects `exact_graph` only when an evidence-dependent local body actually
 receives evidence for an exact-producing target; unrelated local
-specializations remain independent.
+specializations remain independent. A local procedure selected as a method is
+itself explicit dispatch evidence, so its two result-flow facts participate in
+that same evidence-chain decision rather than being treated as graph-free.
 
 A procedure with exact result flow finishes its body in the requesting
 Monotype graph before that graph is sealed. This is required because the body,

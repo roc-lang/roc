@@ -4098,6 +4098,22 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: local method evidence preserves an exact result",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    Local := [Local(List(I64))].{
+        \\        iter : Local -> Iter(I64)
+        \\        iter = |Local.Local(values)| values.iter().map(|value| value)
+        \\    }
+        \\    through_method = |value| value.iter()
+        \\    selected = through_method(Local.Local([1, 2, 3]))
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: mutually recursive procedures preserve exact iterator result",
         .source_kind = .module,
         .source =

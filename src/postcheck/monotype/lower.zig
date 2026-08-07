@@ -1174,7 +1174,8 @@ fn methodTargetProducesExactGraph(target: static_dispatch.MethodTarget) bool {
                 iterator.producesIteratorValue()
             else
                 false,
-        .local_proc, .structural => false,
+        .local_proc => |local| local.produces_exact_graph,
+        .structural => false,
     };
 }
 
@@ -1184,7 +1185,8 @@ fn specEvidenceProducesExactGraph(evidence: []const SpecEvidence) bool {
             if (methodTargetProducesExactGraph(target.target)) return true;
             const depends_on_nested_evidence = switch (target.target.kind) {
                 .procedure => |procedure| procedure.exact_graph_from_evidence,
-                .local_proc, .structural => false,
+                .local_proc => |local| local.exact_graph_from_evidence,
+                .structural => false,
             };
             if (depends_on_nested_evidence) switch (target.nested) {
                 .resolved => |nested| if (specEvidenceProducesExactGraph(nested)) return true,
