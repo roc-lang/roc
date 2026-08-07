@@ -25691,7 +25691,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!LIR.BoxyDescRef {
         // A descriptor attached to the source local describes the actual
-        // value and takes precedence over anything rep-derived — including
+        // value and takes precedence over anything rep-derived—including
         // for representations that carry no descriptor requirement of their
         // own (fully known at this site).
         if (self.localEnvironmentDescriptorForRep(source, rep_id)) |local| return .{ .local = local };
@@ -25811,8 +25811,8 @@ const ProcBodyBuilder = struct {
             // locals, and ARC treats any descriptor-bearing local as
             // refcounted. Reconstructing such a struct concretely would leave
             // the aggregate with no descriptor, so ARC would drop it through
-            // its concrete layout plan — which is a noop for the box-free
-            // layout — and lose the release. Offer the representation's static
+            // its concrete layout plan—which is a noop for the box-free
+            // layout—and lose the release. Offer the representation's static
             // descriptor as a candidate the aggregate construction records; ARC
             // adopts it only when a field actually carries a descriptor, so
             // aggregates whose fields stay concrete keep the concrete plan.

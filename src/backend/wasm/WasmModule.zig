@@ -5405,7 +5405,7 @@ test "initial memory ends above static data and the reserved stack" {
     try std.testing.expect(module.initialMemoryByteLen() >= module.heapBase() + 1024 * 1024);
 }
 
-test "setup — memory exported as 'memory'" {
+test "setup—memory exported as 'memory'" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
@@ -5954,7 +5954,7 @@ test "mergeModule rejects same-name imports with different signatures" {
     try std.testing.expectError(error.FunctionTypeMismatch, host.mergeModule(&source));
 }
 
-test "mergeModule — function indices remapped correctly" {
+test "mergeModule—function indices remapped correctly" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
     defer host.deinit();

@@ -57,7 +57,7 @@ extern const roc_boxy_sidecar_desc: BoxySidecar;
 /// the methods ignore this value.
 var startup_ops: RocOps = undefined;
 
-/// A bump allocator for the runtime's own bookkeeping — the descriptor tables,
+/// A bump allocator for the runtime's own bookkeeping—the descriptor tables,
 /// the decoded sidecar view, and its arenas. This memory lives for the whole
 /// process and is reclaimed by the OS at exit, so it never frees. Keeping it off
 /// the host allocation symbols (`roc_alloc` and friends) means the host's
@@ -66,7 +66,7 @@ var startup_ops: RocOps = undefined;
 /// region is reserved with a raw `mmap` syscall (demand-paged, so the large
 /// reservation costs no physical memory until touched) rather than
 /// `std.heap.page_allocator`, whose posix `mmap`/`munmap` pull `__errno_location`
-/// — a symbol absent from this freestanding standalone object.
+///—a symbol absent from this freestanding standalone object.
 const RuntimeArena = struct {
     base: [*]u8 = undefined,
     cap: usize = 0,

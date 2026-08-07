@@ -7119,8 +7119,8 @@ Declared field order is explicit data. Record rows are sorted lexicographically
 by name at several stages (checking, Monotype row lowering, and Monotype
 instantiation) because field-name resolution and digests depend on a single
 fixed order, so the declared order is not recoverable from the lowered record
-itself. Canonicalization preserves it — a nominal declaration's record
-annotation keeps its fields in source order — and checking records it as
+itself. Canonicalization preserves it—a nominal declaration's record
+annotation keeps its fields in source order—and checking records it as
 explicit CheckedModule data distinct from the (lexicographic) backing row,
 so later stages consume it without rescanning declarations. Monotype lowering,
 boxy planning, and layout lowering all use this checked datum. The struct
@@ -8138,8 +8138,8 @@ Lambda Mono materializer runs before layout selection and cannot recompute that
 decision; instead, direct lowering records each statically resolved match site
 as explicit data and the verifier replays the record, so the two derivations
 demand the same set of functions without the materializer ever consulting
-layouts. A wrong record can only misplace dead code, never a runtime check — the
-primitive's own lowering independently gates the runtime path — and a fold
+layouts. A wrong record can only misplace dead code, never a runtime check—the
+primitive's own lowering independently gates the runtime path—and a fold
 regression surfaces as a Debug stride assertion in the backends rather than as
 silent dead code.
 
@@ -8152,8 +8152,8 @@ Between the two ops the slot holds stale bytes and the buffer is typed by the
 output item while later slots still hold input items. For
 descriptor-governed items, the descriptor representation condition
 guarantees one descriptor remains valid for both states. The window is otherwise
-unobservable because no cleanup path walks live values — `crash` is fatal and
-leaks by design — and the loop itself is the only holder of the buffer (the
+unobservable because no cleanup path walks live values—`crash` is fatal and
+leaks by design—and the loop itself is the only holder of the buffer (the
 runtime count of 1 proved there were no other counted handles, and a live borrow
 of the list would have forced the copy path through an owned capture's incref).
 

@@ -8649,7 +8649,7 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
 
     if (proc.abi == .erased_callable) {
         // Matches `builtins.erased_callable.ErasedCallableFn`: pointers for
-        // ops, ret, args, capture, reuse, and out_desc — the exact type
+        // ops, ret, args, capture, reuse, and out_desc—the exact type
         // `roc_boxy_call_erased` invokes through `call_indirect`.
         const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
         const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;

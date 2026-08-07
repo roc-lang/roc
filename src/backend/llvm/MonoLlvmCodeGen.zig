@@ -10475,7 +10475,6 @@ pub const MonoLlvmCodeGen = struct {
     /// wider than this pass their own slot pointer as before.
     const rc_arg_scratch_size = 64;
 
-
     fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;

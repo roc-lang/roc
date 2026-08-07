@@ -2495,8 +2495,8 @@ pub const Store = struct {
     /// erased to zero-sized, but at runtime it holds a real refcounted heap
     /// allocation (the boxed concrete payload). `layoutContainsRefcounted`
     /// reports it as unrefcounted because a standalone `box_of_zst` local names
-    /// a canonical null box, but the descriptor-guided boxy runtime — which
-    /// maintains refcounts of the actual erased allocations — must treat it as
+    /// a canonical null box, but the descriptor-guided boxy runtime—which
+    /// maintains refcounts of the actual erased allocations—must treat it as
     /// refcounted so a container of erased boxes increfs its elements on clone
     /// and decrefs them on drop. Reference counting a canonical null box is a
     /// null-safe no-op, so this is correct for both uses. This mirrors the

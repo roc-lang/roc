@@ -1,8 +1,8 @@
 //! Shared boxy value runtime.
 //!
 //! `BoxyRuntime` bundles the descriptor-guided boxy value machinery around the
-//! dependencies it needs — a layout store, the boxy descriptor tables, the
-//! string store used for tag names, `RocOps`, and a scratch allocator — so the
+//! dependencies it needs—a layout store, the boxy descriptor tables, the
+//! string store used for tag names, `RocOps`, and a scratch allocator—so the
 //! same semantics back both the LIR interpreter and machine-code output.
 
 const std = @import("std");

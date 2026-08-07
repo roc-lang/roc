@@ -10,9 +10,9 @@
 //! One selected runtime backs each wrapper invocation. Ordinary embedders
 //! install a process-global default; the hot-reload shim temporarily selects
 //! the runtime owned by the executing code image.
-//! once before calling entrypoints — either from live stores
+//! once before calling entrypoints—either from live stores
 //! (`initGlobal`) or from a mapped image's boxy sidecar
-//! (`initGlobalFromSidecarView`) — and register a native callee per worker
+//! (`initGlobalFromSidecarView`)—and register a native callee per worker
 //! proc for dictionary dispatch (`roc_boxy_register_proc`).
 //!
 //! Dictionary callee ABI: a registered `BoxyProcFn` receives the active
@@ -536,7 +536,7 @@ const AbiHooks = struct {
         const store = self.g.runtime.layout_store;
         // The descriptor-guided boxy runtime maintains refcounts of the real
         // allocations behind erased `box_of_zst` values, so element/payload RC
-        // must treat them as refcounted — matching the interpreter, which drives
+        // must treat them as refcounted—matching the interpreter, which drives
         // the same runtime. Using the plain `layoutContainsRefcounted` here would
         // skip refcounting the boxes stored in a container of erased boxes,
         // leaking or corrupting them on clone/drop.

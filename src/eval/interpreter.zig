@@ -5197,7 +5197,7 @@ pub const Interpreter = struct {
     /// box storage (and back) as pure relabels, with the descriptor unchanged.
     /// The descriptor still describes the box value itself. A box-family
     /// payload layout on a box-family value can only mean box-self, because a
-    /// box's erasure is the box pointer itself — a dynamic box interior is
+    /// box's erasure is the box pointer itself—a dynamic box interior is
     /// never a bare box value.
     fn boxyDescIsBoxSelfForBoxValue(
         self: *LirInterpreter,

@@ -15227,7 +15227,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_runtime_ret_desc_ptr_slot = self.runtime_ret_desc_ptr_slot;
             const saved_runtime_ret_desc_local = self.runtime_ret_desc_local;
             const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
-            // Reset register state for new function scope — each RC helper is a
+            // Reset register state for new function scope—each RC helper is a
             // separate callable with its own prologue/epilogue, so it starts with
             // a full set of registers regardless of what the parent is using.
             self.codegen.callee_saved_used = 0;
