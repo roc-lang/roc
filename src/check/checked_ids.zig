@@ -99,6 +99,13 @@ pub const CaptureId = enum(u32) {
         return !self.isCanonical();
     }
 
+    /// Whether this id was minted by Monotype publication, closure lifting,
+    /// or a later post-check transform.
+    pub fn isLiftGenerated(self: CaptureId) bool {
+        const raw = @intFromEnum(self);
+        return (raw & generated_bit) != 0 and (raw & lift_bit) != 0;
+    }
+
     /// Whether this id belongs to the lift-time generated sub-range.
     pub fn isGeneratedLift(self: CaptureId) bool {
         return (@intFromEnum(self) & (generated_bit | lift_bit)) == (generated_bit | lift_bit);

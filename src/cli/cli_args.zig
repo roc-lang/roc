@@ -215,6 +215,7 @@ pub const BuildArgs = struct {
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
     debug: bool = false, // include debug information in the output binary
+    fuzz: bool = false, // add libFuzzer no-link coverage instrumentation to LLVM output
     keep_temp: bool = false, // do not delete temporary directories created during build
     verbose: bool = false, // enable verbose output including cache statistics
     timings: bool = false, // always show the per-phase timing breakdown
@@ -557,6 +558,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var debug: bool = false;
+    var fuzz: bool = false;
     var keep_temp: bool = false;
     var verbose: bool = false;
     var timings: bool = false;
@@ -583,6 +585,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --specialize=<yes|no>          Use lambda-set specialization (yes, default) or experimental boxy lowering (no)
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). A v1 in the name (x64v1musl) targets the oldest CPUs of that architecture. Defaults to native target with musl for static linking
             \\      --debug                        Include debug information in the output binary
+            \\      --fuzz                         Add libFuzzer no-link coverage instrumentation; final linkage must provide the runtime
             \\      --keep-temp                    Keep all temporary directories created during build
             \\      --verbose                      Enable verbose output including cache statistics
             \\      --timings                      Show how long each compilation phase took (shown automatically when a build is slow)
@@ -626,6 +629,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--debug")) {
             debug = true;
+        } else if (mem.eql(u8, arg, "--fuzz")) {
+            fuzz = true;
         } else if (mem.eql(u8, arg, "--keep-temp")) {
             keep_temp = true;
         } else if (mem.startsWith(u8, arg, "--wasm-memory")) {
@@ -683,7 +688,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .target = target, .output = output, .debug = debug, .keep_temp = keep_temp, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .specialization_strategy = specialization_strategy, .target = target, .output = output, .debug = debug, .fuzz = fuzz, .keep_temp = keep_temp, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -1828,6 +1833,17 @@ test "roc build" {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expect(!result.build.debug);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--fuzz", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.build.path);
+        try testing.expect(result.build.fuzz);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expect(!result.build.fuzz);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "-h" });
