@@ -5589,9 +5589,10 @@ fn expectRecordedRunsEqual(
         switch (expected_event) {
             .effect => |expected_effect| switch (actual_event) {
                 .effect => |actual_effect| try std.testing.expectEqualStrings(expected_effect.name, actual_effect.name),
-                else => unreachable,
+                // The activeTag equality above already proved both are effects.
+                .dbg, .expect_failed, .crashed => unreachable,
             },
-            else => {},
+            .dbg, .expect_failed, .crashed => {},
         }
         try std.testing.expectEqualStrings(expected_event.bytes(), actual_event.bytes());
     }

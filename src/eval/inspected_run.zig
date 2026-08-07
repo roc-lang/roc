@@ -76,13 +76,19 @@ pub const HostedCallDependency = struct {
     dispatch: *const fn (*RuntimeHostEnv, Interpreter.HostedCall) Interpreter.Error!void,
 };
 
+/// How a run answers hosted calls: `reject` fails them, `hosted_calls`
+/// dispatches them to a dependency module.
 pub const ExecutionHost = union(enum) {
     reject,
     hosted_calls: HostedCallDependency,
 };
 
+/// Module name a REPL imports to emit one-way effects.
 pub const repl_effect_module_name = "Repl";
+/// Hosted symbol backing `Repl.emit!`.
 pub const repl_effect_hosted_symbol = "roc_repl_emit!";
+/// Source of the in-memory `Repl` module, served to REPL sessions that opt in
+/// to effects so no file on disk is required.
 pub const repl_effect_module_source =
     \\Repl := [].{
     \\    roc_repl_emit! : { name : Str, payload : Str } => {}
@@ -265,7 +271,7 @@ fn crashResult(
     for (recorded.events) |event| {
         switch (event) {
             .crashed => |bytes| event_message = bytes,
-            else => {},
+            .dbg, .expect_failed, .effect => {},
         }
     }
 
