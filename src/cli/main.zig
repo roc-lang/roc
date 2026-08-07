@@ -668,20 +668,64 @@ const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_pla
 
 /// Prebuilt boxy runtime objects (the `roc_boxy_*` C-ABI wrappers plus
 /// `roc_boxy_init_embedded`), linked by `roc build --opt=dev` into programs that
-/// emit boxy statements. The runtime shares the interpreter's boxy core, whose
-/// module graph only compiles for x86_64-linux, so only those targets carry one.
+/// emit boxy statements. Shipped for every target that carries a builtins
+/// object, so a standalone dev build of a generic program works wherever a
+/// standalone dev build works at all.
 const BoxyRuntimeObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_boxy_runtime.o");
+    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_boxy_runtime.o");
     const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_boxy_runtime.o");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_boxy_runtime.o");
+    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_boxy_runtime.o");
+    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_boxy_runtime.o");
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_boxy_runtime.obj");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_boxy_runtime.obj");
+    const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_boxy_runtime.o");
+    const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_boxy_runtime.o");
+    const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_boxy_runtime.o");
     const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_boxy_runtime.o");
 
     /// The boxy runtime object bytes for `target`, or null when the target has
     /// no runtime and boxy programs cannot be built standalone for it.
-    pub fn forTarget(target: RocTarget) ?[]const u8 {
-        if (target == .x64musl) return x64musl;
-        if (target == .x64glibc or target == .x64linux) return x64glibc;
-        if (target == .wasm32) return wasm32;
-        return null;
+    pub fn forTarget(requested: RocTarget) ?[]const u8 {
+        const target = requested.defaultCpuTarget();
+        return switch (target) {
+            .x64musl => x64musl,
+            .arm64musl => arm64musl,
+            .x64glibc, .x64linux => x64glibc,
+            .arm64glibc, .arm64linux => arm64glibc,
+            .x64mac => x64mac,
+            .arm64mac => arm64mac,
+            .x64win => x64win,
+            .arm64win => arm64win,
+            .x64freebsd => x64freebsd,
+            .x64openbsd => x64openbsd,
+            .x64netbsd => x64netbsd,
+            .wasm32 => wasm32,
+            .x64elf,
+            .x64v1mac,
+            .x64v1win,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            .x64v1musl,
+            .x64v1glibc,
+            .x64v1linux,
+            .x64v1elf,
+            .arm64v1win,
+            .arm64v1linux,
+            .arm64v1musl,
+            .arm64v1glibc,
+            .arm32linux,
+            .arm32musl,
+            .wasm32v1,
+            => null,
+        };
+    }
+
+    /// The scratch-directory filename to write the runtime object under.
+    pub fn filename(target: RocTarget) []const u8 {
+        return if (target.isWindows()) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
     }
 };
 
@@ -8364,7 +8408,7 @@ fn appendBoxyRuntimeLinkInputs(
         return error.UnsupportedTarget;
     };
 
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_boxy_runtime.o" });
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, BoxyRuntimeObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch {
         return error.NativeCompilationFailed;
     };

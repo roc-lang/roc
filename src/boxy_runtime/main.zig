@@ -16,6 +16,7 @@ const base = @import("base");
 const builtins = @import("builtins");
 const eval = @import("eval");
 const lir = @import("lir");
+const raw_pages = @import("raw_pages");
 const shim_io = @import("shim_io");
 
 const boxy_abi = eval.boxy_abi;
@@ -62,45 +63,52 @@ var startup_ops: RocOps = undefined;
 /// process and is reclaimed by the OS at exit, so it never frees. Keeping it off
 /// the host allocation symbols (`roc_alloc` and friends) means the host's
 /// Roc-allocation tracker sees only the program's reference-counted values, so
-/// runtime infrastructure is not mistaken for an application memory leak. The
-/// region is reserved with a raw `mmap` syscall (demand-paged, so the large
-/// reservation costs no physical memory until touched) rather than
-/// `std.heap.page_allocator`, whose posix `mmap`/`munmap` pull `__errno_location`
-///—a symbol absent from this freestanding standalone object.
+/// runtime infrastructure is not mistaken for an application memory leak. It
+/// takes pages straight from the kernel through `raw_pages` rather than
+/// `std.heap.page_allocator`, whose posix `mmap`/`munmap` pull
+/// `__errno_location`—a symbol absent from this freestanding standalone object.
+///
+/// Chunks are mapped on demand and grow geometrically, so a program that emits
+/// few boxy statements maps little and one that emits many still reaches its
+/// working set in a handful of mappings. The tail left in a retired chunk is
+/// abandoned; it is bounded by the number of chunks and this memory is never
+/// reclaimed anyway.
 const RuntimeArena = struct {
-    base: [*]u8 = undefined,
+    chunk: [*]u8 = undefined,
     cap: usize = 0,
     used: usize = 0,
-    ready: bool = false,
+    next_chunk: usize = min_chunk,
 
-    fn ensure(self: *RuntimeArena) bool {
-        if (self.ready) return true;
-        const linux = std.os.linux;
-        const cap: usize = 1 << 30;
-        const raw = linux.mmap(
-            null,
-            cap,
-            .{ .READ = true, .WRITE = true },
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-            -1,
-            0,
-        );
-        if (linux.errno(raw) != .SUCCESS) return false;
-        self.base = @ptrFromInt(raw);
-        self.cap = cap;
+    const min_chunk: usize = 1 << 20;
+    const max_chunk: usize = 1 << 26;
+
+    fn grow(self: *RuntimeArena, len: usize, alignment: std.mem.Alignment) bool {
+        // A fresh mapping is page-aligned, so it satisfies any alignment up to
+        // a page outright; asking for the alignment on top covers the rest.
+        const needed = len +| alignment.toByteUnits();
+        var size = self.next_chunk;
+        while (size < needed) {
+            size = std.math.mul(usize, size, 2) catch return false;
+        }
+        const mapped = raw_pages.map(size) orelse return false;
+        self.chunk = mapped;
+        self.cap = size;
         self.used = 0;
-        self.ready = true;
+        self.next_chunk = if (size >= max_chunk) max_chunk else size * 2;
         return true;
     }
 
     fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {
         const self: *RuntimeArena = @ptrCast(@alignCast(ctx));
-        if (!self.ensure()) return null;
         const start = std.mem.alignForward(usize, self.used, alignment.toByteUnits());
-        const end = start + len;
-        if (end > self.cap) return null;
-        self.used = end;
-        return self.base + start;
+        if (start + len > self.cap) {
+            if (!self.grow(len, alignment)) return null;
+            const fresh = std.mem.alignForward(usize, self.used, alignment.toByteUnits());
+            self.used = fresh + len;
+            return self.chunk + fresh;
+        }
+        self.used = start + len;
+        return self.chunk + start;
     }
 
     fn resize(_: *anyopaque, memory: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {

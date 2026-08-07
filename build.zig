@@ -6609,14 +6609,21 @@ fn buildBoxyRuntimeObject(
     obj.root_module.addImport("builtins", roc_modules.builtins);
     obj.root_module.addImport("eval", boxy_eval_module);
     obj.root_module.addImport("lir", roc_modules.lir);
+    obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
     obj.root_module.addImport("shim_io", b.addModule(
         b.fmt("shim_io_{s}", .{name}),
         .{ .root_source_file = b.path("src/shim_io.zig") },
     ));
-    // Bundle compiler-rt on non-macOS so any math libcalls the runtime lowers
-    // to resolve inside the -nostdlib executable; macOS resolves them against
-    // -lSystem at the final link.
-    obj.bundle_compiler_rt = target.result.os.tag != .macos and !target.result.cpu.arch.isWasm();
+    // Bundle compiler-rt so any math libcalls the runtime lowers resolve inside
+    // the -nostdlib executable. Excluded: wasm32, macOS (resolves them against
+    // -lSystem at the final link, and `-fcompiler-rt` crashes the Zig compiler
+    // for macOS targets under --listen), and BSD (Zig 0.16.0 segfaults when
+    // compiling compiler_rt for x86_64-*-bsd-none targets).
+    const os_class = roc_target.classifyOs(target.result.os.tag);
+    obj.bundle_compiler_rt = !target.result.cpu.arch.isWasm() and switch (os_class) {
+        .macos, .freebsd, .openbsd, .netbsd => false,
+        .windows, .linux, .other => true,
+    };
     configureBackend(obj, target);
     return obj;
 }
@@ -7069,10 +7076,7 @@ fn addMainExe(
 
         // Boxy runtime object for this target, linked by `roc build --opt=dev`
         // into programs that emit boxy statements.
-        const cross_supports_boxy_runtime = std.mem.eql(u8, cross_target.name, "x64musl") or
-            std.mem.eql(u8, cross_target.name, "x64glibc") or
-            std.mem.eql(u8, cross_target.name, "wasm32");
-        if (cross_supports_boxy_runtime) {
+        {
             const cross_boxy_runtime_obj = buildBoxyRuntimeObject(
                 b,
                 roc_modules,
@@ -7088,10 +7092,11 @@ fn addMainExe(
                 wasmObjectArtifact(b, cross_boxy_runtime_obj)
             else
                 cross_boxy_runtime_obj.getEmittedBin();
+            const boxy_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
             const copy_cross_boxy_runtime = b.addUpdateSourceFiles();
             copy_cross_boxy_runtime.addCopyFileToSource(
                 boxy_runtime_artifact,
-                b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_boxy_runtime.o" }),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, boxy_runtime_ext }),
             );
             exe.step.dependOn(&copy_cross_boxy_runtime.step);
         }
@@ -7119,6 +7124,7 @@ fn addMainExe(
             });
             default_platform_runtime_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
             default_platform_runtime_obj.root_module.addImport("roc_args", roc_modules.roc_args);
+            default_platform_runtime_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
             default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
             const default_platform_runtime_options = b.addOptions();
             default_platform_runtime_options.addOption(bool, "include_process_entrypoint", false);
@@ -7150,6 +7156,7 @@ fn addMainExe(
             });
             default_platform_executable_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
             default_platform_executable_obj.root_module.addImport("roc_args", roc_modules.roc_args);
+            default_platform_executable_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
             default_platform_executable_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
             const default_platform_executable_options = b.addOptions();
             default_platform_executable_options.addOption(bool, "include_process_entrypoint", true);
