@@ -629,6 +629,11 @@ pub const LowLevel = enum(u16) {
             result[@intFromEnum(LowLevel.list_reserve)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
             result[@intFromEnum(LowLevel.list_drop_at)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
             result[@intFromEnum(LowLevel.list_sublist)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_drop_first)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_drop_last)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_take_first)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_take_last)] = .{ .same_as_arg = .{ .arg = 0, .arity = 2 } };
+            result[@intFromEnum(LowLevel.list_reverse)] = .{ .same_as_arg = .{ .arg = 0, .arity = 1 } };
             result[@intFromEnum(LowLevel.list_release_excess_capacity)] = .{ .same_as_arg = .{ .arg = 0, .arity = 1 } };
             result[@intFromEnum(LowLevel.list_map_prepare_reuse)] = .{ .same_as_arg = .{ .arg = 0, .arity = 1 } };
             result[@intFromEnum(LowLevel.list_swap)] = .{ .same_as_arg = .{ .arg = 0, .arity = 3 } };

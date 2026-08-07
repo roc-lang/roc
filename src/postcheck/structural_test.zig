@@ -428,7 +428,9 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn relateFormalToOperand(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
-    try expectContains(dispatch_instantiation, "self.graph.applyCheckedTypeMapping(fn_graph.args[index], dispatcher_node)");
+    try expectContains(dispatch_instantiation, "const request_fn = try functionRequestNode(");
+    try expectContains(dispatch_instantiation, "self.graph.functionRequestFromProducedArguments(fn_node, request_fn, request_args)");
+    try expectNotContains(dispatch_instantiation, "self.graph.applyCheckedTypeMapping(fn_graph.args[index]");
 
     const entry_wrapper = sourceSliceBetween(
         lower_source,
@@ -715,7 +717,7 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
         try expectContains(lookup_source, "if (!selection.add(raw_spec, exact_interface))");
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
-        try expectContains(lookup_source, "try source_ctx.graph.unifyRecursiveFunctionInterface(");
+        try expectContains(lookup_source, "try source_ctx.graph.joinRecursiveFunctionInterface(");
         try expectContains(lookup_source, "spec.initial_request_arg_classes");
         try expectContains(lookup_source, "indexed_nodes.getOrPut(interface_node)");
         try expectContains(lookup_source, "draftOpenRequestKey(interface_node)");
@@ -724,7 +726,7 @@ test "Monotype open specialization lookup covers the complete function interface
     try expectContains(nested_source, "std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)");
 }
 
-test "Monotype match lowering relates patterns before specialization and projects graph cells" {
+test "Monotype match lowering projects exact scrutinee cells without checked root relations" {
     const lower_source = @embedFile("monotype/lower.zig");
     const match_source = sourceSliceBetween(
         lower_source,
@@ -733,7 +735,7 @@ test "Monotype match lowering relates patterns before specialization and project
     );
     try expectContains(match_source, "const scrutinee = try self.lowerExpr(match.cond)");
     try expectContains(match_source, "const scrutinee_node = try self.exprTypeCell(scrutinee).toGraphNode(self.graph)");
-    try expectContains(match_source, "try self.graph.applyCheckedTypeMapping(");
+    try expectNotContains(match_source, "try self.graph.applyCheckedTypeMapping(");
     try expectContains(match_source, "try entry.ctx.preRegisterPatternBindersAtNode");
     try expectContains(match_source, "entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame");
     try expectContains(match_source, "try entry.ctx.lowerMatchBranchBody");
@@ -742,12 +744,10 @@ test "Monotype match lowering relates patterns before specialization and project
     try expectNotContains(match_source, "lowerPatternAtType(entry.pattern.pattern");
     try expectNotContains(lower_source, "rebindPreRegisteredPatternBindersAtNode");
 
-    const relate = std.mem.find(u8, match_source, "try self.graph.applyCheckedTypeMapping(").?;
     const prepare_binders = std.mem.find(u8, match_source, "try entry.ctx.preRegisterPatternBindersAtNode").?;
     const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
     const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchBranchBody").?;
     const lower_pattern = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchPatternAtNode").?;
-    try std.testing.expect(relate < prepare_binders);
     try std.testing.expect(prepare_binders < guards);
     try std.testing.expect(guards < lower_body);
     try std.testing.expect(lower_body < lower_pattern);

@@ -1527,13 +1527,18 @@ const Solver = struct {
             },
             .list_append_unsafe => {
                 expectLowLevelArity(op, args, 2);
-                try self.unify(expected, args[0]);
+                // Monotype has already selected the exact result
+                // representation from the inserted item. The input list is a
+                // distinct runtime occurrence and may still have the checked-
+                // public element representation (for example, appending to
+                // an empty list).
                 try self.unify(args[1], try self.listElem(expected));
             },
             .list_concat => {
                 expectLowLevelArity(op, args, 2);
-                try self.unify(expected, args[0]);
-                try self.unify(expected, args[1]);
+                _ = try self.listElem(expected);
+                _ = try self.listElem(args[0]);
+                _ = try self.listElem(args[1]);
             },
             .list_reserve,
             .list_drop_at,
@@ -1554,15 +1559,13 @@ const Solver = struct {
             },
             .list_set => {
                 expectLowLevelArity(op, args, 3);
-                try self.unify(expected, args[0]);
                 try self.unify(args[2], try self.listElem(expected));
             },
             .list_replace_unsafe => {
                 expectLowLevelArity(op, args, 3);
-                const elem = try self.listElem(args[0]);
-                try self.unify(args[2], elem);
-                try self.unify(try self.recordFieldByLabel(expected, "list"), args[0]);
-                try self.unify(try self.recordFieldByLabel(expected, "prev"), elem);
+                const input_elem = try self.listElem(args[0]);
+                try self.unify(args[2], try self.listElem(try self.recordFieldByLabel(expected, "list")));
+                try self.unify(try self.recordFieldByLabel(expected, "prev"), input_elem);
             },
             .list_swap => {
                 expectLowLevelArity(op, args, 3);
@@ -1570,7 +1573,6 @@ const Solver = struct {
             },
             .list_prepend => {
                 expectLowLevelArity(op, args, 2);
-                try self.unify(expected, args[0]);
                 try self.unify(args[1], try self.listElem(expected));
             },
             .dict_pseudo_seed => expectLowLevelArity(op, args, 0),

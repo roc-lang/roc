@@ -769,23 +769,36 @@ pub const InstGraph = struct {
         return snapshots;
     }
 
-    pub fn unifyRecursiveFunctionInterface(
+    pub fn joinRecursiveFunctionInterface(
         self: *InstGraph,
         active_fn: NodeId,
         initial_active_arg_classes: []const ArgumentClassSnapshot,
         recursive_request: NodeId,
     ) Allocator.Error!void {
         self.requireRelationProduction();
+        const active = try self.functionNodes(active_fn);
         const request = try self.functionNodes(recursive_request);
-        if (initial_active_arg_classes.len != request.args.len) {
+        if (active.args.len != request.args.len or
+            initial_active_arg_classes.len != request.args.len)
+        {
             Common.invariant("recursive function interface changed argument arity");
         }
-        for (initial_active_arg_classes, request.args) |initial_class, request_arg| {
+        const joined_args = try self.arena().alloc(NodeId, request.args.len);
+        for (active.args, initial_active_arg_classes, request.args, joined_args) |active_arg, initial_class, request_arg, *joined_arg| {
+            joined_arg.* = try self.joinProducedTypeRepresentations(active_arg, request_arg);
             if (!initial_class.contains(request_arg)) {
-                try self.recursive_argument_slots.append(self.allocator, request_arg);
+                try self.recursive_argument_slots.append(self.allocator, joined_arg.*);
             }
         }
-        try self.unify(active_fn, recursive_request);
+        const joined_ret = try self.joinProducedTypeRepresentations(active.ret, request.ret);
+        const joined_content: InstNode = .{ .func = .{
+            .args = joined_args,
+            .ret = joined_ret,
+        } };
+        const active_root = self.find(active_fn);
+        const request_root = self.find(recursive_request);
+        try self.setContent(active_root, joined_content);
+        if (request_root != active_root) try self.setContent(request_root, joined_content);
     }
 
     pub fn markRecursiveValueSlot(self: *InstGraph, slot: NodeId) Allocator.Error!void {
@@ -1940,6 +1953,16 @@ pub const InstGraph = struct {
         switch (private_content) {
             .named => |private_named| if (private_named.backing) |backing| {
                 if (backing.authority == .generated_private) {
+                    // A structural request names the representation expected
+                    // below an explicit constructor layer. Generated nominals
+                    // obey the same rule as every other nominal: relate that
+                    // request directly to the produced backing. Only a public
+                    // nominal interface needs the generated/public argument
+                    // relation below.
+                    if (public_content != .named and public_content != .unresolved) {
+                        try self.relateOpaqueChild(public_node, backing.node, pending);
+                        return;
+                    }
                     switch (public_content) {
                         .unresolved => |public_var| {
                             if (private_named.generated_iterator != null) {
@@ -2267,10 +2290,14 @@ pub const InstGraph = struct {
         // is opaque. They are two checked views of the same declared type, so
         // apply the produced backing directionally while retaining the
         // produced wrapper.
-        if (!std.meta.eql(public_named.def, private_named.def) or
-            public_named.args.len != private_named.args.len)
-        {
+        if (!sameTypeDef(public_named.def, private_named.def)) {
             Common.invariant("opaque interface relation received different named types");
+        }
+        if (!std.meta.eql(public_named.def, private_named.def)) {
+            Common.invariant("opaque interface relation received different instances of one named declaration");
+        }
+        if (public_named.args.len != private_named.args.len) {
+            Common.invariant("opaque interface relation received different named type-argument arities");
         }
         for (public_named.args, private_named.args) |public_arg, private_arg| {
             try self.relateOpaqueChild(public_arg, private_arg, pending);
@@ -2538,33 +2565,16 @@ pub const InstGraph = struct {
                 }
                 try self.collectFunctionRequestSubstitutions(checked_function.ret, produced_content.func.ret, substitution);
             },
-            .tag_union => |checked_row| {
-                if (produced_content != .tag_union) Common.invariant("function substitution received different type structure");
-                for (checked_row.tags) |checked_tag| {
-                    for (produced_content.tag_union.tags) |produced_tag| {
-                        if (!self.name_store.tagLabelTextEql(checked_tag.name, produced_tag.name)) continue;
-                        if (checked_tag.payloads.len != produced_tag.payloads.len) {
-                            Common.invariant("function substitution received one tag at two payload arities");
-                        }
-                        for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
-                            try self.collectFunctionRequestSubstitutions(checked_payload, produced_payload, substitution);
-                        }
-                        break;
-                    }
-                }
-                try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_content.tag_union.ext, substitution);
-            },
-            .record => |checked_row| {
-                if (produced_content != .record) Common.invariant("function substitution received different type structure");
-                for (checked_row.fields) |checked_field| {
-                    for (produced_content.record.fields) |produced_field| {
-                        if (!self.name_store.recordFieldLabelTextEql(checked_field.name, produced_field.name)) continue;
-                        try self.collectFunctionRequestSubstitutions(checked_field.ty, produced_field.ty, substitution);
-                        break;
-                    }
-                }
-                try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_content.record.ext, substitution);
-            },
+            .tag_union => try self.collectFunctionRequestTagSubstitutions(
+                checked_node,
+                produced_node,
+                substitution,
+            ),
+            .record => try self.collectFunctionRequestRecordSubstitutions(
+                checked_node,
+                produced_node,
+                substitution,
+            ),
             .empty_tag_union => if (produced_content != .empty_tag_union)
                 Common.invariant("function substitution received different type structure"),
             .empty_record => if (produced_content != .empty_record)
@@ -2591,6 +2601,57 @@ pub const InstGraph = struct {
             },
             .zst => if (produced_content != .zst)
                 Common.invariant("function substitution received different type structure"),
+        }
+    }
+
+    fn collectFunctionRequestTagSubstitutions(
+        self: *InstGraph,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        if (self.content(produced_node) != .tag_union) {
+            Common.invariant("function substitution received different type structure");
+        }
+        const checked_row = try self.flattenTagRow(checked_node);
+        const produced_row = try self.flattenTagRow(produced_node);
+        for (checked_row.tags) |checked_tag| {
+            for (produced_row.tags) |produced_tag| {
+                if (!self.name_store.tagLabelTextEql(checked_tag.name, produced_tag.name)) continue;
+                if (checked_tag.payloads.len != produced_tag.payloads.len) {
+                    Common.invariant("function substitution received one tag at two payload arities");
+                }
+                for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
+                    try self.collectFunctionRequestSubstitutions(checked_payload, produced_payload, substitution);
+                }
+                break;
+            }
+        }
+        if (!self.sameClass(checked_row.ext, produced_row.ext)) {
+            try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_row.ext, substitution);
+        }
+    }
+
+    fn collectFunctionRequestRecordSubstitutions(
+        self: *InstGraph,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        if (self.content(produced_node) != .record) {
+            Common.invariant("function substitution received different type structure");
+        }
+        const checked_row = try self.flattenRecordRow(checked_node);
+        const produced_row = try self.flattenRecordRow(produced_node);
+        for (checked_row.fields) |checked_field| {
+            for (produced_row.fields) |produced_field| {
+                if (!self.name_store.recordFieldLabelTextEql(checked_field.name, produced_field.name)) continue;
+                try self.collectFunctionRequestSubstitutions(checked_field.ty, produced_field.ty, substitution);
+                break;
+            }
+        }
+        if (!self.sameClass(checked_row.ext, produced_row.ext)) {
+            try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_row.ext, substitution);
         }
     }
 
@@ -3152,6 +3213,31 @@ pub const InstGraph = struct {
         self.produced_join_memo.clearRetainingCapacity();
         defer self.produced_join_memo.clearRetainingCapacity();
         return try self.joinProducedTypeNodes(a, b, &self.produced_join_memo);
+    }
+
+    /// Select one common representation for two stable structural cells at a
+    /// storage boundary. Nominal roots are immutable content identities and
+    /// must instead use the directed request-to-produced relation.
+    pub fn applyCompoundStorageRepresentation(
+        self: *InstGraph,
+        request_node: NodeId,
+        stored_node: NodeId,
+    ) Allocator.Error!void {
+        const request_root = self.find(request_node);
+        const stored_root = self.find(stored_node);
+        if (self.content(request_root) == .named or self.content(stored_root) == .named) {
+            Common.invariant("compound storage representation selection received a named root");
+        }
+
+        const joined = try self.joinProducedTypeRepresentations(request_root, stored_root);
+        if (!self.sameClass(request_root, joined)) {
+            try self.writeProducedTypeSelection(request_root, joined);
+            try self.union_(joined, request_root);
+        }
+        if (!self.sameClass(stored_root, joined)) {
+            try self.writeProducedTypeSelection(stored_root, joined);
+            try self.union_(joined, stored_root);
+        }
     }
 
     /// Write the current common representation into one stable control-flow
@@ -7024,6 +7110,19 @@ test "function request substitutes one exact generated type through every callab
     try std.testing.expect(graph.content(structural_request_fn.args[0]) == .empty_record);
     try std.testing.expect(graph.content(structural_request_fn.ret) == .empty_record);
 
+    const unique_concrete_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{public}),
+        .ret = public,
+    } });
+    const unique_concrete_request = try graph.functionRequestFromProducedArguments(
+        unique_concrete_fn,
+        unique_concrete_fn,
+        &.{exact},
+    );
+    const unique_concrete_request_fn = try graph.functionNodes(unique_concrete_request);
+    try std.testing.expect(graph.sameClass(unique_concrete_request_fn.args[0], exact));
+    try std.testing.expect(graph.sameClass(unique_concrete_request_fn.ret, exact));
+
     var second_def = def;
     second_def.generated = .{ .bytes = [_]u8{0xA2} ** 32 };
     const second_exact = try graph.newNode(.{ .named = .{
@@ -7040,7 +7139,7 @@ test "function request substitutes one exact generated type through every callab
     } });
     const concrete_fn = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{ public, public }),
-        .ret = public_backing,
+        .ret = public,
     } });
     const distinct_request = try graph.functionRequestFromProducedArguments(
         concrete_fn,
@@ -7051,6 +7150,78 @@ test "function request substitutes one exact generated type through every callab
     try std.testing.expect(graph.sameClass(distinct_request_fn.args[0], exact));
     try std.testing.expect(graph.sameClass(distinct_request_fn.args[1], second_exact));
     try std.testing.expect(!graph.sameClass(distinct_request_fn.args[0], distinct_request_fn.args[1]));
+    try std.testing.expect(graph.sameClass(distinct_request_fn.ret, public));
+
+    const stored_public_list = try graph.newNode(.{ .list = public });
+    const requested_exact_list = try graph.newNode(.{ .list = exact });
+    try graph.applyCompoundStorageRepresentation(requested_exact_list, stored_public_list);
+    try std.testing.expect(graph.sameClass(requested_exact_list, stored_public_list));
+    try std.testing.expect(graph.sameClass(try graph.listElementNode(stored_public_list), exact));
+    try std.testing.expect(!graph.sameClass(public, exact));
+
+    const recursive_active = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{public}),
+        .ret = public,
+    } });
+    const initial_classes = try graph.snapshotFunctionArgumentClasses(recursive_active);
+    const recursive_request = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{exact}),
+        .ret = exact,
+    } });
+    try graph.joinRecursiveFunctionInterface(recursive_active, initial_classes, recursive_request);
+    const joined_active = try graph.functionNodes(recursive_active);
+    const joined_recursive = try graph.functionNodes(recursive_request);
+    try std.testing.expect(graph.sameClass(joined_active.args[0], exact));
+    try std.testing.expect(graph.sameClass(joined_active.ret, exact));
+    try std.testing.expect(graph.sameClass(joined_active.args[0], joined_recursive.args[0]));
+    try std.testing.expect(graph.sameClass(joined_active.ret, joined_recursive.ret));
+    try std.testing.expect(!graph.sameClass(recursive_active, recursive_request));
+
+    const first_tag = try name_store.internTagLabel("First");
+    const second_tag = try name_store.internTagLabel("Second");
+    const row_slot = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const checked_row_tail = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{
+            .name = second_tag,
+            .checked_name = second_tag,
+            .payloads = try graph.arena().dupe(NodeId, &.{row_slot}),
+        }}),
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+    const checked_row = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{
+            .name = first_tag,
+            .checked_name = first_tag,
+            .payloads = try graph.arena().dupe(NodeId, &.{row_slot}),
+        }}),
+        .ext = checked_row_tail,
+    } });
+    const completed_row = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{
+            .{ .name = first_tag, .checked_name = first_tag, .payloads = try graph.arena().dupe(NodeId, &.{exact}) },
+            .{ .name = second_tag, .checked_name = second_tag, .payloads = try graph.arena().dupe(NodeId, &.{exact}) },
+        }),
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+    const checked_row_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().alloc(NodeId, 0),
+        .ret = checked_row,
+    } });
+    const completed_row_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().alloc(NodeId, 0),
+        .ret = completed_row,
+    } });
+    const row_request = try graph.functionRequestFromProducedArguments(
+        checked_row_fn,
+        completed_row_fn,
+        &.{},
+    );
+    const flattened_request = try graph.flattenTagRow((try graph.functionNodes(row_request)).ret);
+    try std.testing.expectEqual(@as(usize, 2), flattened_request.tags.len);
+    for (flattened_request.tags) |tag| {
+        try std.testing.expectEqual(@as(usize, 1), tag.payloads.len);
+        try std.testing.expect(graph.sameClass(tag.payloads[0], exact));
+    }
 }
 
 test "checked type mapping preserves forced-dynamic iterator identity" {

@@ -4046,6 +4046,18 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: list reverse preserves an exact iterator item",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    stored = List.rev([[1.I64, 2, 3].iter()])
+        \\    selected = stored.get(0).ok_or([].iter())
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: generic procedure passes through exact iterator",
         .source_kind = .module,
         .source =

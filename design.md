@@ -2681,6 +2681,14 @@ Two different exact values for the same checked slot invoke the explicit common
 representation operation at that call boundary; they are never resolved by
 last-write-wins substitution or a later whole-type merge.
 
+When a stored value meets a compound argument or continuation request,
+Monotype selects their common representation at that explicit edge and writes
+the selected compound structure into both stable type cells before emitting
+the use. This permits a value such as an empty `List(public Iter)` to become
+the selected `List(Iter$identity)` accumulator without scanning it or inventing
+a conversion. This operation may never rewrite a named root; an independently
+produced nominal keeps its own exact identity.
+
 This producer-first order applies to ordinary direct calls as well as static
 dispatch. Preparing checked relations is not completion: a record, tuple, tag,
 list, call, field read, tuple-item read, or tag-payload read can still replace
@@ -2733,6 +2741,15 @@ specialization. Return expressions name that cell directly; they do not seal
 the checker-public return and leave the final body to choose a different type.
 Synthetic argument-destructuring `let` expressions sequence work around the
 already-lowered body and retain that body's exact result cell.
+
+Match and conditional branches likewise lower to their own completed exact
+cells before the control-flow selection relates or joins them with the declared
+destination. A branch is never lowered into the checker-public destination and
+then asked to recover the representation it would have produced.
+The declared destination and each completed branch meet through the same
+explicit common-representation operation used by stored arguments, so an
+empty compound branch can adopt the selected nested representation while a
+named branch root remains immutable.
 
 When an exact-producing call is itself specialization input, Monotype completes
 that one call before selecting the consumer specialization and uses the
@@ -2904,6 +2921,12 @@ not representation growth and remains eligible for the minted tier. This makes
 the distinction producer-authored: finalization consumes the recorded recursive
 edge and minted join instead of inferring recursion from a finished type shape,
 union-find root selection, or call-stack depth.
+
+Relating the recursive edge joins each ordered argument and the return through
+the explicit common-representation operation, then installs that completed
+interface on both requests. It never ordinarily unifies the two whole function
+roots; doing so would descend into public/generated nominal pairs and repeat
+work whose direction is already explicit at the interface slots.
 
 A loop `continue` edge is likewise explicit producer-authored recursive value
 flow, so every loop-carried slot on that edge is recorded even if an earlier
@@ -3837,8 +3860,10 @@ produced, explicit evidence from checked data unifies those nodes:
 - numeric literals and checked numeric defaults constrain numeric type cells;
 - named type uses constrain their declaration formals to the instantiated named
   arguments;
-- pattern lowering constrains checked pattern types to the monomorphic value
-  being matched.
+- pattern lowering consumes the exact scrutinee cells directly. Checked
+  constructors provide the already-validated field, tuple-item, tag-payload,
+  and binder positions; Monotype does not relate a second checked pattern root
+  to the whole runtime value before projecting those positions.
 
 Direct calls in the interface program are dependency edges to the callee's
 interface program, not requests to lower that callee's body. Replay first

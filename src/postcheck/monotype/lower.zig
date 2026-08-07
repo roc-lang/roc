@@ -694,6 +694,14 @@ fn applyExpressionValueToRequest(graph: *InstGraph, request_node: NodeId, produc
     }
 }
 
+fn applyLocalValueToRequest(graph: *InstGraph, request_node: NodeId, local_node: NodeId) Allocator.Error!void {
+    if (graph.content(request_node) == .named or graph.content(local_node) == .named) {
+        try applyExpressionValueToRequest(graph, request_node, local_node);
+    } else {
+        try graph.applyCompoundStorageRepresentation(request_node, local_node);
+    }
+}
+
 const DeferredConstructorPair = struct {
     checked_node: NodeId,
     request_node: NodeId,
@@ -3350,14 +3358,11 @@ const Builder = struct {
         const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
-            break :blk switch (signature_relation) {
-                .exact_graph => root_node,
-                .independent_roots => try body_ctx.completedFunctionNodeForLoweredRet(
-                    root_node,
-                    lowered.ret,
-                    body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
-                ),
-            };
+            break :blk try body_ctx.completedFunctionNodeForLoweredRet(
+                root_node,
+                lowered.ret,
+                body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
+            );
         };
         return .{
             .reservation = reservation,
@@ -3380,12 +3385,7 @@ const Builder = struct {
         // determines every interface slot; root-class call sites adopt this
         // recorded template directly.
         var def_template = pending.fn_template;
-        def_template.mono_fn_ty = switch (pending.signature_relation) {
-            // An exact signature keeps the producer-authored request type. The
-            // independently solved body may seal to an equal, distinct TypeId.
-            .exact_graph => pending.fn_template.mono_fn_ty,
-            .independent_roots => final_fn_ty,
-        };
+        def_template.mono_fn_ty = final_fn_ty;
         self.program.setFnSource(pending.reservation.fn_id, def_template);
         const sealed_fn_data = self.functionShape(final_fn_ty, "checked procedure template root type was not a function");
         self.program.setDef(pending.reservation.def, .{
@@ -3456,7 +3456,7 @@ const Builder = struct {
                 };
                 if (exact_interface or partial_recursive_allowed) {
                     if (active_recursive_edge) {
-                        try source_ctx.graph.unifyRecursiveFunctionInterface(
+                        try source_ctx.graph.joinRecursiveFunctionInterface(
                             active_root.request_fn_node,
                             active_root.initial_request_arg_classes,
                             request_fn_node,
@@ -3622,7 +3622,7 @@ const Builder = struct {
             const active_recursive_edge = spec.state == .lowering and
                 source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
             if (active_recursive_edge) {
-                try source_ctx.graph.unifyRecursiveFunctionInterface(
+                try source_ctx.graph.joinRecursiveFunctionInterface(
                     spec.request_fn_node,
                     spec.initial_request_arg_classes,
                     request_fn_node,
@@ -3752,7 +3752,11 @@ const Builder = struct {
         defer body_ctx.deinit();
         if (lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
         const root_node = try body_ctx.instNode(template.checked_fn_root);
-        if (!local_context_dependent and
+        if (signature_relation == .exact_graph and template.target != .hosted) {
+            const source_fn_node = source_ctx.graph.requestCheckedSource(request_fn_node) orelse
+                Common.invariant("exact procedure request had no checked source interface");
+            try relateFunctionRequestInterface(source_ctx.graph, root_node, source_fn_node);
+        } else if (!local_context_dependent and
             signature_relation == .independent_roots and
             template.target != .hosted)
         {
@@ -3773,7 +3777,10 @@ const Builder = struct {
                 try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
             }
         }
-        if (!local_context_dependent and template.target != .hosted) {
+        if (!local_context_dependent and
+            signature_relation == .independent_roots and
+            template.target != .hosted)
+        {
             try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
         }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
@@ -5356,7 +5363,7 @@ const Builder = struct {
                 try source_ctx.graph.markRecursiveValueSlot(request.ret);
             }
             if (active_recursive_edge) {
-                try source_ctx.graph.unifyRecursiveFunctionInterface(
+                try source_ctx.graph.joinRecursiveFunctionInterface(
                     spec.request_fn_node,
                     spec.initial_request_arg_classes,
                     request_fn_node,
@@ -12231,8 +12238,15 @@ const ControlFlowResultSelection = struct {
     declared: DraftTypeCell,
     selected: DraftTypeCell,
     destination_relation: ControlFlowDestinationRelation,
-    has_selection: bool = false,
-    has_value: bool = false,
+    first_value: ?*ControlFlowResultValue = null,
+    last_value: ?*ControlFlowResultValue = null,
+    target_required: bool = false,
+};
+
+const ControlFlowResultValue = struct {
+    expr: DraftExprId,
+    cell: DraftTypeCell,
+    next: ?*ControlFlowResultValue = null,
 };
 
 const ActiveReturnTarget = struct {
@@ -16485,10 +16499,6 @@ const BodyContext = struct {
 
         for (checked_args, arg_nodes, 0..) |pattern_id, arg_node, i| {
             const arg_cell = DraftTypeCell.fromGraphNode(arg_node);
-            _ = try self.graph.applyCheckedTypeMapping(
-                try self.instNode(self.view.bodies.pattern(pattern_id).ty),
-                arg_node,
-            );
             if (self.patternIsShapeFree(pattern_id)) {
                 const pat = try self.lowerShapeFreePatternAtCell(pattern_id, arg_cell);
                 switch (self.patData(pat)) {
@@ -17009,6 +17019,7 @@ const BodyContext = struct {
             Common.invariant("checked return target disagreed with the active lambda specialization");
         }
         const value = try self.lowerExprAtTypeCell(ret.expr, target.selection.declared);
+        target.selection.target_required = true;
         try self.includeControlFlowResult(target.selection, value);
         return .{
             .value = value,
@@ -25228,19 +25239,6 @@ const BodyContext = struct {
         };
     }
 
-    /// Apply the caller's checked argument occurrence to the callee's checked
-    /// formal mapping and retain the caller occurrence as request identity.
-    fn mapFormalToCallerArgNode(
-        self: *BodyContext,
-        caller: *BodyContext,
-        formal_node: NodeId,
-        arg_ty: checked.CheckedTypeId,
-    ) Allocator.Error!NodeId {
-        const arg_node = try caller.instNode(arg_ty);
-        _ = try self.graph.applyCheckedTypeMapping(formal_node, arg_node);
-        return arg_node;
-    }
-
     fn instantiateCallNodeFromCallerAtNode(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
@@ -25263,20 +25261,19 @@ const BodyContext = struct {
             Common.invariant("checked direct call graph arity differed from its argument span");
         }
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
-        for (fn_graph.args, checked_args, 0..) |formal_node, checked_arg, index| {
+        for (checked_args, 0..) |checked_arg, index| {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
             if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
                 _ = try self.graph.applyCheckedTypeMapping(
                     try caller.freshInstNode(arg_ty),
                     evidence_node,
                 );
-                _ = try self.graph.applyCheckedTypeMapping(formal_node, evidence_node);
                 request_args[index] = evidence_node;
             } else {
-                request_args[index] = try self.mapFormalToCallerArgNode(caller, formal_node, arg_ty);
+                request_args[index] = try caller.instNode(arg_ty);
             }
         }
-        if (expected_ret_node) |expected| {
+        const request_ret = if (expected_ret_node) |expected| blk: {
             if (hosted_try_capability) |capability| {
                 if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, expected)) |request_fn| {
                     return request_fn;
@@ -25286,20 +25283,22 @@ const BodyContext = struct {
                 try caller.freshInstNode(checked_ret_ty),
                 expected,
             );
-        } else {
-            const caller_ret = try caller.instNode(checked_ret_ty);
+            break :blk expected;
+        } else blk: {
+            // The result is a distinct runtime occurrence. Sharing the
+            // caller's cached checked node here would let later result
+            // refinement flow backward into arguments with the same checked
+            // variable.
+            const caller_ret = try caller.freshInstNode(checked_ret_ty);
             if (hosted_try_capability) |capability| {
                 if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, caller_ret)) |request_fn| {
                     return request_fn;
                 }
             }
-            try self.graph.unify(fn_graph.ret, caller_ret);
-        }
-        var request_ret = fn_graph.ret;
-        if (expected_ret_node) |expected| {
-            request_ret = try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
-        }
-        return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+            break :blk caller_ret;
+        };
+        const request_fn = try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+        return try self.graph.functionRequestFromProducedArguments(fn_node, request_fn, request_args);
     }
 
     fn hostedTryWidenedRequestNode(
@@ -25363,11 +25362,8 @@ const BodyContext = struct {
             Common.invariant("checked dispatch plan graph arity differed from its operand span");
         }
         switch (plan.dispatcher) {
-            .arg => |index| {
-                if (index >= fn_graph.args.len) Common.invariant("dispatch plan dispatcher argument index was outside the callable graph");
-                const dispatcher_node = try caller.instNode(plan.dispatcher_ty);
-                _ = try self.graph.applyCheckedTypeMapping(fn_graph.args[index], dispatcher_node);
-            },
+            .arg => |index| if (index >= fn_graph.args.len)
+                Common.invariant("dispatch plan dispatcher argument index was outside the callable graph"),
             .type_only => {},
         }
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
@@ -25382,10 +25378,9 @@ const BodyContext = struct {
                             try caller.freshInstNode(arg_ty),
                             evidence_node,
                         );
-                        _ = try self.graph.applyCheckedTypeMapping(formal_node, evidence_node);
                         request_arg.* = evidence_node;
                     } else {
-                        request_arg.* = try self.mapFormalToCallerArgNode(caller, formal_node, arg_ty);
+                        request_arg.* = try caller.instNode(arg_ty);
                     }
                 },
                 .generated_interpolation_iter,
@@ -25394,18 +25389,15 @@ const BodyContext = struct {
                 => {},
             }
         }
-        var request_ret = fn_graph.ret;
-        if (expected_ret_node) |expected| {
+        const request_ret = if (expected_ret_node) |expected| blk: {
             _ = try self.graph.applyCheckedTypeMapping(
                 try caller.freshInstNode(checked_ret_ty),
                 expected,
             );
-            request_ret = try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
-        } else {
-            const caller_ret = try caller.instNode(checked_ret_ty);
-            try self.graph.unify(fn_graph.ret, caller_ret);
-        }
-        return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+            break :blk expected;
+        } else try caller.freshInstNode(checked_ret_ty);
+        const request_fn = try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+        return try self.graph.functionRequestFromProducedArguments(fn_node, request_fn, request_args);
     }
 
     fn relateFormalToOperand(
@@ -26505,7 +26497,7 @@ const BodyContext = struct {
         const local_node = try local_cell.toGraphNode(self.graph);
         try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
         try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
-        try applyExpressionValueToRequest(self.graph, expected_node, local_node);
+        try applyLocalValueToRequest(self.graph, expected_node, local_node);
         return try self.addExprWithTypeCell(local_cell, .{ .local = binding.local });
     }
 
@@ -26705,7 +26697,7 @@ const BodyContext = struct {
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
-            try applyExpressionValueToRequest(self.graph, expected_node, local_node);
+            try applyLocalValueToRequest(self.graph, expected_node, local_node);
             return try self.addExprWithTypeCell(
                 local_cell,
                 .{ .local = local_id },
@@ -29175,14 +29167,14 @@ const BodyContext = struct {
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
             try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
-            try applyExpressionValueToRequest(self.graph, expected_node, local_node);
+            try applyLocalValueToRequest(self.graph, expected_node, local_node);
             return;
         }
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
-            try applyExpressionValueToRequest(self.graph, expected_node, local_node);
+            try applyLocalValueToRequest(self.graph, expected_node, local_node);
             return;
         }
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
@@ -39900,7 +39892,22 @@ const BodyContext = struct {
                 try self.constrainCheckedInterfaceToCell(self.view.bodies.expr(body).ty, result_cell);
                 break :blk try self.lowerExpr(body);
             },
-            .exact_producer => try self.lowerExprAtTypeCell(body, result_cell),
+            .exact_producer => blk: {
+                // The branch is the authority for its produced representation.
+                // Give it an independent checked output cell so ordinary
+                // literals have their solved shape without inheriting the
+                // enclosing destination's exact identity. The control-flow
+                // selection joins the completed cell after this one lowering.
+                const branch_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                _ = try self.graph.applyCheckedTypeMapping(
+                    try self.freshInstNode(self.view.bodies.expr(body).ty),
+                    branch_node,
+                );
+                break :blk try self.lowerExprAtTypeCell(
+                    body,
+                    DraftTypeCell.fromGraphNode(branch_node),
+                );
+            },
         };
     }
 
@@ -41270,10 +41277,6 @@ const BodyContext = struct {
                 if (try self.checkedPatternIsProvenUninhabited(pattern.pattern)) continue;
                 var branch_ctx = try self.childContext(self.current_fn_key);
                 errdefer branch_ctx.deinit();
-                _ = try self.graph.applyCheckedTypeMapping(
-                    try branch_ctx.instNode(branch_ctx.view.bodies.pattern(pattern.pattern).ty),
-                    scrutinee_node,
-                );
                 try pending.append(self.allocator, .{
                     .ctx = branch_ctx,
                     .pattern = pattern,
@@ -41284,9 +41287,11 @@ const BodyContext = struct {
             }
         }
 
-        // Every pattern relation must settle before binder cells are projected.
-        // This gives derived binders such as record rest their exact graph node
-        // without allocating a checked-type approximation and rebinding it later.
+        // Patterns consume the scrutinee's exact runtime structure directly.
+        // The checker has already established that every constructor is valid;
+        // relating a fresh copy of the checked pattern type back to the whole
+        // scrutinee would only repeat that work and could alias independent
+        // runtime occurrences through shared checked variables.
         for (pending.items) |*entry| {
             try entry.ctx.preRegisterPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
             try entry.ctx.applyAlternativeBinderRemaps(entry.pattern.binderRemapsSlice(self.view.bodies));
@@ -41778,7 +41783,10 @@ const BodyContext = struct {
         const declared_node = try selection.declared.toGraphNode(self.graph);
         switch (selection.destination_relation) {
             .checked_mapping => _ = try self.graph.applyCheckedTypeMapping(declared_node, value_node),
-            .exact_producer => _ = try self.graph.applyProducedTypeToRequest(declared_node, value_node),
+            .exact_producer => {
+                const joined = try self.graph.joinProducedTypeRepresentations(declared_node, value_node);
+                try self.graph.writeProducedTypeSelection(value_node, joined);
+            },
         }
     }
 
@@ -41788,21 +41796,17 @@ const BodyContext = struct {
         value: DraftExprId,
     ) Allocator.Error!void {
         if (self.exprImpossibilityProof(value) != null) return;
-        const value_cell = self.exprTypeCell(value);
-        const value_node = try value_cell.toGraphNode(self.graph);
-        const selected_node = try selection.selected.toGraphNode(self.graph);
-        if (!selection.has_selection) {
-            try self.applyControlFlowDestination(selection.*, value_node);
-            try self.graph.writeProducedTypeSelection(selected_node, value_node);
-            selection.has_selection = true;
+        const entry = try self.graph.arena().create(ControlFlowResultValue);
+        entry.* = .{
+            .expr = value,
+            .cell = self.exprTypeCell(value),
+        };
+        if (selection.last_value) |last| {
+            last.next = entry;
         } else {
-            if (!self.graph.sameClass(selected_node, value_node)) {
-                const joined = try self.graph.joinProducedTypeRepresentations(selected_node, value_node);
-                try self.graph.writeProducedTypeSelection(selected_node, joined);
-            }
+            selection.first_value = entry;
         }
-        selection.has_value = true;
-        self.draft.exprs.items[@intFromEnum(value)].ty = selection.selected;
+        selection.last_value = entry;
     }
 
     fn finishControlFlowResultSelection(
@@ -41813,9 +41817,28 @@ const BodyContext = struct {
         // produces a runtime result. Its checked result variable may therefore
         // remain unconstrained, and cannot supply representation evidence for
         // the enclosing continuation's declared result cell.
-        if (!selection.has_value) return selection.declared;
+        const first = selection.first_value orelse return selection.declared;
+        if (first.next == null and !selection.target_required) {
+            const value_node = try first.cell.toGraphNode(self.graph);
+            try self.applyControlFlowDestination(selection, value_node);
+            return first.cell;
+        }
+
+        var joined_node = try first.cell.toGraphNode(self.graph);
+        var current = first.next;
+        while (current) |entry| : (current = entry.next) {
+            const value_node = try entry.cell.toGraphNode(self.graph);
+            if (!self.graph.sameClass(joined_node, value_node)) {
+                joined_node = try self.graph.joinProducedTypeRepresentations(joined_node, value_node);
+            }
+        }
 
         const selected_node = try selection.selected.toGraphNode(self.graph);
+        try self.graph.writeProducedTypeSelection(selected_node, joined_node);
+        current = first;
+        while (current) |entry| : (current = entry.next) {
+            self.draft.exprs.items[@intFromEnum(entry.expr)].ty = selection.selected;
+        }
         try self.applyControlFlowDestination(selection, selected_node);
         return selection.selected;
     }
@@ -44292,49 +44315,34 @@ const BodyContext = struct {
                 .termination = .none,
             };
         }
-        const requested_cell: DraftTypeCell = if (try self.graphFreeResultTypeForExpr(expr)) |ty|
-            .{ .sealed = ty }
-        else
-            DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr));
-        // The checked pattern is explicit evidence for the value's shape.
-        // Apply that relation before either the value or a shape-dependent
-        // pattern asks for a concrete view of the graph-backed value type.
-        switch (requested_cell) {
-            .sealed => |ty| try self.requireClosedCheckedType(self.view.bodies.pattern(pattern).ty, ty),
-            .graph_node => try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, requested_cell),
+        const closed_ty = try self.graphFreeResultTypeForExpr(expr);
+        if (closed_ty) |ty| {
+            try self.requireClosedCheckedType(self.view.bodies.pattern(pattern).ty, ty);
         }
-        const value = switch (requested_cell) {
-            .sealed => try self.lowerExprAtTypeCellWithKnownDivergence(
+        const value = if (closed_ty) |ty|
+            try self.lowerExprAtTypeCellWithKnownDivergence(
                 expr,
-                requested_cell,
+                .{ .sealed = ty },
                 .runtime_value,
                 false,
-            ),
-            // A checked declaration pattern supplies substitution context,
-            // not a runtime representation. Let the initializer produce its
-            // exact cell before the pattern consumes it.
-            .graph_node => try self.lowerExpr(expr),
-        };
+            )
+        else
+            // A declaration consumes the exact value its initializer
+            // produces. Asking for the initializer's checked type first would
+            // perform a speculative call specialization and alias this
+            // occurrence to every other use of the same checked variable.
+            try self.lowerExpr(expr);
         const produced_cell = self.exprTypeCell(value);
-        const value_cell = switch (requested_cell) {
-            .sealed => |requested_ty| blk: {
-                const produced_ty = switch (produced_cell) {
-                    .sealed => |ty| ty,
-                    .graph_node => Common.invariant("graph-free closed dispatch produced a graph-backed result"),
-                };
-                if (!self.sameType(requested_ty, produced_ty)) {
-                    Common.invariant("graph-free closed dispatch produced a different sealed result type");
-                }
-                break :blk produced_cell;
-            },
-            .graph_node => blk: {
-                try self.constrainCheckedInterfaceToCell(
-                    self.view.bodies.pattern(pattern).ty,
-                    produced_cell,
-                );
-                break :blk produced_cell;
-            },
-        };
+        const value_cell = if (closed_ty) |requested_ty| blk: {
+            const produced_ty = switch (produced_cell) {
+                .sealed => |ty| ty,
+                .graph_node => Common.invariant("graph-free closed dispatch produced a graph-backed result"),
+            };
+            if (!self.sameType(requested_ty, produced_ty)) {
+                Common.invariant("graph-free closed dispatch produced a different sealed result type");
+            }
+            break :blk produced_cell;
+        } else produced_cell;
         const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and self.patternCanMiss(pattern))
             try self.addComptimeSite(.destructure, source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
         else
@@ -44388,10 +44396,12 @@ const BodyContext = struct {
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (ty_cell) {
             .sealed => |ty| try self.requireClosedCheckedType(pattern.ty, ty),
-            .graph_node => |value_node| {
-                const pattern_node = try self.instNode(pattern.ty);
-                _ = try self.graph.applyCheckedTypeMapping(pattern_node, value_node);
-            },
+            // A shape-free pattern cannot inspect its value's representation.
+            // Its caller has already supplied the authoritative runtime cell,
+            // which the binder preserves directly. Relating that cell back to
+            // the checker graph would let an exact argument rewrite a shared
+            // checked variable used by otherwise-independent arguments.
+            .graph_node => {},
         }
         const data: BodyPatData = switch (pattern.data) {
             .assign => |binder| .{ .bind = try self.materializePatternBinderAtCell(binder, ty_cell) },
