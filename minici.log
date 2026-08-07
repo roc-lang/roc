@@ -1,26 +1,19 @@
 === MINICI ORCHESTRATOR ===
-MiniCI  1/75: Building CI steps ... 
-MiniCI  1/75: still running `build-ci` after 30.0s
-MiniCI  1/75: still running `build-ci` after 60.0s
-MiniCI  1/75: still running `build-ci` after 90.0s
-MiniCI  1/75: still running `build-ci` after 120.0s
-MiniCI  1/75: still running `build-ci` after 150.0s
-MiniCI  1/75: still running `build-ci` after 180.0s
-MiniCI  1/75: still running `build-ci` after 210.1s
-MiniCI  1/75: still running `build-ci` after 240.1s
-MiniCI  1/75: Building CI steps ... completed in 268.399s
-MiniCI  2/75: Running `run-check-zig-format` ... passed in 0.369s
-MiniCI  3/75: Running `run-check-zig-lints` ... passed in 1.953s
-MiniCI  4/75: Running `run-check-tidy` ... failed in 5.536s
-  --- output from `run-check-tidy` ---
-  | run-check-tidy
-  | +- run exe tidy failure
-  | error: process exited with error code 1
-  ... (extracted error; full log: `zig-out/minici/logs/run-check-tidy.txt`) ...
+MiniCI  1/75: Building CI steps ... completed in 4.740s
+MiniCI  2/75: Running `run-check-zig-format` ... passed in 0.342s
+MiniCI  3/75: Running `run-check-zig-lints` ... passed in 1.911s
+MiniCI  4/75: Running `run-check-tidy` ... passed in 5.481s
+MiniCI  5/75: Running `run-check-git-lints` ... passed in 0.223s
+MiniCI  6/75: Running `run-check-type-checker-patterns` ... failed in 0.182s
+  --- output from `run-check-type-checker-patterns` ---
+  | run-check-type-checker-patterns
+  | +- check-type-checker-patterns failure
+  | error: Found 5 forbidden patterns (raw string comparison or manipulation) in src/canonicalize/, src/check/, src/layout/, or src/eval/. See above for details on why this is forbidden and what to do instead.
+  ... (extracted error; full log: `zig-out/minici/logs/run-check-type-checker-patterns.txt`) ...
   --- end output ---
-  Re-run failed step: `zig build run-check-tidy --summary all --color off`
-  Log: `zig-out/minici/logs/run-check-tidy.txt`
-MiniCI summary: 4/75 phases ran; 3 passed, 1 failed, 0 crashed, 0 skipped, 71 not run; wall 277.071s
+  Re-run failed step: `zig build run-check-type-checker-patterns --summary all --color off`
+  Log: `zig-out/minici/logs/run-check-type-checker-patterns.txt`
+MiniCI summary: 6/75 phases ran; 5 passed, 1 failed, 0 crashed, 0 skipped, 69 not run; wall 14.003s
 minici
 +- run exe minici failure
 error: process exited with error code 1
@@ -31,4 +24,4 @@ minici transitive failure
 +- run exe minici failure
 
 error: the following build command failed with exit code 1:
-.zig-cache/o/c644a083b5bcec5eee9753abbc948a2d/build /home/lbw/Documents/zig-x86_64-linux-0.16.0/zig /home/lbw/Documents/zig-x86_64-linux-0.16.0/lib /home/lbw/Documents/Github/roc-worktrees/dedicated-repl-wasm .zig-cache /home/lbw/.cache/zig --seed 0x704d2718 -Z9709381e45c7705d minici
+.zig-cache/o/c644a083b5bcec5eee9753abbc948a2d/build /home/lbw/Documents/zig-x86_64-linux-0.16.0/zig /home/lbw/Documents/zig-x86_64-linux-0.16.0/lib /home/lbw/Documents/Github/roc-worktrees/dedicated-repl-wasm .zig-cache /home/lbw/.cache/zig --seed 0x6daba833 -Z79937c86b61c4593 minici
