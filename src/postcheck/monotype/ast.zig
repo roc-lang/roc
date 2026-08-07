@@ -477,7 +477,8 @@ pub const CallValue = struct {
 /// slot this operand fills; `value` is the expression that supplies it. Operand
 /// spans are stored sorted by `id`, parallel to the target's canonically-sorted
 /// capture slots, so every operand↔slot join is an exact keyed lookup with no
-/// load-bearing order.
+/// load-bearing order. At the lift boundary, the id's namespace explicitly
+/// distinguishes a provisional checked key from an already-lifted key.
 pub const CaptureOperand = struct {
     id: checked.CaptureId,
     value: ExprId,
@@ -493,10 +494,10 @@ pub const LiftedFunctionValue = struct {
 
 /// Explicit operand for one checked closure capture before lifting. The `local`
 /// identifies the checked capture in the closure creation context; `value` is
-/// the expression that supplies it there. Lifting matches it to the target
-/// function's solved captures by local id when possible, and by preserved
-/// checked binder identity when copied/specialized contexts use different
-/// Monotype local ids for the same checked capture.
+/// the expression that supplies it there. At the lift boundary, both this local
+/// and the target slot use their checked capture identity when present and their
+/// generated capture identity otherwise. Lifting joins only on that explicit
+/// provisional key, then records the operand with the target's lifted key.
 pub const FnDefCapture = struct {
     local: LocalId,
     value: ExprId,

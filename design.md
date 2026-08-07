@@ -2495,6 +2495,14 @@ pipeline consumes that output directly and must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
 Monotype Lifted output. No later pipeline stage repeats that finalization.
+Each post-lift capture operand explicitly names the callee capture slot it
+supplies. Capture finalization preserves that key while rewriting the operand
+value and never infers the target slot from the value's own capture identity.
+At the lift boundary, each declared key's namespace states how it joins:
+source-authored and check-generated keys normalize once through the target slot's
+checked identity, while lift-generated keys already name the target's lifted
+slot and remain exact. After that boundary, capture recomputation accepts only
+lifted keys; it never retries a lookup in another identity namespace.
 
 Optional tag reachability uses a recursive abstract value tree. A struct field
 or tag payload carries the complete nested `ValueInfo` output for the value
