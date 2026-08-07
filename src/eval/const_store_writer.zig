@@ -1,6 +1,7 @@
 //! Store LIR interpreter results as checked constants.
 
 const std = @import("std");
+const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
 const check = @import("check");
@@ -1077,17 +1078,17 @@ fn writePackedScalar(out: []u8, element: const_store.ConstPackedScalar, scalar: 
     switch (element) {
         .u8 => out[0] = packedScalarValue(.u8, scalar, "packed U8 list element had different scalar data"),
         .i8 => out[0] = @bitCast(packedScalarValue(.i8, scalar, "packed I8 list element had different scalar data")),
-        .u16 => std.mem.writeInt(u16, out[0..2], packedScalarValue(.u16, scalar, "packed U16 list element had different scalar data"), .little),
-        .i16 => std.mem.writeInt(i16, out[0..2], packedScalarValue(.i16, scalar, "packed I16 list element had different scalar data"), .little),
-        .u32 => std.mem.writeInt(u32, out[0..4], packedScalarValue(.u32, scalar, "packed U32 list element had different scalar data"), .little),
-        .i32 => std.mem.writeInt(i32, out[0..4], packedScalarValue(.i32, scalar, "packed I32 list element had different scalar data"), .little),
-        .u64 => std.mem.writeInt(u64, out[0..8], packedScalarValue(.u64, scalar, "packed U64 list element had different scalar data"), .little),
-        .i64 => std.mem.writeInt(i64, out[0..8], packedScalarValue(.i64, scalar, "packed I64 list element had different scalar data"), .little),
+        .u16 => base.byte_encoding.writeIntLittle(u16, out, packedScalarValue(.u16, scalar, "packed U16 list element had different scalar data")),
+        .i16 => base.byte_encoding.writeIntLittle(i16, out, packedScalarValue(.i16, scalar, "packed I16 list element had different scalar data")),
+        .u32 => base.byte_encoding.writeIntLittle(u32, out, packedScalarValue(.u32, scalar, "packed U32 list element had different scalar data")),
+        .i32 => base.byte_encoding.writeIntLittle(i32, out, packedScalarValue(.i32, scalar, "packed I32 list element had different scalar data")),
+        .u64 => base.byte_encoding.writeIntLittle(u64, out, packedScalarValue(.u64, scalar, "packed U64 list element had different scalar data")),
+        .i64 => base.byte_encoding.writeIntLittle(i64, out, packedScalarValue(.i64, scalar, "packed I64 list element had different scalar data")),
         .u128 => writePackedU128(out, packedScalarValue(.u128, scalar, "packed U128 list element had different scalar data")),
-        .i128 => std.mem.writeInt(i128, out[0..16], packedScalarValue(.i128, scalar, "packed I128 list element had different scalar data"), .little),
-        .f32 => std.mem.writeInt(u32, out[0..4], packedScalarValue(.f32_bits, scalar, "packed F32 list element had different scalar data"), .little),
-        .f64 => std.mem.writeInt(u64, out[0..8], packedScalarValue(.f64_bits, scalar, "packed F64 list element had different scalar data"), .little),
-        .dec => std.mem.writeInt(i128, out[0..16], packedScalarValue(.dec_bits, scalar, "packed Dec list element had different scalar data"), .little),
+        .i128 => base.byte_encoding.writeIntLittle(i128, out, packedScalarValue(.i128, scalar, "packed I128 list element had different scalar data")),
+        .f32 => base.byte_encoding.writeIntLittle(u32, out, packedScalarValue(.f32_bits, scalar, "packed F32 list element had different scalar data")),
+        .f64 => base.byte_encoding.writeIntLittle(u64, out, packedScalarValue(.f64_bits, scalar, "packed F64 list element had different scalar data")),
+        .dec => base.byte_encoding.writeIntLittle(i128, out, packedScalarValue(.dec_bits, scalar, "packed Dec list element had different scalar data")),
         .u8x16,
         .i8x16,
         .u16x8,
@@ -1110,7 +1111,7 @@ fn packedScalarValue(
 }
 
 fn writePackedU128(out: []u8, value: u128) void {
-    std.mem.writeInt(u128, out[0..16], value, .little);
+    base.byte_encoding.writeIntLittle(u128, out, value);
 }
 
 fn checkedU32(value: usize, comptime message: []const u8) u32 {
