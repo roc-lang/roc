@@ -1042,6 +1042,21 @@ pub fn listAppendLeBytes(
     if (count == 0) return list;
     const original_len = list.len();
 
+    // A unique list with a full word of spare capacity takes one unaligned
+    // little-endian store and a length bump: the low `count` bytes become the
+    // appended data and the rest of the word lands in capacity slack, which
+    // nothing can observe. Bit-writer flushes hit this path on every call.
+    if (!list.isSeamlessSlice() and list.getCapacity() >= original_len + 8 and
+        (update_mode == .InPlace or list.isUnique(roc_ops)))
+    {
+        if (list.bytes) |bytes| {
+            std.mem.writeInt(u64, bytes[original_len..][0..8], value, .little);
+            var output = list;
+            output.length = original_len + count;
+            return output;
+        }
+    }
+
     var output = listReserveForAppend(
         list,
         alignment,
