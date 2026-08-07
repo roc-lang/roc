@@ -339,6 +339,9 @@ pub const LocalProcedureMethodTarget = struct {
     /// Evaluating this local procedure can return an exact Monotype selected
     /// by its body or by an exact caller-supplied argument.
     produces_exact_graph: bool = false,
+    /// Whether exact result production depends on the concrete dispatch
+    /// evidence supplied to this local procedure's lexical scope.
+    exact_graph_from_evidence: bool = false,
 };
 
 /// Public `MethodTargetKind` declaration.

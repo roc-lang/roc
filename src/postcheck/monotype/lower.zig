@@ -1196,6 +1196,14 @@ fn specEvidenceProducesExactGraph(evidence: []const SpecEvidence) bool {
     return false;
 }
 
+fn evidenceChainProducesExactGraph(evidence: EvidenceChain) bool {
+    var frame = evidence;
+    while (true) {
+        if (specEvidenceProducesExactGraph(frame.vector)) return true;
+        frame = (frame.parent orelse return false).*;
+    }
+}
+
 fn optionalTypeDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
     if (left) |left_digest| {
         const right_digest = right orelse return false;
@@ -26109,6 +26117,11 @@ const BodyContext = struct {
             }
             break :blk context.evidence;
         };
+        const effective_signature_relation = if (local.exact_graph_from_evidence and
+            evidenceChainProducesExactGraph(requested_evidence))
+            Ast.SignatureRelation.exact_graph
+        else
+            signature_relation;
         const lexical_owner_scope = try self.draft.enterOwner(context.lexical_owner);
         defer lexical_owner_scope.leave();
         // The declaration context's capture types are part of the
@@ -26131,7 +26144,7 @@ const BodyContext = struct {
             capture_entry_guards,
             requested_evidence,
             local.dispatch_scope,
-            signature_relation,
+            effective_signature_relation,
         );
     }
 
@@ -34313,6 +34326,7 @@ const BodyContext = struct {
                         .expr = local.expr,
                         .dispatch_scope = local.dispatch_scope,
                         .produces_exact_graph = local.produces_exact_graph,
+                        .exact_graph_from_evidence = local.exact_graph_from_evidence,
                     },
                     lookup.view,
                     lookup.local_proc_context orelse
@@ -34401,6 +34415,7 @@ const BodyContext = struct {
                         .expr = local.expr,
                         .dispatch_scope = local.dispatch_scope,
                         .produces_exact_graph = local.produces_exact_graph,
+                        .exact_graph_from_evidence = local.exact_graph_from_evidence,
                     },
                     lookup.view,
                     lookup.local_proc_context orelse

@@ -4079,6 +4079,45 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: local procedure preserves evidence-dependent exact result",
+        .source_kind = .module,
+        .source =
+        \\Source := [Source].{
+        \\    choose : Source, Iter(I64) -> Iter(I64)
+        \\    choose = |_, iter| iter
+        \\}
+        \\
+        \\through_local : source, Iter(I64) -> Iter(I64) where [source.choose : source, Iter(I64) -> Iter(I64)]
+        \\through_local = |source, iter| {
+        \\    forward = || source.choose(iter)
+        \\    forward()
+        \\}
+        \\
+        \\main = Iter.fold(through_local(Source.Source, [1.I64, 2, 3].iter().map(|value| value)), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: mutually recursive procedures preserve exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\forward : Iter(I64), U64 -> Iter(I64)
+        \\forward = |iter, remaining|
+        \\    if remaining > 0 {
+        \\        bounce(iter, remaining - 1)
+        \\    } else {
+        \\        iter
+        \\    }
+        \\bounce : Iter(I64), U64 -> Iter(I64)
+        \\bounce = |iter, remaining| forward(iter, remaining)
+        \\main = {
+        \\    selected = bounce([1.I64, 2, 3].iter(), 1)
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: local attached procedure preserves exact iterator result",
         .source_kind = .module,
         .source =

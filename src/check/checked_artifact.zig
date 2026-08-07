@@ -13780,6 +13780,9 @@ pub const LocalProcedureBinding = struct {
     /// Evaluating this local procedure can return an exact Monotype selected
     /// by its body or by an exact caller-supplied argument.
     produces_exact_graph: bool = false,
+    /// Whether exact result production depends on the concrete dispatch
+    /// evidence supplied to this local procedure's lexical scope.
+    exact_graph_from_evidence: bool = false,
 };
 
 /// Return the checked module id that owns a top-level procedure binding.
@@ -14495,6 +14498,15 @@ const ExactGraphProducerAnalysis = struct {
     current_template: canonical.CheckedProcedureTemplateId = @enumFromInt(0),
     saw_evidence_dependency: bool = false,
     use_final_procedure_facts: bool = false,
+    evidence_hits: u64 = 0,
+    /// Preserve evidence-dependent callable flow across repeated local uses,
+    /// even when the ordinary expression memo answers without revisiting the
+    /// dispatch that established the dependency.
+    callable_evidence_dependencies: []bool,
+    /// A negative result reached through an active recursion edge is not final:
+    /// another member of that recursive component may still reach an exact
+    /// source. Queries compare this monotone counter before caching `no`.
+    cycle_hits: u64 = 0,
 
     fn init(
         allocator: Allocator,
@@ -14523,6 +14535,9 @@ const ExactGraphProducerAnalysis = struct {
         const dependency_caller_by_callee = try allocator.alloc(?canonical.CheckedProcedureTemplateId, templates.templates.len);
         errdefer allocator.free(dependency_caller_by_callee);
         @memset(dependency_caller_by_callee, null);
+        const callable_evidence_dependencies = try allocator.alloc(bool, bodies.exprCount());
+        errdefer allocator.free(callable_evidence_dependencies);
+        @memset(callable_evidence_dependencies, false);
         var self = ExactGraphProducerAnalysis{
             .allocator = allocator,
             .artifact_key = artifact_key,
@@ -14540,6 +14555,7 @@ const ExactGraphProducerAnalysis = struct {
             .dependency_heads = dependency_heads,
             .dependency_caller_by_callee = dependency_caller_by_callee,
             .dependencies = .empty,
+            .callable_evidence_dependencies = callable_evidence_dependencies,
         };
         errdefer self.binder_values.deinit(allocator);
         errdefer self.projection_steps.deinit(allocator);
@@ -14549,6 +14565,7 @@ const ExactGraphProducerAnalysis = struct {
     }
 
     fn deinit(self: *ExactGraphProducerAnalysis) void {
+        self.allocator.free(self.callable_evidence_dependencies);
         self.dependencies.deinit(self.allocator);
         self.allocator.free(self.dependency_caller_by_callee);
         self.allocator.free(self.dependency_heads);
@@ -14817,15 +14834,14 @@ const ExactGraphProducerAnalysis = struct {
     fn analyze(self: *ExactGraphProducerAnalysis) Allocator.Error!void {
         for (self.templates.templates, 0..) |*template, raw_template| {
             self.current_template = @enumFromInt(@as(u32, @intCast(raw_template)));
-            self.saw_evidence_dependency = false;
-            const produces = switch (template.body) {
-                .checked_body => |body_id| try self.callableExprProduces(self.bodies.body(body_id).root_expr),
-                .intrinsic_wrapper, .entry_wrapper => false,
+            const flow = switch (template.body) {
+                .checked_body => |body_id| try self.callableExprFlow(self.bodies.body(body_id).root_expr),
+                .intrinsic_wrapper, .entry_wrapper => ExactResultFlow{},
             };
-            if (produces) {
+            if (flow.produces) {
                 template.produces_exact_graph = true;
                 template.exact_graph_from_evidence = false;
-            } else if (self.saw_evidence_dependency) {
+            } else if (flow.from_evidence) {
                 template.exact_graph_from_evidence = true;
             }
         }
@@ -14874,6 +14890,28 @@ const ExactGraphProducerAnalysis = struct {
         @memset(self.return_states, .unknown);
     }
 
+    const ExactResultFlow = struct {
+        produces: bool = false,
+        from_evidence: bool = false,
+    };
+
+    fn callableExprFlow(
+        self: *ExactGraphProducerAnalysis,
+        expr_id: CheckedExprId,
+    ) Allocator.Error!ExactResultFlow {
+        self.saw_evidence_dependency = false;
+        const produces = try self.callableExprProduces(expr_id);
+        return .{
+            .produces = produces,
+            .from_evidence = !produces and self.saw_evidence_dependency,
+        };
+    }
+
+    fn noteEvidenceDependency(self: *ExactGraphProducerAnalysis) void {
+        self.saw_evidence_dependency = true;
+        self.evidence_hits += 1;
+    }
+
     fn addTemplateDependency(
         self: *ExactGraphProducerAnalysis,
         callee: canonical.CheckedProcedureTemplateId,
@@ -14893,8 +14931,14 @@ const ExactGraphProducerAnalysis = struct {
     }
 
     fn callableExprProduces(self: *ExactGraphProducerAnalysis, expr_id: CheckedExprId) Allocator.Error!bool {
+        const raw = @intFromEnum(expr_id);
+        if (raw >= self.callable_evidence_dependencies.len) {
+            return checkedArtifactInvariant("exact callable flow referenced a missing expression", .{});
+        }
+        const evidence_hits_before = self.evidence_hits;
+        if (self.callable_evidence_dependencies[raw]) self.noteEvidenceDependency();
         const expr = self.bodies.expr(expr_id);
-        return switch (expr.data) {
+        const produces = switch (expr.data) {
             .lambda => |lambda| try self.exprProduces(lambda.body) or
                 try self.exprReturnsProduced(lambda.body),
             .closure => |closure| try self.callableExprProduces(closure.lambda),
@@ -14950,6 +14994,10 @@ const ExactGraphProducerAnalysis = struct {
             .run_low_level,
             => false,
         };
+        if (!produces and self.evidence_hits != evidence_hits_before) {
+            self.callable_evidence_dependencies[raw] = true;
+        }
+        return produces;
     }
 
     fn callableResolvedRefProduces(self: *ExactGraphProducerAnalysis, maybe_ref: ?ResolvedValueRefId) Allocator.Error!bool {
@@ -14983,7 +15031,9 @@ const ExactGraphProducerAnalysis = struct {
                     .direct_template => |direct| switch (direct.template) {
                         .checked => |template_ref| blk: {
                             if (self.use_final_procedure_facts) {
-                                break :blk self.templates.get(template_ref.template).produces_exact_graph;
+                                const target = self.templates.get(template_ref.template);
+                                if (target.exact_graph_from_evidence) self.noteEvidenceDependency();
+                                break :blk target.produces_exact_graph;
                             }
                             try self.addTemplateDependency(template_ref.template);
                             break :blk false;
@@ -14995,7 +15045,7 @@ const ExactGraphProducerAnalysis = struct {
             },
             .imported, .hosted, .platform_required => {},
         }
-        if (procedure.exact_graph_from_evidence) self.saw_evidence_dependency = true;
+        if (procedure.exact_graph_from_evidence) self.noteEvidenceDependency();
         return procedure.produces_exact_graph;
     }
 
@@ -15042,7 +15092,7 @@ const ExactGraphProducerAnalysis = struct {
             .direct_closed, .direct_parametric => |direct| self.methodTargetProduces(self.plans.evidenceNode(direct.evidence).target),
             .direct_pending => checkedArtifactInvariant("unresolved dispatch reached exact producer publication", .{}),
             .evidence_dependent => blk: {
-                self.saw_evidence_dependency = true;
+                self.noteEvidenceDependency();
                 break :blk false;
             },
             .structural, .checked_error, .@"unreachable" => false,
@@ -15057,12 +15107,14 @@ const ExactGraphProducerAnalysis = struct {
                 }
                 if (std.meta.eql(procedure.template.artifact.bytes, self.artifact_key.bytes)) {
                     if (self.use_final_procedure_facts) {
-                        break :blk self.templates.get(procedure.template.template).produces_exact_graph;
+                        const resolved = self.templates.get(procedure.template.template);
+                        if (resolved.exact_graph_from_evidence) self.noteEvidenceDependency();
+                        break :blk resolved.produces_exact_graph;
                     }
                     try self.addTemplateDependency(procedure.template.template);
                     break :blk false;
                 }
-                if (procedure.exact_graph_from_evidence) self.saw_evidence_dependency = true;
+                if (procedure.exact_graph_from_evidence) self.noteEvidenceDependency();
                 break :blk procedure.produces_exact_graph;
             },
             .local_proc => |local| try self.callableExprProduces(local.expr),
@@ -15303,9 +15355,14 @@ const ExactGraphProducerAnalysis = struct {
         }
         switch (self.return_states[raw]) {
             .yes => return true,
-            .no, .visiting => return false,
+            .no => return false,
+            .visiting => {
+                self.cycle_hits += 1;
+                return false;
+            },
             .unknown => self.return_states[raw] = .visiting,
         }
+        const cycle_hits_before = self.cycle_hits;
         const returns_produced = switch (self.bodies.expr(expr_id).data) {
             .return_ => |return_| try self.exprProduces(return_.expr) or
                 try self.exprReturnsProduced(return_.expr),
@@ -15392,7 +15449,12 @@ const ExactGraphProducerAnalysis = struct {
             .hosted_lambda,
             => false,
         };
-        self.return_states[raw] = if (returns_produced) .yes else .no;
+        self.return_states[raw] = if (returns_produced)
+            .yes
+        else if (self.cycle_hits == cycle_hits_before)
+            .no
+        else
+            .unknown;
         return returns_produced;
     }
 
@@ -15429,9 +15491,14 @@ const ExactGraphProducerAnalysis = struct {
         if (raw >= self.expr_states.len) return checkedArtifactInvariant("exact producer analysis referenced a missing expression", .{});
         switch (self.expr_states[raw]) {
             .yes => return true,
-            .no, .visiting => return false,
+            .no => return false,
+            .visiting => {
+                self.cycle_hits += 1;
+                return false;
+            },
             .unknown => self.expr_states[raw] = .visiting,
         }
+        const cycle_hits_before = self.cycle_hits;
         const expr = self.bodies.expr(expr_id);
         const produces = switch (expr.data) {
             .call => |call| if (call.direct_target) |target| blk: {
@@ -15536,7 +15603,12 @@ const ExactGraphProducerAnalysis = struct {
             .hosted_lambda,
             => false,
         };
-        self.expr_states[raw] = if (produces) .yes else .no;
+        self.expr_states[raw] = if (produces)
+            .yes
+        else if (self.cycle_hits == cycle_hits_before)
+            .no
+        else
+            .unknown;
         return produces;
     }
 };
@@ -15573,7 +15645,9 @@ fn recordExactResultFlowFacts(
             required.procedure.exact_graph_from_evidence = analysis.procedureUseDependsOnEvidence(required.procedure);
         },
         .local_proc => |*local| {
-            local.produces_exact_graph = try analysis.callableExprProduces(local.expr);
+            const flow = try analysis.callableExprFlow(local.expr);
+            local.produces_exact_graph = flow.produces;
+            local.exact_graph_from_evidence = flow.from_evidence;
         },
         .local_param,
         .local_value,
@@ -15593,7 +15667,9 @@ fn recordExactResultFlowFacts(
             procedure.exact_graph_from_evidence = analysis.methodTargetDependsOnEvidence(entry.target);
         },
         .local_proc => |*local| {
-            local.produces_exact_graph = try analysis.callableExprProduces(local.expr);
+            const flow = try analysis.callableExprFlow(local.expr);
+            local.produces_exact_graph = flow.produces;
+            local.exact_graph_from_evidence = flow.from_evidence;
         },
         .structural => {},
     };
@@ -15603,7 +15679,9 @@ fn recordExactResultFlowFacts(
             procedure.exact_graph_from_evidence = analysis.methodTargetDependsOnEvidence(node.target);
         },
         .local_proc => |*local| {
-            local.produces_exact_graph = try analysis.callableExprProduces(local.expr);
+            const flow = try analysis.callableExprFlow(local.expr);
+            local.produces_exact_graph = flow.produces;
+            local.exact_graph_from_evidence = flow.from_evidence;
         },
         .structural => {},
     };

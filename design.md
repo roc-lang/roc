@@ -2733,6 +2733,10 @@ do not ask whether any type contains a generated nominal. Checked body output
 collects direct result flow and dense procedure dependencies in one pass, then
 propagates the two columns with a reverse-call work queue. It must not repeatedly
 rescan procedure bodies until a fixed point is reached.
+An expression query that crosses an active recursion edge may cache a positive
+answer, but it must leave a negative answer unresolved: another member of the
+recursive component may still establish exact result flow before the work queue
+reaches its fixed point.
 
 The direct-flow pass retains exact record fields, tuple items,
 tag payloads, nominal backings, list items, and pattern binders. Selecting one
@@ -2746,6 +2750,10 @@ an early return from the loop body therefore preserves that item's exact type.
 The pass initializes its dense expression state once for the module; it does
 not clear a module-sized column per template. Multiple calls from one template
 to the same callee add one propagation edge.
+Local procedures carry the same two result-flow facts. Their lexical evidence
+chain selects `exact_graph` only when an evidence-dependent local body actually
+receives evidence for an exact-producing target; unrelated local
+specializations remain independent.
 
 A procedure with exact result flow finishes its body in the requesting
 Monotype graph before that graph is sealed. This is required because the body,
