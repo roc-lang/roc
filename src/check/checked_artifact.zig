@@ -21950,6 +21950,21 @@ pub const CompileTimeRoot = struct {
     payload: CompileTimeRootPayload,
 };
 
+fn topLevelDefHasValueImplementation(
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    global_value_defs: []const CIR.Def.Idx,
+    source_name: canonical.ExportNameId,
+) Allocator.Error!bool {
+    for (global_value_defs) |other_def_idx| {
+        const other_def = module.def(other_def_idx);
+        if (other_def.expr.data == .e_anno_only) continue;
+        const other_name = (try topLevelDefSourceName(module, names, other_def)) orelse continue;
+        if (other_name == source_name) return true;
+    }
+    return false;
+}
+
 /// Public `CompileTimeRootTable` declaration.
 ///
 /// This is the durable compile-time root schedule and payload table. It stores
@@ -21996,6 +22011,7 @@ pub const CompileTimeRootTable = struct {
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
 
             const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
+            if (def.expr.data == .e_anno_only and try topLevelDefHasValueImplementation(module, names, global_value_defs, source_name)) continue;
             const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
             if (seen_source_name.found_existing) continue;
             seen_source_name.value_ptr.* = {};
@@ -23339,6 +23355,7 @@ pub const TopLevelValueTable = struct {
             const def = module.def(def_idx);
             const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
             const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
+            if (def.expr.data == .e_anno_only and try topLevelDefHasValueImplementation(module, names, global_value_defs, source_name)) continue;
             const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
             if (seen_source_name.found_existing) continue;
             seen_source_name.value_ptr.* = {};
