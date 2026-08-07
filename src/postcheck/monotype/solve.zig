@@ -257,16 +257,14 @@ const ConcreteFunctionRequestReplacement = union(enum) {
 const FunctionRequestSubstitution = struct {
     replacements: collections.DenseMap(NodeId, NodeId),
     concrete_replacements: collections.DenseMap(NodeId, ConcreteFunctionRequestReplacement),
-    origins: collections.DenseMap(NodeId, NodeId),
-    materialized: collections.DenseMap(NodeId, NodeId),
+    materialized: std.AutoHashMap(NodePair, NodeId),
     compared: std.AutoHashMap(NodePair, void),
 
     fn init(allocator: Allocator) FunctionRequestSubstitution {
         return .{
             .replacements = collections.DenseMap(NodeId, NodeId).init(allocator),
             .concrete_replacements = collections.DenseMap(NodeId, ConcreteFunctionRequestReplacement).init(allocator),
-            .origins = collections.DenseMap(NodeId, NodeId).init(allocator),
-            .materialized = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .materialized = std.AutoHashMap(NodePair, NodeId).init(allocator),
             .compared = std.AutoHashMap(NodePair, void).init(allocator),
         };
     }
@@ -274,7 +272,6 @@ const FunctionRequestSubstitution = struct {
     fn deinit(self: *FunctionRequestSubstitution) void {
         self.replacements.deinit();
         self.concrete_replacements.deinit();
-        self.origins.deinit();
         self.materialized.deinit();
         self.compared.deinit();
     }
@@ -2466,11 +2463,16 @@ pub const InstGraph = struct {
         }
 
         const changed_args = try self.materializeFunctionRequestArgumentNodes(
+            checked_fn.args,
             current_request_fn.args,
             produced_args,
             &substitution,
         );
-        const request_ret = try self.materializeFunctionRequestNode(current_request_fn.ret, &substitution);
+        const request_ret = try self.materializeFunctionRequestNode(
+            checked_fn.ret,
+            current_request_fn.ret,
+            &substitution,
+        );
         const ret_changed = !self.sameClass(current_request_fn.ret, request_ret);
 
         const request_fn = if (changed_args != null or ret_changed)
@@ -2531,7 +2533,6 @@ pub const InstGraph = struct {
             return self.collectFunctionRequestSubstitutions(checked_node, backing.node, substitution);
         }
 
-        try self.recordFunctionRequestOrigin(checked_node, produced_node, substitution);
         switch (checked_content) {
             .redirect => unreachable,
             .unresolved => unreachable,
@@ -2661,8 +2662,6 @@ pub const InstGraph = struct {
         produced_node: NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
-        try self.recordFunctionRequestOrigin(checked_node, produced_node, substitution);
-
         const entry = try substitution.replacements.getOrPut(checked_node);
         if (!entry.found_existing) {
             entry.value_ptr.* = produced_node;
@@ -2679,7 +2678,6 @@ pub const InstGraph = struct {
         produced_node: NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
-        try self.recordFunctionRequestOrigin(checked_node, produced_node, substitution);
         const entry = try substitution.concrete_replacements.getOrPut(checked_node);
         if (!entry.found_existing) {
             entry.value_ptr.* = .{ .unique = produced_node };
@@ -2695,53 +2693,69 @@ pub const InstGraph = struct {
         }
     }
 
-    fn recordFunctionRequestOrigin(
-        _: *InstGraph,
-        checked_node: NodeId,
-        produced_node: NodeId,
-        substitution: *FunctionRequestSubstitution,
-    ) Allocator.Error!void {
-        const origin = try substitution.origins.getOrPut(produced_node);
-        if (!origin.found_existing) origin.value_ptr.* = checked_node;
-    }
-
     fn materializeFunctionRequestNode(
         self: *InstGraph,
+        raw_checked: NodeId,
         raw_node: NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!NodeId {
+        const checked_node = self.find(raw_checked);
         const node = self.find(raw_node);
         const node_content = self.nodes.items[@intFromEnum(node)];
         if (isGeneratedPrivateRootContent(node_content)) return node;
 
-        const source = substitution.origins.get(node) orelse node;
-        if (substitution.replacements.get(source)) |replacement| return self.find(replacement);
-        if (substitution.concrete_replacements.get(source)) |replacement| switch (replacement) {
+        if (substitution.replacements.get(checked_node)) |replacement| return self.find(replacement);
+        if (substitution.concrete_replacements.get(checked_node)) |replacement| switch (replacement) {
             .unique => |exact| return self.find(exact),
             .distinct => {},
         };
-        if (substitution.materialized.get(node)) |materialized| return self.find(materialized);
+        const pair = NodePair{ .left = checked_node, .right = node };
+        if (substitution.materialized.get(pair)) |materialized| return self.find(materialized);
+
+        const checked_content = self.nodes.items[@intFromEnum(checked_node)];
+        if (checked_content == .named and node_content != .named) {
+            const backing = checked_content.named.backing orelse
+                Common.invariant("function request materialization found a checked named view without backing");
+            return self.materializeFunctionRequestNode(backing.node, node, substitution);
+        }
+        if (checked_content == .unresolved) return node;
 
         const materialized = switch (node_content) {
             .redirect => unreachable,
             .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
             .list => |elem| blk: {
-                const next = try self.materializeFunctionRequestNode(elem, substitution);
+                if (checked_content != .list) Common.invariant("function request materialization received different type structure");
+                const next = try self.materializeFunctionRequestNode(checked_content.list, elem, substitution);
                 if (self.sameClass(elem, next)) break :blk node;
                 break :blk try self.newNode(.{ .list = next });
             },
             .box => |elem| blk: {
-                const next = try self.materializeFunctionRequestNode(elem, substitution);
+                if (checked_content != .box) Common.invariant("function request materialization received different type structure");
+                const next = try self.materializeFunctionRequestNode(checked_content.box, elem, substitution);
                 if (self.sameClass(elem, next)) break :blk node;
                 break :blk try self.newNode(.{ .box = next });
             },
             .tuple => |items| blk: {
-                const next = try self.materializeFunctionRequestNodes(items, substitution) orelse break :blk node;
+                if (checked_content != .tuple or checked_content.tuple.len != items.len) {
+                    Common.invariant("function request materialization received tuples of different arity");
+                }
+                const next = try self.materializeFunctionRequestNodes(checked_content.tuple, items, substitution) orelse break :blk node;
                 break :blk try self.newNode(.{ .tuple = next });
             },
             .func => |function| blk: {
-                const changed_args = try self.materializeFunctionRequestNodes(function.args, substitution);
-                const ret = try self.materializeFunctionRequestNode(function.ret, substitution);
+                if (checked_content != .func or checked_content.func.args.len != function.args.len) {
+                    Common.invariant("function request materialization received functions of different arity");
+                }
+                const changed_args = try self.materializeFunctionRequestNodes(
+                    checked_content.func.args,
+                    function.args,
+                    substitution,
+                );
+                const ret = try self.materializeFunctionRequestNode(
+                    checked_content.func.ret,
+                    function.ret,
+                    substitution,
+                );
                 if (changed_args == null and self.sameClass(function.ret, ret)) break :blk node;
                 break :blk try self.newNode(.{ .func = .{
                     .args = changed_args orelse function.args,
@@ -2749,9 +2763,22 @@ pub const InstGraph = struct {
                 } });
             },
             .tag_union => |row| blk: {
+                if (checked_content != .tag_union) Common.invariant("function request materialization received different type structure");
+                const checked_row = try self.flattenTagRow(checked_node);
                 var changed_tags: ?[]InstTag = null;
                 for (row.tags, 0..) |tag, index| {
-                    const changed_payloads = try self.materializeFunctionRequestNodes(tag.payloads, substitution);
+                    var checked_tag: ?InstTag = null;
+                    for (checked_row.tags) |candidate| {
+                        if (!Ident.textEql(self.tagLabelText(candidate.name), self.tagLabelText(tag.name))) continue;
+                        checked_tag = candidate;
+                        break;
+                    }
+                    const changed_payloads = if (checked_tag) |source| payloads: {
+                        if (source.payloads.len != tag.payloads.len) {
+                            Common.invariant("function request materialization received one tag at two payload arities");
+                        }
+                        break :payloads try self.materializeFunctionRequestNodes(source.payloads, tag.payloads, substitution);
+                    } else null;
                     if (changed_tags) |tags| {
                         tags[index] = .{
                             .name = tag.name,
@@ -2769,7 +2796,7 @@ pub const InstGraph = struct {
                         changed_tags = tags;
                     }
                 }
-                const ext = try self.materializeFunctionRequestNode(row.ext, substitution);
+                const ext = try self.materializeFunctionRequestNode(checked_row.ext, row.ext, substitution);
                 if (changed_tags == null and self.sameClass(row.ext, ext)) break :blk node;
                 break :blk try self.newNode(.{ .tag_union = .{
                     .tags = changed_tags orelse row.tags,
@@ -2777,9 +2804,20 @@ pub const InstGraph = struct {
                 } });
             },
             .record => |row| blk: {
+                if (checked_content != .record) Common.invariant("function request materialization received different type structure");
+                const checked_row = try self.flattenRecordRow(checked_node);
                 var changed_fields: ?[]InstField = null;
                 for (row.fields, 0..) |field, index| {
-                    const ty = try self.materializeFunctionRequestNode(field.ty, substitution);
+                    var checked_field: ?InstField = null;
+                    for (checked_row.fields) |candidate| {
+                        if (!Ident.textEql(self.fieldLabelText(candidate.name), self.fieldLabelText(field.name))) continue;
+                        checked_field = candidate;
+                        break;
+                    }
+                    const ty = if (checked_field) |source|
+                        try self.materializeFunctionRequestNode(source.ty, field.ty, substitution)
+                    else
+                        field.ty;
                     if (changed_fields) |fields| {
                         fields[index] = .{ .name = field.name, .ty = ty };
                     } else if (!self.sameClass(field.ty, ty)) {
@@ -2789,7 +2827,7 @@ pub const InstGraph = struct {
                         changed_fields = fields;
                     }
                 }
-                const ext = try self.materializeFunctionRequestNode(row.ext, substitution);
+                const ext = try self.materializeFunctionRequestNode(checked_row.ext, row.ext, substitution);
                 if (changed_fields == null and self.sameClass(row.ext, ext)) break :blk node;
                 break :blk try self.newNode(.{ .record = .{
                     .fields = changed_fields orelse row.fields,
@@ -2797,12 +2835,25 @@ pub const InstGraph = struct {
                 } });
             },
             .named => |named| blk: {
-                const args = try self.materializeFunctionRequestNodes(named.args, substitution) orelse break :blk node;
+                if (checked_content != .named or
+                    !sameTypeDef(checked_content.named.def, named.def) or
+                    checked_content.named.args.len != named.args.len)
+                {
+                    break :blk node;
+                }
+                const args = try self.materializeFunctionRequestNodes(
+                    checked_content.named.args,
+                    named.args,
+                    substitution,
+                ) orelse break :blk node;
 
                 const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
-                try substitution.materialized.put(node, reserved);
+                try substitution.materialized.put(pair, reserved);
                 const backing = if (named.backing) |backing| InstBacking{
-                    .node = try self.materializeFunctionRequestNode(backing.node, substitution),
+                    .node = if (checked_content.named.backing) |checked_backing|
+                        try self.materializeFunctionRequestNode(checked_backing.node, backing.node, substitution)
+                    else
+                        backing.node,
                     .use = backing.use,
                     .authority = backing.authority,
                 } else null;
@@ -2810,7 +2861,18 @@ pub const InstGraph = struct {
                 for (named.declared_order, 0..) |declared, index| {
                     const next = switch (declared) {
                         .named => |field| InstDeclaredField{ .named = field },
-                        .padding => |padding| InstDeclaredField{ .padding = try self.materializeFunctionRequestNode(padding, substitution) },
+                        .padding => |padding| padding: {
+                            if (index >= checked_content.named.declared_order.len or
+                                checked_content.named.declared_order[index] != .padding)
+                            {
+                                break :padding InstDeclaredField{ .padding = padding };
+                            }
+                            break :padding InstDeclaredField{ .padding = try self.materializeFunctionRequestNode(
+                                checked_content.named.declared_order[index].padding,
+                                padding,
+                                substitution,
+                            ) };
+                        },
                     };
                     if (changed_declared) |fields| {
                         fields[index] = next;
@@ -2834,8 +2896,8 @@ pub const InstGraph = struct {
                 break :blk reserved;
             },
         };
-        if (!substitution.materialized.contains(node)) {
-            try substitution.materialized.put(node, materialized);
+        if (!substitution.materialized.contains(pair)) {
+            try substitution.materialized.put(pair, materialized);
         }
         if (!self.sameClass(node, materialized)) {
             self.countDiagnostic("function_request_nodes_materialized");
@@ -2845,12 +2907,16 @@ pub const InstGraph = struct {
 
     fn materializeFunctionRequestNodes(
         self: *InstGraph,
+        checked_nodes: []const NodeId,
         nodes: []const NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!?[]NodeId {
+        if (checked_nodes.len != nodes.len) {
+            Common.invariant("function request materialization received different node span lengths");
+        }
         var changed_nodes: ?[]NodeId = null;
-        for (nodes, 0..) |node, index| {
-            const materialized = try self.materializeFunctionRequestNode(node, substitution);
+        for (checked_nodes, nodes, 0..) |checked_node, node, index| {
+            const materialized = try self.materializeFunctionRequestNode(checked_node, node, substitution);
             if (changed_nodes) |out| {
                 out[index] = materialized;
             } else if (!self.sameClass(node, materialized)) {
@@ -2865,16 +2931,17 @@ pub const InstGraph = struct {
 
     fn materializeFunctionRequestArgumentNodes(
         self: *InstGraph,
+        checked_nodes: []const NodeId,
         current_nodes: []const NodeId,
         produced_nodes: []const NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!?[]NodeId {
-        if (current_nodes.len != produced_nodes.len) {
+        if (checked_nodes.len != current_nodes.len or current_nodes.len != produced_nodes.len) {
             Common.invariant("function request argument materialization received different arities");
         }
         var changed_nodes: ?[]NodeId = null;
-        for (current_nodes, produced_nodes, 0..) |current, produced, index| {
-            const materialized = try self.materializeFunctionRequestNode(produced, substitution);
+        for (checked_nodes, current_nodes, produced_nodes, 0..) |checked_node, current, produced, index| {
+            const materialized = try self.materializeFunctionRequestNode(checked_node, produced, substitution);
             if (changed_nodes) |out| {
                 out[index] = materialized;
             } else if (!self.sameClass(current, materialized)) {
@@ -7128,6 +7195,26 @@ test "function request substitutes one exact generated type through every callab
     const unique_concrete_request_fn = try graph.functionNodes(unique_concrete_request);
     try std.testing.expect(graph.sameClass(unique_concrete_request_fn.args[0], exact));
     try std.testing.expect(graph.sameClass(unique_concrete_request_fn.ret, exact));
+
+    const independent_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const independent_second = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const independent_checked_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ independent_first, independent_second }),
+        .ret = independent_second,
+    } });
+    const shared_public_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ public, public }),
+        .ret = public,
+    } });
+    const independent_request = try graph.functionRequestFromProducedArguments(
+        independent_checked_fn,
+        shared_public_fn,
+        &.{ exact, public },
+    );
+    const independent_request_fn = try graph.functionNodes(independent_request);
+    try std.testing.expect(graph.sameClass(independent_request_fn.args[0], exact));
+    try std.testing.expect(graph.sameClass(independent_request_fn.args[1], public));
+    try std.testing.expect(graph.sameClass(independent_request_fn.ret, public));
 
     var second_def = def;
     second_def.generated = .{ .bytes = [_]u8{0xA2} ** 32 };
