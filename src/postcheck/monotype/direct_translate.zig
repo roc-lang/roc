@@ -1458,6 +1458,11 @@ const Walk = struct {
     fn envBinder(self: *Walk, checked_ty: checked.CheckedTypeId) ?TypeId {
         var env = self.binding_env;
         while (env) |e| : (env = e.parent) {
+            // A checked id names a position inside one module, so a binder list
+            // answers only for the module whose scheme introduced it. Matching
+            // an id against another module's binders binds a position to an
+            // unrelated value that merely shares its number.
+            if (!std.mem.eql(u8, &e.scheme.module_bytes, &self.cursor.module_bytes)) continue;
             if (e.binderIndex(checked_ty)) |index| return e.bound[index].stored;
         }
         return null;
