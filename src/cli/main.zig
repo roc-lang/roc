@@ -7870,6 +7870,14 @@ fn rocBuildCommand(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) 
 }
 
 fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
+    if (args.fuzz and args.opt != .size and args.opt != .speed) {
+        try ctx.io.stderr().print(
+            "Error: `roc build --fuzz` requires the LLVM backend; use --opt=speed or --opt=size.\n",
+            .{},
+        );
+        return error.UnsupportedTarget;
+    }
+
     // Headerless apps build through a synthetic default platform.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
         return rocBuildDefaultApp(ctx, args, source);
@@ -9072,6 +9080,18 @@ fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allo
     return roc_target.llvmFeatureString(allocator, std_target);
 }
 
+fn llvmObjectUsesPic(link_type: roc_target.OutputKind, fuzz: bool) bool {
+    return link_type == .shared or fuzz;
+}
+
+test "LLVM fuzz output uses position-independent code" {
+    try std.testing.expect(llvmObjectUsesPic(.archive, true));
+    try std.testing.expect(llvmObjectUsesPic(.exe, true));
+    try std.testing.expect(llvmObjectUsesPic(.shared, false));
+    try std.testing.expect(!llvmObjectUsesPic(.archive, false));
+    try std.testing.expect(!llvmObjectUsesPic(.exe, false));
+}
+
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -9125,9 +9145,9 @@ fn compileLlvmAppObject(
 
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
-    // Shared libraries need position-independent code; keep their objects
-    // separate from exe objects in the artifact directory.
-    const pic = link_type == .shared;
+    // Shared libraries and fuzz hosts need position-independent code; keep
+    // their objects separate from ordinary exe/archive objects.
+    const pic = llvmObjectUsesPic(link_type, args.fuzz);
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
     const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
     var tuning_hash = std.hash.Crc32.init();
@@ -9135,8 +9155,9 @@ fn compileLlvmAppObject(
     tuning_hash.update(&[_]u8{0});
     tuning_hash.update(llvm_features);
     const tuning_hash_value = tuning_hash.final();
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
+    const fuzz_suffix: []const u8 = if (args.fuzz) "_fuzz" else "";
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix, fuzz_suffix });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix, fuzz_suffix });
     const artifact_dir = try createUniqueTempDir(ctx);
     errdefer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, artifact_dir) catch {};
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, bitcode_filename });
@@ -9163,6 +9184,7 @@ fn compileLlvmAppObject(
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = args.debug,
+        .fuzz = args.fuzz,
         .link_builtins = true,
         .pic = pic,
         // Linked LLVM output uses the symbol ABI: builtins reach the host
@@ -9461,6 +9483,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.output;
+
+    if (args.fuzz and target.toCpuArch() == .wasm32) {
+        try ctx.io.stderr().writeAll("Error: `roc build --fuzz` does not support WebAssembly targets.\n");
+        return error.UnsupportedTarget;
+    }
 
     if (target.isDynamic() and builtin.target.os.tag != .linux) {
         renderValidationError(ctx, .{
@@ -13412,6 +13439,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.target) |target| try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{target});
             if (args.output) |output| try appendOwnedArg(ctx.gpa, &argv, &owned, "--output={s}", .{output});
             if (args.debug) try argv.append(ctx.gpa, "--debug");
+            if (args.fuzz) try argv.append(ctx.gpa, "--fuzz");
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.timings) try argv.append(ctx.gpa, "--timings");
             if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
