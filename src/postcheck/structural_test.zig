@@ -376,6 +376,22 @@ test "Monotype lowering carries exact produced types without containment scans" 
     const solve_source = @embedFile("monotype/solve.zig");
     try expectNotContains(solve_source, "containsGeneratedPrivate");
 
+    const representation_finalizer = sourceSliceBetween(
+        solve_source,
+        "pub fn finalizeGeneratedIteratorRepresentations(",
+        "fn iteratorRootRequiresForcedDynamic(",
+    );
+    try expectContains(representation_finalizer, "self.generated_iterator_nodes.items");
+    try expectNotContains(representation_finalizer, "self.nodes.items");
+
+    const identity_finalizer = sourceSliceBetween(
+        solve_source,
+        "pub fn finalizeGeneratedIteratorIdentities(",
+        "pub fn finalizesAsClosedEmptyTagUnion(",
+    );
+    try expectContains(identity_finalizer, "self.generated_iterator_nodes.items");
+    try expectNotContains(identity_finalizer, "self.nodes.items");
+
     const substitution = sourceSliceBetween(
         solve_source,
         "pub fn applyProducedTypeToRequest(",

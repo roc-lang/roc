@@ -15144,7 +15144,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15165,6 +15165,12 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]
         .{ .name = "Produced-type cycle/repeat hits", .count = graph.produced_type_cycle_hits },
         .{ .name = "Produced-type pairs visited", .count = graph.produced_type_pairs_visited },
         .{ .name = "Produced-type joins", .count = graph.produced_type_joins },
+        .{ .name = "Function request builds", .count = graph.function_request_builds },
+        .{ .name = "Function request pairs visited", .count = graph.function_request_pairs_visited },
+        .{ .name = "Function request replacements", .count = graph.function_request_replacements },
+        .{ .name = "Function request nodes materialized", .count = graph.function_request_nodes_materialized },
+        .{ .name = "Generated representation roots finalized", .count = graph.generated_representation_roots_finalized },
+        .{ .name = "Generated identity roots finalized", .count = graph.generated_identity_roots_finalized },
         .{ .name = "Generated identity nodes hashed", .count = graph.generated_identity_nodes_hashed },
         .{ .name = "Generated identity cache hits", .count = graph.generated_identity_cache_hits },
     };
@@ -15256,6 +15262,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.specialization.nested_misses = 102;
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.produced_type_pairs_visited = 202;
+    diagnostics.graph.function_request_pairs_visited = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
@@ -15273,6 +15280,8 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
     try std.testing.expectEqualStrings("Produced-type pairs visited", graph[16].name);
     try std.testing.expectEqual(@as(u64, 202), graph[16].count);
+    try std.testing.expectEqualStrings("Function request pairs visited", graph[19].name);
+    try std.testing.expectEqual(@as(u64, 203), graph[19].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);

@@ -2592,6 +2592,12 @@ identity requires it; repeated in-session access uses the dense identity rather
 than rehashing a type graph. Different representation inputs remain different
 exact types even when checking assigned them the same public Roc type.
 
+The same construction boundary appends the produced root to an explicit dense
+generated-representation registry. Representation-tier and durable-identity
+finalization iterate only that registry, resolving duplicate union classes as
+they go. They never search the full Monotype graph to rediscover which nodes are
+generated representations; unrelated graph nodes do no work in either pass.
+
 For a minted iterator, the stable generated `TypeDigest` is SHA-256 over an
 explicit domain separator, the public source declaration identity, the producer
 kind, the exact item-type digest, the ordered digests of every
@@ -2656,7 +2662,10 @@ Building that request is one whole-interface substitution. Monotype walks each
 checked argument beside its completed produced argument once and records the
 directed replacement for every checked polymorphic cell that selected an exact
 generated nominal. It then materializes every argument and the return from the
-same table. Repeated occurrences therefore cannot disagree: specializing
+same table, using the current produced request as the structural authority; the
+checked interface supplies occurrence identity but cannot replace an already
+selected private structural or nominal view. Repeated occurrences therefore
+cannot disagree: specializing
 `List(a), a -> List(a)` with an exact `Iter` produces
 `List(Iter$identity), Iter$identity -> List(Iter$identity)` before the body is
 lowered. Ordinary compound nodes are rebuilt only along changed paths, and an

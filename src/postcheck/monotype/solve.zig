@@ -208,6 +208,12 @@ pub const GraphDiagnostics = struct {
     produced_type_cycle_hits: u64 = 0,
     produced_type_pairs_visited: u64 = 0,
     produced_type_joins: u64 = 0,
+    function_request_builds: u64 = 0,
+    function_request_pairs_visited: u64 = 0,
+    function_request_replacements: u64 = 0,
+    function_request_nodes_materialized: u64 = 0,
+    generated_representation_roots_finalized: u64 = 0,
+    generated_identity_roots_finalized: u64 = 0,
     generated_identity_nodes_hashed: u64 = 0,
     generated_identity_cache_hits: u64 = 0,
 };
@@ -244,12 +250,14 @@ const NodePair = struct {
 
 const FunctionRequestSubstitution = struct {
     replacements: collections.DenseMap(NodeId, NodeId),
+    origins: collections.DenseMap(NodeId, NodeId),
     materialized: collections.DenseMap(NodeId, NodeId),
     compared: std.AutoHashMap(NodePair, void),
 
     fn init(allocator: Allocator) FunctionRequestSubstitution {
         return .{
             .replacements = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .origins = collections.DenseMap(NodeId, NodeId).init(allocator),
             .materialized = collections.DenseMap(NodeId, NodeId).init(allocator),
             .compared = std.AutoHashMap(NodePair, void).init(allocator),
         };
@@ -257,6 +265,7 @@ const FunctionRequestSubstitution = struct {
 
     fn deinit(self: *FunctionRequestSubstitution) void {
         self.replacements.deinit();
+        self.origins.deinit();
         self.materialized.deinit();
         self.compared.deinit();
     }
@@ -414,6 +423,10 @@ pub const InstGraph = struct {
     /// roots that contributed to an older graph-local digest. Walking the
     /// dense union class reaches only candidates that can actually match.
     generated_iterators_by_item: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
+    /// Permanent roots recorded by the producer at construction time. The two
+    /// generated-representation finalizers consume only this registry instead
+    /// of searching every unrelated node in the graph.
+    generated_iterator_nodes: std.ArrayList(NodeId),
     /// Exact checked source function node from which a distinct produced
     /// function request was constructed. This is explicit substitution input;
     /// consumers read this field instead of deriving it from the produced
@@ -464,6 +477,7 @@ pub const InstGraph = struct {
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
             .generated_iterator_intern = std.HashMap(names.TypeDigest, std.ArrayList(NodeId), GeneratedIteratorInternContext, 80).init(allocator),
             .generated_iterators_by_item = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
+            .generated_iterator_nodes = .empty,
             .request_checked_sources = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
@@ -510,6 +524,7 @@ pub const InstGraph = struct {
         var generated_item_buckets = self.generated_iterators_by_item.valueIterator();
         while (generated_item_buckets.next()) |bucket| bucket.deinit(allocator);
         self.generated_iterators_by_item.deinit();
+        self.generated_iterator_nodes.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
@@ -593,6 +608,11 @@ pub const InstGraph = struct {
 
     pub fn registerGeneratedIterator(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
         self.requireRelationProduction();
+        try self.generated_iterator_nodes.append(self.allocator, raw_node);
+        try self.indexGeneratedIterator(raw_node);
+    }
+
+    fn indexGeneratedIterator(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
         const node = self.find(raw_node);
         const named = switch (self.content(node)) {
             .named => |named| named,
@@ -790,16 +810,19 @@ pub const InstGraph = struct {
         var active = collections.DenseMap(NodeId, void).init(self.allocator);
         defer active.deinit();
 
-        for (self.nodes.items, 0..) |_, raw_index| {
-            const node = self.find(@enumFromInt(@as(u32, @intCast(raw_index))));
+        for (self.generated_iterator_nodes.items) |registered_node| {
+            const node = self.find(registered_node);
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
             const named = switch (self.content(node)) {
                 .named => |named| named,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("registered generated iterator stopped being named"),
             };
-            if (named.generated_iterator == null) continue;
+            if (named.generated_iterator == null) {
+                Common.invariant("registered generated iterator lost its producer provenance");
+            }
 
+            self.countDiagnostic("generated_representation_roots_finalized");
             const depth = try self.generatedIteratorDepth(node, &depths, &active);
             try pending.append(self.allocator, .{
                 .node = node,
@@ -889,7 +912,7 @@ pub const InstGraph = struct {
             },
             .declared_order = provenance.public_source.declared_order,
         } });
-        try self.registerGeneratedIterator(node);
+        try self.indexGeneratedIterator(node);
     }
 
     fn forcedDynamicIteratorBackingNode(
@@ -1197,15 +1220,18 @@ pub const InstGraph = struct {
         var finalizer = GeneratedIteratorIdentityFinalizer.init(self);
         defer finalizer.deinit();
 
-        for (self.nodes.items, 0..) |_, raw_index| {
-            const node = self.find(@enumFromInt(@as(u32, @intCast(raw_index))));
+        for (self.generated_iterator_nodes.items) |registered_node| {
+            const node = self.find(registered_node);
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
             const named = switch (self.content(node)) {
                 .named => |named| named,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("registered generated iterator stopped being named"),
             };
-            if (named.generated_iterator == null) continue;
+            if (named.generated_iterator == null) {
+                Common.invariant("registered generated iterator lost its producer provenance");
+            }
+            self.countDiagnostic("generated_identity_roots_finalized");
             try pending.append(self.allocator, .{
                 .node = node,
                 .digest = try finalizer.digestFor(node),
@@ -2379,8 +2405,12 @@ pub const InstGraph = struct {
         current_request_fn_node: NodeId,
         produced_args: []const NodeId,
     ) Allocator.Error!NodeId {
+        self.countDiagnostic("function_request_builds");
         const checked_fn = try self.functionNodes(checked_fn_node);
-        const current_request_fn = try self.functionNodes(current_request_fn_node);
+        const current_request_fn = switch (self.content(try self.functionRequestRoot(current_request_fn_node))) {
+            .func => |function| function,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("function request had a non-function current interface"),
+        };
         if (checked_fn.args.len != current_request_fn.args.len or
             checked_fn.args.len != produced_args.len)
         {
@@ -2398,22 +2428,17 @@ pub const InstGraph = struct {
             try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, &substitution);
         }
 
-        const request_args = try self.arena().alloc(NodeId, checked_fn.args.len);
-        var changed = false;
-        for (checked_fn.args, request_args) |checked_arg, *request_arg| {
-            request_arg.* = try self.materializeFunctionRequestNode(checked_arg, &substitution);
-            if (!self.sameClass(checked_arg, request_arg.*)) changed = true;
-        }
-        const request_ret = try self.materializeFunctionRequestNode(checked_fn.ret, &substitution);
-        if (!self.sameClass(checked_fn.ret, request_ret)) changed = true;
+        const changed_args = try self.materializeFunctionRequestNodes(current_request_fn.args, &substitution);
+        const request_ret = try self.materializeFunctionRequestNode(current_request_fn.ret, &substitution);
+        const ret_changed = !self.sameClass(current_request_fn.ret, request_ret);
 
-        const request_fn = if (changed)
+        const request_fn = if (changed_args != null or ret_changed)
             try self.newNode(.{ .func = .{
-                .args = request_args,
+                .args = changed_args orelse current_request_fn.args,
                 .ret = request_ret,
             } })
         else
-            checked_fn_node;
+            current_request_fn_node;
         try self.registerRequestCheckedSource(request_fn, checked_fn_node);
         return request_fn;
     }
@@ -2431,6 +2456,7 @@ pub const InstGraph = struct {
         const pair = NodePair{ .left = checked_node, .right = produced_node };
         const compared = try substitution.compared.getOrPut(pair);
         if (compared.found_existing) return;
+        self.countDiagnostic("function_request_pairs_visited");
 
         const checked_content = self.nodes.items[@intFromEnum(checked_node)];
         const produced_content = self.nodes.items[@intFromEnum(produced_node)];
@@ -2453,21 +2479,18 @@ pub const InstGraph = struct {
             return;
         }
 
-        if (checked_content == .named and checked_content.named.kind == .alias and
-            (produced_content != .named or !sameTypeDef(checked_content.named.def, produced_content.named.def)))
-        {
+        if (checked_content == .named and produced_content != .named) {
             const backing = checked_content.named.backing orelse
-                Common.invariant("function substitution found an alias without backing");
+                Common.invariant("function substitution found a checked named view without backing");
             return self.collectFunctionRequestSubstitutions(backing.node, produced_node, substitution);
         }
-        if (produced_content == .named and produced_content.named.kind == .alias and
-            (checked_content != .named or !sameTypeDef(checked_content.named.def, produced_content.named.def)))
-        {
+        if (produced_content == .named and checked_content != .named) {
             const backing = produced_content.named.backing orelse
-                Common.invariant("function substitution found an exact alias without backing");
+                Common.invariant("function substitution found an exact named view without backing");
             return self.collectFunctionRequestSubstitutions(checked_node, backing.node, substitution);
         }
 
+        try self.recordFunctionRequestOrigin(checked_node, produced_node, substitution);
         switch (checked_content) {
             .redirect => unreachable,
             .unresolved => unreachable,
@@ -2533,8 +2556,10 @@ pub const InstGraph = struct {
             .empty_record => if (produced_content != .empty_record)
                 Common.invariant("function substitution received different type structure"),
             .named => |checked_named| {
-                if (produced_content != .named or
-                    !sameTypeDef(checked_named.def, produced_content.named.def) or
+                if (produced_content != .named) {
+                    Common.invariant("function substitution received a named and non-named pair");
+                }
+                if (!sameTypeDef(checked_named.def, produced_content.named.def) or
                     checked_named.args.len != produced_content.named.args.len)
                 {
                     Common.invariant("function substitution received different named types");
@@ -2561,13 +2586,26 @@ pub const InstGraph = struct {
         produced_node: NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
+        try self.recordFunctionRequestOrigin(checked_node, produced_node, substitution);
+
         const entry = try substitution.replacements.getOrPut(checked_node);
         if (!entry.found_existing) {
             entry.value_ptr.* = produced_node;
+            self.countDiagnostic("function_request_replacements");
             return;
         }
         if (self.sameClass(entry.value_ptr.*, produced_node)) return;
         entry.value_ptr.* = try self.joinProducedTypeRepresentations(entry.value_ptr.*, produced_node);
+    }
+
+    fn recordFunctionRequestOrigin(
+        _: *InstGraph,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        const origin = try substitution.origins.getOrPut(produced_node);
+        if (!origin.found_existing) origin.value_ptr.* = checked_node;
     }
 
     fn materializeFunctionRequestNode(
@@ -2576,7 +2614,8 @@ pub const InstGraph = struct {
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!NodeId {
         const node = self.find(raw_node);
-        if (substitution.replacements.get(node)) |replacement| return self.find(replacement);
+        const source = substitution.origins.get(node) orelse node;
+        if (substitution.replacements.get(source)) |replacement| return self.find(replacement);
         if (substitution.materialized.get(node)) |materialized| return self.find(materialized);
 
         const node_content = self.nodes.items[@intFromEnum(node)];
@@ -2596,63 +2635,68 @@ pub const InstGraph = struct {
                 break :blk try self.newNode(.{ .box = next });
             },
             .tuple => |items| blk: {
-                const next = try self.arena().alloc(NodeId, items.len);
-                var changed = false;
-                for (items, next) |item, *out| {
-                    out.* = try self.materializeFunctionRequestNode(item, substitution);
-                    if (!self.sameClass(item, out.*)) changed = true;
-                }
-                if (!changed) break :blk node;
+                const next = try self.materializeFunctionRequestNodes(items, substitution) orelse break :blk node;
                 break :blk try self.newNode(.{ .tuple = next });
             },
             .func => |function| blk: {
-                const args = try self.arena().alloc(NodeId, function.args.len);
-                var changed = false;
-                for (function.args, args) |arg, *out| {
-                    out.* = try self.materializeFunctionRequestNode(arg, substitution);
-                    if (!self.sameClass(arg, out.*)) changed = true;
-                }
+                const changed_args = try self.materializeFunctionRequestNodes(function.args, substitution);
                 const ret = try self.materializeFunctionRequestNode(function.ret, substitution);
-                if (!self.sameClass(function.ret, ret)) changed = true;
-                if (!changed) break :blk node;
-                break :blk try self.newNode(.{ .func = .{ .args = args, .ret = ret } });
+                if (changed_args == null and self.sameClass(function.ret, ret)) break :blk node;
+                break :blk try self.newNode(.{ .func = .{
+                    .args = changed_args orelse function.args,
+                    .ret = ret,
+                } });
             },
             .tag_union => |row| blk: {
-                const tags = try self.arena().alloc(InstTag, row.tags.len);
-                var changed = false;
-                for (row.tags, tags) |tag, *out_tag| {
-                    const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
-                    for (tag.payloads, payloads) |payload, *out| {
-                        out.* = try self.materializeFunctionRequestNode(payload, substitution);
-                        if (!self.sameClass(payload, out.*)) changed = true;
+                var changed_tags: ?[]InstTag = null;
+                for (row.tags, 0..) |tag, index| {
+                    const changed_payloads = try self.materializeFunctionRequestNodes(tag.payloads, substitution);
+                    if (changed_tags) |tags| {
+                        tags[index] = .{
+                            .name = tag.name,
+                            .checked_name = tag.checked_name,
+                            .payloads = changed_payloads orelse tag.payloads,
+                        };
+                    } else if (changed_payloads) |payloads| {
+                        const tags = try self.arena().alloc(InstTag, row.tags.len);
+                        @memcpy(tags[0..index], row.tags[0..index]);
+                        tags[index] = .{
+                            .name = tag.name,
+                            .checked_name = tag.checked_name,
+                            .payloads = payloads,
+                        };
+                        changed_tags = tags;
                     }
-                    out_tag.* = .{ .name = tag.name, .checked_name = tag.checked_name, .payloads = payloads };
                 }
                 const ext = try self.materializeFunctionRequestNode(row.ext, substitution);
-                if (!self.sameClass(row.ext, ext)) changed = true;
-                if (!changed) break :blk node;
-                break :blk try self.newNode(.{ .tag_union = .{ .tags = tags, .ext = ext } });
+                if (changed_tags == null and self.sameClass(row.ext, ext)) break :blk node;
+                break :blk try self.newNode(.{ .tag_union = .{
+                    .tags = changed_tags orelse row.tags,
+                    .ext = ext,
+                } });
             },
             .record => |row| blk: {
-                const fields = try self.arena().alloc(InstField, row.fields.len);
-                var changed = false;
-                for (row.fields, fields) |field, *out| {
-                    out.* = .{ .name = field.name, .ty = try self.materializeFunctionRequestNode(field.ty, substitution) };
-                    if (!self.sameClass(field.ty, out.ty)) changed = true;
+                var changed_fields: ?[]InstField = null;
+                for (row.fields, 0..) |field, index| {
+                    const ty = try self.materializeFunctionRequestNode(field.ty, substitution);
+                    if (changed_fields) |fields| {
+                        fields[index] = .{ .name = field.name, .ty = ty };
+                    } else if (!self.sameClass(field.ty, ty)) {
+                        const fields = try self.arena().alloc(InstField, row.fields.len);
+                        @memcpy(fields[0..index], row.fields[0..index]);
+                        fields[index] = .{ .name = field.name, .ty = ty };
+                        changed_fields = fields;
+                    }
                 }
                 const ext = try self.materializeFunctionRequestNode(row.ext, substitution);
-                if (!self.sameClass(row.ext, ext)) changed = true;
-                if (!changed) break :blk node;
-                break :blk try self.newNode(.{ .record = .{ .fields = fields, .ext = ext } });
+                if (changed_fields == null and self.sameClass(row.ext, ext)) break :blk node;
+                break :blk try self.newNode(.{ .record = .{
+                    .fields = changed_fields orelse row.fields,
+                    .ext = ext,
+                } });
             },
             .named => |named| blk: {
-                const args = try self.arena().alloc(NodeId, named.args.len);
-                var changed = false;
-                for (named.args, args) |arg, *out| {
-                    out.* = try self.materializeFunctionRequestNode(arg, substitution);
-                    if (!self.sameClass(arg, out.*)) changed = true;
-                }
-                if (!changed) break :blk node;
+                const args = try self.materializeFunctionRequestNodes(named.args, substitution) orelse break :blk node;
 
                 const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
                 try substitution.materialized.put(node, reserved);
@@ -2661,12 +2705,20 @@ pub const InstGraph = struct {
                     .use = backing.use,
                     .authority = backing.authority,
                 } else null;
-                const declared_order = try self.arena().alloc(InstDeclaredField, named.declared_order.len);
-                for (named.declared_order, declared_order) |declared, *out| {
-                    out.* = switch (declared) {
-                        .named => |field| .{ .named = field },
-                        .padding => |padding| .{ .padding = try self.materializeFunctionRequestNode(padding, substitution) },
+                var changed_declared: ?[]InstDeclaredField = null;
+                for (named.declared_order, 0..) |declared, index| {
+                    const next = switch (declared) {
+                        .named => |field| InstDeclaredField{ .named = field },
+                        .padding => |padding| InstDeclaredField{ .padding = try self.materializeFunctionRequestNode(padding, substitution) },
                     };
+                    if (changed_declared) |fields| {
+                        fields[index] = next;
+                    } else if (!std.meta.eql(declared, next)) {
+                        const fields = try self.arena().alloc(InstDeclaredField, named.declared_order.len);
+                        @memcpy(fields[0..index], named.declared_order[0..index]);
+                        fields[index] = next;
+                        changed_declared = fields;
+                    }
                 }
                 try self.setContent(reserved, .{ .named = .{
                     .named_type = named.named_type,
@@ -2676,7 +2728,7 @@ pub const InstGraph = struct {
                     .args = args,
                     .backing = backing,
                     .generated_iterator = named.generated_iterator,
-                    .declared_order = declared_order,
+                    .declared_order = changed_declared orelse named.declared_order,
                 } });
                 break :blk reserved;
             },
@@ -2684,7 +2736,30 @@ pub const InstGraph = struct {
         if (!substitution.materialized.contains(node)) {
             try substitution.materialized.put(node, materialized);
         }
+        if (!self.sameClass(node, materialized)) {
+            self.countDiagnostic("function_request_nodes_materialized");
+        }
         return self.find(materialized);
+    }
+
+    fn materializeFunctionRequestNodes(
+        self: *InstGraph,
+        nodes: []const NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!?[]NodeId {
+        var changed_nodes: ?[]NodeId = null;
+        for (nodes, 0..) |node, index| {
+            const materialized = try self.materializeFunctionRequestNode(node, substitution);
+            if (changed_nodes) |out| {
+                out[index] = materialized;
+            } else if (!self.sameClass(node, materialized)) {
+                const out = try self.arena().alloc(NodeId, nodes.len);
+                @memcpy(out[0..index], nodes[0..index]);
+                out[index] = materialized;
+                changed_nodes = out;
+            }
+        }
+        return changed_nodes;
     }
 
     pub const FunctionInterfaceIterator = struct {
@@ -6820,13 +6895,14 @@ test "function request substitutes one exact generated type through every callab
     const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(12) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const item = try graph.newNode(.{ .primitive = .u64 });
+    const public_backing = try graph.newNode(.empty_record);
     const public = try graph.newNode(.{ .named = .{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
+        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
     } });
     const exact = try graph.newNode(.{ .named = .{
         .named_type = named_type,
@@ -6859,6 +6935,24 @@ test "function request substitutes one exact generated type through every callab
     try std.testing.expect(graph.sameClass(request_fn.args[1], exact));
     try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.ret), exact));
     try std.testing.expect(!graph.sameClass(public, exact));
+
+    const checked_view_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{public}),
+        .ret = public,
+    } });
+    const structural_view_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{public_backing}),
+        .ret = public_backing,
+    } });
+    const structural_request = try graph.functionRequestFromProducedArguments(
+        checked_view_fn,
+        structural_view_fn,
+        &.{public_backing},
+    );
+    const structural_request_fn = try graph.functionNodes(structural_request);
+    try std.testing.expect(graph.sameClass(structural_request, structural_view_fn));
+    try std.testing.expect(graph.content(structural_request_fn.args[0]) == .empty_record);
+    try std.testing.expect(graph.content(structural_request_fn.ret) == .empty_record);
 }
 
 test "checked type mapping preserves forced-dynamic iterator identity" {
@@ -7506,6 +7600,8 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
             .public_source = public_source,
         },
     } });
+    try graph.registerGeneratedIterator(source);
+    try graph.registerGeneratedIterator(adapter);
 
     try graph.finalizeGeneratedIteratorRepresentations();
 
@@ -7598,6 +7694,7 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
     // This order is significant: the finished type is the left side of the
     // recursive join, but only the graph-owned side can author the final
     // forced-dynamic representation.
+    try graph.registerGeneratedIterator(owned);
     try graph.markRecursiveValueSlot(finished);
     try graph.unify(finished, owned);
     try graph.finalizeGeneratedIteratorRepresentations();
