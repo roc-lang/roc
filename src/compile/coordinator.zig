@@ -3797,6 +3797,27 @@ pub const Coordinator = struct {
         return null;
     }
 
+    fn buildPlatformRequirementOwnerEnvs(
+        self: *Coordinator,
+        allocator: Allocator,
+        available_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    ) Allocator.Error![]const *const ModuleEnv {
+        const platform_root = self.platformRootCandidate() orelse
+            coordinatorInvariant("platform requirement surface has no registered platform root", .{});
+        const imported_envs = try self.buildTypecheckImportedEnvs(platform_root.pkg, platform_root.mod, allocator);
+        defer allocator.free(imported_envs);
+        const imported_artifacts = try self.buildTypecheckImportedArtifacts(platform_root.pkg, platform_root.mod, allocator);
+        defer allocator.free(imported_artifacts);
+
+        return compile_package.buildCheckOwnerEnvs(
+            allocator,
+            imported_envs,
+            imported_artifacts,
+            available_artifacts,
+            null,
+        );
+    }
+
     /// App roots wait for the registered platform's root module to finish
     /// checking successfully, so its requirement surface is final before the
     /// app is checked. Platform failure propagates to the app root instead of
@@ -3836,7 +3857,7 @@ pub const Coordinator = struct {
         module_id: ModuleId,
         mod: *ModuleState,
     ) Allocator.Error!void {
-        const platform_surface: ?messages.PlatformRequirementSurface = if (self.platformRequirementSurfaceForApp(mod)) |surface| surface.* else null;
+        var platform_surface: ?messages.PlatformRequirementSurface = if (self.platformRequirementSurfaceForApp(mod)) |surface| surface.* else null;
         const platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = if (platform_surface) |surface| surface.context else null;
 
         const task_payload_alloc = self.getWorkerAllocator();
@@ -3850,12 +3871,10 @@ pub const Coordinator = struct {
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
         // Requirement unification copies platform-owned types into the app's
-        // store, so the app's published API can reference the platform's nominal
-        // types—including types that only appear in the platform's `requires`
-        // signatures (like `Host`), whose declaring modules are not part of the
-        // platform root's public-API type owners. Seed the availability walk with
-        // every checked module of the platform package so each such declaration
-        // is resolvable when the app publishes checked types.
+        // store, including types that only appear in `requires` signatures. The
+        // platform root's publication is deferred for app builds, so seed the
+        // availability walk with every published module in the platform package;
+        // this makes each requirement owner available to checking and publication.
         var platform_seed_list = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         defer platform_seed_list.deinit(task_payload_alloc);
         if (platform_surface != null) {
@@ -3882,6 +3901,13 @@ pub const Coordinator = struct {
             try self.finishCachedModule(pkg, mod);
             return;
         }
+
+        const platform_requirement_owner_envs: []const *const ModuleEnv = if (platform_surface != null)
+            try self.buildPlatformRequirementOwnerEnvs(task_payload_alloc, available_artifacts)
+        else
+            &.{};
+        errdefer if (platform_requirement_owner_envs.len > 0) task_payload_alloc.free(platform_requirement_owner_envs);
+        if (platform_surface) |*surface| surface.owner_modules = platform_requirement_owner_envs;
 
         mod.phase = .TypeCheck;
         mod.visit_color = .black;
@@ -4956,6 +4982,9 @@ pub const Coordinator = struct {
         defer task_allocs.result.free(task.imported_envs);
         defer task_allocs.result.free(task.imported_artifacts);
         defer task_allocs.result.free(task.available_artifacts);
+        defer if (task.platform_requirements) |surface| {
+            if (surface.owner_modules.len > 0) task_allocs.result.free(surface.owner_modules);
+        };
         defer task_allocs.result.free(task.explicit_roots);
 
         const result_alloc = task_allocs.result;

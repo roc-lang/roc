@@ -92,6 +92,9 @@ const FunctionEffectResolution = enum {
 /// never referenced by checker output) and its path for diagnostics.
 pub const PlatformRequirementInput = struct {
     env: *const ModuleEnv,
+    /// Exact semantic owner closure available while copying and checking the
+    /// platform's requirement types in the app.
+    owner_modules: []const *const ModuleEnv,
     path: []const u8,
 };
 
@@ -120,6 +123,9 @@ regions: Region.List,
 imported_modules: []const *const ModuleEnv,
 /// Module envs whose public APIs are semantically visible through imported checked data.
 owner_modules: []const *const ModuleEnv,
+/// Content identity to owner env, built once for constant-time nominal and
+/// alias owner resolution during checking.
+owner_envs_by_identity: std.AutoHashMapUnmanaged(base.ModuleIdentity.Hash, OwnerEnvCandidate),
 /// Env-local identity (in `cir`'s module identity table) that types minted
 /// from compiler-builtin declarations carry as their `origin_module`: the
 /// Builtin module's deep content identity (or this module's own identity when
@@ -1504,6 +1510,16 @@ fn initAssumePrepared(
     // with the same inputs: the resolved direct imports.
     try cir.ensureContentIdentity(imported_modules);
 
+    var owner_envs_by_identity: std.AutoHashMapUnmanaged(base.ModuleIdentity.Hash, OwnerEnvCandidate) = .empty;
+    errdefer owner_envs_by_identity.deinit(gpa);
+    try appendOwnerEnvByIdentity(gpa, &owner_envs_by_identity, cir, true);
+    for (imported_modules) |imported_env| {
+        try appendOwnerEnvByIdentity(gpa, &owner_envs_by_identity, imported_env, false);
+    }
+    for (owner_modules) |owner_env| {
+        try appendOwnerEnvByIdentity(gpa, &owner_envs_by_identity, owner_env, false);
+    }
+
     // Resolve the env-local identity that builtin-origin types minted during
     // this check will carry. When a separate Builtin module env exists, rebase
     // its content identity into this module's table; when checking the Builtin
@@ -1545,6 +1561,7 @@ fn initAssumePrepared(
         .cir = cir,
         .imported_modules = imported_modules,
         .owner_modules = owner_modules,
+        .owner_envs_by_identity = owner_envs_by_identity,
         .builtin_origin_identity = builtin_origin_identity,
         .auto_imported_types = auto_imported_types,
         .regions = blk: {
@@ -1668,6 +1685,7 @@ pub fn fixupTypeWriter(self: *Self) void {
 
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
+    self.owner_envs_by_identity.deinit(self.gpa);
     self.regions.deinit(self.gpa);
     self.problems.deinit(self.gpa);
     self.snapshots.deinit();
@@ -14907,6 +14925,24 @@ const OwnerEnvCandidate = struct {
     is_this_module: bool,
 };
 
+fn appendOwnerEnvByIdentity(
+    gpa: std.mem.Allocator,
+    owner_envs: *std.AutoHashMapUnmanaged(base.ModuleIdentity.Hash, OwnerEnvCandidate),
+    env: *const ModuleEnv,
+    is_this_module: bool,
+) std.mem.Allocator.Error!void {
+    const identity = env.contentIdentityHash() orelse {
+        std.debug.panic(
+            "type checker invariant violated: owner module '{s}' has no content identity",
+            .{env.module_name},
+        );
+    };
+    const entry = try owner_envs.getOrPut(gpa, identity.*);
+    if (!entry.found_existing or is_this_module) {
+        entry.value_ptr.* = .{ .env = env, .is_this_module = is_this_module };
+    }
+}
+
 const StaticDispatchMethodBinding = struct {
     env: *const ModuleEnv,
     is_this_module: bool,
@@ -14977,10 +15013,9 @@ fn lookupStaticDispatchMethodBindingInEnv(
 }
 
 /// Resolve the module env that declares a type from the type's content-based
-/// origin identity: an exact 32-byte hash comparison against each candidate
-/// env's own content identity. No name matching—two envs match the same
-/// origin only when their transitive module content is byte-identical, in
-/// which case they are interchangeable as type owners by definition.
+/// origin identity. No name matching: two envs share an owner entry only when
+/// their transitive module content is byte-identical, in which case they are
+/// interchangeable as type owners by definition.
 fn ownerEnvForOriginModule(
     self: *const Self,
     origin_module: base.ModuleIdentity.Idx,
@@ -14995,22 +15030,10 @@ fn ownerEnvForOriginModule(
     const origin_hash = self.cir.moduleIdentityHash(origin_module);
     const owner_source_decl = nonBuiltinOwnerSourceDecl(source_decl, context, self.cir.moduleIdentityDisplayText(origin_module));
 
-    if (ownerEnvIdentityMatches(self.cir, origin_hash)) {
-        debugAssertOwnerEnvSourceDecl(self.cir, owner_source_decl, context);
-        return .{ self.cir, true };
-    }
-    for (self.imported_modules) |imported_env| {
-        if (imported_env.module_role == .builtin) continue;
-        if (ownerEnvIdentityMatches(imported_env, origin_hash)) {
-            debugAssertOwnerEnvSourceDecl(imported_env, owner_source_decl, context);
-            return .{ imported_env, false };
-        }
-    }
-    for (self.owner_modules) |owner_env| {
-        if (owner_env.module_role == .builtin) continue;
-        if (ownerEnvIdentityMatches(owner_env, origin_hash)) {
-            debugAssertOwnerEnvSourceDecl(owner_env, owner_source_decl, context);
-            return .{ owner_env, false };
+    if (self.owner_envs_by_identity.get(origin_hash.*)) |owner| {
+        if (owner.env.module_role != .builtin or owner.is_this_module) {
+            debugAssertOwnerEnvSourceDecl(owner.env, owner_source_decl, context);
+            return .{ owner.env, owner.is_this_module };
         }
     }
 
@@ -15021,11 +15044,6 @@ fn ownerEnvForOriginModule(
         );
     }
     unreachable;
-}
-
-fn ownerEnvIdentityMatches(candidate: *const ModuleEnv, origin_hash: *const base.ModuleIdentity.Hash) bool {
-    const candidate_hash = candidate.contentIdentityHash() orelse return false;
-    return base.ModuleIdentity.eql(candidate_hash, origin_hash);
 }
 
 fn debugAssertOwnerEnvSourceDecl(candidate: *const ModuleEnv, source_decl: u32, context: []const u8) void {
@@ -18285,14 +18303,7 @@ fn moduleEnvForIdentity(
     module_identity: base.ModuleIdentity.Idx,
 ) ?OwnerEnvCandidate {
     const target_hash = self.cir.moduleIdentityHash(module_identity);
-    if (ownerEnvIdentityMatches(self.cir, target_hash)) return .{ .env = self.cir, .is_this_module = true };
-    for (self.imported_modules) |imported_env| {
-        if (ownerEnvIdentityMatches(imported_env, target_hash)) return .{ .env = imported_env, .is_this_module = false };
-    }
-    for (self.owner_modules) |owner_env| {
-        if (ownerEnvIdentityMatches(owner_env, target_hash)) return .{ .env = owner_env, .is_this_module = false };
-    }
-    return null;
+    return self.owner_envs_by_identity.get(target_hash.*);
 }
 
 /// Copy a variable from another module into this module
