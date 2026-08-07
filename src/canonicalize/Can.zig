@@ -7198,7 +7198,7 @@ fn canonicalizedRuntimeErrorExpr(self: *Self, diagnostic: Diagnostic) std.mem.Al
 /// literal: a numeric literal (including a negated numeral), an
 /// interpolation-free string literal, a tag literal (bare or applied, plain or
 /// nominal-qualified), or a list / record / tuple literal whose components are
-/// all literals. Nothing else — in particular no name reference of any kind —
+/// all literals. Nothing else—in particular no name reference of any kind—
 /// so a default can never participate in an evaluation cycle: it is
 /// materialized by the compiler at construction sites, and the literal set is
 /// closed by construction (design.md "Defaulted Fields").
@@ -7289,8 +7289,8 @@ fn defaultNonLiteralNode(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!?E
             }
             continue;
         }
-        // Everything else — name references, calls, operators, lambdas,
-        // control flow, blocks — is not a literal.
+        // Everything else—name references, calls, operators, lambdas,
+        // control flow, blocks—is not a literal.
         return expr_idx;
     }
     return null;

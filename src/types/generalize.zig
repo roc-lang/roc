@@ -346,7 +346,7 @@ pub const Generalizer = struct {
             },
             .field_presence => {
                 // A resolved presence fact (present/absent) is concrete and
-                // monomorphic — like an empty record, it never needs to be
+                // monomorphic—like an empty record, it never needs to be
                 // generalized and cannot raise the rank on its own. An
                 // unresolved presence variable is `.flex`/`.rigid` and is
                 // handled by those arms above.

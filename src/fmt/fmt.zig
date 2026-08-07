@@ -3135,7 +3135,7 @@ const Formatter = struct {
         } else {
             try fmt.push(' ');
         }
-        // `name ?: Type` — the `?` before the colon marks the field
+        // `name ?: Type`—the `?` before the colon marks the field
         // optional. Legacy `:?` sources format to `?:`. Trivia between the
         // mark and the type is flushed exactly once, by the before-type
         // flush below.
@@ -3151,7 +3151,7 @@ const Formatter = struct {
             try fmt.push(' ');
         }
         try fmt.formatTypeAnnoDiscard(field.ty);
-        // `name : Type ?? default` — a defaulted field's value expression
+        // `name : Type ?? default`—a defaulted field's value expression
         // is part of the annotation and must survive formatting (design.md
         // "Defaulted Fields").
         if (field.default_value) |default_idx| {
@@ -4413,7 +4413,7 @@ test "optional record type fields format as a leading marker" {
 }
 
 test "defaulted record type fields keep their default through formatting" {
-    // Review H1: the formatter must never drop `?? default` — it is
+    // Review H1: the formatter must never drop `?? default`—it is
     // semantics (construction sites that omit the field depend on it).
     const result = try moduleFmtsStable(
         std.testing.allocator,

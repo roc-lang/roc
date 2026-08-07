@@ -760,7 +760,7 @@ pub const ReportBuilder = struct {
                                 D.bytes("The"),
                                 D.ident(fpm.field).withAnnotation(.inline_code),
                                 D.bytes("field is optional, so it may be missing."),
-                                D.bytes("It cannot be used as if it is always present — access it with"),
+                                D.bytes("It cannot be used as if it is always present—access it with"),
                                 D.bytes(".?").withAnnotation(.inline_code),
                                 D.bytes("instead.").withNoPrecedingSpace(),
                             }, self, report);
@@ -770,7 +770,7 @@ pub const ReportBuilder = struct {
                                 D.bytes("Hint:").withAnnotation(.emphasized),
                                 D.bytes("The"),
                                 D.ident(fpm.field).withAnnotation(.inline_code),
-                                D.bytes("field is optional here, so it may be missing — but I expected a record whose"),
+                                D.bytes("field is optional here, so it may be missing—but I expected a record whose"),
                                 D.ident(fpm.field).withAnnotation(.inline_code),
                                 D.bytes("field is always present."),
                             }, self, report);
@@ -784,7 +784,7 @@ pub const ReportBuilder = struct {
                         D.ident(fdm.field).withAnnotation(.inline_code),
                         D.bytes("field has a"),
                         D.bytes("??").withAnnotation(.inline_code),
-                        D.bytes("default in both types, but they are two DIFFERENT defaults — two separately written defaults never merge, even when their values look the same. To share one default, declare the record type once (e.g. as a type alias) and annotate both values with it."),
+                        D.bytes("default in both types, but they are two DIFFERENT defaults—two separately written defaults never merge, even when their values look the same. To share one default, declare the record type once (e.g. as a type alias) and annotate both values with it."),
                     }, self, report);
                     if (self.defaultDeclRegion(fdm.expected_default)) |region| {
                         try report.document.addLineBreak();
@@ -3100,7 +3100,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addReflowingText("An optional access produces a ");
         try report.document.addAnnotated("Try", .inline_code);
-        try report.document.addReflowingText(" for a field that may be missing \u{2014} but this field can never be missing, so the ");
+        try report.document.addReflowingText(" for a field that may be missing\u{2014}but this field can never be missing, so the ");
         try report.document.addAnnotated("Try", .inline_code);
         try report.document.addReflowingText(" would always be ");
         try report.document.addAnnotated("Ok", .inline_code);
@@ -3113,10 +3113,10 @@ pub const ReportBuilder = struct {
 
     /// Build a report for direct access of an optional (`?:`) field: the
     /// field exists, but its presence is not guaranteed, so treating it as
-    /// always present is the actual error — not a missing field or a typo.
+    /// always present is the actual error—not a missing field or a typo.
     /// (Record UPDATE no longer routes here: a supplied update field has
     /// creation semantics, so its kind-flexible probe joins an optional base
-    /// field instead of mismatching — design.md "Field Kinds".)
+    /// field instead of mismatching—design.md "Field Kinds".)
     fn buildOptionalFieldAccessReport(
         self: *Self,
         field_name: Ident.Idx,
@@ -3138,7 +3138,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addReflowingText("An optional field may be missing from the record. Use ");
         try report.document.addAnnotated(".?", .inline_code);
-        try report.document.addReflowingText(" to access it — that produces a ");
+        try report.document.addReflowingText(" to access it—that produces a ");
         try report.document.addAnnotated("Try", .inline_code);
         try report.document.addReflowingText(" you can match on or default with ");
         try report.document.addAnnotated("??", .inline_code);
@@ -3193,7 +3193,7 @@ pub const ReportBuilder = struct {
                 // If the record HAS the field but its kind SOLVED `optional`
                 // (`?:`), the failure is the kind axis: direct access demands
                 // a required field. Without this check the error reads as a
-                // baffling "missing field" — with a typo suggestion of the
+                // baffling "missing field"—with a typo suggestion of the
                 // field's own name.
                 for (actual_slice.items(.name), actual_slice.items(.presence)) |name, presence| {
                     if (name.eql(ctx.field_name) and presence == .optional) {

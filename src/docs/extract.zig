@@ -1255,7 +1255,7 @@ fn sourceTypeLayout(module_env: *const ModuleEnv, anno_idx: CIR.TypeAnno.Idx) Do
 
 /// The trimmed source snippet of a defaulted field's default expression
 /// (`?? <here>`), duped into an owned slice, or null when the region yields no
-/// text — in which case docs render `?? …` (mirroring TypeWriter's fallback).
+/// text—in which case docs render `?? …` (mirroring TypeWriter's fallback).
 fn defaultSourceSnippet(
     gpa: Allocator,
     module_env: *const ModuleEnv,
@@ -2236,7 +2236,7 @@ fn extractNominalType(
 
 /// The documentation kind of a solved record field. A field whose kind solved
 /// `optional` documents as `name ?: Type`. A required field, a defaulted field
-/// (a required slot at runtime — rendering its default value from the solved
+/// (a required slot at runtime—rendering its default value from the solved
 /// type is deferred, design.md "Defaulted Fields"), or a still-flex kind (flex
 /// defaults to required, design.md "Field Kinds (All-Dynamic Optional Fields)")
 /// all document as plain required fields. Mirrors TypeWriter's

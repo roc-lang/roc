@@ -212,11 +212,11 @@ pub const NamedKind = enum(u8) {
 /// field itself so rows that disagree about defaults are distinct monotypes:
 /// distinct digests, hence distinct specializations and derived-codec defs.
 /// This keeps "same monotype ⇒ same behavior" an invariant instead of an
-/// approximation — a required row and a defaulted row of the same shape must
+/// approximation—a required row and a defaulted row of the same shape must
 /// not share a derived parser. The slot encoding stays kind-free (`defaulted`
 /// fields remain plain inline slots) and layout never reads this. `module` is
 /// the declaring module's interned identity in the program name store;
-/// `expr_node` is the default expression's CIR node index in that module —
+/// `expr_node` is the default expression's CIR node index in that module—
 /// the same identity the checked side carries in `CheckedFieldDefault`.
 pub const FieldDefault = struct {
     module: names.ModuleIdentityId,

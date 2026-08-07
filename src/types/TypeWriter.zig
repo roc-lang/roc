@@ -63,7 +63,7 @@ scratch_tags: std.array_list.Managed(types_mod.Tag),
 import_mapping: ?*const import_mapping_mod.ImportMapping,
 /// Optional resolver from a defaulted field's identity to its default's
 /// source snippet. Injected by the layer that owns CIR and source text (the
-/// types layer cannot depend on it) — see `setDefaultSourceResolver`. When
+/// types layer cannot depend on it)—see `setDefaultSourceResolver`. When
 /// null, or when the resolver returns null (foreign module, unrenderable
 /// snippet), a defaulted field renders `?? …` (design.md "Defaulted
 /// Fields").
@@ -723,7 +723,7 @@ fn writeFieldDefaultSuffix(self: *TypeWriter, writer: *ByteWrite, presence: Reco
 /// renders as a plain field, an `optional` kind renders `?:`, and a still
 /// undetermined kind renders as a plain field. Post-check, a still-flex kind
 /// is a scheme interior (monomorphic literal-minted kinds are committed to
-/// `required` by the checker's finalize sweep — design.md "Field Kinds",
+/// `required` by the checker's finalize sweep—design.md "Field Kinds",
 /// kind defaulting), and rendering it required-equivalent matches the
 /// committed default an instantiation would take if nothing pinned it.
 fn writeRecordFieldSeparator(self: *TypeWriter, writer: *ByteWrite, presence: RecordField.Presence) error{WriteFailed}!void {
@@ -733,7 +733,7 @@ fn writeRecordFieldSeparator(self: *TypeWriter, writer: *ByteWrite, presence: Re
             .field_presence => |fp| switch (fp) {
                 // A defaulted field renders as a plain required field; the
                 // default value itself is not part of the rendered type
-                // (design.md "Defaulted Fields" — the `??` suffix is written
+                // (design.md "Defaulted Fields"—the `??` suffix is written
                 // by writeFieldDefaultSuffix).
                 .required, .defaulted => ": ",
                 .optional => " ?: ",

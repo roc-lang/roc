@@ -3312,7 +3312,7 @@ Annotations)" design: `?:` is a static field KIND with one uniform tagged
 representation, not solved presence DATA with witness-directed layout. The
 quantifier machinery that design needed (universal/existential presence
 rigids, the post-body seal rewrite, witness identity across modules) is
-removed with it — nothing about a kind is hidden, so there is nothing to
+removed with it—nothing about a kind is hidden, so there is nothing to
 seal, write out, or keep coherent across copies.
 
 A record field's presence axis carries its kind, one of exactly three
@@ -3332,7 +3332,7 @@ states, solved by ordinary unification:
 
 The kind rules:
 
-- Annotations pin kinds CONCRETELY, in every syntactic position — argument,
+- Annotations pin kinds CONCRETELY, in every syntactic position—argument,
   return, the annotated value's own type, and type-declaration bodies all
   mean the same thing. There is no polarity split: `?:` is `optional`
   everywhere, `:` is `required` everywhere. Layout is therefore a function
@@ -3340,11 +3340,11 @@ The kind rules:
   Symbol ABI (glue generated from the annotation agrees with every app).
 - `required ~ optional` is a TYPE MISMATCH. One value has one layout; a
   record annotated with a required field cannot flow where an optional
-  field is expected (or vice versa) — reconstruct the record instead. Only
+  field is expected (or vice versa)—reconstruct the record instead. Only
   an undetermined kind can become either.
 - Width absorption is OPT-IN: when row unification runs a field into a
   CLOSED row that lacks it (the empty-record tail), the field passes
-  exactly when its kind RESOLVED `optional` — an annotation declared it —
+  exactly when its kind RESOLVED `optional`—an annotation declared it—
   and the merged row keeps the field (the closed record gains a tagged
   slot constructed as missing). An undetermined kind does NOT absorb (it
   is a missing-field mismatch, same as `required`): absorbing undetermined
@@ -3365,16 +3365,16 @@ The kind rules:
   alternative.
 - `.?field` on a field whose kind resolved `required` or `defaulted` is
   rejected as unintended (the field is always present; use `.`). Accesses
-  are recorded and judged at EVERY GENERALIZATION BOUNDARY — receivers are
+  are recorded and judged at EVERY GENERALIZATION BOUNDARY—receivers are
   settled by then, and a still-undetermined kind pins to `optional` BEFORE
   the scheme forms, so instantiated copies of a generalized function's
-  rows carry the concrete kind and the judgment survives instantiation —
+  rows carry the concrete kind and the judgment survives instantiation—
   with a finalize pass as the monomorphic backstop.
 - Record UPDATE (`{ ..r, field: v }`) follows the CONSTRUCTION rule per supplied
   field: like a record literal, each mentioned field probes the base with a
   kind-FLEXIBLE field (a fresh presence var, recorded for the finalize
   kind-defaulting sweep exactly like a literal's), so the base's kind
-  decides — optional pins optional and the value checks against the payload
+  decides—optional pins optional and the value checks against the payload
   type (lowering wraps it in `#Present`, exactly as construction does),
   required/defaulted pin as before, and a still-flex base kind stays flex
   and finalize-defaults to `required`. This realizes the SET side of the
@@ -3383,20 +3383,20 @@ The kind rules:
   destructured field probes the record with a fresh presence var and a
   FRESH payload var, and the binder stays unbound until the deferred
   kind-directed judgment (`Check.judgeRecordDestructBinds`, the
-  `pending_record_destructs` queue) binds it — plainly to the payload for
+  `pending_record_destructs` queue) binds it—plainly to the payload for
   `required`/`defaulted`, or to the nominal `Try(payload, [MissingField])`
   (constructed exactly as a `.?` access's chain result) for `optional`, so
   destructuring an optional field surfaces its runtime presence. A kind
-  still flex at the judgment pins `required` first — a destructure alone
-  must not silently make a field optional — and the probe's mint is
+  still flex at the judgment pins `required` first—a destructure alone
+  must not silently make a field optional—and the probe's mint is
   deliberately NOT in `literal_field_kinds` (the judgment owns the kind
   decision; double-committing with the finalize sweep would be
-  order-dependent). The judgment runs at every generalization boundary —
+  order-dependent). The judgment runs at every generalization boundary—
   BEFORE the boundary's literal defaulting (a numeral flowing through a
   destructured field is signature-reachable only once the binder is
-  unified through the row) and again after `judgeOptionalFieldAccesses` —
+  unified through the row) and again after `judgeOptionalFieldAccesses`—
   at finalize as the backstop, and at every exhaustiveness-analysis site
-  (match expressions and refutable destructure statements — the analysis
+  (match expressions and refutable destructure statements—the analysis
   and its union-closing see sub-pattern tag data through the row only once
   the binder is bound). A judgment pass only commits a still-flex kind
   whose presence var the current boundary OWNS (rank at or above the
@@ -3408,19 +3408,19 @@ The kind rules:
   skips a record pattern position whose field kind resolved `optional`
   (exhaustive.zig's field-type resolution returns no type for it): the
   sub-pattern space is the judged binder's Try, which the
-  scrutinee-row-driven analysis cannot see — a known diagnostic gap (a
+  scrutinee-row-driven analysis cannot see—a known diagnostic gap (a
   non-exhaustive nested pattern over such a field is caught at runtime by
   the lowered miss, not statically).
 
-The tagged representation (IMPLEMENTED — nothing about optional fields is
+The tagged representation (IMPLEMENTED—nothing about optional fields is
 deferred at lowering anymore; the CheckedModule output and lowering are both
 complete):
 
 - Slot encoding: PER-FIELD TAG. Every optional field's Monotype slot is the
   closed STRUCTURAL tag union `[#Missing, #Present(τ)]` (the labels are
-  compiler-reserved — `#` starts a comment in source, so no user tag can
+  compiler-reserved—`#` starts a comment in source, so no user tag can
   spell them; tag variants normalize to sorted label order, so `#Missing`
-  is variant 0 with no payload and `#Present` is variant 1 carrying the value — the discriminant
+  is variant 0 with no payload and `#Present` is variant 1 carrying the value—the discriminant
   contract every consumer shares, hosts included). One uniform
   representation per field regardless of how many optional siblings the
   record has; a per-record presence BITMASK remains a possible later
@@ -3428,11 +3428,11 @@ complete):
   The slot is deliberately NOT the nominal `Try(τ, [MissingField])`
   monotype: record-type lowering runs on rows in modules that never
   reference `Try`, so minting the builtin nominal there would need a
-  name-based lookup of the Try declaration — reconstruction of data no
+  name-based lookup of the Try declaration—reconstruction of data no
   stage output. The structural union is a pure function of the explicit
   row (kind + value type); its byte layout equals Try's backing anyway
   (two variants, one zero-sized payload). Lowering needs NO solver
-  witness — the kind is in the row (`CheckedRecordField.kind`, written into
+  witness—the kind is in the row (`CheckedRecordField.kind`, written into
   the CheckedModule and keyed byte-identically by the solver-side and
   checked-side type-digest writers, so `roc check` and full compilation
   agree).
@@ -3442,21 +3442,21 @@ complete):
   same node shape so graph-solved and directly-lowered occurrences of one
   checked row seal to one Monotype. Downstream (LIR layout, ARC, match
   compilation, interpreter, backends) the slot is an ORDINARY structural
-  tag union — no new concepts anywhere below Monotype lowering.
+  tag union—no new concepts anywhere below Monotype lowering.
 - Construction (`lowerRecordExpr`): a SUPPLIED optional field lowers its
   checked value at the Present payload type and wraps it in the `#Present`
-  tag; an OMITTED optional field (admitted by width absorption — including
+  tag; an OMITTED optional field (admitted by width absorption—including
   every field of `{}` against an all-optional row) constructs the
   `#Missing` tag, exactly where an omitted DEFAULTED field materializes its
   default. Record update copies unmentioned optional slots verbatim
   (presence state included); a MENTIONED optional field takes the same
-  supplied-field arm as construction — the value lowers at the Present
+  supplied-field arm as construction—the value lowers at the Present
   payload type and wraps in the `#Present` tag. DESTRUCTURING an optional
   field lowers as exactly a one-segment `.?` chain result per field: the
-  bound value is the slot read materialized as Try — `#Present(v)` yields
+  bound value is the slot read materialized as Try—`#Present(v)` yields
   `Ok(v)`, `#Missing` yields `Err(MissingField)`
   (`optionalDestructTryExprAtNode`, sharing the slot-test shape of
-  `lowerOptionalFieldAccessChain`) — constructed at the binder's own
+  `lowerOptionalFieldAccessChain`)—constructed at the binder's own
   checked Try node, with the row's `CheckedRecordField.kind` directing
   required-vs-optional (explicit upstream data; destructs themselves
   serialize no kind). Statement and parameter positions route such
@@ -3465,21 +3465,21 @@ complete):
   `appendRecordRestPatternStatements`: field slot read, Try
   materialization, sub-pattern matched against it); a MATCH branch keeps a
   flat pattern by TRANSLATING the Try-space sub-pattern into slot space
-  (`lowerOptionalDestructChildAtSlotNode`: `Ok(p)` ↦ `#Present(p)` — the
-  payload types are identical — `Err(p)` ↦ `#Missing`, and a plain binder
+  (`lowerOptionalDestructChildAtSlotNode`: `Ok(p)` ↦ `#Present(p)`—the
+  payload types are identical—`Err(p)` ↦ `#Missing`, and a plain binder
   becomes a compiler-local slot bind whose Try value is a `let` prelude
   around the branch body and guard, `OptionalDestructBind`), preserving
   fall-through refutability natively.
-- `.?` access: the CheckedModule output is complete —
+- `.?` access: the CheckedModule output is complete—
   `CheckedFieldAccessSegment.mode` records required/optional per segment
   (`serialized_layout_version` 35), and the body copier's former
   required-only invariant is gone. A
   chain containing any optional segment lowers per-CHAIN
   (`lowerOptionalFieldAccessChain`): each `.?` segment is a runtime test
-  (a match) on the field's tagged slot — the first `#Missing` slot
+  (a match) on the field's tagged slot—the first `#Missing` slot
   short-circuits to `Err(MissingField)`, a `#Present` payload continues the
   chain, required segments after an optional one ride that Ok path as
-  plain field reads — and the final value wraps in `Ok` exactly once. The
+  plain field reads—and the final value wraps in `Ok` exactly once. The
   chain yields the flat `Try(τ_final, [MissingField])` the checker
   promised (never nested), constructed at the access expression's own
   checked Try type.
@@ -3488,10 +3488,10 @@ complete):
   builds the identical two-variant union layout (variant 0 = zero-sized
   `#Missing`, variant 1 = the value) directly from the checked field kind,
   so the host's view of a `?:` field agrees byte-for-byte with the
-  compiler's — layout stays a function of the annotation alone, which is
+  compiler's—layout stays a function of the annotation alone, which is
   what keeps `?:` legal across the Host Symbol ABI.
 - Inspect rendering reads the reserved slot labels: Monotype `Type.Field`
-  deliberately carries no kind axis — the kind is consumed once, into the
+  deliberately carries no kind axis—the kind is consumed once, into the
   slot encoding, by `lowerFieldSlotType`. The slot union's labels are the
   COMPILER-RESERVED names `#Missing`/`#Present`: `#` starts a comment in
   Roc source (the same reserved namespace as compiler-minted `#interp_0`
@@ -3499,13 +3499,13 @@ complete):
   is a distinct type from any user-annotated `[Missing, Present(τ)]`.
   Record `Str.inspect` expansion runs over the memoized Monotype alone
   (no checked row in hand); `Builder.optionalFieldSlot` recognizes an
-  optional slot by an EXACT match on the reserved labels — a lossless
-  read-back of the encoding, not a shape heuristic — and renders the
+  optional slot by an EXACT match on the reserved labels—a lossless
+  read-back of the encoding, not a shape heuristic—and renders the
   payload or `<missing>`. Derived JSON codecs read the labels the same
   way (`optionalFieldSlot` in the encode/parse record-field ladders): an
   encoded `#Present` slot emits its field with the payload's encoder and
   `#Missing` omits the field; a parsed record materializes `#Missing`
-  for an absent `?:` field and wraps a present one in `#Present` — the
+  for an absent `?:` field and wraps a present one in `#Present`—the
   slot-kind sibling of the Try(τ, [Missing]) codec convention, pinned by
   test/cli/JsonOptionalFieldKinds.roc. A user-annotated `[Missing, Present(τ)]` field
   is an ordinary tag union everywhere (inspect renders `Present(5)` as
@@ -3517,7 +3517,7 @@ complete):
 Kind defaulting as a checker pass (IMPLEMENTED): a literal-minted kind var
 still undetermined at module finalize (a literal field never used at either
 kind) is COMMITTED to `required` (zero-cost) in the solved graph, by
-ordinary unification (`Check.defaultLiteralFieldKinds` — the same
+ordinary unification (`Check.defaultLiteralFieldKinds`—the same
 fresh-content + unify shape `judgeOptionalFieldAccesses` uses for its
 `optional` pin). The mint sites record every literal field's kind var
 explicitly at creation; the sweep runs LAST at module (and REPL-expression)
@@ -3525,7 +3525,7 @@ finalize, after `judgeOptionalFieldAccesses` and every other
 acceptance/rejection judgment, so it is a pure commitment of already-final
 states. A GENERALIZED kind var is skipped BY DESIGN: it is a scheme interior
 (e.g. `mk = |v| { a: v }`), and instantiations of the scheme may
-legitimately join a `?:` annotation later — which is also why the sweep
+legitimately join a `?:` annotation later—which is also why the sweep
 never runs at per-def generalization boundaries. Consequently the read
 boundaries' still-flex arms (TypeWriter rendering, `copyCheckedRecordFields`
 CheckedModule output, the `writeFieldPresenceForKey` type-digest writer) now cover scheme
@@ -3536,14 +3536,14 @@ Deferred (explicitly not yet implemented):
 
 - Fallback destructure patterns (`{ field ?? fallback }`-style), which need
   their own typing rules here before implementation. (Plain DESTRUCTURE of
-  an optional field is IMPLEMENTED — it binds `Try(payload, [MissingField])`
+  an optional field is IMPLEMENTED—it binds `Try(payload, [MissingField])`
   via the deferred kind-directed judgment; see the record-destructure
-  bullet above. SETTING an optional field in an update is IMPLEMENTED —
+  bullet above. SETTING an optional field in an update is IMPLEMENTED—
   see the record-update bullet above.)
   UNSETTING a field in an update (`{ ..r, x: _ }`) has its typing rule
   sketched in "Deferred: Unsetting an Optional Field" below.
 
-Pinned by tests in src/check/test/type_checking_integration.zig: accepted —
+Pinned by tests in src/check/test/type_checking_integration.zig: accepted—
 a value annotated `{ world ?: U8 }` may supply or omit `world`, and its
 exported type keeps `world ?: U8`; `.?world` on it typechecks as
 `Try(U8, [MissingField])`; one definition MAY supply an optional field on
@@ -3552,7 +3552,7 @@ DESTRUCTURING an optional field binds `Try(U8, [MissingField])` (statement
 and parameter positions, nested `Ok(v)` patterns bind the payload), a
 required sibling's destructure binds plainly, and a destructure of a
 still-flex literal row pins the field `required` (the literal's row renders
-`a:`, not `a ?:`). Rejected — a direct `.world` read of an optional field
+`a:`, not `a ?:`). Rejected—a direct `.world` read of an optional field
 is a type error (both on a value's own annotation and on a `?:`-signature
 argument), `.?` on a required field is rejected at finalize, and
 destructuring a field the record lacks stays a mismatch.
@@ -3561,14 +3561,14 @@ destructuring a field the record lacks stays a mismatch.
 
 `{ a : U8 ?? 10 }` declares a DEFAULTED field: construction may omit it (the
 omitted slot is materialized from the default), but at runtime it is an
-ordinary required field — inline slot, read with `.a`, updated and
+ordinary required field—inline slot, read with `.a`, updated and
 destructured like any required field. Defaulting is a fourth point on the
 field-kind axis (see Field Kinds above):
 
 - Access `.a`, layout, update, and destructure all behave exactly as
   `required`; `.?a` on a defaulted field is rejected at finalize by the same
   always-present judgment as on a required field.
-- Construction may omit the field, exactly as `optional` — via the same
+- Construction may omit the field, exactly as `optional`—via the same
   OPT-IN width absorption: a literal row lacking the field absorbs it only
   when the field's kind RESOLVED `defaulted` (an annotation declared it),
   and lowering materializes the DEFAULT VALUE into the inline slot (where an
@@ -3582,18 +3582,18 @@ with `optional` incomparable:
   `present` and must succeed on a defaulted field, and the merge must KEEP
   the default (stripping it would make later construction sites
   order-dependent). Corollary: a `{ a : U8 ?? 10 }` record flows freely
-  where `{ a : U8 }` is expected — same layout, strictly more information.
+  where `{ a : U8 }` is expected—same layout, strictly more information.
 - `defaulted(d1) ~ defaulted(d2)` unifies exactly when `d1 = d2`. Two
   annotations defaulting one field differently have no coherent merged
   default; the conflict is a type mismatch.
 - `optional ~ defaulted` is a type mismatch (tagged slot vs inline slot).
 
 The default VALUE never lives in the type graph. The row's kind carries only
-a stable DEFAULT IDENTITY — the declaring module's deep content identity
+a stable DEFAULT IDENTITY—the declaring module's deep content identity
 plus the default expression's stable source-node index, the same key shape as
 nominal declarations, rebased by copy_import on every store crossing.
 Materialization only RECORDS the default; the expression is checked once at
-FINALIZE — after every def is checked and callee effects are resolved —
+FINALIZE—after every def is checked and callee effects are resolved—
 against an instantiated copy of the field's type. (Materialization can run
 before check order even exists: type-declaration generation and scheme
 predeclaration both materialize annotations early, so checking there would
@@ -3604,13 +3604,13 @@ of the value.
 Restrictions:
 
 - `?:` and `??` do not combine: a default makes the field never missing,
-  which makes the tagged slot and `.?` pointless — `a ?: U8 ?? 10` is
+  which makes the tagged slot and `.?` pointless—`a ?: U8 ?? 10` is
   rejected at canonicalization with exactly that explanation.
 - The default must be a LITERAL, defined recursively: a numeric literal
   (including a negated numeral), an interpolation-free string literal (an
-  interpolated string references bindings), a tag literal — bare or
+  interpolated string references bindings), a tag literal—bare or
   applied, plain or nominal-qualified (the nominal wrapper names a type
-  declaration, not a value) — or a list / record / tuple literal whose
+  declaration, not a value)—or a list / record / tuple literal whose
   components are all literals. Nothing else: no operators, no calls, no
   lambdas, no control flow, and no name reference of any kind (local,
   module-level, or imported). Judged at canonicalization
@@ -3619,18 +3619,18 @@ Restrictions:
   dropped. The rule exists because defaults are compiler-materialized at
   construction sites: a reference could form an evaluation cycle the
   compiler will not chase. Banning references bans every cycle BY
-  CONSTRUCTION — the direct self-reference judgment, the local-capture
+  CONSTRUCTION—the direct self-reference judgment, the local-capture
   (free-variables) judgment, and the def-dependency demand edges from
   annotation defaults were all subsumed and deleted, including the
   alias-mediated gap none of them covered (a type declaration's default
-  referencing a def, cycling through a value annotated with the alias —
+  referencing a def, cycling through a value annotated with the alias—
   the demand walk never followed alias lookups). Supporting references
   later is future work that needs declaration-aware cycle edges: demand
   edges that follow a value annotation's alias/apply lookups into the
   referenced declarations' defaults.
 - The default's type must be CONCRETE: a default with type variables has
   no single runtime representation. Judged at finalize, after the
-  defaulting rounds so numeral defaults commit first — a literal (`?? []`)
+  defaulting rounds so numeral defaults commit first—a literal (`?? []`)
   can still be non-concrete, which is why this axis survives the literal
   restriction. (Purity needs no axis of its own anymore: a literal is
   never effectful, so the finalize-time `effectful_default_value`
@@ -3647,18 +3647,18 @@ differently digest differently.
 
 Construction-site materialization: the declaring module's CheckedModule
 archives each locally-declared default as a checked expression
-(`CheckedBodyStore.default_exprs`, keyed by `DefaultId.expr_node` — the
+(`CheckedBodyStore.default_exprs`, keyed by `DefaultId.expr_node`—the
 source-node walk already records every checked expression, so the table
 is a serialized index over it, surviving the discard of the build-time
 source-node map). Monotype lowering of a record construction that omits a
 defaulted field resolves the field's default on the checked row and
 materializes it at the field's monotype. Inlining the archived expression
-IS the defining behavior — defaults are literals (see Restrictions
-above), so inlining is their evaluation — and the finalized `field_default`
+IS the defining behavior—defaults are literals (see Restrictions
+above), so inlining is their evaluation—and the finalized `field_default`
 compile-time root is a cache of the same value: materialization prefers
 restoring the declaring module's finalized constant and inlines only
 while that module's own roots are still mid-finalization (a cache-hit
-split, not a fallback — both paths produce the identical literal).
+split, not a fallback—both paths produce the identical literal).
 CROSS-MODULE materialization is COMPLETE through the same route: the
 default identity's declaring-module content hash resolves the declaring
 view (`moduleForIdentityHash`), and an imported checked module is always
@@ -3668,15 +3668,15 @@ rejection as a backstop invariant only: canonicalization's literal
 restriction already makes an effectful default unreachable from source.
 
 Monotype default identity (`Type.FieldDefault`): the Monotype record
-field itself carries the `??` default identity — the declaring module's
+field itself carries the `??` default identity—the declaring module's
 identity interned in the program name store plus the default
-expression's node index — and every Monotype digest and structural
+expression's node index—and every Monotype digest and structural
 equality includes it. This is load-bearing, not descriptive: derived
 codecs and specializations are keyed by monotype, and a derived JSON
 parser for `{ count : U8 ?? 10 }` must FILL an absent key while the
 parser for the same-shaped `{ count : U8 }` must ERROR
 MissingRequiredField, so rows that disagree about defaults (or about
-having one) must be DISTINCT monotypes — "same monotype ⇒ same
+having one) must be DISTINCT monotypes—"same monotype ⇒ same
 behavior" stays an invariant instead of an approximation. The slot
 encoding is unchanged (defaulted fields remain plain inline slots;
 layout never reads the identity), and the identity rides unchanged
@@ -3690,10 +3690,10 @@ the checked kind at the same point the kind is consumed into the slot
 encoding.
 
 Derived JSON parse of `??` fields (IMPLEMENTED): an absent key fills the
-field's archived default into the inline slot — the codec sibling of
-construction-site omission — while a present key parses at the inline
+field's archived default into the inline slot—the codec sibling of
+construction-site omission—while a present key parses at the inline
 type; an explicit `null` is an ERROR for a defaulted field (null is a
-value, absence is not — same rule as `?:`), and encode always emits the
+value, absence is not—same rule as `?:`), and encode always emits the
 field. The parse ladder reads the default straight off the Monotype
 field (`parserFieldDefaultFor`), and the checker's derived-parse gate
 (`recordParseNeedsRequiredFieldError`) skips `?:`/`??`-kind fields so an
@@ -3703,9 +3703,9 @@ graph twin) recognize the same two self-fill cases. Pinned by
 test/cli/JsonOptionalFieldKinds.roc. Evaluation ordering: each archived
 default is a `field_default` compile-time root, registered BEFORE every
 other root kind, and finalization encodes the conservative dependency
-edge explicitly — a non-default root is not ready while any requested
+edge explicitly—a non-default root is not ready while any requested
 `field_default` root is unfinished
-(`RootCompletionState.pending_field_defaults`) — so the defaults always
+(`RootCompletionState.pending_field_defaults`)—so the defaults always
 evaluate as their own leading batch before any parser that might
 restore them lowers.
 
@@ -3716,10 +3716,10 @@ materializes its default.
 
 ### Deferred: Unsetting an Optional Field (`{ ..r, x: _ }`)
 
-Not yet implemented — this is the design sketch for when it is. `{ ..r,
+Not yet implemented—this is the design sketch for when it is. `{ ..r,
 x: _ }` UNSETS a field in a record update: the result carries `x` as an
 optional slot in the Missing state. Unsetting does NOT remove the field
-from the row — the `absent` presence state is gone (Field Kinds above), rows
+from the row—the `absent` presence state is gone (Field Kinds above), rows
 never shrink, and the slot union `[#Missing, #Present(τ)]` already has a
 representation for "not there". That one observation dissolves the
 asymmetry the old record-update TODO feared: input and output presence no
@@ -3733,7 +3733,7 @@ a bare `Underscore` has no prefix rule and lands in the
 `expr_unexpected_token` malformed fallthrough. (`_name` is a
 `NamedUnderscore` IDENT expression, so `x: _name` is an ordinary set and
 stays one; only bare `_` means unset.) The parser newly accepts a bare `_`
-as the ENTIRE field value — `Underscore` directly followed by `,` or `}` —
+as the ENTIRE field value—`Underscore` directly followed by `,` or `}`—
 in expression-record field position only, recorded as an explicit marker on
 `AST.RecordField` (a third state beside a value and punning's null; never a
 sentinel expression). `_` anywhere else in expressions stays rejected. Note
@@ -3741,27 +3741,27 @@ the grammar split this must not blur: TYPE records already use `_`/`_name`
 as field NAMES (unnamed padding fields); expression records do not, and
 unset's `_` sits in VALUE position, after the colon.
 
-Typing. The update's result type EQUALS the base type — the field stays in
-the row, optional, same value type — so the record-update arm in
+Typing. The update's result type EQUALS the base type—the field stays in
+the row, optional, same value type—so the record-update arm in
 src/check/Check.zig keeps its wholesale `unify(base, expr_var)` unchanged.
 Only the PER-FIELD demand becomes kind-directed:
 
 - A SET field keeps today's probe (IMPLEMENTED, see the record-update
   bullet in Field Kinds): a single-field record with a kind-FLEXIBLE
-  presence — `.unknown` over a fresh presence var, recorded for the
-  finalize kind-defaulting sweep — unified into the base, so the base's
+  presence—`.unknown` over a fresh presence var, recorded for the
+  finalize kind-defaulting sweep—unified into the base, so the base's
   kind decides (`present ~ defaulted → defaulted` keeps defaulted-field
   updates working, and an optional base field checks the value at the
   payload type).
 - An UNSET field mirrors the `.?`-access probe EXACTLY (the optional arm of
   `e_field_access` checking): unify the base with an OPEN single-field
-  record `{ x: unknown(π, τ) }` — fresh presence var π, fresh value var
-  τ — and record (π, field, region) in the `optional_field_accesses`
+  record `{ x: unknown(π, τ) }`—fresh presence var π, fresh value var
+  τ—and record (π, field, region) in the `optional_field_accesses`
   watermark queue with a per-entry USE marker (access vs unset), so the
   one `judgeOptionalFieldAccesses` walk at every generalization boundary
   (finalize as backstop) judges both: a kind resolved `required` or
   `defaulted` is rejected (problems below), a still-flex kind pins to
-  `optional` BEFORE the scheme forms — an unset is presence-evidence for
+  `optional` BEFORE the scheme forms—an unset is presence-evidence for
   optionality, exactly like `.?`. The probe must NOT demand concrete
   `optional` in the row, for the same reason `.?` doesn't: a concrete
   demand would let width absorption admit the field into a closed base
@@ -3774,10 +3774,10 @@ Only the PER-FIELD demand becomes kind-directed:
   its base's type.
 
 Lowering. Trivial by construction: `lowerRecordExpr`
-(src/postcheck/monotype/lower.zig) lowers update as CONSTRUCTION-BY-COPY —
+(src/postcheck/monotype/lower.zig) lowers update as CONSTRUCTION-BY-COPY—
 the base binds to a let-local, mentioned fields take their new values,
 unmentioned fields copy via field access. An unset field takes the existing
-`optionalSlotMissingExpr(field.ty)` arm — the same Missing-tag construction
+`optionalSlotMissingExpr(field.ty)` arm—the same Missing-tag construction
 an omitted optional field uses. ARC needs no new rules: the replaced
 Present payload is never read, exactly like a SET field's replaced value
 today, and is freed when ARC decrefs the base after its last use; backends
@@ -3787,16 +3787,16 @@ Interactions:
 
 - Unset of a DEFAULTED field is rejected by the judgment above: the field
   is an inline slot with no missing state, and "unsetting" it would have to
-  rematerialize the default — construction behavior, not update. The
+  rematerialize the default—construction behavior, not update. The
   report carries a did-you-mean note: construct a new record omitting the
   field instead.
 - Unset of a field the base row lacks: ordinary missing-field mismatch from
   the probe (flex kinds never absorb).
-- `{ x: _ }` WITHOUT `..base` is rejected at canonicalization — unset is
+- `{ x: _ }` WITHOUT `..base` is rejected at canonicalization—unset is
   meaningless in construction, where omission already builds Missing.
 - Patterns: `{ x: _ }` in a destructure already means "match `x`, ignore
   the value" (wildcard sub-pattern over the kind-flexible destructure
-  probe) and KEEPS that meaning — expression `_` (unset) and pattern `_`
+  probe) and KEEPS that meaning—expression `_` (unset) and pattern `_`
   (wildcard) deliberately diverge. FALLBACK destructure (`{ x ?? fallback }`)
   stays its own deferred item (Field Kinds above); plain destructure of an
   optional field binds the Try (Field Kinds above).
@@ -3809,24 +3809,24 @@ the construction hint), "Unset Outside Record Update" at canonicalization.
 The probe unifies under its own `record_unset` context so a missing-field
 mismatch renders against the update site.
 
-Phasing (each stage lands with its pins before the next): (1) PARSE — the
+Phasing (each stage lands with its pins before the next): (1) PARSE—the
 `_` field value with its explicit AST marker; snapshots pin the accepted
-form and `_` still rejected elsewhere. (2) CAN — an explicit unset
+form and `_` still rejected elsewhere. (2) CAN—an explicit unset
 representation on `e_record`: a SEPARATE span of unset field names (name +
 region, no value expression; a new span, not a sentinel `Expr.Idx`, per
-AGENTS.md explicitness), plus the outside-update rejection. (3) CHECK — the
+AGENTS.md explicitness), plus the outside-update rejection. (3) CHECK—the
 probe, the queue's use marker, and the judgment split; pinned in
-src/check/test/type_checking_integration.zig: accepted — unset of a
+src/check/test/type_checking_integration.zig: accepted—unset of a
 `?:`-annotated field (result keeps `x ?: τ`), unset pinning an undetermined
-kind to optional, mixed set-and-unset; rejected — unset of required, of
+kind to optional, mixed set-and-unset; rejected—unset of required, of
 defaulted, of a missing field, and unset judged through a generalized
-function instantiated at a required row. (4) LOWER — route unset fields to
+function instantiated at a required row. (4) LOWER—route unset fields to
 `optionalSlotMissingExpr`; an eval test (run-test-eval, all backends)
 proving `.?x` on the updated record yields `Err(MissingField)` while other
 fields survive. Beyond this sketch, FALLBACK destructure (`{ x ?? d }`)
 remains deferred (orthogonal, listed in Field Kinds; plain optional
 destructure is IMPLEMENTED); SETTING an optional field in an update
-(Present-wrapping `{ ..r, x: v }` on an optional `x`) is now IMPLEMENTED —
+(Present-wrapping `{ ..r, x: v }` on an optional `x`) is now IMPLEMENTED—
 the SET side of this section's typing frame, realized by the kind-flexible
 update probe (see the record-update bullet in Field Kinds).
 

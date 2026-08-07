@@ -276,7 +276,7 @@ const Builder = struct {
                         // The default identity is part of the canonical key:
                         // two rows defaulting a field differently are
                         // different types (design.md "Defaulted Fields").
-                        // Written in CANONICAL form — the declaring module's
+                        // Written in CANONICAL form—the declaring module's
                         // content hash, never the env-local identity index,
                         // so the key is stable across environments.
                         self.writeTag("presence_defaulted");
@@ -695,7 +695,7 @@ const Builder = struct {
         // the checked artifact's encoding (`writeCheckedFieldKind`), so
         // solver and checked canonical keys agree: required (concrete
         // `required`, a kind var solved `required`, or a scheme interior's
-        // still-flex kind — required-equivalent, see the `.flex` arm) writes
+        // still-flex kind—required-equivalent, see the `.flex` arm) writes
         // `writeBool(false)` + the type; a `defaulted` kind writes the
         // checked `field_default` tag + the declaring module's content hash
         // + the default's expr node + the type; an `optional` kind writes

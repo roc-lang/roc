@@ -2579,7 +2579,7 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
 /// Whether a record field's kind resolved `optional` (design.md "Field
 /// Kinds"). A destructured OPTIONAL field's sub-pattern space is the nominal
 /// `Try(payload, [MissingField])` the checker's destructure judgment bound
-/// the binder to — NOT the field's value type on the row. This analysis
+/// the binder to—NOT the field's value type on the row. This analysis
 /// works from the scrutinee row alone and has no access to that judged
 /// binder type, so record specialization treats an optional field like a
 /// field it cannot resolve (`error.TypeError` upstream): the analysis is

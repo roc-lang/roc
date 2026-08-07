@@ -574,7 +574,7 @@ const Unifier = struct {
     /// defaulted` merges to `defaulted` (access demands `present` and must
     /// succeed on a defaulted field, keeping the default), two defaulted
     /// kinds merge exactly when their default identities are equal, and
-    /// `optional` unifies only with itself — every other pairing is a
+    /// `optional` unifies only with itself—every other pairing is a
     /// mismatch because one value has one layout.
     fn unifyFieldPresence(
         self: *Self,
@@ -1904,12 +1904,12 @@ const Unifier = struct {
     ///
     /// This is width absorption (design.md "Field Kinds (All-Dynamic
     /// Optional Fields)"): a field running into a closed row that lacks it
-    /// is acceptable exactly when its kind RESOLVED `optional` — an
+    /// is acceptable exactly when its kind RESOLVED `optional`—an
     /// annotation declared it, so the merged row keeps the field with a
     /// tagged slot constructed as missing. An undetermined kind does NOT
     /// absorb: optionality is opt-in via `?:`, and silently absorbing
     /// undetermined fields would accept typo'd extras and merge any two
-    /// literal records. The ROW is the surviving content of the merge —
+    /// literal records. The ROW is the surviving content of the merge—
     /// collapsing to `.empty_record` would discard the fields' existence,
     /// which row rendering and publication rely on.
     ///
@@ -1947,7 +1947,7 @@ const Unifier = struct {
             }
         }
 
-        // Close the extension first — its tail rows re-enter this function
+        // Close the extension first—its tail rows re-enter this function
         // and pre-check themselves before mutating anything.
         const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
         if (mb_ext) |ext| {

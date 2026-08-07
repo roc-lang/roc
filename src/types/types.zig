@@ -508,7 +508,7 @@ pub const FieldPresence = union(enum) {
 
 /// Stable identity of a defaulted field's default value (design.md
 /// "Defaulted Fields"). The default expression itself never lives in the
-/// type graph: the kind carries only this key — the declaring module's deep
+/// type graph: the kind carries only this key—the declaring module's deep
 /// content identity plus the canonical (CIR) node index of the default
 /// expression in that module. Like `Alias.origin_module`, crossing a store
 /// boundary rebases the origin half. Two defaulted kinds unify exactly when
@@ -519,7 +519,7 @@ pub const DefaultId = struct {
     /// the owning store's identity table (see `base.module_identity`).
     origin_module: ModuleIdentity.Idx,
     /// The CIR expression node index of the default value in the declaring
-    /// module — stable, deterministic, and directly resolvable to the
+    /// module—stable, deterministic, and directly resolvable to the
     /// expression for construction-site lowering.
     expr_node: u32,
 

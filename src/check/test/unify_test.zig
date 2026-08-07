@@ -1514,7 +1514,7 @@ test "unify - shared field presence - present ~ unknown pinned optional (fail)" 
 
     // Confirms the presence axis is scheduled: `a` demands present, but the
     // unknown's kind var is already pinned to `optional` (one value, one
-    // layout — design.md "Field Kinds").
+    // layout—design.md "Field Kinds").
     const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
     const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
     const p = try env.module_env.types.freshFromContent(.{ .field_presence = .optional });

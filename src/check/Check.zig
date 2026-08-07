@@ -181,7 +181,7 @@ optional_access_watermark: usize = 0,
 /// presence every literal field gets), recorded at the mint site so the
 /// finalize sweep (`defaultLiteralFieldKinds`) can commit still-undetermined
 /// MONOMORPHIC kinds to `required` from explicit data instead of walking the
-/// type store (design.md "Field Kinds" — kind defaulting as a checker pass).
+/// type store (design.md "Field Kinds"—kind defaulting as a checker pass).
 /// `.?`-minted kind vars are deliberately NOT recorded here:
 /// `judgeOptionalFieldAccesses` owns those and pins them to `optional`.
 /// `literal_field_kind_watermark` tracks the swept prefix (REPL sessions
@@ -208,7 +208,7 @@ pending_record_destructs: std.ArrayList(PendingRecordDestruct),
 pending_default_seen: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
 /// True while `predeclareAnnotationScheme` materializes an annotation ahead
 /// of all body checking: a defaulted field's kind (identity) is minted as
-/// usual, but its default EXPRESSION is not checked — the body-pass
+/// usual, but its default EXPRESSION is not checked—the body-pass
 /// generation types it exactly once, after dependency-ordered defs are
 /// checked (design.md "Defaulted Fields").
 predeclaring_annotation: bool = false,
@@ -4073,7 +4073,7 @@ fn instantiateVarOrphan(
 
 /// Like `instantiateVarOrphan`, but rigids in the copy become fresh FLEX
 /// vars: the copy is a strictly looser view of the type. Used to seed a
-/// branch accumulator from the expected type — the copy carries the
+/// branch accumulator from the expected type—the copy carries the
 /// annotation's concrete structural facts (e.g. `optional` field kinds) into
 /// the branch meet without capturing its rigids, which the branches' own
 /// types bind (design.md "Field Kinds (All-Dynamic Optional Fields)").
@@ -5673,7 +5673,7 @@ const PendingDefaultCheck = struct {
 const PendingRecordDestruct = struct {
     /// The field's kind-flexible presence var (the destructure's probe).
     presence_var: Var,
-    /// The field's value type in the probed row — a FRESH var, so the binder
+    /// The field's value type in the probed row—a FRESH var, so the binder
     /// stays independent until the judgment decides plain-vs-Try binding.
     payload_var: Var,
     /// The destructure binder (the sub-pattern's var).
@@ -6092,7 +6092,7 @@ const HoistedConstWalk = enum { value_graph, decl_template };
 /// here (one value-type var per field, in field order).
 ///
 /// The copy exists because a caller's loop body may reallocate the record-fields
-/// store — a borrowed column view into `self.types` would then dangle — so the
+/// store—a borrowed column view into `self.types` would then dangle—so the
 /// vars must be read out first. Every caller here also *recurses back into this
 /// function* from inside that loop, pushing a nested batch on top of the parent's.
 /// Because the scratch is index-addressed and each nested batch is released before
@@ -11736,7 +11736,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // Annotations pin field kinds CONCRETELY, in every syntactic
                 // position and context: `?:` is the `optional` kind (tagged
                 // slot, read with `.?`) and `:` is the `required` kind
-                // (`present`), with no polarity split — layout is a function
+                // (`present`), with no polarity split—layout is a function
                 // of the annotation alone (design.md "Field Kinds
                 // (All-Dynamic Optional Fields)").
                 const presence: types_mod.RecordField.Presence = if (rec_field.is_optional) blk: {
@@ -11750,7 +11750,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     // A DEFAULTED field (design.md "Defaulted Fields"): pin
                     // the kind to `defaulted` carrying the default's stable
                     // identity, and RECORD the default expression for the
-                    // finalize check — materialization can run before check
+                    // finalize check—materialization can run before check
                     // order exists and before callee effects resolve, so
                     // typing and purity wait for finalize. Predeclaration's
                     // side effects are unwound, so only the body-pass
@@ -12641,14 +12641,14 @@ fn checkPatternHelp(
                 // The destructured field probes the record with a
                 // kind-FLEXIBLE presence var (the same mint as a record
                 // update's probe): the record's kind decides what the binder
-                // sees. The row's value type is a FRESH payload var — the
+                // sees. The row's value type is a FRESH payload var—the
                 // binder is deliberately NOT the field's value type here,
                 // because an `optional` kind binds it to
                 // `Try(payload, [MissingField])` instead of the payload
                 // itself. `judgeRecordDestructBinds` performs that
                 // kind-directed binding at every generalization boundary
-                // (and finalize); a still-flex kind pins `required` there —
-                // destructuring must not silently make a field optional —
+                // (and finalize); a still-flex kind pins `required` there—
+                // destructuring must not silently make a field optional—
                 // which is also why this mint is NOT recorded in
                 // `literal_field_kinds` (design.md "Field Kinds").
                 const destruct_region = self.getRegionAt(destruct_var);
@@ -13341,8 +13341,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // The annotation is also the expected result of any `if`/
                 // `match` at the body's root: each branch checks against it
                 // directly (instead of pairwise against the previous branch),
-                // so annotation-declared facts — e.g. an `optional` field
-                // kind — pin branch types before the branches merge
+                // so annotation-declared facts—e.g. an `optional` field
+                // kind—pin branch types before the branches merge
                 // (design.md "Field Kinds (All-Dynamic Optional Fields)").
                 expected.withMaterializedAnnotation(.{
                     .var_ = anno_var,
@@ -13527,8 +13527,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // is checked directly against an expected type (its def's
                 // annotation or a platform requirement), seed the element
                 // meet with the element of a rigids-flexed ORPHAN COPY of
-                // that type, so annotation-declared facts — e.g. an
-                // `optional` field kind — constrain every element as it
+                // that type, so annotation-declared facts—e.g. an
+                // `optional` field kind—constrain every element as it
                 // folds in, instead of the elements meeting each other first
                 // with kinds still undetermined (design.md "Field Kinds
                 // (All-Dynamic Optional Fields)"). The copy is unpacked to
@@ -13673,7 +13673,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     does_fx = field_value.does_fx or does_fx;
 
                     // A supplied update field has CREATION semantics: like a
-                    // record-literal field, its KIND is undetermined — the
+                    // record-literal field, its KIND is undetermined—the
                     // update can set a required, defaulted, or optional field
                     // (design.md "Field Kinds (All-Dynamic Optional
                     // Fields)"). Unifying the kind-flexible probe into the
@@ -13683,7 +13683,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // exactly as construction does); `required`/`defaulted`
                     // pin as before; a still-flex base kind joins flex and
                     // defaults to `required` at finalize, exactly like a
-                    // literal's — which is why the minted kind var is
+                    // literal's—which is why the minted kind var is
                     // recorded in `literal_field_kinds` (see
                     // `defaultLiteralFieldKinds`).
                     //
@@ -14680,7 +14680,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // per-CHAIN, not per-segment: one optional segment anywhere makes
             // the whole chain produce a single `Try(τ_final, [MissingField])`,
             // with later segments (required or optional) riding in the Ok
-            // path. The runtime semantics are the monadic short-circuit — the
+            // path. The runtime semantics are the monadic short-circuit—the
             // first missing optional slot yields `Err(MissingField)`.
             var saw_optional = false;
 
@@ -14695,7 +14695,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const access_region = self.getRegionAt(access_var);
                 try self.setVarRank(access_var, env);
 
-                // Every segment's var is the FIELD's value type — for `.?`
+                // Every segment's var is the FIELD's value type—for `.?`
                 // segments too, so chains keep accessing the underlying value.
                 // The chain-level Try wrapper is added once, after the loop.
                 try self.unifyWith(access_var, .{ .flex = Flex.init() }, env);
@@ -14706,7 +14706,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .required => break :blk .{ .required = access_var },
                             .optional => {
                                 // The row constrains the FIELD's value type
-                                // (`name ?: τ` with a fresh flex kind — a
+                                // (`name ?: τ` with a fresh flex kind—a
                                 // concrete `optional` demand would let
                                 // absorption admit the field into a closed
                                 // receiver, accepting `.?` on undeclared
@@ -14715,7 +14715,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // generalization boundary (and finalize as
                                 // backstop): a required receiver field is
                                 // rejected, a still-flex kind pins to
-                                // `optional` BEFORE the scheme forms — so
+                                // `optional` BEFORE the scheme forms—so
                                 // instantiated copies carry the concrete
                                 // kind and cannot escape the judgment
                                 // (design.md "Field Kinds").
@@ -16899,8 +16899,8 @@ fn checkIfElseExpr(
     // with the whole expr (and hence the accumulator) exactly once, at the
     // end. Seeded with an ORPHAN COPY of the expected type (never the shared
     // var itself): the accumulator is the meet of the branches AND the
-    // annotation, so annotation-declared facts — e.g. an `optional` field
-    // kind — constrain every branch as it folds in, while the pristine
+    // annotation, so annotation-declared facts—e.g. an `optional` field
+    // kind—constrain every branch as it folds in, while the pristine
     // `expected_ret` stays the untouched reference that step-(1) probes and
     // error reports compare against (design.md "Field Kinds (All-Dynamic
     // Optional Fields)").
@@ -17071,8 +17071,8 @@ fn checkMatchExpr(
     // with the whole expr (and hence the accumulator) exactly once, at the
     // end. Seeded with an ORPHAN COPY of the expected type (never the shared
     // var itself): the accumulator is the meet of the branches AND the
-    // annotation, so annotation-declared facts — e.g. an `optional` field
-    // kind — constrain every branch as it folds in, while the pristine
+    // annotation, so annotation-declared facts—e.g. an `optional` field
+    // kind—constrain every branch as it folds in, while the pristine
     // `expected_ret` stays the untouched reference that step-(1) probes and
     // error reports compare against (design.md "Field Kinds (All-Dynamic
     // Optional Fields)").
@@ -17335,7 +17335,7 @@ fn checkMatchExpr(
         // type, so every record-destructure binder in the branch patterns must
         // already be bound through its row (the closure of a tag union inside
         // a destructured field is discovered via the field's value type).
-        // Judge the pending destructure binds now — an analysis site is a
+        // Judge the pending destructure binds now—an analysis site is a
         // commitment point exactly like a generalization boundary (a
         // still-flex kind pins `required` here; see `judgeRecordDestructBinds`).
         try self.judgeRecordDestructBinds(env);
@@ -19412,7 +19412,7 @@ const FinalizeScope = union(enum) {
 
 /// Judge the recorded `.?field` accesses now that the module's types have
 /// settled: an access whose presence variable resolved to the concrete
-/// `present` kind is rejected — the field can never be missing, so the
+/// `present` kind is rejected—the field can never be missing, so the
 /// optional access is almost certainly not what the user intended (design.md
 /// "Field Kinds (All-Dynamic Optional Fields)").
 ///
@@ -19422,15 +19422,15 @@ const FinalizeScope = union(enum) {
 /// both judgments are order-independent within the module.
 /// Judge every not-yet-judged `.?` access (design.md "Field Kinds"):
 /// rejects `.?` on a field whose kind resolved required/defaulted (always
-/// present — use `.`), and pins a still-flex kind to `optional`. Called at
-/// every generalization boundary — receivers are settled by then, and
+/// present—use `.`), and pins a still-flex kind to `optional`. Called at
+/// every generalization boundary—receivers are settled by then, and
 /// pinning BEFORE the scheme forms is what makes the judgment survive
-/// instantiation — and at finalize as the monomorphic backstop.
+/// instantiation—and at finalize as the monomorphic backstop.
 /// The field-kind judgment choreography run at every generalization
 /// boundary: `.?`-driven optional pins land first
 /// (`judgeOptionalFieldAccesses`), then destructure binders are judged
 /// against the pinned rows (`judgeRecordDestructBinds`). The internal
-/// ordering is load-bearing — see the two judges' doc comments — and this
+/// ordering is load-bearing—see the two judges' doc comments—and this
 /// helper is the single place it lives.
 fn judgeFieldKindsAtBoundary(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     try self.judgeOptionalFieldAccesses(env);
@@ -19473,19 +19473,19 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 ///   the pre-optional-fields semantics).
 /// - `optional`: the binder is `Try(payload, [MissingField])`, constructed
 ///   exactly as a `.?` access's chain result (`mkTryContent` over
-///   `makeFieldMissingTag`) — destructuring an optional field surfaces its
+///   `makeFieldMissingTag`)—destructuring an optional field surfaces its
 ///   runtime presence, it never invents the value.
 /// - still-flex: pinned to `required` FIRST (the mirror of
-///   `judgeOptionalFieldAccesses`' optional pin — a destructure alone must
+///   `judgeOptionalFieldAccesses`' optional pin—a destructure alone must
 ///   not silently make a field optional), then bound plainly.
-/// - `.err` (or any poisoned content): bound plainly to the payload — the
+/// - `.err` (or any poisoned content): bound plainly to the payload—the
 ///   kind mismatch was already reported and err absorbs; no cascade.
 ///
-/// Called at every generalization boundary — BEFORE the boundary's literal
+/// Called at every generalization boundary—BEFORE the boundary's literal
 /// defaulting (a numeral flowing through a destructured field is only
 /// signature-reachable once the binder is unified through the row, and
 /// defaulting's reachability classification must see that link) and again
-/// after `judgeOptionalFieldAccesses` — and at finalize as the monomorphic
+/// after `judgeOptionalFieldAccesses`—and at finalize as the monomorphic
 /// backstop; pinning before the scheme forms is what makes the judgment
 /// survive instantiation, exactly like the access judgment. Consequence of
 /// the pre-defaulting pass: a field that is BOTH destructured and
@@ -19497,7 +19497,7 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 /// refutable destructure statements): the analysis and its union-closing
 /// walk the SCRUTINEE type, so a destructured field's sub-pattern facts are
 /// only visible to them through the row once the binder is bound. An
-/// analysis site is therefore a commitment point too — a destructure whose
+/// analysis site is therefore a commitment point too—a destructure whose
 /// field kind is still flex there commits to `required` at the site (in
 /// checking order), which is also what the pre-optional-fields `.required`
 /// row demand did at pattern-check time.
@@ -19527,7 +19527,7 @@ fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
                 // commitment point that OWNS the var: the boundary's
                 // generalize call is about to promote exactly the vars at
                 // (or above) the current rank. A lower-ranked presence var
-                // belongs to an enclosing scope still mid-inference — a
+                // belongs to an enclosing scope still mid-inference—a
                 // nested boundary (an annotation predeclare or inner
                 // lambda fired while checking the destructure's own RHS)
                 // must not pin it before the destructure statement's own
@@ -19560,8 +19560,8 @@ fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
 }
 
 /// Kind defaulting as a checker pass (design.md "Field Kinds"): commit every
-/// literal-minted field kind that is still undetermined at finalize — nothing
-/// ever pinned it to either kind — to `required`, the zero-cost kind, by
+/// literal-minted field kind that is still undetermined at finalize—nothing
+/// ever pinned it to either kind—to `required`, the zero-cost kind, by
 /// ordinary unification. After this sweep a MONOMORPHIC module-level type can
 /// no longer carry a literal-minted flex kind, so the read boundaries
 /// (TypeWriter rendering, checked-artifact publication, canonical-key
@@ -19570,7 +19570,7 @@ fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
 ///
 /// A kind var whose root is GENERALIZED is skipped, permanently: it is the
 /// interior of a scheme (e.g. `mk = |v| { a: v }`), and instantiations of
-/// that scheme may legitimately join a `?:` annotation later — committing it
+/// that scheme may legitimately join a `?:` annotation later—committing it
 /// would mutate the scheme and change which programs typecheck. This is why
 /// the sweep runs at MODULE (and REPL-expression) finalize only, never at
 /// per-def generalization boundaries.
@@ -19583,7 +19583,7 @@ fn defaultLiteralFieldKinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
         // committed (annotation pin, `.?` optional pin, absorption), and
         // `.err` is a poisoned kind whose mismatch was already reported.
         if (resolved.desc.content != .flex) continue;
-        // Scheme interior — stays flex by design (see doc comment above).
+        // Scheme interior—stays flex by design (see doc comment above).
         if (resolved.desc.rank == .generalized) continue;
         const required_var = try self.freshFromContent(
             .{ .field_presence = .required },
@@ -19598,7 +19598,7 @@ fn defaultLiteralFieldKinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
 /// once, after all defs are checked and callee effects are resolved: type
 /// the default against an INSTANTIATED copy of its field's type (a
 /// generalized annotation scheme must not be mutated at finalize), and
-/// reject effectful defaults — the compiler materializes a default at
+/// reject effectful defaults—the compiler materializes a default at
 /// every construction site that omits the field, so it must be pure.
 fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.pending_default_checks.items) |pending| {
@@ -19633,7 +19633,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// Post-settlement restriction on defaults (design.md "Defaulted Fields"):
 /// the default's type must be CONCRETE (it is evaluated once at compile
 /// time and materialized at construction sites, so it must have exactly one
-/// runtime representation — judged after the defaulting rounds so numeral
+/// runtime representation—judged after the defaulting rounds so numeral
 /// defaults have committed). A literal can still be non-concrete (`?? []`
 /// with a parametric element type), which is why this judgment survives the
 /// canonicalization-time literal-only restriction: the default's SHAPE is
@@ -19641,7 +19641,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     for (self.pending_default_checks.items) |pending| {
         // An erroring default already reported (effectful poisoning above, or
-        // a unify mismatch against its field type — both leave the var `.err`);
+        // a unify mismatch against its field type—both leave the var `.err`);
         // judging concreteness of an err var would cascade a second problem
         // onto the same default.
         if (self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err) continue;
@@ -19719,11 +19719,11 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     try self.checkAllConstraints(env);
     try self.checkDefaultRestrictions();
 
-    // LAST, deliberately: every acceptance/rejection judgment above —
+    // LAST, deliberately: every acceptance/rejection judgment above—
     // `judgeOptionalFieldAccesses` (which may pin a literal-minted kind to
     // `optional` first), the literal-defaulting rounds and the constraint
     // validations (whose commits can run rows together and pin kinds from
-    // annotations), and `checkDefaultRestrictions` — must run on the exact
+    // annotations), and `checkDefaultRestrictions`—must run on the exact
     // pre-commit states, so the sweep is a pure commitment of already-final
     // facts and cannot alter any accept/reject outcome. Nothing after
     // finalize unifies types, so a kind committed here is a fact every

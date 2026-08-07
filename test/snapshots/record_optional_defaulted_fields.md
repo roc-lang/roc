@@ -28,8 +28,8 @@ TYPE MISMATCH - record_optional_defaulted_fields.md:10:26:10:31
  │                           ‾‾‾‾‾                                            │
  └───────────────────────────────── record_optional_defaulted_fields.md:10:26 ┘
 
-    An optional field may be missing from the record. Use `.?` to access it —
-    that produces a `Try` you can match on or default with `??`.
+    An optional field may be missing from the record. Use `.?` to access
+    it—that produces a `Try` you can match on or default with `??`.
 
 # TOKENS
 ~~~zig

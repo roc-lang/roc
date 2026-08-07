@@ -705,7 +705,7 @@ const core_tests = [_]TestCase{
     // absorbs a caller's extra optional fields by widening its instantiation.
     // If a polarity restriction lands (absorption only into a literal's
     // still-unbound row), these calls become type errors and these tests must
-    // be renegotiated — they document behavior, not a language guarantee.
+    // be renegotiated—they document behavior, not a language guarantee.
     .{
         .name = "optional record field: closed param absorbs a wider value's missing optional slot",
         .source_kind = .module,

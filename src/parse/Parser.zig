@@ -5027,7 +5027,7 @@ fn runExprStatementKernel(
                     .type_record_field => {
                         const state = open_syntax.popTypePayload(.type_record_field, TypeRecordFieldState);
                         last_type_anno = null;
-                        // `a : T ?? default` — a defaulted field: parse the
+                        // `a : T ?? default`—a defaulted field: parse the
                         // default value expression, then finish the field in
                         // the `.type_record_field_default` expr continuation.
                         if (self.peek() == .OpDoubleQuestion) {
@@ -5360,7 +5360,7 @@ fn runExprStatementKernel(
                 const name = self.pos;
                 self.advance();
                 var optional_mark: ?Token.Idx = null;
-                // `name ?: Type` — a `?` before the colon marks the field
+                // `name ?: Type`—a `?` before the colon marks the field
                 // optional (design.md "Field Kinds").
                 if ((self.peek() == .OpQuestion or self.peek() == .NoSpaceOpQuestion) and
                     self.peekNext() == .OpColon)

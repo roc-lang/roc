@@ -98,7 +98,7 @@ pub const SnapshotRecord = struct {
 /// not been resolved). Mirrors the presence axis of `types.RecordField.Presence`
 /// without carrying type variables (the field's type lives in `content`).
 ///
-/// TODO(optional-fields): polish optional field rendering — consumers that
+/// TODO(optional-fields): polish optional field rendering—consumers that
 /// format snapshotted records (src/check/report.zig, src/check/snapshot/diff.zig)
 /// should print a `?:` marker for `.unknown` (and decide on `.absent`) fields.
 /// A field's kind as snapshotted for error reporting, with the presence var

@@ -2639,8 +2639,8 @@ pub const CheckedFieldDefault = extern struct {
 ///
 /// The published field-kind axis (design.md "Field Kinds (All-Dynamic
 /// Optional Fields)" and "Defaulted Fields"): `required` and `defaulted`
-/// fields are plain inline slots — `defaulted` additionally carries the
-/// default identity in `default` — while `optional` is the tagged slot,
+/// fields are plain inline slots—`defaulted` additionally carries the
+/// default identity in `default`—while `optional` is the tagged slot,
 /// lowered by every layout/monotype consumer as the closed two-variant
 /// union `[#Missing, #Present(value)]`. The encoding is canonical:
 /// `default` carries an identity exactly when `tag == .defaulted`, so one
@@ -5779,7 +5779,7 @@ fn checkedRecordFieldsFromDeclarationAnnoSpan(
             // Kinds"): `?:` publishes `optional`, `??` publishes `defaulted`
             // with this module's canonical identity (design.md "Defaulted
             // Fields"), plain `:` publishes `required`. `?:` and `??` never
-            // combine — canonicalization rejects `a ?: T ?? d` outright.
+            // combine—canonicalization rejects `a ?: T ?? d` outright.
             .kind = if (field.is_optional)
                 .optional
             else if (field.default_value) |default_expr_idx|
@@ -7951,7 +7951,7 @@ fn copyCheckedRecordFields(
                 // defs' types are published as schemes, and a scheme's
                 // quantified kind var must stay flex (instantiations may
                 // join a `?:` annotation later). Monomorphic literal-minted
-                // kinds no longer reach publication flex — the finalize
+                // kinds no longer reach publication flex—the finalize
                 // sweep commits them to `required` in the solved graph
                 // (Check.defaultLiteralFieldKinds, design.md "Field Kinds"
                 // kind defaulting). A scheme's flex kind publishes
@@ -9032,7 +9032,7 @@ pub const CheckedFieldAccessMode = enum(u8) {
 
 /// One source-ordered segment of a checked record-field access path.
 ///
-/// `success_ty` is the checked type of this path prefix's successful payload —
+/// `success_ty` is the checked type of this path prefix's successful payload—
 /// for `.?` segments too, the field's VALUE type, never the slot or Try
 /// wrapper. The enclosing checked expression owns the observable type of the
 /// complete path (one flat `Try(τ, [MissingField])` when any segment's `mode`
@@ -9987,7 +9987,7 @@ pub const CheckedBodyStoreView = struct {
 
     /// Resolve a locally-declared field default's `DefaultId.expr_node` to
     /// its published checked expression (design.md "Defaulted Fields").
-    /// Null for a node this module never declared a default on — a foreign
+    /// Null for a node this module never declared a default on—a foreign
     /// default resolves in its declaring module's view instead.
     pub fn defaultExpr(self: CheckedBodyStoreView, expr_node: u32) ?CheckedExprId {
         for (self.default_exprs) |entry| {
@@ -10122,7 +10122,7 @@ const CheckedSourceNodeKind = enum(u2) {
 
 // Not an `OptionalId`: a slot here is a packed `(kind:2, id:30)` pair, not a
 // plain id, and the map is build-only (`serde_transient_fields`), never
-// serialized — the sentinel marks an empty slot in the dense per-node table.
+// serialized—the sentinel marks an empty slot in the dense per-node table.
 const checked_source_node_empty = std.math.maxInt(u32);
 const checked_source_node_id_bits = 30;
 const checked_source_node_id_limit = @as(u32, 1) << checked_source_node_id_bits;
@@ -10693,8 +10693,8 @@ pub const CheckedBodyStore = struct {
     /// Locally-declared field defaults (design.md "Defaulted Fields"):
     /// `DefaultId.expr_node` (a CIR node in THIS module) → the published
     /// checked expression, so construction sites can materialize omitted
-    /// defaulted fields after `source_node_map` is discarded. SERIALIZED —
-    /// unlike the source-node map — because cross-module construction sites
+    /// defaulted fields after `source_node_map` is discarded. SERIALIZED—
+    /// unlike the source-node map—because cross-module construction sites
     /// resolve a foreign default in its declaring module's (possibly cached)
     /// artifact. Sorted by `expr_node` (built from a deduplicating scan).
     default_exprs: std.ArrayList(CheckedDefaultExpr) = .empty,
@@ -13409,7 +13409,7 @@ const CheckedBodyPayloadCopier = struct {
     /// Copy a field-access path's segments into the read-form payload slice.
     /// The result is a per-result heap allocation, not a view into a reused
     /// copier buffer: `CheckedExprData.field_access.segments` is the public
-    /// read-form type (a slice — see the pool-reconstruction path), so the loose
+    /// read-form type (a slice—see the pool-reconstruction path), so the loose
     /// build form cannot carry a range the way stored/pooled sub-arrays do. Every
     /// field-access expr's slice is retained side-by-side in the build `exprs`
     /// array until the batch `commitExprs` copies each into
@@ -16657,7 +16657,7 @@ const EvidencePass = struct {
             // dispatch-specific failures; `.err` is the separate value-error
             // fence and must never be inferred from the callable or its return.
             // A presence variable is not a dispatch target and carries no
-            // obligations — treat it as inert like `.err`.
+            // obligations—treat it as inert like `.err`.
             .err, .field_presence => return .checked_error,
             .flex => |flex| return self.resolveVarObligation(resolved.var_, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .rigid => |rigid| return self.resolveVarObligation(resolved.var_, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
@@ -22640,7 +22640,7 @@ pub const CompileTimeRootKind = enum {
     quote_conversion,
     /// A record field default (`a : U8 ?? expr`, design.md "Defaulted
     /// Fields"): the declaring module evaluates the pure default once, and
-    /// construction sites — local and cross-module — restore the archived
+    /// construction sites—local and cross-module—restore the archived
     /// constant instead of re-lowering the expression.
     field_default,
 };
@@ -22713,8 +22713,8 @@ pub const CompileTimeRootTable = struct {
 
         // Every archived field default is a compile-time constant root
         // (design.md "Defaulted Fields"): the declaring module evaluates the
-        // pure default once, and construction sites — local and
-        // cross-module — restore the archived constant. Registered FIRST:
+        // pure default once, and construction sites—local and
+        // cross-module—restore the archived constant. Registered FIRST:
         // defaults are closed literals with no dependencies (literals-only
         // rule), and derived parsers restore them from within OTHER roots'
         // compile-time evaluation, so every default must finalize before
@@ -27803,8 +27803,8 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size. (+2 for the body store's
-            // `field_access_segment_pool` and `default_exprs` — design.md
-            // "Defaulted Fields" — over the upstream count.)
+            // `field_access_segment_pool` and `default_exprs`—design.md
+            // "Defaulted Fields"—over the upstream count.)
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 208);
         }
 
@@ -27958,7 +27958,7 @@ pub const CheckedModuleArtifact = struct {
     // Version 57 (over upstream 56) publishes the optional/defaulted record
     // field machinery: checked record-field access paths as ordered segment
     // ranges with explicit successful-prefix types, source regions, access
-    // modes (`CheckedFieldAccessSegment.mode` — `.?` segments reach checked
+    // modes (`CheckedFieldAccessSegment.mode`—`.?` segments reach checked
     // bodies), and per-segment backing access; the field-kind axis on
     // checked record fields (`CheckedRecordField.kind`:
     // required/optional/defaulted plus the defaulted identity, design.md

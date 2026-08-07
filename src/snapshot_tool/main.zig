@@ -2587,7 +2587,7 @@ fn getDefaultedTypeStringWithSeen(
                         // wrapper whose kind solved required/defaulted is a
                         // plain field; only a solved `optional` renders `?:`
                         // (a still-flex kind defaults to required at read
-                        // boundaries — design.md "Field Kinds").
+                        // boundaries—design.md "Field Kinds").
                         try result.appendSlice(switch (field_presence) {
                             .required => " : ",
                             .unknown => |unknown| switch (can_ir.types.resolveVar(unknown.presence).desc.content) {

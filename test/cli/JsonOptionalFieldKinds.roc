@@ -53,7 +53,7 @@ expect {
 	}
 }
 
-# An absent `??` key materializes the archived default — the same
+# An absent `??` key materializes the archived default—the same
 # construction-site omission semantics `{}` literals get.
 expect {
 	result : Try({ name : Str, count : U8 ?? 10 }, [InvalidJson(Str), MissingRequiredField(Str)])

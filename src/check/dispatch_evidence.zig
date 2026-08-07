@@ -368,16 +368,16 @@ fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.
 /// presence var is an evidence leaf exactly like the `.field_presence` arms
 /// above: static-dispatch constraints attach to expression receivers, a
 /// presence var is never addressable from an expression, and unification only
-/// ever pairs it with other presence-axis content — `unify.zig`'s
+/// ever pairs it with other presence-axis content—`unify.zig`'s
 /// `unifyFlex`/`unifyFieldPresence` assert that a flex meeting a presence fact
 /// carries zero constraints (and still `recordDeferredConstraint` it), so no
 /// constraint can hide behind a presence var.
 ///
 /// `.unknown` fields occur in both row kinds: `record` rows mint them for
-/// literals, `.?` accesses, and `?:` annotations, and `record_unbound` rows —
+/// literals, `.?` accesses, and `?:` annotations, and `record_unbound` rows—
 /// whose sole producer is the record-update probe in `Check.zig` (`e_record`
 /// with an ext, later appearances being verbatim copies via `instantiate.zig`
-/// and `copy_import.zig`) — carry one kind-flexible `.unknown` field per
+/// and `copy_import.zig`)—carry one kind-flexible `.unknown` field per
 /// mentioned update field (creation semantics: the base's kind decides).
 /// Both row kinds share this walk because the evidence-bearing axis is
 /// identical either way.

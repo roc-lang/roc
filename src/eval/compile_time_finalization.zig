@@ -355,7 +355,7 @@ const RootCompletionState = struct {
     current_root_id: ?checked.ComptimeRootId = null,
     /// Requested `field_default` roots not yet finished. Derived parsers
     /// restore archived default constants from within OTHER roots' lowering
-    /// — which happens before those roots' own evaluation — so every
+    ///—which happens before those roots' own evaluation—so every
     /// non-default root carries an implicit dependency edge on ALL field
     /// defaults (design.md "Defaulted Fields"). Encoding the edge here (a
     /// non-default request is not ready while this is nonzero) is what
