@@ -2679,6 +2679,25 @@ a generated nominal it consumes the nominal's recorded public source and
 ordered public arguments directly. It never merges the generated nominal with
 the public nominal.
 
+A checked-view mapping may relate an ordinary checked nominal view to its
+declared structural backing. This is not a recovered type relation: the
+nominal's checker-authored backing edge is the explicit authorization. An
+exact producer relation does not erase an ordinary nominal constructor layer;
+generated-private nominals remain atomic exact roots as described above.
+
+An ordinary opaque keeps its nominal constructor in a procedure's runtime ABI.
+Inside the defining module, the registered checked procedure source may
+explicitly authorize the body to consume that argument's private backing.
+Monotype then emits a nominal pattern at function entry and binds the backing
+for the body; it does not retag the ABI local as structural. Flow in the other
+direction emits an explicit nominal construction around the structural value.
+The same rule applies to local and control-flow storage reads: relating graph
+cells proves which conversion is authorized, while the lowered IR still
+contains the nominal construction or destructure that performs it. Once those
+boundaries have been emitted, Lambda Solved keeps the more restrictive backing
+visibility when otherwise-identical named runtime types meet; backing
+visibility is compile-time access, not a second runtime representation.
+
 Procedure dispatch specializes from the values the call actually produced.
 After each operand has been lowered once, Monotype builds the callee request
 from those operands' exact output cells and the requested result cell. The
@@ -2687,6 +2706,13 @@ substitution. In particular, a compiler-generated interpolation iterator enters
 `from_interpolation` as its exact generated nominal; dispatch must not reuse the
 original checked-public callable argument and ask the callee to reconstruct or
 repair the representation.
+
+Iterator producer operations are applied to that completed callable, after
+lowered operands have supplied their exact cells. In particular, `Iter.next`
+and adapter operations derive their exact result from the iterator actually
+passed at runtime even when the checked-public request did not expose that
+identity. Direct graph-backed dispatch follows the same operation; it cannot
+bypass producer conversion merely because it does not need evidence lookup.
 
 Building that request is one whole-interface substitution. Monotype walks each
 checked argument beside its completed produced argument once and records the
@@ -2718,10 +2744,42 @@ the selected `List(Iter$identity)` accumulator without scanning it or inventing
 a conversion. This operation may never rewrite a named root; an independently
 produced nominal keeps its own exact identity.
 
+Constructor payloads are storage boundaries too. Their common-representation
+operation descends through the constructor layers already being emitted until
+it reaches the stored local occurrence, so a narrow structural row can enter a
+wider tag, tuple, list, record, or nominal payload without a later repair pass.
+This descent performs no generated-private containment query and allocates no
+parallel type graph. An ordinary local read remains directional; symmetric
+selection is reserved for real storage and control-flow joins. A checked narrow
+closed row may therefore map into a wider exact contextual row at such a
+boundary, but unrelated labels are never invented by ordinary equality.
+
 This producer-first order applies to ordinary direct calls as well as static
 dispatch. Preparing checked relations is not completion: a record, tuple, tag,
 list, call, field read, tuple-item read, or tag-payload read can still replace
 its checked destination with a distinct exact output cell while it lowers.
+Casting a branch or procedure result into an independent producer cell first
+instantiates a fresh checked copy from the destination's already-selected
+specialization substitutions. The copy isolates the eventual exact root; it
+must not independently default numeric, row, or other checked variables and
+only compare them with the destination after lowering.
+Every fresh checked occurrence inside a specialization follows this rule,
+including call arguments and results and dispatch results. It copies only
+substitutions that are already selected: an unresolved source variable remains
+an independent unresolved variable. Consequently, later exact production at
+one occurrence cannot flow backward into another occurrence merely because
+their checked types shared a variable before lowering.
+Once a body's generated identities are final and its relations are frozen, it
+publishes those identities to the durable Monotype interner before lowering any
+deferred nested specialization. Nested lowering can therefore reuse the
+already-authoritative type; it cannot win an ordering race after the outer
+graph is no longer able to bind relations.
+Function-request materialization memoizes by both source/target node pair and
+the explicit purpose of the copy: call request, produced value, produced
+callable, body ABI, or reassigned storage. These purposes share unchanged
+structure but cannot reuse one another's constructor decision. In particular,
+body ABI copies keep function constructor roots independent, and reassigned
+storage copies only the paths leading to selected stored cells.
 Callee specialization starts only after those argument expressions have
 completed, and reuses the already-lowered operands in the emitted call. An
 `exact_graph` procedure signature also

@@ -424,12 +424,13 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     const dispatch_instantiation = sourceSliceBetween(
         lower_source,
-        "fn instantiateCallableDispatchPlanCallNodeFromCallerAtNode(",
+        "fn instantiateCallableDispatchPlanRequestFromCallerAtNode(",
         "fn relateFormalToOperand(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
     try expectContains(dispatch_instantiation, "const request_fn = try functionRequestNode(");
-    try expectContains(dispatch_instantiation, "self.graph.functionRequestFromProducedArguments(fn_node, request_fn, request_args)");
+    try expectContains(dispatch_instantiation, "self.graph.functionRequestFromProducedArgumentsAndComponents(");
+    try expectContains(dispatch_instantiation, "&.{checked_dispatcher_node}");
     try expectNotContains(dispatch_instantiation, "self.graph.applyCheckedTypeMapping(fn_graph.args[index]");
 
     const entry_wrapper = sourceSliceBetween(
@@ -505,7 +506,9 @@ test "Monotype expanded record-rest statements retain graph provenance" {
         "fn appendExpandedPatternStatement(",
         "fn checkedStatementHasRuntimeEffect(",
     );
-    try expectContains(record_rest, "const value_request_node = try self.lowerExprTypeNode(expr)");
+    try expectContains(record_rest, "const value_request_node = if (reassigned_binders)");
+    try expectContains(record_rest, "reassignedPatternStorageCell(pattern, expr, binders)");
+    try expectContains(record_rest, "else\n            try self.lowerExprTypeNode(expr)");
     try expectContains(record_rest, "const value_cell = self.exprTypeCell(value)");
     try expectContains(record_rest, "const value_node = try value_cell.toGraphNode(self.graph)");
     try expectContains(record_rest, "addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null)");
@@ -733,7 +736,8 @@ test "Monotype match lowering projects exact scrutinee cells without checked roo
         "fn lowerMatch(",
         "fn savePatternBinders(",
     );
-    try expectContains(match_source, "const scrutinee = try self.lowerExpr(match.cond)");
+    try expectContains(match_source, "const produced_scrutinee = try self.lowerExpr(match.cond)");
+    try expectContains(match_source, "const scrutinee = try self.wrapCheckedNominalRequestAroundBackingValue(");
     try expectContains(match_source, "const scrutinee_node = try self.exprTypeCell(scrutinee).toGraphNode(self.graph)");
     try expectNotContains(match_source, "try self.graph.applyCheckedTypeMapping(");
     try expectContains(match_source, "try entry.ctx.preRegisterPatternBindersAtNode");

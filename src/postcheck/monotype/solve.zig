@@ -252,15 +252,28 @@ const NodePair = struct {
     right: NodeId,
 };
 
+const FunctionRequestMaterializationMode = enum {
+    request,
+    produced_value,
+    produced_callable,
+    body_abi,
+    reassigned_storage,
+};
+
+const FunctionRequestMaterialization = struct {
+    pair: NodePair,
+    mode: FunctionRequestMaterializationMode,
+};
+
 const FunctionRequestSubstitution = struct {
     replacements: collections.DenseMap(NodeId, NodeId),
-    materialized: std.AutoHashMap(NodePair, NodeId),
+    materialized: std.AutoHashMap(FunctionRequestMaterialization, NodeId),
     compared: std.AutoHashMap(NodePair, void),
 
     fn init(allocator: Allocator) FunctionRequestSubstitution {
         return .{
             .replacements = collections.DenseMap(NodeId, NodeId).init(allocator),
-            .materialized = std.AutoHashMap(NodePair, NodeId).init(allocator),
+            .materialized = std.AutoHashMap(FunctionRequestMaterialization, NodeId).init(allocator),
             .compared = std.AutoHashMap(NodePair, void).init(allocator),
         };
     }
@@ -295,6 +308,7 @@ const ProducedRelationStamp = struct {
 const TypeApplicationKind = enum {
     exact_producer,
     checked_mapping,
+    selected_substitutions,
 };
 
 const NominalBackingDeclaration = struct {
@@ -2169,6 +2183,23 @@ pub const InstGraph = struct {
         return try self.applyTypeToRequest(checked_node, exact_node, .checked_mapping);
     }
 
+    /// Copy substitutions that this specialization has already selected into
+    /// a fresh occurrence of the same checked type. An unresolved source is
+    /// not a substitution, so it deliberately leaves the fresh occurrence
+    /// independent. This preserves producer-owned exact roots while carrying
+    /// ordinary choices such as a generic numeric slot specialized to U16.
+    pub fn applySelectedCheckedSubstitutions(
+        self: *InstGraph,
+        fresh_checked_node: NodeId,
+        current_checked_node: NodeId,
+    ) Allocator.Error!NodeId {
+        return try self.applyTypeToRequest(
+            fresh_checked_node,
+            current_checked_node,
+            .selected_substitutions,
+        );
+    }
+
     fn applyTypeToRequest(
         self: *InstGraph,
         request_node: NodeId,
@@ -2224,6 +2255,12 @@ pub const InstGraph = struct {
         const public_content = self.nodes.items[@intFromEnum(public_node)];
         const private_content = self.nodes.items[@intFromEnum(private_node)];
 
+        // A still-open cell contains no selected substitution to copy. Do not
+        // merge it with the fresh occurrence: either side may later receive a
+        // different producer-owned exact representation of the same checked
+        // type variable.
+        if (kind == .selected_substitutions and private_content == .unresolved) return;
+
         // Aliases are not runtime representation boundaries. Preserve the
         // exact produced root while applying the request through either
         // side's checker-authored transparent backing.
@@ -2240,11 +2277,17 @@ pub const InstGraph = struct {
             return;
         }
 
-        if (kind == .checked_mapping and public_content == .named and private_content != .named) {
+        if (public_content == .named and private_content != .named) {
             const backing = public_content.named.backing orelse
                 Common.invariant("checked type mapping found a named view without backing");
-            try self.relateOpaqueChild(backing.node, private_node, pending);
-            return;
+            if (kind == .checked_mapping or backing.authority == .checked_public) {
+                // Ordinary nominal requests are handled at the exact point
+                // where the traversal encounters them. The IR boundary emits
+                // the explicit nominal constructor; this relation only maps
+                // the checker-authorized backing to the produced structure.
+                try self.relateOpaqueChild(backing.node, private_node, pending);
+                return;
+            }
         }
 
         if (isGeneratedPrivateRootContent(public_content) and isGeneratedPrivateRootContent(private_content)) {
@@ -2312,9 +2355,7 @@ pub const InstGraph = struct {
 
         // An exact produced nominal is an explicit constructor layer. A
         // structural request maps to its backing without discarding that
-        // produced root. The reverse is not valid: a structural producer for
-        // a nominal request means the producer failed to construct the named
-        // value, and descending through the request would hide that bug.
+        // produced root.
         if (public_content != .named and public_content != .unresolved and private_content == .named) {
             const backing = private_content.named.backing orelse
                 Common.invariant("produced-type substitution found an exact nominal without backing");
@@ -2372,11 +2413,11 @@ pub const InstGraph = struct {
             },
             .tag_union => {
                 if (private_content != .tag_union) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueTagRows(public_node, private_node, pending);
+                try self.relateOpaqueTagRows(public_node, private_node, kind, pending);
             },
             .record => {
                 if (private_content != .record) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueRecordRows(public_node, private_node, pending);
+                try self.relateOpaqueRecordRows(public_node, private_node, kind, pending);
             },
             .empty_tag_union => if (private_content != .empty_tag_union)
                 Common.invariant("opaque interface relation received different type structure"),
@@ -2405,6 +2446,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         public_node: NodeId,
         private_node: NodeId,
+        kind: TypeApplicationKind,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         const flat_public = try self.flattenTagRow(public_node);
@@ -2447,9 +2489,16 @@ pub const InstGraph = struct {
             }
         }
 
-        if (self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .tag_union) or
-            self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .tag_union))
-        {
+        const public_conflicts = self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .tag_union);
+        const private_conflicts = self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .tag_union);
+        if (kind == .checked_mapping and only_public.items.len == 0 and public_conflicts) {
+            // Checking may coerce a closed narrow tag row into a wider
+            // contextual row. The exact contextual cell already owns that
+            // wider runtime representation, so mapping the shared payloads is
+            // complete; do not try to mutate the checked closed row.
+            return;
+        }
+        if (public_conflicts or private_conflicts) {
             Common.invariant("opaque interface relation widened a closed tag union");
         }
         if (only_public.items.len == 0 and only_private.items.len == 0) {
@@ -2478,6 +2527,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         public_node: NodeId,
         private_node: NodeId,
+        kind: TypeApplicationKind,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         const flat_public = try self.flattenRecordRow(public_node);
@@ -2515,9 +2565,15 @@ pub const InstGraph = struct {
             }
         }
 
-        if (self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .record) or
-            self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .record))
-        {
+        const public_conflicts = self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .record);
+        const private_conflicts = self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .record);
+        if (kind == .checked_mapping and only_public.items.len == 0 and public_conflicts) {
+            // Record width coercion has the same directional contract as tag
+            // rows: the wider exact contextual cell is the representation;
+            // the narrower checked interface contributes only shared fields.
+            return;
+        }
+        if (public_conflicts or private_conflicts) {
             Common.invariant("opaque interface relation widened a closed record");
         }
         if (only_public.items.len == 0 and only_private.items.len == 0) {
@@ -2761,6 +2817,30 @@ pub const InstGraph = struct {
         current_request_fn_node: NodeId,
         produced_args: []const NodeId,
     ) Allocator.Error!NodeId {
+        return (try self.functionRequestFromProducedArgumentsAndComponents(
+            checked_fn_node,
+            current_request_fn_node,
+            produced_args,
+            &.{},
+        )).request;
+    }
+
+    pub const MaterializedFunctionRequest = struct {
+        request: NodeId,
+        components: []const NodeId,
+    };
+
+    /// Build a function request and, through the exact same substitution,
+    /// materialize checker-authored component roots such as a type-only method
+    /// dispatcher. Returning those roots preserves the request's produced
+    /// structure without re-reading the independent checked instantiation.
+    pub fn functionRequestFromProducedArgumentsAndComponents(
+        self: *InstGraph,
+        checked_fn_node: NodeId,
+        current_request_fn_node: NodeId,
+        produced_args: []const NodeId,
+        checked_components: []const NodeId,
+    ) Allocator.Error!MaterializedFunctionRequest {
         self.countDiagnostic("function_request_builds");
         const checked_fn = try self.functionNodes(checked_fn_node);
         const current_request_fn = switch (self.content(try self.functionRequestRoot(current_request_fn_node))) {
@@ -2803,22 +2883,40 @@ pub const InstGraph = struct {
             produced_args,
             &substitution,
         );
-        const request_ret = try self.materializeFunctionRequestNode(
+        // The return cell is the caller's exact destination, not a fresh
+        // checked-public occurrence. Preserve a definition-private structural
+        // destination just as nested callable outputs preserve their produced
+        // representation.
+        const request_ret = try self.materializeFunctionRequestNodeMode(
             checked_fn.ret,
             current_request_fn.ret,
             &substitution,
+            .produced_callable,
         );
         const ret_changed = !self.sameClass(current_request_fn.ret, request_ret);
+        const checked_source_root = try self.functionRequestRoot(checked_fn_node);
+        const source_changed = if (self.requestCheckedSource(current_request_fn_node)) |current_source|
+            !self.sameClass(try self.functionRequestRoot(current_source), checked_source_root)
+        else
+            false;
 
-        const request_fn = if (changed_args != null or ret_changed)
+        const request_fn = if (changed_args != null or ret_changed or source_changed)
             try self.newNode(.{ .func = .{
                 .args = changed_args orelse current_request_fn.args,
                 .ret = request_ret,
             } })
         else
             current_request_fn_node;
-        try self.registerRequestCheckedSource(request_fn, checked_fn_node);
-        return request_fn;
+        try self.registerRequestCheckedSource(request_fn, checked_source_root);
+        const components = try self.arena().alloc(NodeId, checked_components.len);
+        for (checked_components, components) |checked_component, *component| {
+            component.* = try self.materializeFunctionRequestNode(
+                checked_component,
+                checked_component,
+                &substitution,
+            );
+        }
+        return .{ .request = request_fn, .components = components };
     }
 
     fn collectFunctionRequestSubstitutions(
@@ -3013,20 +3111,140 @@ pub const InstGraph = struct {
         raw_node: NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!NodeId {
+        return self.materializeFunctionRequestNodeMode(
+            raw_checked,
+            raw_node,
+            substitution,
+            .request,
+        );
+    }
+
+    /// Give one function body stable constructor roots for its ABI while
+    /// sharing all value-only structure. Function nodes are copied, and
+    /// compound paths are copied only when they lead to a copied function.
+    /// Later checked-source relations can then refine their own request roots
+    /// without changing argument cells the body has already emitted.
+    pub fn isolateFunctionAbi(self: *InstGraph, fn_node: NodeId) Allocator.Error!NodeId {
+        var substitution = FunctionRequestSubstitution.init(self.allocator);
+        defer substitution.deinit();
+        return try self.materializeFunctionRequestNodeMode(
+            fn_node,
+            fn_node,
+            &substitution,
+            .body_abi,
+        );
+    }
+
+    /// Build one detached request whose explicitly selected descendant cells
+    /// use the representations already stored in mutable locals. The old local
+    /// cells remain immutable: only compound paths from `request_root` to a
+    /// selected cell are copied. Multiple selections for the same request cell
+    /// meet at that assignment boundary and choose one common representation.
+    pub fn materializeReassignedStorageRequest(
+        self: *InstGraph,
+        request_root: NodeId,
+        request_nodes: []const NodeId,
+        stored_nodes: []const NodeId,
+    ) Allocator.Error!NodeId {
+        if (request_nodes.len != stored_nodes.len) {
+            Common.invariant("reassigned storage request received different selection lengths");
+        }
+        var substitution = FunctionRequestSubstitution.init(self.allocator);
+        defer substitution.deinit();
+        for (request_nodes, stored_nodes) |request, stored| {
+            try self.recordFunctionRequestReplacement(
+                self.find(request),
+                self.find(stored),
+                &substitution,
+            );
+        }
+        return try self.materializeFunctionRequestNodeMode(
+            request_root,
+            request_root,
+            &substitution,
+            .reassigned_storage,
+        );
+    }
+
+    fn materializeFunctionRequestNodeMode(
+        self: *InstGraph,
+        raw_checked: NodeId,
+        raw_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+        mode: FunctionRequestMaterializationMode,
+    ) Allocator.Error!NodeId {
         const checked_node = self.find(raw_checked);
         const node = self.find(raw_node);
         const node_content = self.nodes.items[@intFromEnum(node)];
-        if (isGeneratedPrivateRootContent(node_content)) return node;
-
         if (substitution.replacements.get(checked_node)) |replacement| return self.find(replacement);
+        if (isGeneratedPrivateRootContent(node_content)) return node;
         const pair = NodePair{ .left = checked_node, .right = node };
-        if (substitution.materialized.get(pair)) |materialized| return self.find(materialized);
+        const materialization_key = FunctionRequestMaterialization{ .pair = pair, .mode = mode };
+        if (substitution.materialized.get(materialization_key)) |materialized| return self.find(materialized);
 
         const checked_content = self.nodes.items[@intFromEnum(checked_node)];
         if (checked_content == .named and node_content != .named) {
             const backing = checked_content.named.backing orelse
                 Common.invariant("function request materialization found a checked named view without backing");
-            return self.materializeFunctionRequestNode(backing.node, node, substitution);
+            if (checked_content.named.kind == .alias or mode == .produced_callable) {
+                return self.materializeFunctionRequestNodeMode(backing.node, node, substitution, mode);
+            }
+
+            // A definition-private call-site view may expose an ordinary
+            // nominal's structural backing. Preserve the checked constructor
+            // root and substitute beneath it; only an exact generated-private
+            // nominal (handled above) may replace a nominal request root.
+            const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+            try substitution.materialized.put(materialization_key, reserved);
+            const args = try self.materializeFunctionRequestNodesMode(
+                checked_content.named.args,
+                checked_content.named.args,
+                substitution,
+                mode,
+            ) orelse checked_content.named.args;
+            const materialized_backing = try self.materializeFunctionRequestNodeMode(
+                backing.node,
+                node,
+                substitution,
+                mode,
+            );
+            var declared_order = checked_content.named.declared_order;
+            var changed_declared: ?[]InstDeclaredField = null;
+            for (checked_content.named.declared_order, 0..) |declared, index| {
+                const next = switch (declared) {
+                    .named => |field| InstDeclaredField{ .named = field },
+                    .padding => |padding| InstDeclaredField{ .padding = try self.materializeFunctionRequestNodeMode(
+                        padding,
+                        padding,
+                        substitution,
+                        mode,
+                    ) },
+                };
+                if (changed_declared) |fields| {
+                    fields[index] = next;
+                } else if (!std.meta.eql(declared, next)) {
+                    const fields = try self.arena().alloc(InstDeclaredField, declared_order.len);
+                    @memcpy(fields[0..index], declared_order[0..index]);
+                    fields[index] = next;
+                    changed_declared = fields;
+                }
+            }
+            if (changed_declared) |fields| declared_order = fields;
+            try self.setContent(reserved, .{ .named = .{
+                .named_type = checked_content.named.named_type,
+                .def = checked_content.named.def,
+                .kind = checked_content.named.kind,
+                .builtin_owner = checked_content.named.builtin_owner,
+                .args = args,
+                .backing = .{
+                    .node = materialized_backing,
+                    .use = backing.use,
+                    .authority = backing.authority,
+                },
+                .generated_iterator = checked_content.named.generated_iterator,
+                .declared_order = declared_order,
+            } });
+            return reserved;
         }
         if (checked_content == .unresolved) return node;
 
@@ -3035,13 +3253,13 @@ pub const InstGraph = struct {
             .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
             .list => |elem| blk: {
                 if (checked_content != .list) Common.invariant("function request materialization received different type structure");
-                const next = try self.materializeFunctionRequestNode(checked_content.list, elem, substitution);
+                const next = try self.materializeFunctionRequestNodeMode(checked_content.list, elem, substitution, mode);
                 if (self.sameClass(elem, next)) break :blk node;
                 break :blk try self.newNode(.{ .list = next });
             },
             .box => |elem| blk: {
                 if (checked_content != .box) Common.invariant("function request materialization received different type structure");
-                const next = try self.materializeFunctionRequestNode(checked_content.box, elem, substitution);
+                const next = try self.materializeFunctionRequestNodeMode(checked_content.box, elem, substitution, mode);
                 if (self.sameClass(elem, next)) break :blk node;
                 break :blk try self.newNode(.{ .box = next });
             },
@@ -3049,24 +3267,32 @@ pub const InstGraph = struct {
                 if (checked_content != .tuple or checked_content.tuple.len != items.len) {
                     Common.invariant("function request materialization received tuples of different arity");
                 }
-                const next = try self.materializeFunctionRequestNodes(checked_content.tuple, items, substitution) orelse break :blk node;
+                const next = try self.materializeFunctionRequestNodesMode(checked_content.tuple, items, substitution, mode) orelse break :blk node;
                 break :blk try self.newNode(.{ .tuple = next });
             },
             .func => |function| blk: {
                 if (checked_content != .func or checked_content.func.args.len != function.args.len) {
                     Common.invariant("function request materialization received functions of different arity");
                 }
-                const changed_args = try self.materializeFunctionRequestNodes(
+                const callable_mode: FunctionRequestMaterializationMode = switch (mode) {
+                    .request => .request,
+                    .produced_value, .produced_callable => .produced_callable,
+                    .body_abi => .body_abi,
+                    .reassigned_storage => .reassigned_storage,
+                };
+                const changed_args = try self.materializeFunctionRequestNodesMode(
                     checked_content.func.args,
                     function.args,
                     substitution,
+                    callable_mode,
                 );
-                const ret = try self.materializeFunctionRequestNode(
+                const ret = try self.materializeFunctionRequestNodeMode(
                     checked_content.func.ret,
                     function.ret,
                     substitution,
+                    callable_mode,
                 );
-                if (changed_args == null and self.sameClass(function.ret, ret)) break :blk node;
+                if (mode != .body_abi and changed_args == null and self.sameClass(function.ret, ret)) break :blk node;
                 break :blk try self.newNode(.{ .func = .{
                     .args = changed_args orelse function.args,
                     .ret = ret,
@@ -3087,7 +3313,7 @@ pub const InstGraph = struct {
                         if (source.payloads.len != tag.payloads.len) {
                             Common.invariant("function request materialization received one tag at two payload arities");
                         }
-                        break :payloads try self.materializeFunctionRequestNodes(source.payloads, tag.payloads, substitution);
+                        break :payloads try self.materializeFunctionRequestNodesMode(source.payloads, tag.payloads, substitution, mode);
                     } else null;
                     if (changed_tags) |tags| {
                         tags[index] = .{
@@ -3106,7 +3332,7 @@ pub const InstGraph = struct {
                         changed_tags = tags;
                     }
                 }
-                const ext = try self.materializeFunctionRequestNode(checked_row.ext, row.ext, substitution);
+                const ext = try self.materializeFunctionRequestNodeMode(checked_row.ext, row.ext, substitution, mode);
                 if (changed_tags == null and self.sameClass(row.ext, ext)) break :blk node;
                 break :blk try self.newNode(.{ .tag_union = .{
                     .tags = changed_tags orelse row.tags,
@@ -3125,7 +3351,7 @@ pub const InstGraph = struct {
                         break;
                     }
                     const ty = if (checked_field) |source|
-                        try self.materializeFunctionRequestNode(source.ty, field.ty, substitution)
+                        try self.materializeFunctionRequestNodeMode(source.ty, field.ty, substitution, mode)
                     else
                         field.ty;
                     if (changed_fields) |fields| {
@@ -3137,7 +3363,7 @@ pub const InstGraph = struct {
                         changed_fields = fields;
                     }
                 }
-                const ext = try self.materializeFunctionRequestNode(checked_row.ext, row.ext, substitution);
+                const ext = try self.materializeFunctionRequestNodeMode(checked_row.ext, row.ext, substitution, mode);
                 if (changed_fields == null and self.sameClass(row.ext, ext)) break :blk node;
                 break :blk try self.newNode(.{ .record = .{
                     .fields = changed_fields orelse row.fields,
@@ -3151,17 +3377,20 @@ pub const InstGraph = struct {
                 {
                     break :blk node;
                 }
-                const args = try self.materializeFunctionRequestNodes(
+                const changed_args = try self.materializeFunctionRequestNodesMode(
                     checked_content.named.args,
                     named.args,
                     substitution,
-                ) orelse break :blk node;
+                    mode,
+                );
+                if (changed_args == null and mode != .body_abi and mode != .reassigned_storage) break :blk node;
+                const args = changed_args orelse named.args;
 
                 const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
-                try substitution.materialized.put(pair, reserved);
+                try substitution.materialized.put(materialization_key, reserved);
                 const backing = if (named.backing) |backing| InstBacking{
                     .node = if (checked_content.named.backing) |checked_backing|
-                        try self.materializeFunctionRequestNode(checked_backing.node, backing.node, substitution)
+                        try self.materializeFunctionRequestNodeMode(checked_backing.node, backing.node, substitution, mode)
                     else
                         backing.node,
                     .use = backing.use,
@@ -3177,10 +3406,11 @@ pub const InstGraph = struct {
                             {
                                 break :padding InstDeclaredField{ .padding = padding };
                             }
-                            break :padding InstDeclaredField{ .padding = try self.materializeFunctionRequestNode(
+                            break :padding InstDeclaredField{ .padding = try self.materializeFunctionRequestNodeMode(
                                 checked_content.named.declared_order[index].padding,
                                 padding,
                                 substitution,
+                                mode,
                             ) };
                         },
                     };
@@ -3206,8 +3436,8 @@ pub const InstGraph = struct {
                 break :blk reserved;
             },
         };
-        if (!substitution.materialized.contains(pair)) {
-            try substitution.materialized.put(pair, materialized);
+        if (!substitution.materialized.contains(materialization_key)) {
+            try substitution.materialized.put(materialization_key, materialized);
         }
         if (!self.sameClass(node, materialized)) {
             self.countDiagnostic("function_request_nodes_materialized");
@@ -3221,12 +3451,27 @@ pub const InstGraph = struct {
         nodes: []const NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!?[]NodeId {
+        return self.materializeFunctionRequestNodesMode(
+            checked_nodes,
+            nodes,
+            substitution,
+            .request,
+        );
+    }
+
+    fn materializeFunctionRequestNodesMode(
+        self: *InstGraph,
+        checked_nodes: []const NodeId,
+        nodes: []const NodeId,
+        substitution: *FunctionRequestSubstitution,
+        mode: FunctionRequestMaterializationMode,
+    ) Allocator.Error!?[]NodeId {
         if (checked_nodes.len != nodes.len) {
             Common.invariant("function request materialization received different node span lengths");
         }
         var changed_nodes: ?[]NodeId = null;
         for (checked_nodes, nodes, 0..) |checked_node, node, index| {
-            const materialized = try self.materializeFunctionRequestNode(checked_node, node, substitution);
+            const materialized = try self.materializeFunctionRequestNodeMode(checked_node, node, substitution, mode);
             if (changed_nodes) |out| {
                 out[index] = materialized;
             } else if (!self.sameClass(node, materialized)) {
@@ -3251,7 +3496,12 @@ pub const InstGraph = struct {
         }
         var changed_nodes: ?[]NodeId = null;
         for (checked_nodes, current_nodes, produced_nodes, 0..) |checked_node, current, produced, index| {
-            const materialized = try self.materializeFunctionRequestNode(checked_node, produced, substitution);
+            const materialized = try self.materializeFunctionRequestNodeMode(
+                checked_node,
+                produced,
+                substitution,
+                .produced_value,
+            );
             if (changed_nodes) |out| {
                 out[index] = materialized;
             } else if (!self.sameClass(current, materialized)) {
@@ -3869,15 +4119,26 @@ pub const InstGraph = struct {
                 if (left_named.backing) |left_backing| {
                     const right_backing = right_named.backing orelse
                         Common.invariant("produced representation join found backing on only one nominal");
-                    if (left_backing.authority != right_backing.authority or left_backing.use != right_backing.use) {
+                    if (left_backing.authority != right_backing.authority) {
                         Common.invariant("produced representation join found different nominal backing contracts");
                     }
                     const backing = try self.joinProducedTypeNodes(left_backing.node, right_backing.node, joined);
                     all_left = all_left and self.sameClass(backing, left_backing.node);
                     all_right = all_right and self.sameClass(backing, right_backing.node);
+                    // Backing visibility is a lowering capability, not part of
+                    // the runtime representation. A join cannot grant the
+                    // definition-private inspectable view to a public use, so
+                    // retain the more restrictive capability when they meet.
+                    const backing_use: Type.BackingUse = if (left_backing.use == .runtime_layout_only or
+                        right_backing.use == .runtime_layout_only)
+                        .runtime_layout_only
+                    else
+                        .inspectable;
+                    all_left = all_left and left_backing.use == backing_use;
+                    all_right = all_right and right_backing.use == backing_use;
                     result.backing = .{
                         .node = backing,
-                        .use = left_backing.use,
+                        .use = backing_use,
                         .authority = left_backing.authority,
                     };
                 } else if (right_named.backing != null) {
@@ -5575,6 +5836,21 @@ pub const GraphTypeFinals = struct {
             }
         }
         return sealed;
+    }
+
+    /// Publish every graph-owned generated identity before sealing work can
+    /// recursively lower another specialization. Without this barrier a
+    /// nested specialization can publish the same identity first, after this
+    /// graph's relations have already frozen and can no longer bind to it.
+    pub fn publishGeneratedIteratorRoots(self: *GraphTypeFinals) Allocator.Error!void {
+        var seen = collections.DenseMap(NodeId, void).init(self.graph.allocator);
+        defer seen.deinit();
+        for (self.graph.generated_iterator_nodes.items) |registered| {
+            const node = self.graph.find(registered);
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            _ = try self.sealNode(node);
+        }
     }
 
     fn sealContent(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Content {
@@ -7692,8 +7968,12 @@ test "function request substitutes variables while keeping concrete slots indepe
         &.{public_backing},
     );
     const structural_request_fn = try graph.functionNodes(structural_request);
-    try std.testing.expect(graph.sameClass(structural_request, structural_view_fn));
-    try std.testing.expect(graph.content(structural_request_fn.args[0]) == .empty_record);
+    try std.testing.expect(!graph.sameClass(structural_request, structural_view_fn));
+    try std.testing.expect(graph.content(structural_request_fn.args[0]) == .named);
+    const structural_arg = graph.namedNodes(structural_request_fn.args[0]);
+    try std.testing.expect(structural_arg.backing != null);
+    const structural_arg_backing = structural_arg.backing.?;
+    try std.testing.expect(graph.sameClass(structural_arg_backing.node, public_backing));
     try std.testing.expect(graph.content(structural_request_fn.ret) == .empty_record);
 
     const unique_concrete_fn = try graph.newNode(.{ .func = .{
@@ -9065,6 +9345,121 @@ test "produced representation join keeps exact children at their compound positi
     try std.testing.expectEqual(@as(usize, 2), joined_items.len);
     try std.testing.expect(graph.sameClass(joined_items[0], a.private));
     try std.testing.expect(graph.sameClass(joined_items[1], joined_cycle));
+}
+
+test "produced representation join retains restrictive nominal backing visibility" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD1} ** 32));
+    const type_name = try name_store.internTypeName("Date");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(21) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const backing = try graph.newNode(.{ .primitive = .i64 });
+
+    const inspectable = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = backing, .use = .inspectable },
+    } });
+    const public = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = backing, .use = .runtime_layout_only },
+    } });
+
+    const joined = try graph.joinProducedTypeRepresentations(inspectable, public);
+    const joined_named = graph.content(joined).named;
+    try std.testing.expectEqual(Type.BackingUse.runtime_layout_only, joined_named.backing.?.use);
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, joined_named.backing.?.authority);
+    try std.testing.expect(graph.sameClass(joined_named.backing.?.node, backing));
+}
+
+test "checked mapping places narrow closed rows in wider exact representations" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const first_tag = try name_store.internTagLabel("First");
+    const second_tag = try name_store.internTagLabel("Second");
+    const narrow_tags = try graph.arena().dupe(InstTag, &.{.{
+        .name = first_tag,
+        .checked_name = first_tag,
+        .payloads = &.{},
+    }});
+    const wide_tags = try graph.arena().dupe(InstTag, &.{
+        .{ .name = first_tag, .checked_name = first_tag, .payloads = &.{} },
+        .{ .name = second_tag, .checked_name = second_tag, .payloads = &.{} },
+    });
+    const narrow_tags_node = try graph.newNode(.{ .tag_union = .{
+        .tags = narrow_tags,
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+    const wide_tags_node = try graph.newNode(.{ .tag_union = .{
+        .tags = wide_tags,
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+    const narrow_fn = try graph.newNode(.{ .func = .{
+        .args = &.{},
+        .ret = narrow_tags_node,
+    } });
+    const wide_fn = try graph.newNode(.{ .func = .{
+        .args = &.{},
+        .ret = wide_tags_node,
+    } });
+
+    _ = try graph.applyCheckedTypeMapping(narrow_fn, wide_fn);
+    try std.testing.expect(!graph.sameClass(narrow_tags_node, wide_tags_node));
+    try std.testing.expectEqual(@as(usize, 1), (try graph.tagRowNodes(narrow_tags_node)).tags.len);
+    try std.testing.expectEqual(@as(usize, 2), (try graph.tagRowNodes(wide_tags_node)).tags.len);
+
+    // Storing the narrower value in the wider row is an explicit common-
+    // representation boundary. Both live cells adopt the wide layout so the
+    // already-emitted local definition and its constructor use agree.
+    try graph.applyCompoundStorageRepresentation(wide_tags_node, narrow_tags_node);
+    try std.testing.expect(graph.sameClass(narrow_tags_node, wide_tags_node));
+    try std.testing.expectEqual(@as(usize, 2), (try graph.tagRowNodes(narrow_tags_node)).tags.len);
+
+    const first_field = try name_store.internRecordFieldLabel("first");
+    const second_field = try name_store.internRecordFieldLabel("second");
+    const value = try graph.newNode(.{ .primitive = .u64 });
+    const narrow_record = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{ .name = first_field, .ty = value }}),
+        .ext = try graph.newNode(.empty_record),
+    } });
+    const wide_record = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{
+            .{ .name = first_field, .ty = value },
+            .{ .name = second_field, .ty = value },
+        }),
+        .ext = try graph.newNode(.empty_record),
+    } });
+
+    _ = try graph.applyCheckedTypeMapping(narrow_record, wide_record);
+    try std.testing.expect(!graph.sameClass(narrow_record, wide_record));
+    try std.testing.expectEqual(@as(usize, 1), (try graph.recordNodes(narrow_record)).fields.len);
+    try std.testing.expectEqual(@as(usize, 2), (try graph.recordNodes(wide_record)).fields.len);
 }
 
 test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {

@@ -1890,7 +1890,19 @@ const Solver = struct {
                 }
                 if (left_named.backing) |left_backing| {
                     const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
-                    if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
+                    if (left_backing.use != right_backing.use) {
+                        // Backing use is compile-time visibility, not runtime
+                        // representation. Monotype has already emitted every
+                        // explicit nominal construction/destructure, so two
+                        // otherwise-identical named runtime types retain the
+                        // more restrictive interface visibility when they
+                        // meet here.
+                        var selected_named = left_named;
+                        var selected_backing = left_backing;
+                        selected_backing.use = .runtime_layout_only;
+                        selected_named.backing = selected_backing;
+                        self.program.types.set(a, .{ .named = selected_named });
+                    }
                     if (left_backing.authority != right_backing.authority) {
                         Common.invariant("exact named types reached Lambda Solved with different backing authorities");
                     }
