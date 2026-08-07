@@ -56,7 +56,9 @@ const Event = union(enum) {
     runtime: struct { kind: []const u8, message: []const u8 },
     effect: struct { name: []const u8, payload: []const u8 },
 
-    pub fn jsonStringify(self: Event, json: anytype) !void {
+    /// Emit the tagged event shape the protocol documents: a `kind` plus either
+    /// a `message` or an effect's `name`/`payload`.
+    pub fn jsonStringify(self: Event, json: anytype) error{WriteFailed}!void {
         try json.beginObject();
         switch (self) {
             .runtime => |event| {
@@ -121,7 +123,26 @@ const SnippetMetadata = struct {
     name: ?[]const u8 = null,
 };
 
-fn ensureSession() !*ReplSession {
+/// Failures a request handler can surface. `processJson` maps the
+/// protocol-visible members onto JSON error codes and reports the rest as
+/// `internal_error`.
+const RequestError = ReplSession.ReplInitError ||
+    ReplSession.ReplStepError ||
+    error{
+        DefinitionTypeUnavailable,
+        DuplicateVirtualModule,
+        ExpressionTypeUnavailable,
+        InvalidCursor,
+        MissingCursor,
+        MissingModules,
+        MissingSource,
+        ParseDiagnosticUnavailable,
+        ReservedVirtualModule,
+        RevisionExhausted,
+        UnexpectedEmptyResult,
+    };
+
+fn ensureSession() ReplSession.ReplInitError!*ReplSession {
     if (repl_session == null) {
         const roc_ctx = CoreCtx.default(allocator, allocator, @as(std.Io, undefined));
         repl_session = try ReplSession.initVirtual(allocator, roc_ctx, .interpreter, .lss);
@@ -237,7 +258,7 @@ fn appendDiagnostic(
     });
 }
 
-fn definitionType(arena: Allocator, session: *ReplSession, name: []const u8) ![]const u8 {
+fn definitionType(arena: Allocator, session: *ReplSession, name: []const u8) RequestError![]const u8 {
     const items = try session.completionItems();
     defer session.freeCompletionItems(items);
     for (items) |item| {
@@ -248,7 +269,7 @@ fn definitionType(arena: Allocator, session: *ReplSession, name: []const u8) ![]
     return error.DefinitionTypeUnavailable;
 }
 
-fn expressionType(arena: Allocator, session: *ReplSession, source: []const u8) ![]const u8 {
+fn expressionType(arena: Allocator, session: *ReplSession, source: []const u8) RequestError![]const u8 {
     const inspected = try session.inspectExpressionType(source, reportingConfig());
     defer inspected.deinit(allocator);
     return switch (inspected) {
@@ -257,7 +278,7 @@ fn expressionType(arena: Allocator, session: *ReplSession, source: []const u8) !
     };
 }
 
-fn parseDiagnosticMessage(arena: Allocator, session: *ReplSession, source: []const u8) ![]const u8 {
+fn parseDiagnosticMessage(arena: Allocator, session: *ReplSession, source: []const u8) RequestError![]const u8 {
     const step_result = try session.stepLanguageWithConfig(source, reportingConfig());
     defer step_result.deinit(allocator);
     return switch (step_result) {
@@ -266,7 +287,7 @@ fn parseDiagnosticMessage(arena: Allocator, session: *ReplSession, source: []con
     };
 }
 
-fn evaluate(request: Request, arena: Allocator) ![]u8 {
+fn evaluate(request: Request, arena: Allocator) RequestError![]u8 {
     const source = requiredSource(request) orelse return error.MissingSource;
     const session = try ensureSession();
     const statements = try session.splitInputIntoStatements(source);
@@ -352,7 +373,7 @@ fn evaluate(request: Request, arena: Allocator) ![]u8 {
     });
 }
 
-fn analyze(request: Request, arena: Allocator) ![]u8 {
+fn analyze(request: Request, arena: Allocator) RequestError![]u8 {
     const source = requiredSource(request) orelse return error.MissingSource;
     const session = try ensureSession();
 
@@ -400,7 +421,7 @@ fn inspectDiagnosticResponse(
     source: []const u8,
     code: []const u8,
     message: []const u8,
-) ![]u8 {
+) Allocator.Error![]u8 {
     const diagnostics = try arena.alloc(Diagnostic, 1);
     diagnostics[0] = .{ .code = code, .message = try arenaDupe(arena, message) };
     return okResponse(request.id, .{
@@ -412,7 +433,7 @@ fn inspectDiagnosticResponse(
     });
 }
 
-fn inspect(request: Request, arena: Allocator) ![]u8 {
+fn inspect(request: Request, arena: Allocator) RequestError![]u8 {
     const source = requiredSource(request) orelse return error.MissingSource;
     const session = try ensureSession();
     switch (try session.inputStatus(source)) {
@@ -467,7 +488,7 @@ fn identifierPrefixStart(source: []const u8, cursor: usize) usize {
     return start;
 }
 
-fn complete(request: Request, arena: Allocator) ![]u8 {
+fn complete(request: Request, arena: Allocator) RequestError![]u8 {
     const source = requiredSource(request) orelse return error.MissingSource;
     const params = request.params orelse return error.MissingCursor;
     const cursor_u32 = params.cursor orelse return error.MissingCursor;
@@ -504,7 +525,7 @@ fn complete(request: Request, arena: Allocator) ![]u8 {
     });
 }
 
-fn getState(request: Request, arena: Allocator) ![]u8 {
+fn getState(request: Request, arena: Allocator) RequestError![]u8 {
     const session = try ensureSession();
     const definition_source = try session.definitionsSource();
     defer allocator.free(definition_source);
@@ -536,7 +557,7 @@ fn getState(request: Request, arena: Allocator) ![]u8 {
     });
 }
 
-fn setModules(request: Request, arena: Allocator) ![]u8 {
+fn setModules(request: Request, arena: Allocator) RequestError![]u8 {
     const params = request.params orelse return error.MissingModules;
     const inputs = params.modules orelse return error.MissingModules;
     const modules = try arena.alloc(eval.Inspected.ModuleSource, inputs.len);
@@ -592,7 +613,7 @@ fn capabilities(request: Request) Allocator.Error![]u8 {
     });
 }
 
-fn handleRequest(request: Request, arena: Allocator) ![]u8 {
+fn handleRequest(request: Request, arena: Allocator) RequestError![]u8 {
     if (request.protocol != protocol_version) {
         return errorResponse(request.id, "unsupported_protocol", "This module supports protocol version 1.");
     }
