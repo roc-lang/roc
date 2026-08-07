@@ -242,6 +242,26 @@ const NodePair = struct {
     right: NodeId,
 };
 
+const FunctionRequestSubstitution = struct {
+    replacements: collections.DenseMap(NodeId, NodeId),
+    materialized: collections.DenseMap(NodeId, NodeId),
+    compared: std.AutoHashMap(NodePair, void),
+
+    fn init(allocator: Allocator) FunctionRequestSubstitution {
+        return .{
+            .replacements = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .materialized = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .compared = std.AutoHashMap(NodePair, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *FunctionRequestSubstitution) void {
+        self.replacements.deinit();
+        self.materialized.deinit();
+        self.compared.deinit();
+    }
+};
+
 const ProducedJoinMemo = union(enum) {
     visiting,
     cycle: NodeId,
@@ -2347,6 +2367,326 @@ pub const InstGraph = struct {
         return .{ .args = node_content.func.args, .ret = self.find(node_content.func.ret) };
     }
 
+    /// Construct one complete specialization interface from a checked callable
+    /// and the exact values at this call site. Each checked cell that denotes an
+    /// exact generated nominal is substituted everywhere it occurs in the
+    /// callable before body lowering begins. This is a single directed
+    /// request-to-produced traversal, not a containment scan followed by a
+    /// whole-root merge.
+    pub fn functionRequestFromProducedArguments(
+        self: *InstGraph,
+        checked_fn_node: NodeId,
+        current_request_fn_node: NodeId,
+        produced_args: []const NodeId,
+    ) Allocator.Error!NodeId {
+        const checked_fn = try self.functionNodes(checked_fn_node);
+        const current_request_fn = try self.functionNodes(current_request_fn_node);
+        if (checked_fn.args.len != current_request_fn.args.len or
+            checked_fn.args.len != produced_args.len)
+        {
+            Common.invariant("exact function request had different arity from its checked source");
+        }
+
+        var substitution = FunctionRequestSubstitution.init(self.allocator);
+        defer substitution.deinit();
+
+        for (checked_fn.args, current_request_fn.args) |checked_arg, current_arg| {
+            try self.collectFunctionRequestSubstitutions(checked_arg, current_arg, &substitution);
+        }
+        try self.collectFunctionRequestSubstitutions(checked_fn.ret, current_request_fn.ret, &substitution);
+        for (checked_fn.args, produced_args) |checked_arg, produced_arg| {
+            try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, &substitution);
+        }
+
+        const request_args = try self.arena().alloc(NodeId, checked_fn.args.len);
+        var changed = false;
+        for (checked_fn.args, request_args) |checked_arg, *request_arg| {
+            request_arg.* = try self.materializeFunctionRequestNode(checked_arg, &substitution);
+            if (!self.sameClass(checked_arg, request_arg.*)) changed = true;
+        }
+        const request_ret = try self.materializeFunctionRequestNode(checked_fn.ret, &substitution);
+        if (!self.sameClass(checked_fn.ret, request_ret)) changed = true;
+
+        const request_fn = if (changed)
+            try self.newNode(.{ .func = .{
+                .args = request_args,
+                .ret = request_ret,
+            } })
+        else
+            checked_fn_node;
+        try self.registerRequestCheckedSource(request_fn, checked_fn_node);
+        return request_fn;
+    }
+
+    fn collectFunctionRequestSubstitutions(
+        self: *InstGraph,
+        raw_checked: NodeId,
+        raw_produced: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        const checked_node = self.find(raw_checked);
+        const produced_node = self.find(raw_produced);
+        if (checked_node == produced_node) return;
+
+        const pair = NodePair{ .left = checked_node, .right = produced_node };
+        const compared = try substitution.compared.getOrPut(pair);
+        if (compared.found_existing) return;
+
+        const checked_content = self.nodes.items[@intFromEnum(checked_node)];
+        const produced_content = self.nodes.items[@intFromEnum(produced_node)];
+
+        if (checked_content == .unresolved) {
+            try self.recordFunctionRequestReplacement(checked_node, produced_node, substitution);
+            return;
+        }
+
+        if (isGeneratedPrivateRootContent(produced_content) and checked_content == .named and
+            sameTypeDef(checked_content.named.def, produced_content.named.def))
+        {
+            try self.recordFunctionRequestReplacement(checked_node, produced_node, substitution);
+            if (checked_content.named.args.len != produced_content.named.args.len) {
+                Common.invariant("generated-private function substitution changed public argument arity");
+            }
+            for (checked_content.named.args, produced_content.named.args) |checked_arg, produced_arg| {
+                try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
+            }
+            return;
+        }
+
+        if (checked_content == .named and checked_content.named.kind == .alias and
+            (produced_content != .named or !sameTypeDef(checked_content.named.def, produced_content.named.def)))
+        {
+            const backing = checked_content.named.backing orelse
+                Common.invariant("function substitution found an alias without backing");
+            return self.collectFunctionRequestSubstitutions(backing.node, produced_node, substitution);
+        }
+        if (produced_content == .named and produced_content.named.kind == .alias and
+            (checked_content != .named or !sameTypeDef(checked_content.named.def, produced_content.named.def)))
+        {
+            const backing = produced_content.named.backing orelse
+                Common.invariant("function substitution found an exact alias without backing");
+            return self.collectFunctionRequestSubstitutions(checked_node, backing.node, substitution);
+        }
+
+        switch (checked_content) {
+            .redirect => unreachable,
+            .unresolved => unreachable,
+            .primitive => |primitive| {
+                if (produced_content != .primitive or produced_content.primitive != primitive) {
+                    Common.invariant("function substitution received different primitive types");
+                }
+            },
+            .list => |checked_elem| {
+                if (produced_content != .list) Common.invariant("function substitution received different type structure");
+                try self.collectFunctionRequestSubstitutions(checked_elem, produced_content.list, substitution);
+            },
+            .box => |checked_elem| {
+                if (produced_content != .box) Common.invariant("function substitution received different type structure");
+                try self.collectFunctionRequestSubstitutions(checked_elem, produced_content.box, substitution);
+            },
+            .tuple => |checked_items| {
+                if (produced_content != .tuple or checked_items.len != produced_content.tuple.len) {
+                    Common.invariant("function substitution received tuples of different arity");
+                }
+                for (checked_items, produced_content.tuple) |checked_item, produced_item| {
+                    try self.collectFunctionRequestSubstitutions(checked_item, produced_item, substitution);
+                }
+            },
+            .func => |checked_function| {
+                if (produced_content != .func or checked_function.args.len != produced_content.func.args.len) {
+                    Common.invariant("function substitution received functions of different arity");
+                }
+                for (checked_function.args, produced_content.func.args) |checked_arg, produced_arg| {
+                    try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
+                }
+                try self.collectFunctionRequestSubstitutions(checked_function.ret, produced_content.func.ret, substitution);
+            },
+            .tag_union => |checked_row| {
+                if (produced_content != .tag_union) Common.invariant("function substitution received different type structure");
+                for (checked_row.tags) |checked_tag| {
+                    for (produced_content.tag_union.tags) |produced_tag| {
+                        if (!self.name_store.tagLabelTextEql(checked_tag.name, produced_tag.name)) continue;
+                        if (checked_tag.payloads.len != produced_tag.payloads.len) {
+                            Common.invariant("function substitution received one tag at two payload arities");
+                        }
+                        for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
+                            try self.collectFunctionRequestSubstitutions(checked_payload, produced_payload, substitution);
+                        }
+                        break;
+                    }
+                }
+                try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_content.tag_union.ext, substitution);
+            },
+            .record => |checked_row| {
+                if (produced_content != .record) Common.invariant("function substitution received different type structure");
+                for (checked_row.fields) |checked_field| {
+                    for (produced_content.record.fields) |produced_field| {
+                        if (!self.name_store.recordFieldLabelTextEql(checked_field.name, produced_field.name)) continue;
+                        try self.collectFunctionRequestSubstitutions(checked_field.ty, produced_field.ty, substitution);
+                        break;
+                    }
+                }
+                try self.collectFunctionRequestSubstitutions(checked_row.ext, produced_content.record.ext, substitution);
+            },
+            .empty_tag_union => if (produced_content != .empty_tag_union)
+                Common.invariant("function substitution received different type structure"),
+            .empty_record => if (produced_content != .empty_record)
+                Common.invariant("function substitution received different type structure"),
+            .named => |checked_named| {
+                if (produced_content != .named or
+                    !sameTypeDef(checked_named.def, produced_content.named.def) or
+                    checked_named.args.len != produced_content.named.args.len)
+                {
+                    Common.invariant("function substitution received different named types");
+                }
+                for (checked_named.args, produced_content.named.args) |checked_arg, produced_arg| {
+                    try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
+                }
+            },
+            .erased => |digest| {
+                if (produced_content != .erased or
+                    !std.mem.eql(u8, &digest.bytes, &produced_content.erased.bytes))
+                {
+                    Common.invariant("function substitution received different erased types");
+                }
+            },
+            .zst => if (produced_content != .zst)
+                Common.invariant("function substitution received different type structure"),
+        }
+    }
+
+    fn recordFunctionRequestReplacement(
+        self: *InstGraph,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        const entry = try substitution.replacements.getOrPut(checked_node);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = produced_node;
+            return;
+        }
+        if (self.sameClass(entry.value_ptr.*, produced_node)) return;
+        entry.value_ptr.* = try self.joinProducedTypeRepresentations(entry.value_ptr.*, produced_node);
+    }
+
+    fn materializeFunctionRequestNode(
+        self: *InstGraph,
+        raw_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!NodeId {
+        const node = self.find(raw_node);
+        if (substitution.replacements.get(node)) |replacement| return self.find(replacement);
+        if (substitution.materialized.get(node)) |materialized| return self.find(materialized);
+
+        const node_content = self.nodes.items[@intFromEnum(node)];
+        if (isGeneratedPrivateRootContent(node_content)) return node;
+
+        const materialized = switch (node_content) {
+            .redirect => unreachable,
+            .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
+            .list => |elem| blk: {
+                const next = try self.materializeFunctionRequestNode(elem, substitution);
+                if (self.sameClass(elem, next)) break :blk node;
+                break :blk try self.newNode(.{ .list = next });
+            },
+            .box => |elem| blk: {
+                const next = try self.materializeFunctionRequestNode(elem, substitution);
+                if (self.sameClass(elem, next)) break :blk node;
+                break :blk try self.newNode(.{ .box = next });
+            },
+            .tuple => |items| blk: {
+                const next = try self.arena().alloc(NodeId, items.len);
+                var changed = false;
+                for (items, next) |item, *out| {
+                    out.* = try self.materializeFunctionRequestNode(item, substitution);
+                    if (!self.sameClass(item, out.*)) changed = true;
+                }
+                if (!changed) break :blk node;
+                break :blk try self.newNode(.{ .tuple = next });
+            },
+            .func => |function| blk: {
+                const args = try self.arena().alloc(NodeId, function.args.len);
+                var changed = false;
+                for (function.args, args) |arg, *out| {
+                    out.* = try self.materializeFunctionRequestNode(arg, substitution);
+                    if (!self.sameClass(arg, out.*)) changed = true;
+                }
+                const ret = try self.materializeFunctionRequestNode(function.ret, substitution);
+                if (!self.sameClass(function.ret, ret)) changed = true;
+                if (!changed) break :blk node;
+                break :blk try self.newNode(.{ .func = .{ .args = args, .ret = ret } });
+            },
+            .tag_union => |row| blk: {
+                const tags = try self.arena().alloc(InstTag, row.tags.len);
+                var changed = false;
+                for (row.tags, tags) |tag, *out_tag| {
+                    const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
+                    for (tag.payloads, payloads) |payload, *out| {
+                        out.* = try self.materializeFunctionRequestNode(payload, substitution);
+                        if (!self.sameClass(payload, out.*)) changed = true;
+                    }
+                    out_tag.* = .{ .name = tag.name, .checked_name = tag.checked_name, .payloads = payloads };
+                }
+                const ext = try self.materializeFunctionRequestNode(row.ext, substitution);
+                if (!self.sameClass(row.ext, ext)) changed = true;
+                if (!changed) break :blk node;
+                break :blk try self.newNode(.{ .tag_union = .{ .tags = tags, .ext = ext } });
+            },
+            .record => |row| blk: {
+                const fields = try self.arena().alloc(InstField, row.fields.len);
+                var changed = false;
+                for (row.fields, fields) |field, *out| {
+                    out.* = .{ .name = field.name, .ty = try self.materializeFunctionRequestNode(field.ty, substitution) };
+                    if (!self.sameClass(field.ty, out.ty)) changed = true;
+                }
+                const ext = try self.materializeFunctionRequestNode(row.ext, substitution);
+                if (!self.sameClass(row.ext, ext)) changed = true;
+                if (!changed) break :blk node;
+                break :blk try self.newNode(.{ .record = .{ .fields = fields, .ext = ext } });
+            },
+            .named => |named| blk: {
+                const args = try self.arena().alloc(NodeId, named.args.len);
+                var changed = false;
+                for (named.args, args) |arg, *out| {
+                    out.* = try self.materializeFunctionRequestNode(arg, substitution);
+                    if (!self.sameClass(arg, out.*)) changed = true;
+                }
+                if (!changed) break :blk node;
+
+                const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+                try substitution.materialized.put(node, reserved);
+                const backing = if (named.backing) |backing| InstBacking{
+                    .node = try self.materializeFunctionRequestNode(backing.node, substitution),
+                    .use = backing.use,
+                    .authority = backing.authority,
+                } else null;
+                const declared_order = try self.arena().alloc(InstDeclaredField, named.declared_order.len);
+                for (named.declared_order, declared_order) |declared, *out| {
+                    out.* = switch (declared) {
+                        .named => |field| .{ .named = field },
+                        .padding => |padding| .{ .padding = try self.materializeFunctionRequestNode(padding, substitution) },
+                    };
+                }
+                try self.setContent(reserved, .{ .named = .{
+                    .named_type = named.named_type,
+                    .def = named.def,
+                    .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
+                    .args = args,
+                    .backing = backing,
+                    .generated_iterator = named.generated_iterator,
+                    .declared_order = declared_order,
+                } });
+                break :blk reserved;
+            },
+        };
+        if (!substitution.materialized.contains(node)) {
+            try substitution.materialized.put(node, materialized);
+        }
+        return self.find(materialized);
+    }
+
     pub const FunctionInterfaceIterator = struct {
         function: FunctionNodes,
         index: usize = 0,
@@ -3701,7 +4041,8 @@ pub const InstGraph = struct {
 
     fn sameTypeDef(left: Type.TypeDef, right: Type.TypeDef) bool {
         return left.module == right.module and
-            left.type_name == right.type_name;
+            left.type_name == right.type_name and
+            left.source_decl == right.source_decl;
     }
 
     const RowKind = enum {
@@ -6460,6 +6801,64 @@ test "opaque interface relation preserves distinct public and generated-private 
     const projected = try graph.recordNodes(structural_record);
     try std.testing.expectEqual(@as(usize, 1), projected.fields.len);
     try std.testing.expectEqual(field_name, projected.fields[0].name);
+}
+
+test "function request substitutes one exact generated type through every callable position" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCF} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(12) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    const public = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
+    } });
+    const exact = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+    const public_list = try graph.newNode(.{ .list = public });
+    const checked_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ public_list, public }),
+        .ret = public_list,
+    } });
+    const produced_list = try graph.newNode(.{ .list = public });
+
+    const request = try graph.functionRequestFromProducedArguments(
+        checked_fn,
+        checked_fn,
+        &.{ produced_list, exact },
+    );
+    const request_fn = try graph.functionNodes(request);
+
+    try std.testing.expect(!graph.sameClass(request, checked_fn));
+    try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.args[0]), exact));
+    try std.testing.expect(graph.sameClass(request_fn.args[1], exact));
+    try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.ret), exact));
+    try std.testing.expect(!graph.sameClass(public, exact));
 }
 
 test "checked type mapping preserves forced-dynamic iterator identity" {

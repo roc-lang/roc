@@ -104,6 +104,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lower_expr_at_type = sourceSliceBetween(lower_source, "fn lowerExprAtType", "fn sameType");
     const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
     const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn lookupExprMonoType");
+    const lower_expr_inner = sourceSliceBetween(lower_source, "fn lowerExprInner", "fn lowerReturn");
 
     try expectContains(lower_call, "if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {");
     try expectContains(lower_call, "var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
@@ -114,6 +115,9 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty)");
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
+    try expectContains(lower_expr_inner, ".lookup_local => |lookup| return try self.lowerLookupExprAtNode(");
+    try expectContains(lower_expr_inner, ".lookup_external => |resolved| return try self.lowerLookupExprAtNode(");
+    try expectContains(lower_expr_inner, ".lookup_required => |resolved| return try self.lowerLookupExprAtNode(");
     try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(");
     try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                try self.evidenceForUseSite(record.expr),");
     try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence)");
@@ -848,28 +852,26 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectNotContains(lower_source, "runtimeDemandHasUninhabitedProducerGuard");
 }
 
-test "Monotype closed direct low-level lowering stays sealed and allocation disciplined" {
+test "Monotype closed direct dispatch preserves produced operand graphs" {
     const lower_source = @embedFile("monotype/lower.zig");
 
-    const low_level = sourceSliceBetween(
+    const closed_low_level = sourceSliceBetween(
         lower_source,
         "fn lowerClosedDirectLowLevelDispatch(",
-        "fn lowerClosedDispatchOperandsAtTypes(",
+        "const ClosedDispatchOperands",
     );
-    try expectContains(low_level, "lowerClosedDispatchOperandsAtTypes(");
-    try expectNotContains(low_level, "activeNodeFromType(callable_ty)");
-    try expectNotContains(low_level, "constrainTypeToMono");
+    try expectContains(closed_low_level, "self.lowerClosedDispatchOperandsAtNode(");
+    try expectContains(closed_low_level, "applyProducedTypeToRequest(self.graph, expected_ret_node, callable.ret)");
+    try expectNotContains(closed_low_level, "lowerClosedDispatchOperandsAtTypes");
 
-    const sealed_operands = sourceSliceBetween(
+    const dispatch = sourceSliceBetween(
         lower_source,
-        "fn lowerClosedDispatchOperandsAtTypes(",
-        "fn lowerClosedDirectProcedureDispatch(",
+        "fn lowerDispatchExprAtType(",
+        "fn lowerClosedDirectLowLevelDispatch(",
     );
-    try expectContains(sealed_operands, "self.typeIsProvenUninhabited(arg_ty)");
-    try expectContains(sealed_operands, "self.reserveExprSpan(operands.len)");
-    try expectContains(sealed_operands, "self.lowerDispatchOperandAtType(operand, ty)");
-    try expectNotContains(sealed_operands, "InstGraph");
-    try expectNotContains(sealed_operands, "activeNodeFromType");
+    try expectContains(dispatch, ".procedure => direct_graph_call = true");
+    try expectNotContains(lower_source, "fn lowerClosedDirectProcedureDispatch(");
+    try expectNotContains(lower_source, "closed_direct_specializations");
 
     const graph_operands = sourceSliceBetween(
         lower_source,

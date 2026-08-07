@@ -13746,7 +13746,7 @@ pub const ProcedureUseTemplate = struct {
     /// Post-check consumers must not derive this by walking binding bodies or
     /// exported template closures.
     intrinsic: ?IntrinsicId = null,
-    /// Producer-recorded semantic role for compiler-owned iterator procedures.
+    /// Producer-recorded checked role for compiler-owned iterator procedures.
     iterator_procedure: ?IteratorProcedureId = null,
     /// Checking proved that this procedure consumes or produces a runtime
     /// representation whose exact Monotype graph must remain its signature.
@@ -14883,7 +14883,8 @@ const ExactGraphProducerAnalysis = struct {
     fn callableExprProduces(self: *ExactGraphProducerAnalysis, expr_id: CheckedExprId) Allocator.Error!bool {
         const expr = self.bodies.expr(expr_id);
         return switch (expr.data) {
-            .lambda => |lambda| try self.exprProduces(lambda.body),
+            .lambda => |lambda| try self.exprProduces(lambda.body) or
+                try self.exprReturnsProduced(lambda.body),
             .closure => |closure| try self.callableExprProduces(closure.lambda),
             .lookup_local => |lookup| try self.callableResolvedRefProduces(lookup.resolved),
             .lookup_external => |resolved| try self.callableResolvedRefProduces(resolved),
@@ -15233,7 +15234,8 @@ const ExactGraphProducerAnalysis = struct {
 
     fn statementReturnsProduced(self: *ExactGraphProducerAnalysis, statement_id: CheckedStatementId) Allocator.Error!bool {
         return switch (self.bodies.statement(statement_id).data) {
-            .return_ => |return_| try self.exprProduces(return_.expr),
+            .return_ => |return_| try self.exprProduces(return_.expr) or
+                try self.exprReturnsProduced(return_.expr),
             .decl => |decl| try self.exprReturnsProduced(decl.expr),
             .var_ => |var_| try self.exprReturnsProduced(var_.expr),
             .reassign => |reassign| try self.exprReturnsProduced(reassign.expr),
@@ -15287,7 +15289,8 @@ const ExactGraphProducerAnalysis = struct {
             .unknown => self.return_states[raw] = .visiting,
         }
         const returns_produced = switch (self.bodies.expr(expr_id).data) {
-            .return_ => |return_| try self.exprProduces(return_.expr),
+            .return_ => |return_| try self.exprProduces(return_.expr) or
+                try self.exprReturnsProduced(return_.expr),
             .str => |segments| try self.exprsReturnProduced(segments),
             .list, .tuple => |items| try self.exprsReturnProduced(items),
             .match_ => |match_| blk: {
@@ -15482,7 +15485,8 @@ const ExactGraphProducerAnalysis = struct {
             ),
             .dbg, .expect => |child| try self.exprProduces(child),
             .expect_err => |expect_err| try self.exprProduces(expect_err.expr),
-            .return_ => |return_| try self.exprProduces(return_.expr),
+            .return_ => |return_| try self.exprProduces(return_.expr) or
+                try self.exprReturnsProduced(return_.expr),
             // The loop expression itself produces no item value. Only a
             // non-local return nested in its operands can determine the
             // enclosing function's exact result.

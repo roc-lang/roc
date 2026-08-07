@@ -3986,6 +3986,24 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: nested return preserves an exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\return_from_condition : Iter(I64) -> Iter(I64)
+        \\return_from_condition = |iter| if return iter {
+        \\    crash "unreachable"
+        \\} else {
+        \\    crash "unreachable"
+        \\}
+        \\
+        \\main = {
+        \\    selected = return_from_condition([1.I64, 2, 3].iter())
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: box round trip preserves an exact iterator",
         .source_kind = .module,
         .source =
@@ -3993,6 +4011,18 @@ const core_tests = [_]TestCase{
         \\
         \\main = {
         \\    selected = box_round_trip([1.I64, 2, 3].iter())
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: list append and get preserve an exact iterator item",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    stored = [].append([1.I64, 2, 3].iter())
+        \\    selected = stored.get(0).ok_or([].iter())
         \\    Iter.fold(selected, [], |out, value| out.append(value))
         \\}
         ,

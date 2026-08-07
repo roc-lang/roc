@@ -1656,17 +1656,6 @@ const GeneratedParserDefAddress = struct {
     result_ty: u32,
 };
 
-/// Process-local O(1) reuse key for a checker-classified closed direct
-/// procedure call. `evidence` is an interned producer identity in `module`;
-/// the plan's closed callable type is likewise structurally interned there.
-/// The method scope remains part of specialization identity because imported
-/// bodies resolve compiler-generated method calls in that scope.
-const ClosedDirectCallIdentity = struct {
-    callable: CheckedTypeAddress,
-    evidence: static_dispatch.EvidenceNodeId,
-    method_scope: checked.ModuleId,
-};
-
 /// Tracks a memoized structural-derivation helper def (is_eq / inspect /
 /// to_hash). `reserved` means the def id is allocated but its body has not yet
 /// been filled in (used to break recursion); `ready` means the body is complete.
@@ -9112,11 +9101,6 @@ const DraftFnSlot = union(enum(u8)) {
     imported: Ast.ImportedFnId,
 };
 
-const ClosedDirectDraftSpecialization = struct {
-    slot: DraftFnSlot,
-    draft_spec: ?u32,
-};
-
 const DraftProcCallee = union(enum(u8)) {
     func: DraftFnSlot,
     lifted: Ast.LiftedFnId,
@@ -10429,9 +10413,6 @@ const BodyDraftStore = struct {
     template_specs: std.ArrayList(DraftTemplateSpec),
     template_spec_by_fn: collections.DenseMap(DraftFnId, u32),
     template_spec_lookup: std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)),
-    /// Exact checked identities bypass the general graph/digest lookup after
-    /// the first closed direct call in this draft.
-    closed_direct_specializations: std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization),
     active_callable_eval_bindings: std.ArrayList(ActiveCallableEvalBinding),
     active_const_node_bindings: std.ArrayList(ActiveConstNodeBinding),
     active_const_node_binding_indices: std.AutoHashMap(ActiveConstNodeAddress, u32),
@@ -10509,7 +10490,6 @@ const BodyDraftStore = struct {
             .template_specs = .empty,
             .template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(allocator),
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
-            .closed_direct_specializations = std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization).init(allocator),
             .active_callable_eval_bindings = .empty,
             .active_const_node_bindings = .empty,
             .active_const_node_binding_indices = std.AutoHashMap(ActiveConstNodeAddress, u32).init(allocator),
@@ -10607,7 +10587,6 @@ const BodyDraftStore = struct {
         var template_lookup_lists = self.template_spec_lookup.valueIterator();
         while (template_lookup_lists.next()) |list| list.deinit(self.allocator);
         self.template_spec_lookup.deinit();
-        self.closed_direct_specializations.deinit();
         self.template_spec_by_fn.deinit();
         var nested_lookup_lists = self.nested_spec_lookup.valueIterator();
         while (nested_lookup_lists.next()) |list| list.deinit(self.allocator);
@@ -13460,14 +13439,22 @@ const BodyContext = struct {
 
     /// Return the exact nominal view produced by explicit nominal-constructor
     /// syntax. Checking has already proven that this expression may construct
-    /// the definition, so an opaque checked interface becomes the inspectable
-    /// definition-private nominal view here. The public checked node remains
-    /// unchanged and is related directionally to this produced node.
+    /// the definition, so an opaque interface becomes the inspectable
+    /// definition-private nominal view here. When the enclosing specialization
+    /// selected an exact destination instance, construct that definition, its
+    /// type arguments, and its backing directly; the checked-public node remains
+    /// substitution input. This also preserves ordinary wrappers whose arguments
+    /// contain an exact generated nominal.
     fn explicitNominalConstructorNode(
         self: *BodyContext,
         checked_node: NodeId,
+        request_node: NodeId,
     ) Allocator.Error!NodeId {
-        const representation_node = self.constructorRepresentationNode(checked_node);
+        const request_representation = self.constructorRepresentationNode(request_node);
+        const representation_node = if (self.graph.content(request_representation) == .named)
+            request_representation
+        else
+            self.constructorRepresentationNode(checked_node);
         const named = switch (self.graph.content(representation_node)) {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("nominal constructor had no nominal graph representation"),
@@ -13478,9 +13465,6 @@ const BodyContext = struct {
             .@"opaque" => blk: {
                 const backing = named.backing orelse
                     Common.invariant("opaque nominal constructor had no checked backing");
-                if (backing.authority != .checked_public) {
-                    Common.invariant("explicit nominal constructor had non-checked backing authority");
-                }
                 var produced = named;
                 produced.kind = .nominal;
                 produced.backing = .{
@@ -16803,6 +16787,25 @@ const BodyContext = struct {
             if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
         }
         switch (expr.data) {
+            // A local binding already carries the exact cell produced by its
+            // initializer or pattern binder. Preserve that cell directly;
+            // it may still contain unresolved children that later consumers
+            // (for example, a match pattern) are responsible for constraining.
+            .lookup_local => |lookup| return try self.lowerLookupExprAtNode(
+                expr_id,
+                lookup.resolved,
+                try self.lowerExprTypeNode(expr_id),
+            ),
+            .lookup_external => |resolved| return try self.lowerLookupExprAtNode(
+                expr_id,
+                resolved,
+                try self.lowerExprTypeNode(expr_id),
+            ),
+            .lookup_required => |resolved| return try self.lowerLookupExprAtNode(
+                expr_id,
+                resolved,
+                try self.lowerExprTypeNode(expr_id),
+            ),
             // A literal conversion is the leaf that resolves its checked
             // variable. Seal that leaf at the point its runtime value is
             // demanded; enclosing constructors must wait for it rather than
@@ -16956,7 +16959,7 @@ const BodyContext = struct {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
                 return try self.lowerFieldAccessExprAtNode(expr_id, field, expr_node);
             },
-            .pending, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .str_segment, .bytes_literal, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_node = try self.lowerExprTypeNode(expr_id);
         switch (expr.data) {
@@ -29595,11 +29598,10 @@ const BodyContext = struct {
         }
         const checked_source = self.graph.requestCheckedSource(checked_callable_node) orelse
             checked_callable_node;
-        return try functionRequestNode(
-            self.graph,
+        return try self.graph.functionRequestFromProducedArguments(
             checked_source,
+            checked_callable_node,
             produced_arg_nodes,
-            callable.ret,
         );
     }
 
@@ -30909,7 +30911,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const checked_node = try self.lowerExprTypeNode(checked_expr);
         _ = try self.graph.applyCheckedTypeMapping(checked_node, expected_node);
-        const nominal_node = try self.explicitNominalConstructorNode(checked_node);
+        const nominal_node = try self.explicitNominalConstructorNode(checked_node, expected_node);
         const named = self.graph.namedNodes(nominal_node);
         const backing_node = (named.backing orelse
             Common.invariant("nominal constructor graph node had no backing")).node;
@@ -31336,13 +31338,7 @@ const BodyContext = struct {
                             op,
                             expected_ret_cell,
                         ),
-                        .procedure => return try self.lowerClosedDirectProcedureDispatch(
-                            checked_ret_ty,
-                            plan,
-                            direct.evidence,
-                            procedure,
-                            expected_ret_cell,
-                        ),
+                        .procedure => direct_graph_call = true,
                         .intrinsic, .graph_participating => {},
                     },
                     .local_proc => direct_graph_call = true,
@@ -31519,14 +31515,15 @@ const BodyContext = struct {
                 try self.activeTypeFromNode(plan_ret_node),
             );
         }
-        const call_data = if (direct_graph_call)
+        const lowered_call = if (direct_graph_call)
             try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items)
         else
             try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
-        const call_ret_cell = DraftTypeCell.fromGraphNode(plan_ret_node);
+        const produced_ret_node = try lowered_call.ret_ty.toGraphNode(self.graph);
+        try applyProducedTypeToRequest(self.graph, expected_ret_node, produced_ret_node);
         const call_expr = try self.addExprWithTypeCell(
-            call_ret_cell,
-            call_data,
+            lowered_call.ret_ty,
+            lowered_call.data,
         );
         return switch (plan.result_mode) {
             .value, .parser_for, .encoder_for, .map, .map_effectful => call_expr,
@@ -31559,115 +31556,15 @@ const BodyContext = struct {
             Common.invariant("checked closed direct low-level call argument arity differed from its callable type");
         }
 
-        const produced_ret_cell: DraftTypeCell = switch (expected_ret_cell) {
-            .sealed => |expected| if (!self.sameType(expected, function.ret)) {
-                Common.invariant("checked closed direct low-level call result differed from its expected type");
-            } else .{ .sealed = function.ret },
-            .graph_node => |expected| blk: {
-                const produced = try self.activeNodeFromType(function.ret);
-                _ = try self.graph.applyProducedTypeToRequest(expected, produced);
-                break :blk DraftTypeCell.fromGraphNode(produced);
-            },
-        };
-
-        const lowered = switch (try self.lowerClosedDispatchOperandsAtTypes(
-            operands,
-            self.builder.program.types.span(function.args),
-            expected_ret_cell,
-        )) {
-            .args => |args| args,
-            .uninhabited => |expr| return expr,
-        };
-        const call = try self.addExprWithTypeCell(produced_ret_cell, .{ .low_level = .{
-            .op = op,
-            .args = lowered,
-        } });
-        return try self.applyDispatchResultMode(plan.result_mode, call, function.ret);
-    }
-
-    fn lowerClosedDispatchOperandsAtTypes(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        arg_types: anytype,
-        ret_cell: DraftTypeCell,
-    ) Allocator.Error!ClosedDispatchOperands {
-        if (operands.len != GuardedList.borrowLen(arg_types)) {
-            Common.invariant("closed dispatch argument arity differed from its sealed callable type");
-        }
-        const stable_types = try GuardedList.dupe(self.allocator, Type.TypeId, arg_types);
-        defer self.allocator.free(stable_types);
-
-        for (stable_types, 0..) |arg_ty, uninhabited_index| {
-            if (!try self.typeIsProvenUninhabited(arg_ty)) continue;
-            const checked_arg = switch (operands[uninhabited_index]) {
-                .checked_expr => |expr| expr,
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => Common.invariant("compiler-generated dispatch operand had an uninhabited sealed type"),
-            };
-            const prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
-            defer self.allocator.free(prior);
-            for (operands[0..uninhabited_index], stable_types[0..uninhabited_index], prior) |operand, ty, *out| {
-                out.* = try self.lowerDispatchOperandAtType(operand, ty);
-            }
-            const scrutinee = try self.lowerUninhabitedScrutinee(checked_arg, arg_ty);
-            var result = try self.zeroBranchMatchAtTypeCell(scrutinee, ret_cell);
-            var index = uninhabited_index;
-            while (index > 0) {
-                index -= 1;
-                result = try self.addExprWithTypeCell(ret_cell, .{ .let_ = .{
-                    .bind = try self.addPatWithTypeCell(.{ .sealed = stable_types[index] }, .wildcard),
-                    .value = prior[index],
-                    .rest = result,
-                } });
-            }
-            return .{ .uninhabited = result };
-        }
-
-        const reserved = try self.reserveExprSpan(operands.len);
-        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
-        for (operands, stable_types, 0..) |operand, ty, index| {
-            self.draft.setReservedExprSpanItem(
-                reserved,
-                index,
-                try self.lowerDispatchOperandAtType(operand, ty),
-            );
-        }
-        return .{ .args = reserved.span };
-    }
-
-    fn lowerClosedDirectProcedureDispatch(
-        self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        plan: static_dispatch.StaticDispatchCallPlan,
-        evidence_id: static_dispatch.EvidenceNodeId,
-        procedure: static_dispatch.ProcedureMethodTarget,
-        expected_ret_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        const callable_ty = blk: {
-            var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-            defer timing_scope.end();
-            break :blk try self.builder.lowerType(self.view, plan.callable_ty);
-        };
-        const function = self.builder.functionShape(callable_ty, "checked closed direct procedure call had a non-function type");
-        const operands = plan.argsSlice(self.view.static_dispatch_plans);
-        if (operands.len != self.builder.program.types.span(function.args).len) {
-            Common.invariant("checked closed direct procedure call argument arity differed from its callable type");
-        }
-        try self.constrainTypeToMono(checked_ret_ty, function.ret);
-        const produced_ret_cell: DraftTypeCell = switch (expected_ret_cell) {
-            .sealed => |expected| if (!self.sameType(expected, function.ret)) {
-                Common.invariant("checked closed direct procedure call result differed from its expected type");
-            } else .{ .sealed = function.ret },
-            .graph_node => |expected| blk: {
-                const produced = try self.activeNodeFromType(function.ret);
-                _ = try self.graph.applyProducedTypeToRequest(expected, produced);
-                break :blk DraftTypeCell.fromGraphNode(produced);
-            },
-        };
-
+        // `direct_closed` describes the checker's dispatch evidence, not the
+        // concrete representation carried by each runtime operand. A value can
+        // still contain an exact generated type (for example `List(Iter$...)`),
+        // even when a low-level operation such as `list_len` does not produce
+        // such a value itself. Let the operands refine the callable graph before
+        // selecting the result cell so no consuming primitive erases that exact
+        // input identity.
         const callable_node = try self.activeNodeFromType(callable_ty);
+        const callable = try self.graph.functionNodes(callable_node);
         const lowered = switch (try self.lowerClosedDispatchOperandsAtNode(
             operands,
             callable_node,
@@ -31676,66 +31573,30 @@ const BodyContext = struct {
             .args => |args| args,
             .uninhabited => |expr| return expr,
         };
-        const evidence_node = self.view.static_dispatch_plans.evidenceNode(evidence_id);
-        const lookup = self.methodLookupForResolvedTarget(evidence_node.target);
-        const direct_key = ClosedDirectCallIdentity{
-            .callable = checkedTypeAddress(self.view, plan.callable_ty),
-            .evidence = evidence_id,
-            .method_scope = self.method_scope.key,
-        };
-        const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
-            if (existing.draft_spec) |raw_spec| {
-                if (raw_spec >= self.draft.template_specs.items.len) {
-                    Common.invariant("closed direct call cache referenced a missing draft specialization");
-                }
-                const spec = &self.draft.template_specs.items[raw_spec];
-                if (spec.state != .deferred and !runtimeDemandGuardFrameSetsEql(
-                    spec.runtime_demand_guard_frames,
-                    try self.runtimeDemandGuardFrameAddresses(),
-                )) {
-                    try self.draft.template_spec_reuses.append(self.allocator, .{
-                        .spec = raw_spec,
-                        .prefix_proof = try self.currentRuntimeImpossibilityProof(null),
-                    });
-                }
+        const expected_ret_node = try expected_ret_cell.toGraphNode(self.graph);
+        try applyProducedTypeToRequest(self.graph, expected_ret_node, callable.ret);
+        const produced_ret_cell: DraftTypeCell = if (op.producedTypeFlow() == .none)
+            switch (expected_ret_cell) {
+                .sealed => |expected| if (!self.sameType(expected, function.ret))
+                    Common.invariant("checked closed direct low-level call result differed from its expected type")
+                else
+                    .{ .sealed = function.ret },
+                .graph_node => DraftTypeCell.fromGraphNode(callable.ret),
             }
-            break :blk existing.slot;
-        } else blk: {
-            const evidence_vector = switch (try self.evidenceForDispatchTarget(plan)) {
-                .resolved => |evidence| evidence,
-                .synthesize => Common.invariant("closed direct procedure call had specialization-dependent evidence"),
-            };
-            const source_fn_ty = lookup.target.callable_ty;
-            const created = try self.builder.lowerDraftTemplateFromContext(
-                self,
-                procedure.template,
-                source_fn_ty,
-                lookup.view.types.rootKey(source_fn_ty),
-                callable_node,
-                evidence_vector,
-                .resolved,
-                self.procedureRuntimeSignatureRelation(procedure),
-            );
-            const draft_spec: ?u32 = switch (created) {
-                .local => |local| switch (local) {
-                    .draft => |draft_fn| self.draft.template_spec_by_fn.get(draft_fn) orelse
-                        Common.invariant("closed direct call created a draft function without a specialization record"),
-                    .final => null,
-                },
-                .imported => null,
-            };
-            try self.draft.closed_direct_specializations.put(direct_key, .{
-                .slot = created,
-                .draft_spec = draft_spec,
-            });
-            break :blk created;
-        };
-        const call = try self.addExprWithTypeCell(produced_ret_cell, .{ .call_proc = .{
-            .callee = draftProcCalleeForSlot(slot),
+        else
+            DraftTypeCell.fromGraphNode(callable.ret);
+        const call = try self.addExprWithTypeCell(produced_ret_cell, .{ .low_level = .{
+            .op = op,
             .args = lowered,
-            .captures = try self.methodTargetCaptureSpan(lookup),
         } });
-        return try self.applyDispatchResultMode(plan.result_mode, call, function.ret);
+        return try self.applyDispatchResultMode(
+            plan.result_mode,
+            call,
+            switch (produced_ret_cell) {
+                .sealed => |ty| ty,
+                .graph_node => try self.activeTypeFromNode(callable.ret),
+            },
+        );
     }
 
     const ClosedDispatchOperands = union(enum) {
@@ -31883,14 +31744,9 @@ const BodyContext = struct {
 
         const target_node = try self.methodTargetNodeFromPlan(resolved, &call_ctx, plan.callable_ty);
         try relateFunctionRequestInterface(self.graph, target_node, callable_node);
-        const fn_nodes = try self.graph.functionNodes(callable_node);
-        const ret_ty = try self.activeTypeFromNode(fn_nodes.ret);
-
-        const call_expr = try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(fn_nodes.ret),
-            try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, &.{}),
-        );
-        return .{ .call = call_expr, .try_ty = ret_ty };
+        const lowered = try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, &.{});
+        const call_expr = try self.addExprWithTypeCell(lowered.ret_ty, lowered.data);
+        return .{ .call = call_expr, .try_ty = try self.activeTypeFromCell(lowered.ret_ty) };
     }
 
     fn lowerNumeralRootBody(
@@ -32546,12 +32402,10 @@ const BodyContext = struct {
         };
     }
 
-    /// Consume a CheckedModule-proved closed direct call without constructing a
-    /// dispatch graph. The producer's runtime category is authoritative:
-    /// ordinary procedures and exact low-level operations have a sealed
-    /// checked callable interface, while graph-participating operations and
-    /// parametric/local/evidence-dependent calls continue through the relation
-    /// path below.
+    /// Consume the sealed result of a CheckedModule-proved closed direct call.
+    /// Closed target evidence alone is insufficient: procedures or low-level
+    /// operations that may produce an exact graph must stay on the producer
+    /// path even when their checked callable has no identity variables.
     fn closedDirectGraphFreeResultNode(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
@@ -32591,7 +32445,10 @@ const BodyContext = struct {
         };
         switch (procedure.runtime_target) {
             .intrinsic, .graph_participating => return null,
-            .procedure, .low_level => {},
+            .procedure => {
+                if (procedure.produces_exact_graph or procedure.exact_graph_from_evidence) return null;
+            },
+            .low_level => |op| if (op.producedTypeFlow() != .none) return null,
         }
 
         const callable_ty = try self.builder.lowerType(self.view, plan.callable_ty);
@@ -34148,7 +34005,7 @@ const BodyContext = struct {
         callable_node: NodeId,
         arg_ctx: *BodyContext,
         pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!BodyExprData {
+    ) Allocator.Error!LoweredCall {
         const fn_nodes = try self.graph.functionNodes(callable_node);
         const args = try arg_ctx.lowerDispatchOperandsAtNodes(
             plan.argsSlice(self.view.static_dispatch_plans),
@@ -34157,16 +34014,21 @@ const BodyContext = struct {
         );
         const produced_callable_node = try arg_ctx.producedCallableNode(callable_node, args);
         const contextual_lookup = try self.withLocalProcContext(lookup);
-        return .{ .call_proc = .{
-            .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNode(
-                contextual_lookup,
-                produced_callable_node,
-                try self.evidenceForDispatchTarget(plan),
-            )),
-            .args = args,
-            .iterator_procedure = self.iteratorProcedureForMethodTarget(contextual_lookup.target),
-            .captures = try self.methodTargetCaptureSpan(contextual_lookup),
-        } };
+        const callee = try self.methodTargetCalleeAtNode(
+            contextual_lookup,
+            produced_callable_node,
+            try self.evidenceForDispatchTarget(plan),
+        );
+        const completed = try self.graph.functionNodes(try self.draftFnSlotTypeNode(callee, produced_callable_node));
+        return .{
+            .ret_ty = DraftTypeCell.fromGraphNode(completed.ret),
+            .data = .{ .call_proc = .{
+                .callee = draftProcCalleeForSlot(callee),
+                .args = args,
+                .iterator_procedure = self.iteratorProcedureForMethodTarget(contextual_lookup.target),
+                .captures = try self.methodTargetCaptureSpan(contextual_lookup),
+            } },
+        };
     }
 
     fn lowerResolvedDirectDispatchAtNode(
@@ -34176,7 +34038,7 @@ const BodyContext = struct {
         callable_node: NodeId,
         arg_ctx: *BodyContext,
         pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!BodyExprData {
+    ) Allocator.Error!LoweredCall {
         const fn_nodes = try self.graph.functionNodes(callable_node);
         const args = try arg_ctx.lowerDispatchOperandsAtNodes(
             plan.argsSlice(self.view.static_dispatch_plans),
@@ -34185,15 +34047,20 @@ const BodyContext = struct {
         );
         const produced_callable_node = try arg_ctx.producedCallableNode(callable_node, args);
         const contextual_lookup = try self.withLocalProcContext(lookup);
-        return .{ .call_proc = .{
-            .callee = draftProcCalleeForSlot(try self.methodTargetCalleeDirectAtNode(
-                contextual_lookup,
-                produced_callable_node,
-                try self.evidenceForDispatchTarget(plan),
-            )),
-            .args = args,
-            .captures = try self.methodTargetCaptureSpan(contextual_lookup),
-        } };
+        const callee = try self.methodTargetCalleeDirectAtNode(
+            contextual_lookup,
+            produced_callable_node,
+            try self.evidenceForDispatchTarget(plan),
+        );
+        const completed = try self.graph.functionNodes(try self.draftFnSlotTypeNode(callee, produced_callable_node));
+        return .{
+            .ret_ty = DraftTypeCell.fromGraphNode(completed.ret),
+            .data = .{ .call_proc = .{
+                .callee = draftProcCalleeForSlot(callee),
+                .args = args,
+                .captures = try self.methodTargetCaptureSpan(contextual_lookup),
+            } },
+        };
     }
 
     fn lowerStructuralEqualityAtNode(

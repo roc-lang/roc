@@ -2344,9 +2344,13 @@ CheckedModule construction chooses every target that checking made exact.
 It projects the target callable through the checked call relation and classifies
 the result as closed or parametric. A closed direct call has no reachable
 checked identity variables and no nested evidence forwarded from an enclosing
-specialization. A parametric direct call still has an exact target but retains
-one of those explicit specialization inputs. Evidence-dependent calls are the
-only calls whose target itself comes from an enclosing specialization.
+specialization. This classification does not make its runtime operands sealed:
+a concrete operand may still carry an exact generated nominal beneath the
+checked public interface. Monotype lowers those operands first and derives the
+procedure specialization request from the cells they actually produced. A
+parametric direct call still has an exact target but retains one of those
+explicit specialization inputs. Evidence-dependent calls are the only calls
+whose target itself comes from an enclosing specialization.
 
 The runtime target category is producer-authored. Canonicalization records the
 exact low-level operation when it replaces a provided definition; CheckedModule
@@ -2648,13 +2652,26 @@ substitution. In particular, a compiler-generated interpolation iterator enters
 original checked-public callable argument and ask the callee to reconstruct or
 repair the representation.
 
+Building that request is one whole-interface substitution. Monotype walks each
+checked argument beside its completed produced argument once and records the
+directed replacement for every checked polymorphic cell that selected an exact
+generated nominal. It then materializes every argument and the return from the
+same table. Repeated occurrences therefore cannot disagree: specializing
+`List(a), a -> List(a)` with an exact `Iter` produces
+`List(Iter$identity), Iter$identity -> List(Iter$identity)` before the body is
+lowered. Ordinary compound nodes are rebuilt only along changed paths, and an
+exact generated nominal is an atomic replacement rather than a graph to scan.
+Two different exact values for the same checked slot invoke the explicit common
+representation operation at that call boundary; they are never resolved by
+last-write-wins substitution or a later whole-type merge.
+
 This producer-first order applies to ordinary direct calls as well as static
 dispatch. Preparing checked relations is not completion: a record, tuple, tag,
 list, call, field read, tuple-item read, or tag-payload read can still replace
 its checked destination with a distinct exact output cell while it lowers.
-Callee specialization starts
-only after those argument expressions have completed, and reuses the already
-lowered operands in the emitted call. An `exact_graph` procedure signature also
+Callee specialization starts only after those argument expressions have
+completed, and reuses the already-lowered operands in the emitted call. An
+`exact_graph` procedure signature also
 drives its body through graph-cell lowering even when the outer checked return
 cell initially equals the request; otherwise a compound return would be sealed
 before its exact children were known.
@@ -2717,12 +2734,14 @@ same declaration on the other; the checked mapping follows that explicitly
 recorded nominal backing and preserves the exact specialization as authority.
 Explicit nominal-constructor syntax is itself checker-authored producer
 evidence: it returns the definition-private nominal view with an inspectable
-backing, while the checked public opaque view remains unchanged. The backing
-expression is lowered at that private cell and the completed private nominal is
-the constructor's exact result. If equivalent nominal views form a redundant
-wrapper chain, Monotype compresses the wrapper to the structural backing before
-selecting a common root; a named root and its backing must always remain
-distinct graph nodes.
+backing, while the checked public opaque view remains unchanged. The exact
+destination instance selects the constructor's type arguments and backing, so a
+wrapper such as `Result(Iter$identity)` cannot construct a stale
+`Result(public Iter)` internally. The backing expression is lowered at that
+private exact cell and the completed private nominal is the constructor's exact
+result. If equivalent nominal views form a redundant wrapper chain, Monotype
+compresses the wrapper to the structural backing before selecting a common
+root; a named root and its backing must always remain distinct graph nodes.
 An exact value producer has no such permission: if a nominal result was
 requested, the producer must return the nominal wrapper. Treating a structural
 produced value as that nominal would hide a lowering bug. Neither operation
@@ -2775,6 +2794,7 @@ const IteratorKind = enum(u8) {
     none,
     custom,
     list,
+    str,
     single,
     range_exclusive,
     range_inclusive,
@@ -7560,8 +7580,10 @@ The main language difference is static dispatch. Roc keeps static dispatch
 separate from checked types. Checking still reports every user-facing
 static-dispatch error and outputs checked call classifications. Monotype IR
 lowering consumes those classifications and only instantiates the explicit
-parametric/evidence relations before replacing dispatch with direct calls; a
-closed direct call performs no method lookup or dispatch-graph construction.
+parametric/evidence relations before replacing dispatch with direct calls. A
+closed direct call performs no target search or evidence synthesis, but it still
+uses the current Monotype graph to preserve the exact types of its concrete
+runtime operands.
 
 Lambda sets are not stored in the checked type store or checked cache.
 They are introduced after Monotype Lifted IR, during Lambda Solved IR, exactly
