@@ -826,6 +826,7 @@ const crash_first_other_defs =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{ .name = "comptime eval - simple constant", .source_kind = .module, .source = simple_constant, .expected = .{ .inspect_str = "42.0" } },
+    .{ .name = "comptime eval - packed U16 constant list restores with element length", .source_kind = .module, .source = "main : List(U16)\nmain = [258, 513, 1027]", .expected = .{ .inspect_str = "[258, 513, 1027]" } },
     .{ .name = "comptime eval helper auto-imports builtin typed suffix types", .source_kind = .module, .source = builtin_suffix_constant, .expected = .{ .inspect_str = "42" } },
     .{ .name = "comptime eval - crash in constant", .source = crash_now, .expected = .{ .crash = {} } },
     .{ .name = "comptime eval - crash in if branch not taken", .source_kind = .module, .source = crash_branch_not_taken, .expected = .{ .inspect_str = "42.0" } },

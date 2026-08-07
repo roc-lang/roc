@@ -26,6 +26,7 @@
 const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
+const check = @import("check");
 const collections = @import("collections");
 const lir_core = @import("lir_core");
 
@@ -314,10 +315,12 @@ pub const Evaluator = struct {
             .frac_f64_lit => |f| return .{ .float64 = f },
             .dec_lit => |d| return .{ .dec = d.num },
             .str_lit => |sid| return .{ .str = self.program.stringLiteralText(sid) },
-            .bytes_lit => |sid| {
-                const bytes = self.program.stringLiteralText(sid);
-                const elems = self.alloc().alloc(Value, bytes.len) catch return error.OutOfMemory;
-                for (bytes, 0..) |byte, i| elems[i] = self.canonicalInt(.u8, byte);
+            .bytes_lit => |literal| {
+                const bytes = self.program.stringLiteralText(literal.literal);
+                const width: usize = literal.element.byteWidth();
+                if (bytes.len != @as(usize, literal.len) * width) return self.unsupported_("packed list literal byte length");
+                const elems = self.alloc().alloc(Value, literal.len) catch return error.OutOfMemory;
+                for (elems, 0..) |*elem, i| elem.* = self.packedScalarValue(literal.element, bytes[i * width ..][0..width]);
                 return .{ .list = elems };
             },
             .static_data_candidate => |cand| return self.evalExpr(frame, cand.runtime_expr),
@@ -411,6 +414,32 @@ pub const Evaluator = struct {
                 return self.raiseAbort(.expect_err, msg.str);
             },
         }
+    }
+
+    fn packedScalarValue(self: *Evaluator, element: check.ConstStore.ConstPackedScalar, bytes: []const u8) Value {
+        return switch (element) {
+            .u8 => self.canonicalInt(.u8, bytes[0]),
+            .i8 => self.canonicalInt(.i8, @as(i8, @bitCast(bytes[0]))),
+            .u16 => self.canonicalInt(.u16, std.mem.readInt(u16, bytes[0..2], .little)),
+            .i16 => self.canonicalInt(.i16, std.mem.readInt(i16, bytes[0..2], .little)),
+            .u32 => self.canonicalInt(.u32, std.mem.readInt(u32, bytes[0..4], .little)),
+            .i32 => self.canonicalInt(.i32, std.mem.readInt(i32, bytes[0..4], .little)),
+            .u64 => self.canonicalInt(.u64, std.mem.readInt(u64, bytes[0..8], .little)),
+            .i64 => self.canonicalInt(.i64, std.mem.readInt(i64, bytes[0..8], .little)),
+            .u128 => self.canonicalInt(.u128, @bitCast(std.mem.readInt(u128, bytes[0..16], .little))),
+            .i128 => self.canonicalInt(.i128, std.mem.readInt(i128, bytes[0..16], .little)),
+            .f32 => .{ .float32 = @bitCast(std.mem.readInt(u32, bytes[0..4], .little)) },
+            .f64 => .{ .float64 = @bitCast(std.mem.readInt(u64, bytes[0..8], .little)) },
+            .dec => .{ .dec = std.mem.readInt(i128, bytes[0..16], .little) },
+            .u8x16 => self.canonicalInt(.u8x16, @bitCast(std.mem.readInt(u128, bytes[0..16], .little))),
+            .i8x16 => self.canonicalInt(.i8x16, @bitCast(std.mem.readInt(u128, bytes[0..16], .little))),
+            .u16x8 => self.canonicalInt(.u16x8, @bitCast(std.mem.readInt(u128, bytes[0..16], .little))),
+            .i16x8 => self.canonicalInt(.i16x8, @bitCast(std.mem.readInt(u128, bytes[0..16], .little))),
+            .u32x4 => self.canonicalInt(.u32x4, @bitCast(std.mem.readInt(u128, bytes[0..16], .little))),
+            .i32x4 => self.canonicalInt(.i32x4, @bitCast(std.mem.readInt(u128, bytes[0..16], .little))),
+            .u64x2 => self.canonicalInt(.u64x2, @bitCast(std.mem.readInt(u128, bytes[0..16], .little))),
+            .i64x2 => self.canonicalInt(.i64x2, @bitCast(std.mem.readInt(u128, bytes[0..16], .little))),
+        };
     }
 
     fn evalExprSpan(self: *Evaluator, frame: *Frame, span: Ast.Span(Ast.ExprId)) EvalError![]const Value {

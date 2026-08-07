@@ -14,8 +14,8 @@ const Allocator = std.mem.Allocator;
 pub const ConstNodeId = enum(u32) { _ };
 /// Identifier for a function value in the checked const store.
 pub const ConstFnId = enum(u32) { _ };
-/// Identifier for stored string backing bytes in the checked const store.
-pub const ConstStrDataId = enum(u32) { _ };
+/// Identifier for stored immutable backing bytes in the checked const store.
+pub const ConstBlobDataId = enum(u32) { _ };
 /// Identifier for a stored monomorphic type used by checked constants.
 pub const ConstTypeId = enum(u32) { _ };
 
@@ -37,6 +37,53 @@ pub const ConstScalar = union(enum) {
     f32_bits: u32,
     f64_bits: u64,
     dec_bits: i128,
+};
+
+/// Target-independent scalar encoding used by a packed constant list.
+/// Multi-byte values use canonical little-endian bytes in `ConstStore`.
+pub const ConstPackedScalar = enum(u8) {
+    i8,
+    i16,
+    i32,
+    i64,
+    i128,
+    u8,
+    u16,
+    u32,
+    u64,
+    u128,
+    f32,
+    f64,
+    dec,
+    u8x16,
+    i8x16,
+    u16x8,
+    i16x8,
+    u32x4,
+    i32x4,
+    u64x2,
+    i64x2,
+
+    pub fn byteWidth(self: ConstPackedScalar) u32 {
+        return switch (self) {
+            .i8, .u8 => 1,
+            .i16, .u16 => 2,
+            .i32, .u32, .f32 => 4,
+            .i64, .u64, .f64 => 8,
+            .i128,
+            .u128,
+            .dec,
+            .u8x16,
+            .i8x16,
+            .u16x8,
+            .i16x8,
+            .u32x4,
+            .i32x4,
+            .u64x2,
+            .i64x2,
+            => 16,
+        };
+    }
 };
 
 /// Identity for a captured value inside a compile-time function value. This is
@@ -283,15 +330,28 @@ pub const FnDef = union(enum) {
     },
 };
 
-/// Stored string value.
-///
-/// `data` identifies the backing bytes. `offset` and `len` describe the string
-/// view into those bytes. This lets checked constants keep the sharing needed
-/// for readonly static slices while still storing only checked Roc values.
-pub const ConstStr = struct {
-    data: ConstStrDataId,
+/// A view into immutable bytes shared by strings and packed scalar lists.
+pub const ConstBlob = struct {
+    data: ConstBlobDataId,
     offset: u32,
     len: u32,
+};
+
+/// String view into immutable shared backing bytes.
+pub const ConstStr = ConstBlob;
+
+/// Packed scalar list whose bytes use the canonical encoding named by
+/// `element`. `bytes.len == len * element.byteWidth()`.
+pub const ConstPackedList = struct {
+    bytes: ConstBlob,
+    len: u32,
+    element: ConstPackedScalar,
+};
+
+/// List data stored either as child nodes or packed scalar bytes.
+pub const ConstList = union(enum) {
+    nodes: []const ConstNodeId,
+    scalar_bytes: ConstPackedList,
 };
 
 /// Compile-time constant stored in checked module data.
@@ -300,7 +360,7 @@ pub const ConstValue = union(enum) {
     zst,
     scalar: ConstScalar,
     str: ConstStr,
-    list: []const ConstNodeId,
+    list: ConstList,
     box: ConstNodeId,
     tuple: []const ConstNodeId,
     record: []const ConstNodeId,
@@ -324,7 +384,10 @@ const StoredValue = union(enum) {
     zst,
     scalar: ConstScalar,
     str: ConstStr,
-    list: ConstRange,
+    list: union(enum) {
+        nodes: ConstRange,
+        scalar_bytes: ConstPackedList,
+    },
     box: ConstNodeId,
     tuple: ConstRange,
     record: ConstRange,
@@ -629,13 +692,19 @@ pub const ConstStore = struct {
     /// Flat evidence vectors referenced by stored functions.
     evidence_pool: std.ArrayList(ConstFnEvidence),
     evidence_frame_pool: std.ArrayList(ConstFnEvidenceFrame),
-    /// Flat pool of all string backing bytes; `str_views` indexes into it.
-    str_backing: std.ArrayList(u8),
-    /// `ConstStrDataId` -> range into `str_backing`.
-    str_views: std.ArrayList(ConstRange),
+    /// Flat pool of immutable backing bytes shared by strings and packed lists.
+    blob_backing: std.ArrayList(u8),
+    /// `ConstBlobDataId` -> range into `blob_backing`.
+    blob_views: std.ArrayList(ConstRange),
+    /// Build-only content index. Keys own separate bytes because `blob_backing`
+    /// may move while the store is being built.
+    blob_index: std.StringHashMap(ConstBlobDataId),
+    blob_index_keys: std.ArrayList([]u8) = .empty,
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
+
+    pub const serde_transient_fields = .{ "blob_index", "blob_index_keys" };
 
     pub fn init(allocator: Allocator) ConstStore {
         return .{
@@ -648,8 +717,9 @@ pub const ConstStore = struct {
             .capture_pool = .empty,
             .evidence_pool = .empty,
             .evidence_frame_pool = .empty,
-            .str_backing = .empty,
-            .str_views = .empty,
+            .blob_backing = .empty,
+            .blob_views = .empty,
+            .blob_index = std.StringHashMap(ConstBlobDataId).init(allocator),
         };
     }
 
@@ -683,7 +753,10 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
-            .list => |items| .{ .list = try self.appendNodes(items) },
+            .list => |list| .{ .list = switch (list) {
+                .nodes => |items| .{ .nodes = try self.appendNodes(items) },
+                .scalar_bytes => |scalar_bytes| .{ .scalar_bytes = scalar_bytes },
+            } },
             .tuple => |items| .{ .tuple = try self.appendNodes(items) },
             .record => |items| .{ .record = try self.appendNodes(items) },
             .tag => |tag| blk: {
@@ -792,10 +865,19 @@ pub const ConstStore = struct {
         try std.testing.expectEqual(@as(?usize, 1), evidenceVectorEnd(&evidence, 0, 1));
     }
 
-    pub fn addStrData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstStrDataId {
-        const id: ConstStrDataId = @enumFromInt(@as(u32, @intCast(self.str_views.items.len)));
-        const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.str_backing, self.allocator, bytes);
-        try self.str_views.append(self.allocator, view);
+    pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
+        if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
+        if (self.blob_index.get(bytes)) |existing| return existing;
+
+        const id: ConstBlobDataId = @enumFromInt(@as(u32, @intCast(self.blob_views.items.len)));
+        const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
+        try self.blob_views.append(self.allocator, view);
+
+        const key = try self.allocator.dupe(u8, bytes);
+        errdefer self.allocator.free(key);
+        try self.blob_index_keys.append(self.allocator, key);
+        errdefer _ = self.blob_index_keys.pop();
+        try self.blob_index.put(key, id);
         return id;
     }
 
@@ -813,7 +895,10 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
-            .list => |r| .{ .list = self.nodeSlice(r) },
+            .list => |list| .{ .list = switch (list) {
+                .nodes => |r| .{ .nodes = self.nodeSlice(r) },
+                .scalar_bytes => |scalar_bytes| .{ .scalar_bytes = scalar_bytes },
+            } },
             .tuple => |r| .{ .tuple = self.nodeSlice(r) },
             .record => |r| .{ .record = self.nodeSlice(r) },
             .tag => |tag| .{ .tag = .{
@@ -836,13 +921,13 @@ pub const ConstStore = struct {
         };
     }
 
-    pub fn strData(self: *const ConstStore, id: ConstStrDataId) []const u8 {
+    pub fn blobData(self: *const ConstStore, id: ConstBlobDataId) []const u8 {
         const index = @intFromEnum(id);
-        if (@import("builtin").mode == .Debug and index >= self.str_views.items.len) {
-            constStoreInvariant("string backing id is out of range");
+        if (@import("builtin").mode == .Debug and index >= self.blob_views.items.len) {
+            constStoreInvariant("blob backing id is out of range");
         }
-        const view = self.str_views.items[index];
-        return self.str_backing.items[view.start .. view.start + view.len];
+        const view = self.blob_views.items[index];
+        return self.blob_backing.items[view.start .. view.start + view.len];
     }
 
     /// Relocatable serialized form. Every field is a `SafeList`-equivalent POD
@@ -856,8 +941,8 @@ pub const ConstStore = struct {
         capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
         evidence_pool: artifact_serialize.SerializedSlice(ConstFnEvidence) = .{},
         evidence_frame_pool: artifact_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
-        str_backing: artifact_serialize.SerializedSlice(u8) = .{},
-        str_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
+        blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
+        blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
             // 9 value/function side lists + 5 nested type-store lists.
@@ -871,11 +956,15 @@ pub const ConstStore = struct {
     };
 
     pub fn strBytes(self: *const ConstStore, str: ConstStr) []const u8 {
-        const backing = self.strData(str.data);
-        const offset: usize = str.offset;
-        const len: usize = str.len;
+        return self.blobBytes(str);
+    }
+
+    pub fn blobBytes(self: *const ConstStore, blob: ConstBlob) []const u8 {
+        const backing = self.blobData(blob.data);
+        const offset: usize = blob.offset;
+        const len: usize = blob.len;
         if (@import("builtin").mode == .Debug and (offset > backing.len or len > backing.len - offset)) {
-            constStoreInvariant("string view is outside backing data");
+            constStoreInvariant("blob view is outside backing data");
         }
         return backing[offset..][0..len];
     }
@@ -926,6 +1015,9 @@ pub const ConstStore = struct {
 
     pub fn deinit(self: *ConstStore) void {
         self.type_store.deinit();
+        for (self.blob_index_keys.items) |key| self.allocator.free(key);
+        self.blob_index_keys.deinit(self.allocator);
+        self.blob_index.deinit();
         if (!self.serialized) {
             self.values.deinit(self.allocator);
             self.fns.deinit(self.allocator);
@@ -934,8 +1026,8 @@ pub const ConstStore = struct {
             self.capture_pool.deinit(self.allocator);
             self.evidence_pool.deinit(self.allocator);
             self.evidence_frame_pool.deinit(self.allocator);
-            self.str_backing.deinit(self.allocator);
-            self.str_views.deinit(self.allocator);
+            self.blob_backing.deinit(self.allocator);
+            self.blob_views.deinit(self.allocator);
         }
         self.* = ConstStore.init(self.allocator);
     }
@@ -971,7 +1063,18 @@ pub const ConstStore = struct {
             .fn_value => |fn_id| self.verifyFnGraph(fn_id, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
             .box => |child| self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
             .nominal => |nominal| self.verifyGraph(nominal.backing, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
-            .list,
+            .list => |list| switch (list) {
+                .nodes => |children| for (children) |child| {
+                    self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
+                },
+                .scalar_bytes => |scalar_bytes| {
+                    const bytes = self.blobBytes(scalar_bytes.bytes);
+                    const expected_len = @as(u64, scalar_bytes.len) * scalar_bytes.element.byteWidth();
+                    if (bytes.len != expected_len) {
+                        constStoreInvariant("packed list byte length differs from its element encoding");
+                    }
+                },
+            },
             .tuple,
             .record,
             => |children| {
@@ -1041,15 +1144,21 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // owns and frees the slices it hands to `append`/`appendFn`.
     const list_items = try gpa.dupe(ConstNodeId, &.{ a, b });
     defer gpa.free(list_items);
-    const list = try store.append(.{ .list = list_items });
+    const list = try store.append(.{ .list = .{ .nodes = list_items } });
     const tag_payloads = try gpa.dupe(ConstNodeId, &.{a});
     defer gpa.free(tag_payloads);
     const tag_name = try gpa.dupe(u8, "Ok");
     defer gpa.free(tag_name);
     const tag = try store.append(.{ .tag = .{ .tag_name = tag_name, .payloads = tag_payloads } });
-    // A string backing + a str value (exercises str_backing + str_views).
-    const sd = try store.addStrData("hello world");
+    // Strings and packed lists share one content-deduplicated blob backing.
+    const sd = try store.addBlobData("hello world");
+    try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
     const str = try store.append(.{ .str = .{ .data = sd, .offset = 0, .len = 5 } });
+    const packed_list = try store.append(.{ .list = .{ .scalar_bytes = .{
+        .bytes = .{ .data = sd, .offset = 0, .len = 11 },
+        .len = 11,
+        .element = .u8,
+    } } });
     // A function value with a capture (exercises capture_pool).
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const private_backing_ty = try store.type_store.append(.{ .record = .{} });
@@ -1128,13 +1237,16 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(@as(u64, 7), loaded.get(a).scalar.u64);
     try std.testing.expectEqual(@as(i32, -3), loaded.get(b).scalar.i32);
     // List range resolves to the same node ids
-    try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list);
+    try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list.nodes);
     // Tag name + payloads
     const loaded_tag = loaded.get(tag).tag;
     try std.testing.expectEqualStrings("Ok", loaded_tag.tag_name);
     try std.testing.expectEqualSlices(ConstNodeId, &.{a}, loaded_tag.payloads);
     // String backing
     try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
+    const loaded_packed = loaded.get(packed_list).list.scalar_bytes;
+    try std.testing.expectEqual(sd, loaded_packed.bytes.data);
+    try std.testing.expectEqualStrings("hello world", loaded.blobBytes(loaded_packed.bytes));
     // Function captures
     const loaded_fn = loaded.getFn(fn_id);
     try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);
