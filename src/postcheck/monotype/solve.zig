@@ -4143,18 +4143,10 @@ pub const GraphTypeFinals = struct {
                 };
                 if (occurrence_held) {
                     try self.graph.types.excludeFromDedup(built);
-                    try self.graph.types.noteCommittedSeal(built);
                     return built;
                 }
                 const shared = try self.graph.types.internFilledNode(self.graph.name_store, built);
                 if (shared != built) try self.sealed.put(node, shared);
-                // Debug/probe-only: record the committed final seal so the Slice 7
-                // Stage A probe can compare the full sealed population against a
-                // directed re-translation (a no-op when no sink is connected).
-                try self.graph.types.noteCommittedSeal(shared);
-                // Debug/probe-only: attribute the seal to the node that produced
-                // it, so the per-specialization rehearsal can join it to the
-                // checked position the node was instantiated from.
                 return shared;
             },
         }

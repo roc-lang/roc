@@ -429,7 +429,6 @@ pub fn run(
     // The sink points into the builder, which every exit of this function
     // deinitializes; disconnecting on every path keeps the pointer from
     // outliving it.
-    defer program.types.committed_census = null;
 
     // The per-specialization instantiation state (reunify.md sections 9/10/11).
     // It runs alongside lowering because a specialization's binder environment
@@ -2086,12 +2085,6 @@ const Builder = struct {
     seam_divergences_noted: usize = 0,
     /// Whether this lowering has already named its modules for the census.
     module_names_dumped: bool = false,
-    /// Debug/probe-only widened population sink (reunify.md section 9, Slice 7
-    /// Stage A): connected to the type store's `committed_census` while the
-    /// directed-translation probe runs, so it accumulates every committed final
-    /// seal id the graph produces per specialization, deduped by sealed id. Empty
-    /// and disconnected on every non-probe lowering.
-    sealed_population: std.AutoHashMap(Type.TypeId, void),
     /// The specialization graph currently being lowered. Template body
     /// requests made anywhere inside that specialization defer to its end,
     /// when its types are final and specialization keys are stable.
@@ -2138,7 +2131,6 @@ const Builder = struct {
             .target_usize = options.target_usize,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
-            .sealed_population = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
@@ -2239,7 +2231,6 @@ const Builder = struct {
         self.spec_store.deinit();
         self.uninhabited_type_cache.deinit();
         self.type_cache.deinit();
-        self.sealed_population.deinit();
         self.evidence_arena.deinit();
     }
 
@@ -5171,51 +5162,6 @@ const Builder = struct {
     /// concrete checked source whose ground directed translation should reproduce
     /// it. Keyed by sealed id in the population map, so the widened population is
     /// deduplicated by sealed id (reunify.md section 9, Slice 7 Stage A).
-    const ProbeEntry = struct {
-        module_bytes: [32]u8,
-        type_id: u32,
-        /// True when this entry is a concrete root lowering translated
-        /// (`type_cache`): its ground translation is the authoritative logical
-        /// comparison. False for a widened sealed variant, whose ground source may
-        /// be faithful (a `type_cache` key) or a scheme template.
-        from_type_cache: bool,
-    };
-
-    /// Assemble the widened probe population: every concrete checked root lowering
-    /// translated (`type_cache`), plus every named type the graph committed into
-    /// the program per specialization (`sealed_population`, from the
-    /// GraphTypeFinals commit hook), resolved to its concrete checked provenance.
-    /// Deduplicated by sealed id; the first source wins.
-    fn collectProbePopulation(self: *Builder, out: *std.AutoHashMap(Type.TypeId, ProbeEntry)) Allocator.Error!void {
-        var cache_it = self.type_cache.iterator();
-        while (cache_it.next()) |entry| {
-            const address = entry.key_ptr.*;
-            const gop = try out.getOrPut(entry.value_ptr.*);
-            if (!gop.found_existing) gop.value_ptr.* = .{
-                .module_bytes = address.module_bytes,
-                .type_id = address.type_id,
-                .from_type_cache = true,
-            };
-        }
-
-        var sealed_it = self.sealed_population.keyIterator();
-        while (sealed_it.next()) |sealed_id_ptr| {
-            const sealed_id = sealed_id_ptr.*;
-            // Only a named type carries a checked provenance (`named_type`) a
-            // ground directed translation can read; a structural seal has no such
-            // source and is reached only as a child of a named or cached root.
-            const named = switch (self.program.types.get(sealed_id)) {
-                .named => |named| named,
-                else => continue,
-            };
-            const gop = try out.getOrPut(sealed_id);
-            if (!gop.found_existing) gop.value_ptr.* = .{
-                .module_bytes = named.named_type.module.bytes,
-                .type_id = @intFromEnum(named.named_type.ty),
-                .from_type_cache = false,
-            };
-        }
-    }
 
     const NominalDeclLookup = struct {
         view: ModuleView,
