@@ -4,9 +4,9 @@ const std = @import("std");
 const check = @import("check");
 const helpers = @import("eval").test_helpers;
 
-test "issue 10346: unsupported generated method publishes a checked error" {
+test "issue 10346: unsupported generated method warning survives publication" {
     // Repro for https://github.com/roc-lang/roc/issues/10346.
-    // Publication must preserve the checked error instead of treating the
+    // Publication must preserve the warning instead of treating the
     // annotation-only method as a callable dispatch target.
     const source =
         \\Thing := U64.{

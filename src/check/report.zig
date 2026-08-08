@@ -3987,7 +3987,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildUnsupportedGeneratedMethodReport(self: *Self, data: UnsupportedGeneratedMethod) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Unsupported Generated Method", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Unsupported Generated Method", "", .warning);
         errdefer report.deinit();
 
         try D.renderSliceInto(&.{

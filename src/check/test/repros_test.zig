@@ -850,7 +850,7 @@ test "check - repro - issue 10184 - tag syntax for value-backed nominal reports 
     try test_env.assertOneTypeError("Invalid Nominal Tag");
 }
 
-test "check - repro - issue 10346 - unsupported generated method reports an error" {
+test "check - repro - issue 10346 - unsupported generated method reports a warning" {
     // Repro for https://github.com/roc-lang/roc/issues/10346.
     const src =
         \\Thing := U64.{
@@ -863,7 +863,7 @@ test "check - repro - issue 10346 - unsupported generated method reports an erro
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Unsupported Generated Method");
+    try test_env.assertOneTypeWarning("Unsupported Generated Method");
 }
 
 test "check - associated underscore annotation with a body is inferred normally" {
