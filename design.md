@@ -1320,6 +1320,16 @@ history; it never guesses which variables are source occurrences from their
 storage parents. Error recovery must use this explicit operation rather than
 calling ordinary union or writing a raw redirect.
 
+An already-erroneous operand cannot overwrite a solved type or a flex carrying
+constraints. Encountering `.err` against either terminates the current
+unification successfully for diagnostic recovery, before any enclosing
+structure is merged. An unconstrained flex placeholder may adopt `.err`; this
+is how an erroneous expression explicitly fills its owning binding or
+annotation slot without contaminating an independently constrained producer.
+Checker sites that own a reported error use `markErroneous` to poison the owning
+solved class directly. No successful ordinary unification propagates an
+existing `.err` into a type that already carries information.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
@@ -3688,6 +3698,10 @@ Other solved-graph mutations:
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.
+- `markErroneous` (`setVarContent(.err)`)—mechanism: diagnostic recovery after
+  an already-reported error. It marks the checker node's solved class directly,
+  preserving the class-wide cascade suppression previously provided by
+  unifying that node with a fresh error variable.
 - `resetAnnotationNodes` (`resetVarToUnbound`)—mechanism: recycles
   annotation node vars after the scheme was copied off as a disjoint orphan.
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning
