@@ -8220,6 +8220,26 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListAppendUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        // A zero-sized element has no bytes to copy, so appending one only
+        // bumps the length. Handled here for the same reason emitListConcat
+        // handles it here: the list owns no allocation, so there is no data
+        // pointer to walk and no capacity to maintain.
+        if (abi.elem_size == 0) {
+            const builder = self.builder orelse return error.CompilationFailed;
+            const wip = self.wip orelse return error.CompilationFailed;
+            const src_ptr = self.slot(GuardedList.at(args, 0)).ptr;
+            const out_ptr = self.slot(target).ptr;
+            const len = try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListLenOffset()));
+            const one = builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory;
+            const new_len = wip.bin(.add, len, one, "") catch return error.OutOfMemory;
+            // listAppendUnsafe hands the incoming list's allocation to its
+            // result, so carry the pointer and capacity across rather than
+            // dropping them, which would leak whatever the source owned.
+            try self.storePointer(out_ptr, try self.loadPointer(src_ptr));
+            try self.storeListLen(out_ptr, new_len);
+            try self.storeListCapacity(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListCapacityOffset())));
+            return;
+        }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
@@ -8605,10 +8625,18 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
-        // Zero-sized elements make the capacity bookkeeping degenerate; leave
-        // them entirely to the builtin.
+        // A list of zero-sized elements owns no allocation, so it carries a
+        // length and nothing else and a reserve cannot change anything
+        // observable. Passing it to the builtin instead goes through capacity
+        // bookkeeping that a zero-width element makes degenerate, which loses
+        // the length, so copy the list across here.
         if (abi.elem_size == 0) {
-            return self.emitListReserveCall(target, args, unique_args);
+            const src_ptr = self.slot(GuardedList.at(args, 0)).ptr;
+            const out_ptr = self.slot(target).ptr;
+            try self.storePointer(out_ptr, try self.loadPointer(src_ptr));
+            try self.storeListLen(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListLenOffset())));
+            try self.storeListCapacity(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListCapacityOffset())));
+            return;
         }
 
         const builder = self.builder orelse return error.CompilationFailed;
