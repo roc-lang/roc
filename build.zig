@@ -4388,7 +4388,7 @@ pub fn build(b: *std.Build) void {
         const provided_callable_wasm_host = b.addObject(.{
             .name = "provided_callable_wasm_host",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("test/wasm/provided-callable-host/platform/host.zig"),
+                .root_source_file = b.path("test/provided-callable-host/platform/wasm_host.zig"),
                 .target = wasm32_resolved_target,
                 .optimize = optimize,
                 .strip = strip,
@@ -4405,15 +4405,15 @@ pub fn build(b: *std.Build) void {
         const copy_provided_callable_wasm_host = b.addUpdateSourceFiles();
         copy_provided_callable_wasm_host.addCopyFileToSource(
             provided_callable_wasm_host.getEmittedBin(),
-            "test/wasm/provided-callable-host/platform/targets/wasm32/host.wasm",
+            "test/provided-callable-host/platform/targets/wasm32/host.wasm",
         );
 
         const build_wasm_provided_callable_app = b.addRunArtifact(roc_exe);
         build_wasm_provided_callable_app.addArgs(&.{
             "build",
-            "test/wasm/provided-callable-host/app.roc",
+            "test/provided-callable-host/app.roc",
             "--target=wasm32",
-            "--output=test/wasm/provided-callable-host/app.wasm",
+            "--output=test/provided-callable-host/app.wasm",
         });
         build_wasm_provided_callable_app.step.dependOn(&copy_provided_callable_wasm_host.step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_provided_callable_app.step);
@@ -4631,7 +4631,7 @@ pub fn build(b: *std.Build) void {
             const run_wasm_provided_callable_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_provided_callable_test.addArgs(&.{
                 "--wasm-path",
-                "test/wasm/provided-callable-host/app.wasm",
+                "test/provided-callable-host/app.wasm",
                 "--expected",
                 "42",
                 "--assert-alloc-balanced",

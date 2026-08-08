@@ -8,7 +8,8 @@ const host_alloc = @import("host_alloc");
 
 const RocOps = builtins.host_abi.RocOps;
 
-extern fn roc_make(seed: u64) callconv(.c) ?[*]u8;
+extern fn roc_make_boxed_callable(offset: u64) callconv(.c) ?[*]u8;
+extern fn roc_drop_boxed_callable(callable: ?[*]u8) callconv(.c) void;
 
 const U64Arg = extern struct {
     arg0: u64,
@@ -78,8 +79,7 @@ export fn wasm_main() [*]const u8 {
         .roc_crashed = rocOpsCrashed,
         .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
     };
-    const callable = roc_make(0) orelse @trap();
-    defer builtins.erased_callable.decref(callable, &roc_ops);
+    const callable = roc_make_boxed_callable(1) orelse @trap();
 
     const payload = builtins.erased_callable.payloadPtr(callable);
     var args = U64Arg{ .arg0 = 41 };
@@ -91,6 +91,7 @@ export fn wasm_main() [*]const u8 {
         builtins.erased_callable.capturePtr(callable),
         null,
     );
+    roc_drop_boxed_callable(callable);
 
     result = if (value == 42) "42" else "wrong result";
     return result.ptr;
