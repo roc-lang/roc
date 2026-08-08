@@ -21570,6 +21570,19 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
                                 }
+                                // Nothing further will arrive to close the row,
+                                // so the fields it has are the fields it gets.
+                                if (try self.closeRecordRowForDerivedParse(deferred_constraint.var_, env, region)) {
+                                    try self.satisfyImplicitParserConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                        failure_expr,
+                                    );
+                                    continue;
+                                }
                                 try self.reportConstraintError(
                                     deferred_constraint.var_,
                                     constraint,
@@ -22527,7 +22540,8 @@ fn typeSupportsDerivedParse(
                 support = combineDerivedSupport(support, try self.varSupportsDerivedParseField(field_var, env, region));
                 if (support == .unsupported) break;
             }
-            break :blk support;
+            if (support == .unsupported) break :blk support;
+            break :blk combineDerivedSupport(support, try self.varSupportsDerivedParseRecordExt(record.ext, env, region));
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
@@ -22612,6 +22626,61 @@ fn derivedParseExtHasAnyTag(self: *Self, ext_var: Var) Allocator.Error!DerivedSu
         .flex => .unresolved,
         .rigid => .unsupported,
     };
+}
+
+/// Whether a record row is settled enough to derive a parser for it. A row
+/// still open on a flex var can gain fields, and the parser derivation needs
+/// the exact field set, so report it unresolved and let the dispatch defer
+/// until the row closes—or until `closeRecordRowForDerivedParse` closes it.
+fn varSupportsDerivedParseRecordExt(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedSupport {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_record => .supported,
+            .record => |record| try self.typeSupportsDerivedParse(.{ .record = record }, env, region),
+            .record_unbound => |fields| try self.typeSupportsDerivedParse(.{ .record_unbound = fields }, env, region),
+            .tag_union,
+            .empty_tag_union,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            => .unsupported,
+        },
+        .alias => |alias| try self.varSupportsDerivedParseRecordExt(self.types.getAliasBackingVar(alias), env, region),
+        .flex => .unresolved,
+        .err => .supported,
+        .rigid => .unsupported,
+    };
+}
+
+/// Close an inferred record row so a parser can be derived for it.
+///
+/// A record whose shape comes only from use sites keeps an open row: every
+/// field access adds a field and leaves the rest of the row a flex var that
+/// another access could still extend. Deriving a parser needs the exact field
+/// set, so once the dispatch has been deferred as far as it can go and nothing
+/// further is coming, take the fields the row has as the fields it gets and
+/// close it. Reports whether the row closed and now supports derivation, which
+/// it does not when a field's own type never resolved.
+fn closeRecordRowForDerivedParse(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_).desc.content;
+    if (resolved != .structure or resolved.structure != .record) return false;
+    const record = resolved.structure.record;
+    if (self.types.resolveVar(record.ext).desc.content != .flex) return false;
+
+    try self.unifyWith(record.ext, .{ .structure = .empty_record }, env);
+    return (try self.varSupportsDerivedParseShape(var_, env, region)) == .supported;
 }
 
 fn varSupportsDerivedParseTagExt(

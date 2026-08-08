@@ -15956,7 +15956,7 @@ const EvidencePass = struct {
                 const evidence_var: Var = @enumFromInt(source_call.evidence_var);
                 switch (target.kind) {
                     .procedure, .local_proc => {
-                        const node_id = try self.evidenceNodeForTarget(target, call.dispatcher_ty, evidence_var);
+                        const node_id = try self.evidenceNodeForTarget(target, call.dispatcher_ty, evidence_var, .derivation);
                         call.nested = switch (self.evidence_nodes.items[@intFromEnum(node_id)].nested) {
                             .resolved => |span| span,
                             .from_callable => checkedArtifactInvariant(
@@ -16518,7 +16518,7 @@ const EvidencePass = struct {
                 }
                 break :blk .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
             },
-            .procedure, .local_proc => .{ .direct_pending = try self.evidenceNodeForTarget(target, dispatcher_ty, constraint_fn_var) },
+            .procedure, .local_proc => .{ .direct_pending = try self.evidenceNodeForTarget(target, dispatcher_ty, constraint_fn_var, .dispatch_edge) },
         };
     }
 
@@ -16591,11 +16591,20 @@ const EvidencePass = struct {
     /// record is the exact evidence selected at the discharge edge; compiler-
     /// generated edges that have no record derive evidence from the target
     /// schema and concrete callable relation.
+    /// How a method target was selected, which decides whether a checked
+    /// instantiation record must exist for it. A `dispatch_edge` target was
+    /// chosen by resolving a static-dispatch constraint, and that resolution
+    /// records the instantiation it performed. A `derivation` target was
+    /// chosen by a generated codec deriving over a type's fields: there is no
+    /// dispatch edge behind it, so no such record was ever written.
+    const MethodTargetSelection = enum { dispatch_edge, derivation };
+
     fn evidenceNodeForTarget(
         self: *EvidencePass,
         target: static_dispatch.MethodTarget,
         dispatcher_ty: ?CheckedTypeId,
         constraint_fn_var: ?Var,
+        selection: MethodTargetSelection,
     ) Allocator.Error!static_dispatch.EvidenceNodeId {
         if (target.kind == .structural) {
             checkedArtifactInvariant("structural method registry result reached the callable evidence-node graph", .{});
@@ -16672,7 +16681,7 @@ const EvidencePass = struct {
         if (procedure_schema == .requires_record) {
             checkedArtifactInvariant("pathless procedure target evidence had no checked instantiation record", .{});
         }
-        if (target.kind == .local_proc and constraint_fn_var != null) {
+        if (target.kind == .local_proc and constraint_fn_var != null and selection == .dispatch_edge) {
             checkedArtifactInvariant("constrained local-procedure target evidence had no checked instantiation record", .{});
         }
 
