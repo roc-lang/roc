@@ -2839,6 +2839,17 @@ callable, body ABI, or reassigned storage. These purposes share unchanged
 structure but cannot reuse one another's constructor decision. In particular,
 body ABI copies keep function constructor roots independent, and reassigned
 storage copies only the paths leading to selected stored cells.
+Materialization separately reports whether a returned node records a real
+replacement or copied function, rather than treating every different node as a
+change. While one recursive named type is being materialized, an active dense
+table maps its produced node to the reserved result node. A recursive edge may
+use that reserved node to close a copied cycle, but the edge alone does not mark
+the surrounding path as changed. If the traversal finds no replacement or
+function copy, it retains the original named root and discards the provisional
+path; consequently body ABI isolation never clones an ordinary recursive type.
+The active entry is removed when that one named traversal finishes, so two
+independent argument occurrences remain independent. This is part of the
+direct materialization traversal, not a preliminary structure query.
 Callee specialization starts only after those argument expressions have
 completed, and reuses the already-lowered operands in the emitted call. An
 `exact_graph` procedure signature also
