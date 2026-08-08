@@ -19,6 +19,7 @@ platform ""
 		arm64v1musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
 		x64win: { inputs: ["host.lib", app] },
 		arm64win: { inputs: ["host.lib", app] },
+		wasm32: { inputs: ["host.wasm", app] },
 	}
 
 make_boxed_callable_for_host : U64 -> Box(U64 -> U64)
