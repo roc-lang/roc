@@ -18279,6 +18279,9 @@ const BodyContext = struct {
         child: checked.CheckedExprId,
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        if (self.view.bodies.expr(child).data == .runtime_error) {
+            return try self.lowerExprWithType(child, str_ty);
+        }
         const value_node = try self.lowerExprTypeNode(child);
         const value = try self.lowerExprAtTypeCell(child, DraftTypeCell.fromGraphNode(value_node));
         return if (try self.graph.typeIsResolved(value_node))

@@ -137,4 +137,5 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/range_prove_test.zig"));
     std.testing.refAllDecls(@import("test/match_corpus_test.zig"));
     std.testing.refAllDecls(@import("test/url_package_test.zig"));
+    std.testing.refAllDecls(@import("test/dbg_runtime_error_test.zig"));
 }
