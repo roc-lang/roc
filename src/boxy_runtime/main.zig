@@ -186,7 +186,15 @@ comptime {
     // carries the small self-contained libcall set. Standalone Wasm resolves
     // these symbols from the builtins object linked before this runtime.
     if (builtin.cpu.arch.isWasm() and builtins.host_abi.host_call_mode == .vtable) {
-        builtins.native_runtime_libcalls.exportLibcalls();
+        builtins.native_runtime_libcalls.exportLibcalls(.strong);
+    }
+
+    // This runtime lowers 128-bit conversions and division to compiler-rt
+    // libcalls. A `--opt=dev` link resolves them from the builtins object
+    // beside it, but the LLVM link has no such object, so carry weak copies:
+    // they satisfy that link and defer to the builtins object in the other.
+    if (!builtin.cpu.arch.isWasm()) {
+        builtins.native_runtime_libcalls.exportLibcalls(.weak);
     }
 
     const names = [_][:0]const u8{
