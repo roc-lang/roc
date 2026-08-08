@@ -165,10 +165,11 @@ fn evaluateEntrypointInView(
     };
     defer gpa.free(arg_layouts);
 
-    var interpreter = eval.LirInterpreter.init(
+    var interpreter = eval.LirInterpreter.initWithBoxyTables(
         gpa,
         &view.store,
         &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
         .preserve,
     ) catch {
@@ -245,12 +246,13 @@ fn shimEntrypointFromImage(
         return;
     };
 
-    const view = viewEmbeddedLirImage(base, image_len, ops) catch |err| switch (err) {
+    var view = viewEmbeddedLirImage(base, image_len, ops) catch |err| switch (err) {
         error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => return,
     };
+    defer view.deinit();
 
     evaluateEntrypointInView(&view, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
         error.ImageUnavailable,

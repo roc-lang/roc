@@ -267,7 +267,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         return err;
     };
 
-    const view = lir.LirImage.viewMappedImage(
+    var view = lir.LirImage.viewMappedImage(
         image_header,
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
@@ -276,6 +276,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         diag.step("LirImage.viewMappedImage", err);
         return err;
     };
+    defer view.deinit();
 
     return runEchoView(allocator, &view, diag, opts.std_io) catch |err| {
         diag.step("runEchoView", err);
@@ -302,10 +303,11 @@ fn runEchoView(
     var cli_args_list = try echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
-    var interpreter = eval.LirInterpreter.init(
+    var interpreter = eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &view.store,
         &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
         &roc_ops,
         .preserve,
     ) catch |err| {

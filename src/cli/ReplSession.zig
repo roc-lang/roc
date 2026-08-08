@@ -9,6 +9,7 @@ const base = @import("base");
 const can = @import("can");
 const compile = @import("compile");
 const eval = @import("eval");
+const lir = @import("lir");
 const parse = @import("parse");
 const reporting = @import("reporting");
 
@@ -39,6 +40,7 @@ allocator: Allocator,
 /// to read `import "path" as x : Str`/`: List(U8)` files.
 roc_ctx: CoreCtx,
 backend_kind: eval.EvalBackend,
+specialization_strategy: base.SpecializationStrategy,
 definitions: DefinitionStore,
 builtin_modules: *eval.BuiltinModules,
 /// Whether this session owns `builtin_modules` (and must deinit it). Tests can
@@ -65,7 +67,12 @@ pub const StepResult = union(enum) {
     }
 };
 
-pub fn init(allocator: Allocator, roc_ctx: CoreCtx, backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
+pub fn init(
+    allocator: Allocator,
+    roc_ctx: CoreCtx,
+    backend_kind: eval.EvalBackend,
+    specialization_strategy: base.SpecializationStrategy,
+) ReplInitError!ReplSession {
     const builtin_modules = try allocator.create(eval.BuiltinModules);
     errdefer allocator.destroy(builtin_modules);
     builtin_modules.* = try eval.BuiltinModules.init(allocator);
@@ -73,6 +80,7 @@ pub fn init(allocator: Allocator, roc_ctx: CoreCtx, backend_kind: eval.EvalBacke
         .allocator = allocator,
         .roc_ctx = roc_ctx,
         .backend_kind = backend_kind,
+        .specialization_strategy = specialization_strategy,
         .definitions = DefinitionStore.init(),
         .builtin_modules = builtin_modules,
         .owns_builtin_modules = true,
@@ -93,6 +101,7 @@ fn initBorrowingBuiltins(
         .allocator = allocator,
         .roc_ctx = roc_ctx,
         .backend_kind = backend_kind,
+        .specialization_strategy = .lss,
         .definitions = DefinitionStore.init(),
         .builtin_modules = builtin_modules,
         .owns_builtin_modules = false,
@@ -1043,6 +1052,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         target_usize,
         self.prePublishedBuiltin(),
         self.roc_ctx,
+        self.specialization_strategy,
     ) catch |err| switch (err) {
         error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
         error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
@@ -1159,6 +1169,9 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     const program: eval.InspectedRun.Program = .{
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
+        .boxy_tables = eval.boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
+        .boxy_sidecar_desc = lir.LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),
     };
     const result = switch (self.backend_kind) {
@@ -1747,6 +1760,7 @@ fn expectAllNative(expr: []const u8, expected: []const u8) ReplTestError!void {
         .native,
         repl.prePublishedBuiltin(),
         repl.roc_ctx,
+        repl.specialization_strategy,
     );
     defer compiled.deinit(testing.allocator);
 

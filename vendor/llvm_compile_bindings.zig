@@ -126,6 +126,9 @@ pub const Value = opaque {
     pub const setLinkage = LLVMSetLinkage;
     extern fn LLVMSetLinkage(Global: *Value, Linkage: c_int) void;
 
+    pub const getLinkage = LLVMGetLinkage;
+    extern fn LLVMGetLinkage(Global: *Value) c_int;
+
     pub const setVisibility = LLVMSetVisibility;
     extern fn LLVMSetVisibility(Global: *Value, Viz: c_int) void;
 
@@ -150,6 +153,10 @@ extern fn ZigLLVMRunGlobalDCE(module: *Module) void;
 /// LLVM-C linkage value for `internal`: a local definition, never an exported
 /// symbol, and discarded by global DCE when unused.
 pub const internal_linkage: c_int = 8;
+
+/// LLVM-C linkage value for `private`: a local definition whose name is not
+/// visible to the linker.
+pub const private_linkage: c_int = 9;
 
 /// LLVM-C attribute index for function-level attributes (`~0U`).
 pub const attribute_function_index: c_uint = 0xFFFFFFFF;

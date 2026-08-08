@@ -33,6 +33,8 @@ pub const LowerResourceError = Allocator.Error;
 /// An explicit checked constant requested for target static-data materialization.
 pub const StaticDataRequest = postcheck.Common.StaticDataRequest;
 
+pub const SpecializationStrategy = base.SpecializationStrategy;
+
 /// Root checked module plus the checked imports visible to post-check lowering.
 pub const CheckedModuleSet = struct {
     root: checked.LoweringModuleView,
@@ -58,6 +60,7 @@ pub const RootRequestSet = struct {
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    specialization_strategy: SpecializationStrategy = .lss,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
     inline_expects: InlineExpectMode = .run,
@@ -480,6 +483,18 @@ pub fn lowerCheckedModulesToLir(
     };
     defer allocator.free(static_data_requests);
 
+    switch (target.specialization_strategy) {
+        .lss => {},
+        .boxy => return lowerBoxyCheckedModulesToLir(
+            allocator,
+            modules,
+            roots,
+            target,
+            layout_requests,
+            static_data_requests,
+        ),
+    }
+
     const monotype_started_ns = if (target.timing) |timing| timing.start() else 0;
     var monotype_timing: ?postcheck.Monotype.Lower.Timing = if (target.timing) |timing|
         postcheck.Monotype.Lower.Timing.init(timing.std_io)
@@ -577,6 +592,15 @@ pub fn lowerCheckedModulesToLir(
     if (target.timing) |timing| timing.finish(lir_gen_started_ns, .lir_gen);
     errdefer lowered.deinit();
 
+    return finishLoweredOutput(allocator, roots, target, &lowered);
+}
+
+fn finishLoweredOutput(
+    allocator: Allocator,
+    roots: RootRequestSet,
+    target: TargetConfig,
+    lowered: anytype,
+) LowerResourceError!LoweredProgram {
     const lir_passes_started_ns = if (target.timing) |timing| timing.start() else 0;
 
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
@@ -627,6 +651,43 @@ pub fn lowerCheckedModulesToLir(
         .target_usize = target.target_usize,
         .runtime_value_schemas = runtime_value_schemas,
     };
+}
+
+fn lowerBoxyCheckedModulesToLir(
+    allocator: Allocator,
+    modules: CheckedModuleSet,
+    roots: RootRequestSet,
+    target: TargetConfig,
+    layout_requests: []const checked.CheckedTypeId,
+    static_data_requests: []const postcheck.Common.StaticDataRequest,
+) LowerResourceError!LoweredProgram {
+    var boxy_layout_requests = std.ArrayList(checked.CheckedTypeId).empty;
+    defer boxy_layout_requests.deinit(allocator);
+    try boxy_layout_requests.appendSlice(allocator, layout_requests);
+
+    var plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
+        .root_module = modules.root,
+        .imports = modules.imports,
+        .roots = roots.requests,
+        .layout_requests = boxy_layout_requests.items,
+        .static_data_requests = static_data_requests,
+    }, .{});
+    defer plan.deinit();
+
+    var lowered = try postcheck.Boxy.Lower.run(
+        allocator,
+        checkedModules(modules),
+        rootRequests(roots, layout_requests, static_data_requests),
+        &plan,
+        .{
+            .target_usize = target.target_usize,
+            .list_in_place_map = target.list_in_place_map,
+            .proc_debug_names = target.proc_debug_names,
+        },
+    );
+    errdefer lowered.deinit();
+
+    return finishLoweredOutput(allocator, roots, target, &lowered);
 }
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {

@@ -4771,7 +4771,7 @@ const Builder = struct {
         padding_field_tys: []const checked.CheckedTypeId,
     };
 
-    /// Resolves a nominal's source declaration across every representation that
+    /// Resolves a nominal's checked declaration across every representation that
     /// has one, for reading declared field order. The box-payload representation
     /// is the common case for record nominals (assigned while the checked module
     /// data is built), so it must be handled, not just `*_declaration`.
@@ -4817,10 +4817,22 @@ const Builder = struct {
     /// declaration backing. The span feeds layout selection only; the lowered
     /// row stays lexicographic.
     fn declaredOrderForNominal(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!Type.Span {
+        if (nominal.declared_fields.len != 0) {
+            return try self.lowerCheckedDeclaredOrder(view, nominal.declared_fields, view, nominal.padding_field_types);
+        }
         const lookup = self.nominalDeclarationFor(view, nominal) orelse {
             if (!nominalHasDeclarationBacking(nominal)) return Type.Span.empty();
             Common.invariant("declaration-backed nominal reached Monotype lowering without declaration data");
         };
+        const declared_fields = lookup.declaration.declaredFields(lookup.view.types);
+        if (declared_fields.len != 0) {
+            return try self.lowerCheckedDeclaredOrder(
+                lookup.view,
+                declared_fields,
+                lookup.view,
+                lookup.padding_field_tys,
+            );
+        }
         const fields = lookup.declaration.declaredRecordFields(lookup.view.types);
         if (fields.len == 0) return Type.Span.empty();
         // Unnamed fields are layout padding; their resolved checked types ride on
@@ -4847,6 +4859,30 @@ const Builder = struct {
                     entries[i] = .{ .padding = try self.lowerType(padding_view, checked_ty) };
                 },
             }
+        }
+        return try self.program.types.addDeclaredFields(entries);
+    }
+
+    fn lowerCheckedDeclaredOrder(
+        self: *Builder,
+        field_view: ModuleView,
+        fields: []const checked.CheckedDeclaredField,
+        padding_view: ModuleView,
+        padding_types: []const checked.CheckedTypeId,
+    ) Allocator.Error!Type.Span {
+        const entries = try self.allocator.alloc(Type.DeclaredField, fields.len);
+        defer self.allocator.free(entries);
+        for (fields, 0..) |field, i| {
+            entries[i] = switch (field) {
+                .named => |name| .{ .named = try self.recordFieldName(field_view, name) },
+                .padding => |index| blk: {
+                    const raw_index: usize = @intCast(index);
+                    if (raw_index >= padding_types.len) {
+                        Common.invariant("nominal declaration declared-order padding index was out of range");
+                    }
+                    break :blk .{ .padding = try self.lowerType(padding_view, padding_types[raw_index]) };
+                },
+            };
         }
         return try self.program.types.addDeclaredFields(entries);
     }
@@ -33293,7 +33329,7 @@ const BodyContext = struct {
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.alloc(SpecEvidence, refs.len);
         for (refs, params, 0..) |ref, param, i| {
-            out[i] = switch (ref) {
+            out[i] = switch (ref.resolution) {
                 .from_callable => blk: {
                     const path = self.view.templates.evidenceParamPath(param);
                     if (path.len == 0) {
@@ -33319,7 +33355,7 @@ const BodyContext = struct {
         ref: static_dispatch.CheckedEvidence,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
-        switch (ref) {
+        switch (ref.resolution) {
             .direct => |node_id| {
                 const node = self.view.static_dispatch_plans.evidenceNode(node_id);
                 return .{ .target = try self.materializeEvidenceTarget(node, purpose) };
@@ -33329,7 +33365,7 @@ const BodyContext = struct {
                     Common.invariant("checked evidence reference was absent from its lexical chain");
                 return entry;
             },
-            .structural => |kind| return .{ .structural = kind },
+            .structural => |evidence| return .{ .structural = evidence.derivation },
             .from_callable => Common.invariant("callable-derived checked evidence escaped a nested procedure construction recipe"),
             .checked_error => return .checked_error,
             .unreachable_value => return .unreachable_value,

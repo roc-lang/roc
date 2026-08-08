@@ -1066,19 +1066,39 @@ pub const EvidenceChainIndex = struct {
 /// enclosing callable's evidence params, or with a compiler-derived structural
 /// implementation. `checked_error` marks an obligation at a site checking
 /// already rejected; consuming it after checking is a compiler bug.
-pub const CheckedEvidence = union(enum) {
-    direct: EvidenceNodeId,
-    constraint: EvidenceChainIndex,
-    structural: StructuralDerivation,
-    /// The checker proved this nested-procedure obligation is the matching
-    /// evidence parameter projected from the concrete callable request.
-    from_callable,
-    checked_error,
-    /// The edge left this obligation's dispatcher unsolved: no value of that
-    /// type can ever reach the dispatch (e.g. the `Ok` payload of a `Try` that
-    /// is always `Err` at this edge). The obligation is vacuous; consuming it
-    /// lowers to an unreachable crash, never to a resolved call.
-    unreachable_value,
+pub const CheckedEvidence = struct {
+    /// Exact checked dispatcher type at this instantiation edge. Consumers use
+    /// this for non-dictionary evidence too (notably defaulted literals whose
+    /// runtime representation still needs an explicit descriptor).
+    dispatcher_ty: CheckedTypeId,
+    resolution: Resolution,
+    /// Whether this obligation is represented by a runtime dictionary slot.
+    /// Literal-defaulting constraints remain in canonical evidence vectors for
+    /// specialization, but do not become Boxy dictionary requirements.
+    runtime_dictionary: bool,
+
+    pub const Resolution = union(enum) {
+        direct: EvidenceNodeId,
+        constraint: EvidenceChainIndex,
+        structural: StructuralEvidence,
+        /// The checker proved this nested-procedure obligation is the matching
+        /// evidence parameter projected from the concrete callable request.
+        from_callable,
+        checked_error,
+        /// The edge left this obligation's dispatcher unsolved: no value of that
+        /// type can ever reach the dispatch (e.g. the `Ok` payload of a `Try` that
+        /// is always `Err` at this edge). The obligation is vacuous; consuming it
+        /// lowers to an unreachable crash, never to a resolved call.
+        unreachable_value,
+    };
+};
+
+/// Exact checked identities for one compiler-derived evidence entry.
+pub const StructuralEvidence = struct {
+    derivation: StructuralDerivation,
+    dispatcher_ty: CheckedTypeId,
+    callable_ty: CheckedTypeId,
+    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
 };
 
 /// Public `EvidenceNode` declaration.
@@ -1107,6 +1127,10 @@ pub const EvidenceNested = union(enum(u8)) {
 /// Exact checked target and nested evidence selected for one dispatch edge.
 pub const EvidenceNode = struct {
     target: MethodTarget,
+    /// Exact checked dispatcher type that selected this target. Defaulted
+    /// literal evidence has no concrete source type and records null.
+    dispatcher_ty: ?CheckedTypeId = null,
+    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
     instantiation: EvidenceTargetInstantiation,
     nested: EvidenceNested = .{ .resolved = .{} },
 };
@@ -1133,7 +1157,8 @@ pub const EvidencePathStep = dispatch_evidence.PathStep;
 ///
 /// One published evidence param of a procedure template's scheme, in canonical
 /// order (see `dispatch_evidence.zig`). Consumers index these by position; the
-/// method name identifies the obligation, and `path` locates the dispatcher
+/// method name identifies the obligation, `dispatcher_ty` preserves its exact
+/// checked identity, and `path` locates the dispatcher
 /// within the scheme's callable so compiler-generated call edges (which have
 /// no checked instantiation records) can resolve the obligation from the
 /// concrete monomorphic callable. An empty path means the dispatcher has no
@@ -1141,6 +1166,11 @@ pub const EvidencePathStep = dispatch_evidence.PathStep;
 /// a constraint's fn type, or is an open-row remainder erased on closure).
 pub const EvidenceParamRecord = struct {
     method: canonical.MethodNameId,
+    dispatcher_ty: CheckedTypeId,
+    /// Whether this parameter becomes a runtime method dictionary. Literal
+    /// defaulting evidence remains an ABI input for descriptor selection but
+    /// does not carry method implementations at runtime.
+    runtime_dictionary: bool,
     /// Checker-recorded derived implementation permitted when the concrete
     /// dispatcher has no registered method target.
     structural: ?StructuralKind = null,
@@ -1206,6 +1236,49 @@ pub const StaticDispatchCallPlan = struct {
 
 /// Public `StaticDispatchPlanId` declaration.
 pub const StaticDispatchPlanId = enum(u32) { _ };
+
+/// Kind of compiler-generated codec whose internal calls checking validated.
+pub const GeneratedCodecDerivationKind = enum(u8) {
+    parser,
+    encoder,
+};
+
+/// Stable index of a checked generated-codec derivation contract.
+pub const GeneratedCodecDerivationId = enum(u32) { _ };
+
+/// One exact method edge inside a compiler-generated parser or encoder.
+pub const GeneratedCodecCall = struct {
+    method: canonical.MethodNameId,
+    dispatcher_ty: CheckedTypeId,
+    callable_ty: CheckedTypeId,
+    subject_ty: ?CheckedTypeId = null,
+    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
+    /// Nested evidence for the instantiated target callable, in its canonical
+    /// evidence-parameter order.
+    nested: artifact_serialize.Span = .{},
+};
+
+/// Exact checked contract for one compiler-generated codec instantiation.
+pub const GeneratedCodecDerivation = struct {
+    kind: GeneratedCodecDerivationKind,
+    source_constructor_ty: CheckedTypeId,
+    source_runtime_ty: CheckedTypeId,
+    source_shape_ty: CheckedTypeId,
+    source_encoding_ty: CheckedTypeId,
+    source_state_ty: CheckedTypeId,
+    source_error_ty: CheckedTypeId,
+    constructor_ty: CheckedTypeId,
+    runtime_ty: CheckedTypeId,
+    shape_ty: CheckedTypeId,
+    encoding_ty: CheckedTypeId,
+    state_ty: CheckedTypeId,
+    error_ty: CheckedTypeId,
+    calls: artifact_serialize.Span = .{},
+
+    pub fn callsSlice(self: GeneratedCodecDerivation, table: *const StaticDispatchPlanTable) []const GeneratedCodecCall {
+        return table.generated_codec_calls[self.calls.start .. self.calls.start + self.calls.len];
+    }
+};
 
 /// Public `IteratorForPlanId` declaration.
 pub const IteratorForPlanId = enum(u32) { _ };
@@ -1346,6 +1419,10 @@ pub const StaticDispatchPlanTable = struct {
     evidence_refs: []CheckedEvidence = &.{},
     /// Checked-expr-keyed evidence for instantiation sites, sorted by key.
     site_evidence: []SiteEvidenceEntry = &.{},
+    /// Exact generated-codec contracts emitted by checking.
+    generated_codec_derivations: []GeneratedCodecDerivation = &.{},
+    /// Shared flat pool backing `GeneratedCodecDerivation.calls`.
+    generated_codec_calls: []GeneratedCodecCall = &.{},
 
     pub const Serialized = extern struct {
         plans: SerializedSlice(StaticDispatchCallPlan) = .{},
@@ -1363,11 +1440,13 @@ pub const StaticDispatchPlanTable = struct {
         evidence_nodes: SerializedSlice(EvidenceNode) = .{},
         evidence_refs: SerializedSlice(CheckedEvidence) = .{},
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
+        generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
+        generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
 
         comptime {
-            // 15 side lists → 15 base-pointer fixups on deserialize, never a
+            // 17 side lists → 17 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 15);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 17);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -1402,6 +1481,10 @@ pub const StaticDispatchPlanTable = struct {
         errdefer quote_by_node.deinit(allocator);
         var iterator_for_plans = std.ArrayList(IteratorForPlan).empty;
         errdefer iterator_for_plans.deinit(allocator);
+        var generated_codec_derivations = std.ArrayList(GeneratedCodecDerivation).empty;
+        errdefer generated_codec_derivations.deinit(allocator);
+        var generated_codec_calls = std.ArrayList(GeneratedCodecCall).empty;
+        errdefer generated_codec_calls.deinit(allocator);
         const iterator_topologies = try allocator.alloc(IteratorRepresentationTopology, 1);
         errdefer allocator.free(iterator_topologies);
         iterator_topologies[0] = .{
@@ -1537,6 +1620,40 @@ pub const StaticDispatchPlanTable = struct {
         }
 
         const module_env = module.moduleEnvConst();
+        for (module_env.generated_codec_derivations.items.items) |derivation| {
+            const source_calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
+            const calls_start: u32 = @intCast(generated_codec_calls.items.len);
+            for (source_calls) |call| {
+                try generated_codec_calls.append(allocator, .{
+                    .method = try names.internMethodIdent(module.identStoreConst(), @bitCast(call.method_ident)),
+                    .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(call.dispatcher_var)),
+                    .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(call.callable_var)),
+                    .subject_ty = if (call.subject_var == ModuleEnv.GeneratedCodecCall.no_subject_var)
+                        null
+                    else
+                        try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(call.subject_var)),
+                });
+            }
+            try generated_codec_derivations.append(allocator, .{
+                .kind = switch (@as(ModuleEnv.GeneratedCodecDerivation.Kind, @enumFromInt(derivation.kind))) {
+                    .parser => .parser,
+                    .encoder => .encoder,
+                },
+                .source_constructor_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_constraint_fn_var)),
+                .source_runtime_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_runtime_fn_var)),
+                .source_shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_shape_var)),
+                .source_encoding_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_encoding_var)),
+                .source_state_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_state_var)),
+                .source_error_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_error_var)),
+                .constructor_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.constraint_fn_var)),
+                .runtime_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.runtime_fn_var)),
+                .shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.shape_var)),
+                .encoding_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.encoding_var)),
+                .state_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.state_var)),
+                .error_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.error_var)),
+                .calls = .{ .start = calls_start, .len = @intCast(source_calls.len) },
+            });
+        }
         for (module_env.store.literalDispatchPlans()) |numeral_plan| {
             if (numeral_plan.dispatchKind() != .numeral) continue;
             switch (numeral_plan.dispatchResolution()) {
@@ -1694,21 +1811,24 @@ pub const StaticDispatchPlanTable = struct {
                 var next_args = [_]IteratorDispatchOperand{.loop_iterator_state};
                 const next_ar = try pushOperands(IteratorDispatchOperand, &iter_operand_pool, allocator, &next_args);
 
+                const iter_call = IteratorDispatchCall{
+                    .method = try names.internMethodName("iter"),
+                    .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
+                    .callable_ty = iter_callable_ty,
+                    .dispatcher_arg_index = 0,
+                    .args = iter_ar,
+                };
+                const next_call = IteratorDispatchCall{
+                    .method = try names.internMethodName("next"),
+                    .dispatcher_ty = iterator_ty,
+                    .callable_ty = next_callable_ty,
+                    .dispatcher_arg_index = 0,
+                    .args = next_ar,
+                };
+
                 try iterator_for_plans.append(allocator, .{
-                    .iter = .{
-                        .method = try names.internMethodName("iter"),
-                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
-                        .callable_ty = iter_callable_ty,
-                        .dispatcher_arg_index = 0,
-                        .args = iter_ar,
-                    },
-                    .next = .{
-                        .method = try names.internMethodName("next"),
-                        .dispatcher_ty = iterator_ty,
-                        .callable_ty = next_callable_ty,
-                        .dispatcher_arg_index = 0,
-                        .args = next_ar,
-                    },
+                    .iter = iter_call,
+                    .next = next_call,
                     .iterable = iterable_expr,
                     .item_ty = item_ty,
                     .iterator_ty = iterator_ty,
@@ -1754,6 +1874,8 @@ pub const StaticDispatchPlanTable = struct {
             .iterator_for_by_node = iterator_for_sorted,
             .operand_pool = try operand_pool.toOwnedSlice(allocator),
             .iter_operand_pool = try iter_operand_pool.toOwnedSlice(allocator),
+            .generated_codec_derivations = try generated_codec_derivations.toOwnedSlice(allocator),
+            .generated_codec_calls = try generated_codec_calls.toOwnedSlice(allocator),
         };
     }
 
@@ -1790,6 +1912,10 @@ pub const StaticDispatchPlanTable = struct {
             },
         };
         return self.evidence_refs[span.start .. span.start + span.len];
+    }
+
+    pub fn generatedCodecCallEvidence(self: *const StaticDispatchPlanTable, call: GeneratedCodecCall) []const CheckedEvidence {
+        return self.evidence_refs[call.nested.start .. call.nested.start + call.nested.len];
     }
 
     /// Evidence for the scheme instantiated at `expr` (a constrained
@@ -1829,6 +1955,8 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(self.evidence_nodes);
         allocator.free(self.evidence_refs);
         allocator.free(self.site_evidence);
+        allocator.free(self.generated_codec_derivations);
+        allocator.free(self.generated_codec_calls);
         self.* = .{};
     }
 };
@@ -2285,6 +2413,11 @@ test "method registry finalization sorts entries for binary lookup" {
     try std.testing.expect(registry.lookup(.{ .owner = .{ .builtin = .list }, .method = @enumFromInt(2) }) == null);
 }
 
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
+}
+
 fn testPlan(expr_raw: u32, args_start: u32, args_len: u32) StaticDispatchCallPlan {
     return .{
         .expr = @enumFromInt(expr_raw),
@@ -2303,7 +2436,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 15);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 17);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);
@@ -2318,6 +2451,34 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             .{ .key = 10, .val = 0 },
             .{ .key = 11, .val = 1 },
         };
+        var evidence_nodes = [_]EvidenceNode{.{
+            .target = .{
+                .module_idx = 7,
+                .def_idx = @enumFromInt(8),
+                .kind = .{ .local_proc = .{
+                    .binder = @enumFromInt(9),
+                    .expr = @enumFromInt(10),
+                    .context_anchor = @enumFromInt(12),
+                } },
+                .callable_ty = @enumFromInt(11),
+            },
+            .dispatcher_ty = @enumFromInt(12),
+            .instantiation = .{ .callable = @enumFromInt(13) },
+            .nested = .{ .resolved = .{ .start = 0, .len = 1 } },
+        }};
+        var evidence_refs = [_]CheckedEvidence{
+            .{ .dispatcher_ty = @enumFromInt(14), .runtime_dictionary = true, .resolution = .{ .structural = .{
+                .derivation = .encoder,
+                .dispatcher_ty = @enumFromInt(14),
+                .callable_ty = @enumFromInt(15),
+            } } },
+            .{ .dispatcher_ty = @enumFromInt(12), .runtime_dictionary = false, .resolution = .{ .direct = @enumFromInt(fixtureTableIndex(0)) } },
+        };
+        var site_evidence = [_]SiteEvidenceEntry{.{
+            .key = 16,
+            .start = 1,
+            .len = 1,
+        }};
         var iterator_topologies = [_]IteratorRepresentationTopology{.{
             .len_field = @enumFromInt(20),
             .step_field = @enumFromInt(21),
@@ -2335,6 +2496,9 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             .by_expr = &by_expr,
             .iterator_topologies = &iterator_topologies,
             .operand_pool = operands,
+            .evidence_nodes = &evidence_nodes,
+            .evidence_refs = &evidence_refs,
+            .site_evidence = &site_evidence,
         };
 
         const rt = try artifact_serialize.roundTripForTest(gpa, StaticDispatchPlanTable, &table);
@@ -2357,6 +2521,20 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         );
 
         try std.testing.expectEqual(@as(?u32, 1), lookupPlanKV(loaded.by_expr, 11));
+
+        const node = loaded.evidenceNode(@enumFromInt(fixtureTableIndex(0)));
+        try std.testing.expectEqual(@as(?CheckedTypeId, @enumFromInt(12)), node.dispatcher_ty);
+        try std.testing.expectEqual(@as(CheckedTypeId, @enumFromInt(13)), node.instantiation.callable);
+        const nested = loaded.nestedEvidence(node);
+        try std.testing.expectEqual(@as(usize, 1), nested.len);
+        try std.testing.expect(nested[0].runtime_dictionary);
+        try std.testing.expectEqual(StructuralKind.encoder, nested[0].resolution.structural.derivation.kind());
+        try std.testing.expectEqual(@as(CheckedTypeId, @enumFromInt(14)), nested[0].resolution.structural.dispatcher_ty);
+        try std.testing.expectEqual(@as(CheckedTypeId, @enumFromInt(15)), nested[0].resolution.structural.callable_ty);
+        const site = loaded.siteEvidence(@enumFromInt(16)) orelse return error.TestExpectedEqual;
+        try std.testing.expectEqual(@as(usize, 1), site.len);
+        try std.testing.expect(!site[0].runtime_dictionary);
+        try std.testing.expectEqual(@as(EvidenceNodeId, @enumFromInt(fixtureTableIndex(0))), site[0].resolution.direct);
     }
 }
 

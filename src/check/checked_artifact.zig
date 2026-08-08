@@ -2598,6 +2598,16 @@ pub const CheckedRecordField = struct {
     ty: CheckedTypeId,
 };
 
+/// One entry in a nominal record's source-declared layout order.
+///
+/// Named entries reference the lexicographic backing row by field name. Padding
+/// entries reference the corresponding slot in `padding_field_types`; the type
+/// itself stays in that existing pool so substitution has one source of truth.
+pub const CheckedDeclaredField = union(enum) {
+    named: canonical.RecordFieldLabelId,
+    padding: u32,
+};
+
 /// Public `CheckedNominalRecordField` declaration.
 ///
 /// Declared-order record field entry for a nominal declaration. Named entries
@@ -2880,6 +2890,9 @@ pub const CheckedNominalType = struct {
     /// layout selection reserves `sizeof` of each. Empty for the common case of
     /// a nominal with no unnamed fields.
     padding_field_types: []const CheckedTypeId = &.{},
+    /// Source-declared field order for nominal record layout. Empty for
+    /// non-record nominal backings and for builtin nominals.
+    declared_fields: []const CheckedDeclaredField = &.{},
 };
 
 fn checkedNominalTypeKey(nominal: CheckedNominalType) canonical.NominalTypeKey {
@@ -2983,7 +2996,7 @@ pub const StoredAlias = struct {
 };
 
 /// POD form of `CheckedNominalType`: `args` and `padding_field_types` are ranges
-/// into `type_id_pool`.
+/// into `type_id_pool`; `declared_fields` is a range into `declared_field_pool`.
 pub const StoredNominal = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleIdentityId,
@@ -2994,6 +3007,7 @@ pub const StoredNominal = struct {
     representation: CheckedNominalRepresentationRef,
     args: CheckedTypeRange = .{},
     padding_field_types: CheckedTypeRange = .{},
+    declared_fields: CheckedTypeRange = .{},
 };
 
 /// POD form of `CheckedRecordType`: `fields` is a range into `record_field_pool`.
@@ -3085,6 +3099,7 @@ fn reconstructCheckedTypePayload(pool_owner: anytype, stored: StoredCheckedTypeP
             .representation = n.representation,
             .args = pool_owner.typeIdPool()[n.args.start .. n.args.start + n.args.len],
             .padding_field_types = pool_owner.typeIdPool()[n.padding_field_types.start .. n.padding_field_types.start + n.padding_field_types.len],
+            .declared_fields = pool_owner.declaredFieldPool()[n.declared_fields.start .. n.declared_fields.start + n.declared_fields.len],
         } },
         .function => |f| .{ .function = .{
             .kind = f.kind,
@@ -3127,6 +3142,7 @@ pub const CheckedTypeStoreView = struct {
     nominal_declarations: []const CheckedNominalDeclaration = &.{},
     type_id_pool: []const CheckedTypeId = &.{},
     record_field_pool: []const CheckedRecordField = &.{},
+    declared_field_pool: []const CheckedDeclaredField = &.{},
     nominal_record_field_pool: []const CheckedNominalRecordField = &.{},
     constraint_pool: []const CheckedStaticDispatchConstraint = &.{},
     tag_pool: []const CheckedTag = &.{},
@@ -3140,6 +3156,11 @@ pub const CheckedTypeStoreView = struct {
     /// The shared flat pool of record fields backing record range fields.
     pub fn recordFieldPool(self: CheckedTypeStoreView) []const CheckedRecordField {
         return self.record_field_pool;
+    }
+
+    /// The shared flat pool of declared nominal record fields.
+    pub fn declaredFieldPool(self: CheckedTypeStoreView) []const CheckedDeclaredField {
+        return self.declared_field_pool;
     }
 
     /// The shared flat pool of declared-order nominal record fields.
@@ -3512,6 +3533,11 @@ pub const CheckedNominalDeclaration = struct {
     pf_start: u32 = 0,
     pf_len: u32 = 0,
 
+    /// Range into `CheckedTypeStore.declared_field_pool` for the source-declared
+    /// nominal record field order.
+    df_start: u32 = 0,
+    df_len: u32 = 0,
+
     /// Range into `CheckedTypeStore.nominal_record_field_pool` for the
     /// declaration's top-level record field sequence.
     rf_start: u32 = 0,
@@ -3525,6 +3551,11 @@ pub const CheckedNominalDeclaration = struct {
     /// The declaration's padding field types within its store's `type_id_pool`.
     pub fn paddingFieldTypes(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
         return pool_owner.typeIdPool()[self.pf_start .. self.pf_start + self.pf_len];
+    }
+
+    /// The declaration's source-declared nominal record field order.
+    pub fn declaredFields(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedDeclaredField {
+        return pool_owner.declaredFieldPool()[self.df_start .. self.df_start + self.df_len];
     }
 
     /// The declaration's top-level record field sequence.
@@ -3616,6 +3647,8 @@ pub const CheckedTypeStore = struct {
     type_id_pool: std.ArrayList(CheckedTypeId) = .empty,
     /// Flat pool of record fields backing record/record_unbound payloads.
     record_field_pool: std.ArrayList(CheckedRecordField) = .empty,
+    /// Flat pool of source-declared nominal record layout fields.
+    declared_field_pool: std.ArrayList(CheckedDeclaredField) = .empty,
     /// Flat pool of declared-order nominal record fields.
     nominal_record_field_pool: std.ArrayList(CheckedNominalRecordField) = .empty,
     /// Flat pool of static-dispatch constraints backing flex/rigid variables.
@@ -3645,6 +3678,11 @@ pub const CheckedTypeStore = struct {
     /// The shared flat pool of record fields backing record range fields.
     pub fn recordFieldPool(self: *const CheckedTypeStore) []const CheckedRecordField {
         return self.record_field_pool.items;
+    }
+
+    /// The shared flat pool of declared nominal record fields.
+    pub fn declaredFieldPool(self: *const CheckedTypeStore) []const CheckedDeclaredField {
+        return self.declared_field_pool.items;
     }
 
     /// The shared flat pool of declared-order nominal record fields.
@@ -3697,6 +3735,12 @@ pub const CheckedTypeStore = struct {
     fn appendRecordFields(self: *CheckedTypeStore, allocator: Allocator, fields: []const CheckedRecordField) Allocator.Error!CheckedTypeRange {
         std.debug.assert(!self.serialized);
         return artifact_serialize.appendSpan(CheckedTypeRange, CheckedRecordField, &self.record_field_pool, allocator, fields);
+    }
+
+    /// Append `fields` to `declared_field_pool`, returning their range.
+    fn appendDeclaredFields(self: *CheckedTypeStore, allocator: Allocator, fields: []const CheckedDeclaredField) Allocator.Error!CheckedTypeRange {
+        std.debug.assert(!self.serialized);
+        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedDeclaredField, &self.declared_field_pool, allocator, fields);
     }
 
     /// Append `fields` to `nominal_record_field_pool`, returning their range.
@@ -3775,6 +3819,8 @@ pub const CheckedTypeStore = struct {
                 if (n.args.len != 0) allocator.free(n.args);
                 const padding_field_types = try self.appendTypeIds(allocator, n.padding_field_types);
                 if (n.padding_field_types.len != 0) allocator.free(n.padding_field_types);
+                const declared_fields = try self.appendDeclaredFields(allocator, n.declared_fields);
+                if (n.declared_fields.len != 0) allocator.free(n.declared_fields);
                 break :blk .{ .nominal = .{
                     .name = n.name,
                     .origin_module = n.origin_module,
@@ -3785,6 +3831,7 @@ pub const CheckedTypeStore = struct {
                     .representation = n.representation,
                     .args = args,
                     .padding_field_types = padding_field_types,
+                    .declared_fields = declared_fields,
                 } };
             },
             .function => |f| blk: {
@@ -3884,6 +3931,72 @@ pub const CheckedTypeStore = struct {
         }
 
         const module_env = module.moduleEnvConst();
+        // Static-dispatch evidence resolves constrained scheme instantiations
+        // after type publication. Publish each recorded fresh variable now so
+        // evidence nodes can name the exact concrete dispatcher type by a
+        // checked type id rather than retaining checker-only variables.
+        for (module_env.scheme_use_pairs.items.items) |pair| {
+            _ = try appendCheckedTypeRoot(
+                allocator,
+                module,
+                names,
+                import_views,
+                &store,
+                &active,
+                @enumFromInt(pair.fresh_var),
+            );
+        }
+        for (module_env.generated_codec_derivations.items.items) |derivation| {
+            inline for (.{
+                derivation.source_constraint_fn_var,
+                derivation.source_runtime_fn_var,
+                derivation.source_shape_var,
+                derivation.source_encoding_var,
+                derivation.source_state_var,
+                derivation.source_error_var,
+                derivation.constraint_fn_var,
+                derivation.runtime_fn_var,
+                derivation.shape_var,
+                derivation.encoding_var,
+                derivation.state_var,
+                derivation.error_var,
+            }) |raw_var| {
+                _ = try appendCheckedTypeRoot(
+                    allocator,
+                    module,
+                    names,
+                    import_views,
+                    &store,
+                    &active,
+                    @enumFromInt(raw_var),
+                );
+            }
+            const calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
+            for (calls) |call| {
+                inline for (.{ call.dispatcher_var, call.callable_var, call.evidence_var }) |raw_var| {
+                    _ = try appendCheckedTypeRoot(
+                        allocator,
+                        module,
+                        names,
+                        import_views,
+                        &store,
+                        &active,
+                        @enumFromInt(raw_var),
+                    );
+                }
+                if (call.subject_var != ModuleEnv.GeneratedCodecCall.no_subject_var) {
+                    _ = try appendCheckedTypeRoot(
+                        allocator,
+                        module,
+                        names,
+                        import_views,
+                        &store,
+                        &active,
+                        @enumFromInt(call.subject_var),
+                    );
+                }
+            }
+        }
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             if (!source_nodes.hasStatement(statement_idx)) continue;
             switch (module.getStatement(statement_idx)) {
@@ -4012,6 +4125,7 @@ pub const CheckedTypeStore = struct {
             .nominal_declarations = self.nominal_declarations.items,
             .type_id_pool = self.type_id_pool.items,
             .record_field_pool = self.record_field_pool.items,
+            .declared_field_pool = self.declared_field_pool.items,
             .nominal_record_field_pool = self.nominal_record_field_pool.items,
             .constraint_pool = self.constraint_pool.items,
             .tag_pool = self.tag_pool.items,
@@ -4205,6 +4319,32 @@ pub const CheckedTypeStore = struct {
         return id;
     }
 
+    pub fn ensureEmptyRecordRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+    ) Allocator.Error!CheckedTypeId {
+        const key = try checkedTypePayloadKeyBuild(allocator, names, self, .empty_record);
+        if (self.rootForKey(key)) |existing| {
+            if (self.payload(existing) != .empty_record) try self.replaceTypeRootPayload(allocator, existing, .empty_record);
+            return existing;
+        }
+        return try self.appendSyntheticPayloadRoot(allocator, names, .empty_record);
+    }
+
+    pub fn ensureEmptyTagUnionRoot(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+    ) Allocator.Error!CheckedTypeId {
+        const key = try checkedTypePayloadKeyBuild(allocator, names, self, .empty_tag_union);
+        if (self.rootForKey(key)) |existing| {
+            if (self.payload(existing) != .empty_tag_union) try self.replaceTypeRootPayload(allocator, existing, .empty_tag_union);
+            return existing;
+        }
+        return try self.appendSyntheticPayloadRoot(allocator, names, .empty_tag_union);
+    }
+
     /// Reserve a checked type root whose payload will be filled after recursive
     /// cloning has finished.
     pub fn reserveSyntheticTypeRoot(
@@ -4266,6 +4406,26 @@ pub const CheckedTypeStore = struct {
         const stored = try self.commitPayload(allocator, owned_payload);
         self.payloads.items[index] = stored;
         errdefer self.payloads.items[index] = .pending;
+        try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots.items[index].key);
+    }
+
+    pub fn replaceTypeRootPayload(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        root: CheckedTypeId,
+        build_payload: CheckedTypePayloadBuild,
+    ) Allocator.Error!void {
+        const index: usize = @intFromEnum(root);
+        if (index >= self.payloads.items.len) {
+            checkedArtifactInvariant("checked type payload replacement referenced a missing root", .{});
+        }
+
+        var owned_payload = build_payload;
+        var payload_owned = true;
+        errdefer if (payload_owned) deinitCheckedTypePayloadBuild(allocator, &owned_payload);
+        const stored = try self.commitPayload(allocator, owned_payload);
+        payload_owned = false;
+        self.payloads.items[index] = stored;
         try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots.items[index].key);
     }
 
@@ -4441,6 +4601,7 @@ pub const CheckedTypeStore = struct {
             self.roots.deinit(allocator);
             self.type_id_pool.deinit(allocator);
             self.record_field_pool.deinit(allocator);
+            self.declared_field_pool.deinit(allocator);
             self.nominal_record_field_pool.deinit(allocator);
             self.constraint_pool.deinit(allocator);
             self.tag_pool.deinit(allocator);
@@ -4459,16 +4620,17 @@ pub const CheckedTypeStore = struct {
         nominal_declarations: SerializedSlice(CheckedNominalDeclaration) = .{},
         type_id_pool: SerializedSlice(CheckedTypeId) = .{},
         record_field_pool: SerializedSlice(CheckedRecordField) = .{},
+        declared_field_pool: SerializedSlice(CheckedDeclaredField) = .{},
         nominal_record_field_pool: SerializedSlice(CheckedNominalRecordField) = .{},
         constraint_pool: SerializedSlice(CheckedStaticDispatchConstraint) = .{},
         tag_pool: SerializedSlice(CheckedTag) = .{},
         var_names: canonical.NameInterner.Serialized,
 
         comptime {
-            // 12 = 9 `SerializedSlice` fields + 3 for the nested `var_names`
+            // 13 = 10 `SerializedSlice` fields + 3 for the nested `var_names`
             // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
             // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 12);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 13);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -4584,6 +4746,7 @@ pub const CheckedTypeStore = struct {
                 .representation = n.representation,
                 .args = try allocator.dupe(CheckedTypeId, n.args),
                 .padding_field_types = try allocator.dupe(CheckedTypeId, n.padding_field_types),
+                .declared_fields = try allocator.dupe(CheckedDeclaredField, n.declared_fields),
             } },
             .function => |f| .{ .function = .{
                 .kind = f.kind,
@@ -4660,6 +4823,7 @@ pub const CheckedTypeStore = struct {
                 .representation = nominal.representation,
                 .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, nominal.args, formals, actuals, active),
                 .padding_field_types = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, nominal.padding_field_types, formals, actuals, active),
+                .declared_fields = try allocator.dupe(CheckedDeclaredField, nominal.declared_fields),
             } },
             .function => |function| try self.cloneCheckedFunctionTypeSubstituting(allocator, names, function, formals, actuals, active),
             .tag_union => |tag_union| .{ .tag_union = .{
@@ -4869,6 +5033,7 @@ fn deinitCheckedTypePayloadBuild(allocator: Allocator, payload: *CheckedTypePayl
         .nominal => |nominal| {
             allocator.free(nominal.args);
             allocator.free(nominal.padding_field_types);
+            allocator.free(nominal.declared_fields);
         },
         .function => |function| allocator.free(function.args),
         .tag_union => |tag_union| deinitCheckedTagsBuild(allocator, tag_union.tags),
@@ -5102,6 +5267,16 @@ fn appendCheckedNominalDeclarationFromStatement(
     var padding_field_types_owned = padding_field_types.len != 0;
     errdefer if (padding_field_types_owned) allocator.free(padding_field_types);
 
+    const declared_fields = try declaredFieldsFromDeclarationAnno(
+        allocator,
+        module,
+        names,
+        padding_field_types,
+        anno_idx,
+    );
+    var declared_fields_owned = declared_fields.len != 0;
+    errdefer if (declared_fields_owned) allocator.free(declared_fields);
+
     const nominal_payload = CheckedTypePayloadBuild{ .nominal = .{
         .name = statement_nominal.name,
         .origin_module = statement_nominal.origin_module,
@@ -5115,9 +5290,11 @@ fn appendCheckedNominalDeclarationFromStatement(
             .{ .local_declaration = localNominalDeclarationIdForStatement(module, statement_idx) },
         .args = formal_args,
         .padding_field_types = padding_field_types,
+        .declared_fields = declared_fields,
     } };
     formal_args_owned = false;
     padding_field_types_owned = false;
+    declared_fields_owned = false;
 
     const declaration_root = try appendNominalDeclarationRootPayload(
         allocator,
@@ -5475,6 +5652,8 @@ fn appendInstantiatedNamedApplicationFromTemplate(
 
             const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
             errdefer if (payload_args.len != 0) allocator.free(payload_args);
+            const declared_fields = if (nominal.declared_fields.len == 0) &.{} else try allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
+            errdefer if (declared_fields.len != 0) allocator.free(declared_fields);
 
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .nominal = .{
                 .name = nominal.name,
@@ -5486,6 +5665,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
                 .representation = nominal.representation,
                 .args = payload_args,
                 .padding_field_types = padding_field_types,
+                .declared_fields = declared_fields,
             } });
         },
         .pending,
@@ -5757,6 +5937,46 @@ fn paddingFieldTypesFromDeclaredRecordFields(
     return out;
 }
 
+fn declaredFieldsFromDeclarationAnno(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    padding_field_types: []const CheckedTypeId,
+    anno_idx: CIR.TypeAnno.Idx,
+) Allocator.Error![]const CheckedDeclaredField {
+    var record_anno = anno_idx;
+    const record = while (true) {
+        const anno = module.moduleEnvConst().store.getTypeAnno(record_anno);
+        if (anno == .parens) {
+            record_anno = anno.parens.anno;
+        } else if (anno == .record) {
+            break anno.record;
+        } else return &.{};
+    };
+    const fields = module.moduleEnvConst().store.sliceAnnoRecordFields(record.fields);
+    if (fields.len == 0) return &.{};
+
+    const out = try allocator.alloc(CheckedDeclaredField, fields.len);
+    errdefer allocator.free(out);
+    var padding_cursor: u32 = 0;
+    for (fields, 0..) |field_idx, i| {
+        const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
+        out[i] = if (field.is_unnamed) blk: {
+            if (padding_cursor >= padding_field_types.len) {
+                checkedArtifactInvariant("nominal declaration had more unnamed fields than recorded padding types", .{});
+            }
+            defer padding_cursor += 1;
+            break :blk .{ .padding = padding_cursor };
+        } else .{
+            .named = try names.internRecordFieldIdent(module.identStoreConst(), field.name),
+        };
+    }
+    if (padding_cursor != padding_field_types.len) {
+        checkedArtifactInvariant("nominal declaration recorded padding types that were missing from declared field order", .{});
+    }
+    return out;
+}
+
 fn checkedTagsFromDeclarationAnnoSpan(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -5995,6 +6215,7 @@ fn appendCheckedNominalDeclarationFromPayload(
             if (existing.backing == backing and
                 checkedTypeRootKeySliceEql(store, existing.formalArgs(store), nominal.args) and
                 checkedTypeRootKeySliceEql(store, existing.paddingFieldTypes(store), nominal.padding_field_types) and
+                checkedDeclaredFieldSliceEql(existing.declaredFields(store), nominal.declared_fields) and
                 checkedNominalRecordFieldRootKeySliceEql(store, existing.declaredRecordFields(store), declared_record_fields))
             {
                 return;
@@ -6009,8 +6230,11 @@ fn appendCheckedNominalDeclarationFromPayload(
     defer allocator.free(args_copy);
     const padding_copy = try allocator.dupe(CheckedTypeId, nominal.padding_field_types);
     defer allocator.free(padding_copy);
+    const declared_copy = try allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
+    defer allocator.free(declared_copy);
     const fa = try store.appendTypeIds(allocator, args_copy);
     const pf = try store.appendTypeIds(allocator, padding_copy);
+    const df = try store.appendDeclaredFields(allocator, declared_copy);
     const rf = try store.appendNominalRecordFields(allocator, declared_record_fields);
     try declarations.append(allocator, .{
         .id = @enumFromInt(@as(u32, @intCast(declarations.items.len))),
@@ -6023,6 +6247,8 @@ fn appendCheckedNominalDeclarationFromPayload(
         .fa_len = fa.len,
         .pf_start = pf.start,
         .pf_len = pf.len,
+        .df_start = df.start,
+        .df_len = df.len,
         .rf_start = rf.start,
         .rf_len = rf.len,
     });
@@ -6032,6 +6258,23 @@ fn checkedTypeIdSliceEql(a: []const CheckedTypeId, b: []const CheckedTypeId) boo
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
         if (left != right) return false;
+    }
+    return true;
+}
+
+fn checkedDeclaredFieldSliceEql(a: []const CheckedDeclaredField, b: []const CheckedDeclaredField) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        switch (left) {
+            .named => |left_name| switch (right) {
+                .named => |right_name| if (left_name != right_name) return false,
+                .padding => return false,
+            },
+            .padding => |left_index| switch (right) {
+                .named => return false,
+                .padding => |right_index| if (left_index != right_index) return false,
+            },
+        }
     }
     return true;
 }
@@ -6558,6 +6801,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 for (nominal.args) |arg| try self.writeType(arg);
                 self.writeU32(@intCast(nominal.padding_field_types.len));
                 for (nominal.padding_field_types) |padding_type| try self.writeType(padding_type);
+                self.writeDeclaredFields(nominal.declared_fields);
             },
             .function => |func| {
                 switch (finalizedFunctionKind(func.kind)) {
@@ -6891,6 +7135,25 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             self.writeBool(maybe_num_literal != null);
             if (maybe_num_literal) |num_literal| {
                 self.hasher.update(&num_literal.keyBytes());
+            }
+        }
+    }
+
+    fn writeDeclaredFields(
+        self: *SubstitutedCheckedTypeKeyBuilder,
+        fields: []const CheckedDeclaredField,
+    ) void {
+        self.writeU32(@intCast(fields.len));
+        for (fields) |field| {
+            switch (field) {
+                .named => |name| {
+                    self.writeTag("named");
+                    self.writeBytes(self.names.recordFieldLabelText(name));
+                },
+                .padding => |index| {
+                    self.writeTag("padding");
+                    self.writeU32(index);
+                },
             }
         }
     }
@@ -7642,6 +7905,7 @@ fn copyCheckedFlatType(
                     // annotation), not on usage payloads copied from the internal
                     // type store, which carry no unnamed-field information.
                     .padding_field_types = &.{},
+                    .declared_fields = &.{},
                 },
             };
         },
@@ -15388,6 +15652,7 @@ const EvidencePass = struct {
         self.enum_scratch.deinit(self.allocator);
         var scope_lists = self.scope_params.valueIterator();
         while (scope_lists.next()) |list| {
+            for (list.*) |param| self.allocator.free(param.path);
             self.allocator.free(list.*);
         }
         self.scope_params.deinit();
@@ -15401,6 +15666,7 @@ const EvidencePass = struct {
         @memset(self.iterator_plan_resolved, false);
 
         try self.buildIndexes();
+        try self.linkGeneratedCodecCalls();
 
         var params = std.ArrayListUnmanaged(EvidenceParam).empty;
         defer params.deinit(self.allocator);
@@ -15672,6 +15938,51 @@ const EvidencePass = struct {
         }
     }
 
+    fn linkGeneratedCodecCalls(self: *EvidencePass) Allocator.Error!void {
+        const module_env = self.module.moduleEnvConst();
+        const source_derivations = module_env.generated_codec_derivations.items.items;
+        if (source_derivations.len != self.plan_table.generated_codec_derivations.len) {
+            checkedArtifactInvariant("generated codec source and artifact derivation counts differed", .{});
+        }
+        for (source_derivations, self.plan_table.generated_codec_derivations) |source_derivation, derivation| {
+            const source_calls = module_env.generated_codec_calls.items.items[source_derivation.calls_start..][0..source_derivation.calls_len];
+            const artifact_calls = self.plan_table.generated_codec_calls[derivation.calls.start..][0..derivation.calls.len];
+            if (source_calls.len != artifact_calls.len) {
+                checkedArtifactInvariant("generated codec source and artifact derivation call counts differed", .{});
+            }
+            for (artifact_calls, source_calls) |*call, source_call| {
+                const owner = (try self.methodOwnerForSourceContent(@enumFromInt(source_call.dispatcher_var))) orelse continue;
+                const target = self.lookupMethodTargetAcrossViews(owner, call.method) orelse continue;
+                const evidence_var: Var = @enumFromInt(source_call.evidence_var);
+                switch (target.kind) {
+                    .procedure, .local_proc => {
+                        const node_id = try self.evidenceNodeForTarget(target, call.dispatcher_ty, evidence_var);
+                        call.nested = switch (self.evidence_nodes.items[@intFromEnum(node_id)].nested) {
+                            .resolved => |span| span,
+                            .from_callable => checkedArtifactInvariant(
+                                "generated codec method evidence was not resolved at its checked call edge",
+                                .{},
+                            ),
+                        };
+                    },
+                    .structural => |kind| {
+                        const expected_kind: static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
+                            .parser => .parser,
+                            .encoder => .encoder,
+                            .equality, .hash, .map, .map_effectful => checkedArtifactInvariant("non-codec structural method reached a generated codec contract", .{}),
+                        };
+                        call.generated_codec_derivation = try self.generatedCodecDerivationForCall(
+                            expected_kind,
+                            call.dispatcher_ty,
+                            derivation,
+                        ) orelse
+                            checkedArtifactInvariant("structural generated codec call had no checked nested derivation", .{});
+                    },
+                }
+            }
+        }
+    }
+
     fn enumerateParams(self: *EvidencePass, root: Var, out: *std.ArrayListUnmanaged(EvidenceParam)) Allocator.Error!void {
         try dispatch_evidence.enumerateEvidenceParams(self.allocator, self.types, root, &self.enum_scratch, out);
     }
@@ -15700,6 +16011,12 @@ const EvidencePass = struct {
         var params = std.ArrayListUnmanaged(EvidenceParam).empty;
         errdefer params.deinit(self.allocator);
         try self.enumerateParams(scheme_var, &params);
+        var owned_path_count: usize = 0;
+        errdefer for (params.items[0..owned_path_count]) |param| self.allocator.free(param.path);
+        for (params.items) |*param| {
+            param.path = try self.allocator.dupe(static_dispatch.EvidencePathStep, param.path);
+            owned_path_count += 1;
+        }
         entry.value_ptr.* = try params.toOwnedSlice(self.allocator);
         return entry.value_ptr.*;
     }
@@ -15728,6 +16045,9 @@ const EvidencePass = struct {
             }
             try self.evidence_params_pool.append(self.allocator, .{
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
+                .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
+                    checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
+                .runtime_dictionary = param.constraint.origin.literalKind() == null,
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .pathless_default_phase = if (param.path.len == 0) self.pathlessDefaultPhaseForParam(param) else null,
                 .path = .{ .start = path_start, .len = @intCast(param.path.len) },
@@ -15843,6 +16163,7 @@ const EvidencePass = struct {
         defer self.current_chain = &.{};
         plan.resolution = (try self.resolveObligation(
             src.dispatcher_var,
+            plan.dispatcher_ty,
             plan.method,
             structural_kind,
             src.constraint_fn_var,
@@ -15862,6 +16183,7 @@ const EvidencePass = struct {
         defer self.current_chain = &.{};
         plan.iter.resolution = (try self.resolveObligation(
             src.iter_dispatcher_var,
+            plan.iter.dispatcher_ty,
             plan.iter.method,
             null,
             src.iter_fn_var,
@@ -15874,6 +16196,7 @@ const EvidencePass = struct {
         plan.next.resolution = if (next_dispatcher) |dispatcher_var|
             (try self.resolveObligation(
                 dispatcher_var,
+                plan.next.dispatcher_ty,
                 plan.next.method,
                 null,
                 src.next_fn_var,
@@ -15903,6 +16226,7 @@ const EvidencePass = struct {
     fn resolveObligation(
         self: *EvidencePass,
         dispatcher_var: Var,
+        dispatcher_ty: CheckedTypeId,
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var: ?Var,
@@ -15914,6 +16238,26 @@ const EvidencePass = struct {
         }
 
         const resolved = self.types.resolveVar(dispatcher_var);
+
+        // Builtin containers have ordinary registry methods for parser_for and
+        // encoder_for, but checking can deliberately discharge an obligation
+        // through the generated structural codec path instead. Preserve that
+        // exact producer decision: the derivation records the original
+        // constraint-function variable that selected it.
+        if (structural_kind) |kind| {
+            const derivation_kind: ?static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
+                .parser => .parser,
+                .encoder => .encoder,
+                .equality, .hash, .map, .map_effectful => null,
+            };
+            if (derivation_kind) |expected_kind| {
+                if (constraint_fn_var) |fn_var| {
+                    if (self.generatedCodecDerivationForSourceConstraint(fn_var, expected_kind) != null) {
+                        return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
+                    }
+                }
+            }
+        }
 
         // A generalized VALUE decl's scheme param may LOOK concrete here:
         // compile-time finalization defaults the pristine var (e.g. to Dec)
@@ -15928,7 +16272,9 @@ const EvidencePass = struct {
                 if (self.pairForResolved(pairs, resolved.var_)) |fresh| {
                     if (self.types.resolveVar(fresh).var_ != resolved.var_) {
                         const fresh_fn: ?Var = if (constraint_fn_var) |fn_var| self.pairForResolved(pairs, self.types.resolveVar(fn_var).var_) else null;
-                        return self.resolveObligation(fresh, method, structural_kind, fresh_fn orelse constraint_fn_var, chain, true);
+                        const fresh_dispatcher_ty = self.checked_types.rootForSourceVar(self.module, fresh) orelse
+                            checkedArtifactInvariant("checked dispatch use instantiation type was not published", .{});
+                        return self.resolveObligation(fresh, fresh_dispatcher_ty, method, structural_kind, fresh_fn orelse constraint_fn_var, chain, true);
                     }
                 }
             }
@@ -15941,12 +16287,12 @@ const EvidencePass = struct {
             // dispatch-specific failures; `.err` is the separate value-error
             // fence and must never be inferred from the callable or its return.
             .err => return .checked_error,
-            .flex => |flex| return self.resolveVarObligation(resolved.var_, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
-            .rigid => |rigid| return self.resolveVarObligation(resolved.var_, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
+            .flex => |flex| return self.resolveVarObligation(resolved.var_, dispatcher_ty, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
+            .rigid => |rigid| return self.resolveVarObligation(resolved.var_, dispatcher_ty, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .alias, .structure => {
                 if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
                     if (self.lookupMethodTargetAcrossViews(owner, method)) |target| {
-                        return try self.resolutionForMethodTarget(target, structural_kind, constraint_fn_var);
+                        return try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var);
                     }
                     // The dispatcher has an owner, checking passed, and no
                     // registry-visible view declares the method: the checker
@@ -15965,9 +16311,48 @@ const EvidencePass = struct {
         }
     }
 
+    fn generatedCodecDerivationForSourceConstraint(
+        self: *EvidencePass,
+        constraint_fn_var: Var,
+        expected_kind: static_dispatch.GeneratedCodecDerivationKind,
+    ) ?static_dispatch.GeneratedCodecDerivationId {
+        const source_derivations = self.module.moduleEnvConst().generated_codec_derivations.items.items;
+        if (source_derivations.len != self.plan_table.generated_codec_derivations.len) {
+            checkedArtifactInvariant("generated codec source and artifact derivation counts differed", .{});
+        }
+
+        const constraint_root = self.types.resolveVar(constraint_fn_var).var_;
+        var found: ?static_dispatch.GeneratedCodecDerivationId = null;
+        for (source_derivations, self.plan_table.generated_codec_derivations, 0..) |source, derivation, index| {
+            const kind: static_dispatch.GeneratedCodecDerivationKind = switch (@as(ModuleEnv.GeneratedCodecDerivation.Kind, @enumFromInt(source.kind))) {
+                .parser => .parser,
+                .encoder => .encoder,
+            };
+            if (kind != expected_kind or
+                self.types.resolveVar(@enumFromInt(source.source_constraint_fn_var)).var_ != constraint_root)
+            {
+                continue;
+            }
+
+            const candidate: static_dispatch.GeneratedCodecDerivationId = @enumFromInt(@as(u32, @intCast(index)));
+            if (found) |existing| {
+                if (!self.generatedCodecDerivationsSemanticallyEql(
+                    self.plan_table.generated_codec_derivations[@intFromEnum(existing)],
+                    derivation,
+                )) {
+                    checkedArtifactInvariant("one checked codec constraint produced conflicting derivations", .{});
+                }
+            } else {
+                found = candidate;
+            }
+        }
+        return found;
+    }
+
     fn resolveVarObligation(
         self: *EvidencePass,
         dispatcher_root: Var,
+        dispatcher_ty: CheckedTypeId,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
@@ -16012,18 +16397,18 @@ const EvidencePass = struct {
                 .checking_finalized => return .checked_error,
             };
             if (self.lookupMethodTargetAcrossViews(owner, method)) |target| {
-                return try self.resolutionForMethodTarget(target, structural_kind, constraint_fn_var);
+                return try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var);
             }
         }
 
         // No edge can ever supply this dispatcher (not a param of any
-        // enclosing callable, no defaulting literal). For structural-allowed
-        // modes the vacuous shape decomposes structurally (equality of values
-        // that never exist is defined); a value dispatch is statically
-        // unreachable and lowers to an explicit crash.
+        // enclosing callable, no defaulting literal). Equality and hashing of
+        // the vacuous shape remain structural. Generated codecs require the
+        // explicit checker snapshot handled above; without one, parser,
+        // encoder, map, and value dispatches are statically unreachable.
         if (structural_kind) |kind| switch (kind) {
-            .map, .map_effectful => return .@"unreachable",
-            .equality, .hash, .parser, .encoder => return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) },
+            .equality, .hash => return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) },
+            .parser, .encoder, .map, .map_effectful => return .@"unreachable",
         };
         return .@"unreachable";
     }
@@ -16123,6 +16508,7 @@ const EvidencePass = struct {
         self: *EvidencePass,
         target: static_dispatch.MethodTarget,
         structural_kind: ?static_dispatch.StructuralKind,
+        dispatcher_ty: ?CheckedTypeId,
         constraint_fn_var: ?Var,
     ) Allocator.Error!static_dispatch.CheckedCallResolution {
         return switch (target.kind) {
@@ -16132,7 +16518,7 @@ const EvidencePass = struct {
                 }
                 break :blk .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
             },
-            .procedure, .local_proc => .{ .direct_pending = try self.evidenceNodeForTarget(target, constraint_fn_var) },
+            .procedure, .local_proc => .{ .direct_pending = try self.evidenceNodeForTarget(target, dispatcher_ty, constraint_fn_var) },
         };
     }
 
@@ -16208,22 +16594,42 @@ const EvidencePass = struct {
     fn evidenceNodeForTarget(
         self: *EvidencePass,
         target: static_dispatch.MethodTarget,
+        dispatcher_ty: ?CheckedTypeId,
         constraint_fn_var: ?Var,
     ) Allocator.Error!static_dispatch.EvidenceNodeId {
         if (target.kind == .structural) {
             checkedArtifactInvariant("structural method registry result reached the callable evidence-node graph", .{});
         }
+        const callable_ty = if (constraint_fn_var) |fn_var|
+            self.checked_types.rootForSourceVar(self.module, fn_var) orelse
+                checkedArtifactInvariant("checked direct evidence callable type was not published", .{})
+        else
+            null;
         const record_idx: ?u32 = if (constraint_fn_var) |fn_var|
             self.target_by_fn_var.get(@intFromEnum(fn_var))
         else
             null;
+        const generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId = null;
 
         const procedure_schema: ?ProcedureEvidenceSchema = switch (target.kind) {
             .procedure => self.procedureEvidenceSchema(target),
             .local_proc, .structural => null,
         };
         if (record_idx) |idx| {
-            if (self.node_by_record.get(idx)) |memoized| return memoized;
+            if (self.node_by_record.get(idx)) |memoized| {
+                const existing = self.evidence_nodes.items[@intFromEnum(memoized)];
+                const callable_matches = switch (existing.instantiation) {
+                    .monomorphic => false,
+                    .callable => |existing_callable| existing_callable == callable_ty.?,
+                };
+                if (existing.dispatcher_ty != dispatcher_ty or
+                    existing.generated_codec_derivation != generated_codec_derivation or
+                    !callable_matches)
+                {
+                    checkedArtifactInvariant("one checked dispatch evidence record resolved at two checked call identities", .{});
+                }
+                return memoized;
+            }
             if ((try self.record_in_progress.getOrPut(idx)).found_existing) {
                 checkedArtifactInvariant("checked dispatch evidence chain was cyclic", .{});
             }
@@ -16240,6 +16646,8 @@ const EvidencePass = struct {
             }
             const node_id = try self.internEvidenceNode(.{
                 .target = target,
+                .dispatcher_ty = dispatcher_ty,
+                .generated_codec_derivation = generated_codec_derivation,
                 .instantiation = .{ .callable = instantiated_callable_ty },
                 .nested = .{ .resolved = nested },
             });
@@ -16254,6 +16662,8 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("callable-derived dispatch target was missing from checked type output", .{});
             return try self.internEvidenceNode(.{
                 .target = target,
+                .dispatcher_ty = dispatcher_ty,
+                .generated_codec_derivation = generated_codec_derivation,
                 .instantiation = .{ .callable = callable },
                 .nested = .from_callable,
             });
@@ -16272,6 +16682,8 @@ const EvidencePass = struct {
         } else .monomorphic;
         return try self.internEvidenceNode(.{
             .target = target,
+            .dispatcher_ty = dispatcher_ty,
+            .generated_codec_derivation = generated_codec_derivation,
             .instantiation = instantiation,
             .nested = .{ .resolved = .{} },
         });
@@ -16283,6 +16695,8 @@ const EvidencePass = struct {
     ) Allocator.Error!static_dispatch.EvidenceNodeId {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, candidate.target);
+        std.hash.autoHash(&hasher, candidate.dispatcher_ty);
+        std.hash.autoHash(&hasher, candidate.generated_codec_derivation);
         std.hash.autoHash(&hasher, candidate.instantiation);
         switch (candidate.nested) {
             .from_callable => std.hash.autoHash(&hasher, @as(u8, 0)),
@@ -16315,6 +16729,8 @@ const EvidencePass = struct {
         right: static_dispatch.EvidenceNode,
     ) bool {
         if (!std.meta.eql(left.target, right.target) or
+            left.dispatcher_ty != right.dispatcher_ty or
+            left.generated_codec_derivation != right.generated_codec_derivation or
             !std.meta.eql(left.instantiation, right.instantiation)) return false;
         return switch (left.nested) {
             .from_callable => right.nested == .from_callable,
@@ -16389,24 +16805,136 @@ const EvidencePass = struct {
         const idents = self.module.identStoreConst();
         const method = try self.names.internMethodIdent(idents, param.constraint.fn_name);
         const structural_kind = self.structuralKindForMethodIdent(param.constraint.fn_name);
+        const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, var_) orelse
+            checkedArtifactInvariant("checked scheme evidence dispatcher type was not published", .{});
 
-        const resolution = (try self.resolveObligation(var_, method, structural_kind, fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
-        return switch (resolution) {
-            .direct_pending => |node| .{ .direct = node },
-            .direct_closed, .direct_parametric => checkedArtifactInvariant("call resolution was finalized before evidence publication completed", .{}),
-            .evidence_dependent => |ref| .{ .constraint = ref },
-            .structural => |kind| .{ .structural = kind },
-            .checked_error => blk: {
-                if (@import("builtin").mode == .Debug) {
-                    std.log.scoped(.checked_evidence).debug("evidence entry checked_error: method={s} content={s}", .{
-                        self.module.identStoreConst().getText(param.constraint.fn_name),
-                        @tagName(self.types.resolveVar(var_).desc.content),
-                    });
-                }
-                break :blk .checked_error;
+        const resolution = (try self.resolveObligation(var_, dispatcher_ty, method, structural_kind, fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
+        return .{
+            .dispatcher_ty = dispatcher_ty,
+            .runtime_dictionary = param.constraint.origin.literalKind() == null,
+            .resolution = switch (resolution) {
+                .direct_pending => |node| .{ .direct = node },
+                .direct_closed, .direct_parametric => checkedArtifactInvariant("call resolution was finalized before evidence publication completed", .{}),
+                .evidence_dependent => |ref| .{ .constraint = ref },
+                .structural => |kind| blk: {
+                    const callable_var = fresh_fn_var orelse param.constraint.fn_var;
+                    const callable_ty = self.checked_types.rootForSourceVar(self.module, callable_var) orelse
+                        checkedArtifactInvariant("checked structural evidence callable type was not published", .{});
+                    break :blk .{ .structural = .{
+                        .derivation = kind,
+                        .dispatcher_ty = dispatcher_ty,
+                        .callable_ty = callable_ty,
+                        .generated_codec_derivation = switch (kind) {
+                            .parser => self.generatedCodecDerivationForSourceConstraint(
+                                callable_var,
+                                .parser,
+                            ) orelse checkedArtifactInvariant(
+                                "structural parser evidence had no generated derivation for its checked constraint",
+                                .{},
+                            ),
+                            .encoder => self.generatedCodecDerivationForSourceConstraint(
+                                callable_var,
+                                .encoder,
+                            ) orelse checkedArtifactInvariant(
+                                "structural encoder evidence had no generated derivation for its checked constraint",
+                                .{},
+                            ),
+                            .equality, .hash, .map, .map_effectful => null,
+                        },
+                    } };
+                },
+                .checked_error => blk: {
+                    if (@import("builtin").mode == .Debug) {
+                        std.log.scoped(.checked_evidence).debug("evidence entry checked_error: method={s} content={s}", .{
+                            self.module.identStoreConst().getText(param.constraint.fn_name),
+                            @tagName(self.types.resolveVar(var_).desc.content),
+                        });
+                    }
+                    break :blk .checked_error;
+                },
+                .@"unreachable" => .unreachable_value,
             },
-            .@"unreachable" => .unreachable_value,
         };
+    }
+
+    fn generatedCodecDerivationsSemanticallyEql(
+        self: *EvidencePass,
+        a: static_dispatch.GeneratedCodecDerivation,
+        b: static_dispatch.GeneratedCodecDerivation,
+    ) bool {
+        if (a.kind != b.kind) return false;
+        inline for (.{
+            "constructor_ty",
+            "runtime_ty",
+            "shape_ty",
+            "encoding_ty",
+            "state_ty",
+            "error_ty",
+        }) |field| {
+            const a_key = self.checked_types.store.view().rootKey(@field(a, field));
+            const b_key = self.checked_types.store.view().rootKey(@field(b, field));
+            if (!std.meta.eql(a_key, b_key)) return false;
+        }
+        const a_calls = a.callsSlice(self.plan_table);
+        const b_calls = b.callsSlice(self.plan_table);
+        if (a_calls.len != b_calls.len) return false;
+        for (a_calls, b_calls) |a_call, b_call| {
+            if (a_call.method != b_call.method) return false;
+            inline for (.{ "dispatcher_ty", "callable_ty" }) |field| {
+                const a_key = self.checked_types.store.view().rootKey(@field(a_call, field));
+                const b_key = self.checked_types.store.view().rootKey(@field(b_call, field));
+                if (!std.meta.eql(a_key, b_key)) return false;
+            }
+            if ((a_call.subject_ty == null) != (b_call.subject_ty == null)) return false;
+            if (a_call.subject_ty) |a_subject| {
+                const b_subject = b_call.subject_ty.?;
+                if (!std.meta.eql(
+                    self.checked_types.store.view().rootKey(a_subject),
+                    self.checked_types.store.view().rootKey(b_subject),
+                )) return false;
+            }
+        }
+        return true;
+    }
+
+    /// Link a structural codec call to the frozen derivation validated for the
+    /// same nested shape and enclosing codec context. Callable type ids are not
+    /// the identity here: the registry declaration, instantiated call, and
+    /// frozen validation snapshot deliberately publish distinct callable roots.
+    fn generatedCodecDerivationForCall(
+        self: *EvidencePass,
+        expected_kind: static_dispatch.GeneratedCodecDerivationKind,
+        dispatcher_ty: CheckedTypeId,
+        enclosing: static_dispatch.GeneratedCodecDerivation,
+    ) Allocator.Error!?static_dispatch.GeneratedCodecDerivationId {
+        const dispatcher_key = self.checked_types.store.view().rootKey(dispatcher_ty);
+        const view = self.checked_types.store.view();
+        const encoding_key = view.rootKey(enclosing.encoding_ty);
+        const state_key = view.rootKey(enclosing.state_ty);
+        const error_key = view.rootKey(enclosing.error_ty);
+        var found: ?static_dispatch.GeneratedCodecDerivationId = null;
+        for (self.plan_table.generated_codec_derivations, 0..) |derivation, index| {
+            if (derivation.kind != expected_kind or
+                !std.meta.eql(dispatcher_key, view.rootKey(derivation.shape_ty)) or
+                !std.meta.eql(encoding_key, view.rootKey(derivation.encoding_ty)) or
+                !std.meta.eql(state_key, view.rootKey(derivation.state_ty)) or
+                !std.meta.eql(error_key, view.rootKey(derivation.error_ty)))
+            {
+                continue;
+            }
+            const candidate: static_dispatch.GeneratedCodecDerivationId = @enumFromInt(@as(u32, @intCast(index)));
+            if (found) |existing| {
+                if (!self.generatedCodecDerivationsSemanticallyEql(
+                    self.plan_table.generated_codec_derivations[@intFromEnum(existing)],
+                    derivation,
+                )) {
+                    checkedArtifactInvariant("generated codec method target matched multiple derivation contracts", .{});
+                }
+            } else {
+                found = candidate;
+            }
+        }
+        return found;
     }
 
     /// The derived-structural kind a constraint method admits, if any.
@@ -16543,7 +17071,13 @@ const EvidencePass = struct {
         try entries.ensureTotalCapacity(self.allocator, scope_params.len);
         for (scope_params) |param| {
             if (param.path.len > 0) {
-                entries.appendAssumeCapacity(.from_callable);
+                const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
+                    checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
+                entries.appendAssumeCapacity(.{
+                    .dispatcher_ty = dispatcher_ty,
+                    .runtime_dictionary = param.constraint.origin.literalKind() == null,
+                    .resolution = .from_callable,
+                });
                 continue;
             }
             const evidence = (try self.evidenceForVar(
@@ -16576,8 +17110,8 @@ const EvidencePass = struct {
 test "procedure evidence schema positively classifies callable paths and pathless requirements" {
     var path_steps = [_]static_dispatch.EvidencePathStep{ undefined, undefined };
     var params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = @enumFromInt(1), .structural = .encoder, .path = .{ .start = 0, .len = 1 } },
-        .{ .method = @enumFromInt(2), .path = .{ .start = 1, .len = 1 } },
+        .{ .method = @enumFromInt(1), .dispatcher_ty = @enumFromInt(1), .runtime_dictionary = true, .structural = .encoder, .path = .{ .start = 0, .len = 1 } },
+        .{ .method = @enumFromInt(2), .dispatcher_ty = @enumFromInt(2), .runtime_dictionary = true, .path = .{ .start = 1, .len = 1 } },
     };
     const table = CheckedProcedureTemplateTable{
         .evidence_params_pool = params[0..],
@@ -17663,8 +18197,8 @@ pub const CheckedProcedureTemplateTable = struct {
                 .def = def_idx,
                 .template = template_ref,
                 .kind = if (intrinsic) |intrinsic_id| switch (intrinsic_id) {
-                    .str_inspect => .callable,
                     .structural_eq => .{ .structural = .equality },
+                    .str_inspect,
                     .parse_tag_union,
                     .field_names_rename_fields,
                     .field_names_shortest_name,
@@ -19734,7 +20268,7 @@ fn directEvidenceIsClosed(
         },
         .resolved => |span| plans.evidence_refs[span.start .. span.start + span.len],
     };
-    for (nested) |evidence| switch (evidence) {
+    for (nested) |evidence| switch (evidence.resolution) {
         .direct => |child| if (!directEvidenceIsClosed(plans, child, states)) {
             states[raw_node] = .parametric;
             return false;
@@ -21405,6 +21939,7 @@ pub const HostedRepresentationCapability = struct {
     external_symbol_name: canonical.ExternalSymbolNameId,
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
+    host_checked_fn_root: CheckedTypeId,
 };
 
 /// Public `PlatformRepresentationCapability` declaration.
@@ -21456,6 +21991,7 @@ pub const ModuleInterfaceCapabilities = struct {
         module: TypedCIR.Module,
         checked_types: *CheckedTypeStore,
         hosted_procs: *const HostedProcTable,
+        checked_procedure_templates: *const CheckedProcedureTemplateTable,
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         names: *const canonical.CanonicalNameStore,
     ) Allocator.Error!ModuleInterfaceCapabilities {
@@ -21589,11 +22125,16 @@ pub const ModuleInterfaceCapabilities = struct {
         const hosted_representations = try allocator.alloc(HostedRepresentationCapability, hosted_procs.procs.len);
         errdefer allocator.free(hosted_representations);
         for (hosted_procs.procs, 0..) |hosted, hosted_index| {
+            const template = checked_procedure_templates.get(hosted.template.template);
+            if (template.target != .hosted) {
+                checkedArtifactInvariant("hosted representation capability referenced a non-hosted procedure template", .{});
+            }
             hosted_representations[hosted_index] = .{
                 .id = @enumFromInt(@as(u32, @intCast(hosted_index))),
                 .external_symbol_name = hosted.external_symbol_name,
                 .proc = hosted.proc,
                 .template = hosted.template,
+                .host_checked_fn_root = template.checked_fn_root,
             };
         }
 
@@ -27042,7 +27583,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 206);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 209);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -27720,7 +28261,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
         for (table.evidence_refs, 0..) |ref, i| {
-            switch (ref) {
+            switch (ref.resolution) {
                 .direct => |node| if (@intFromEnum(node) >= table.evidence_nodes.len) {
                     return .{ .kind = .evidence_ref_node_out_of_bounds, .index = @intCast(i) };
                 },
@@ -28527,6 +29068,11 @@ pub const CheckedModuleArtifact = struct {
         self.const_templates.verifySealed();
         try self.const_store.verifyComplete();
         self.interface_capabilities.verifyComplete();
+        for (self.interface_capabilities.hosted_representations) |entry| {
+            if (@intFromEnum(entry.host_checked_fn_root) >= self.checked_types.roots.items.len) {
+                std.debug.panic("checked artifact invariant violated: hosted representation references missing host checked function root", .{});
+            }
+        }
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprCount());
             if (self.checking_context_identity.platform_app_relation != null) {
@@ -28901,6 +29447,7 @@ pub const CheckedTypeProjector = struct {
                 .representation = remapViewNominalRepresentation(nominal.representation),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, nominal.args, active),
                 .padding_field_types = try self.projectCheckedTypeViewIds(source, source_names, nominal.padding_field_types, active),
+                .declared_fields = try self.projectCheckedTypeViewDeclaredFields(source_names, nominal.declared_fields),
             } },
             .function => |function| .{ .function = .{
                 .kind = finalizedFunctionKind(function.kind),
@@ -28988,6 +29535,23 @@ pub const CheckedTypeProjector = struct {
             out[i] = .{
                 .name = try self.remapViewRecordField(source_names, field.name),
                 .ty = try self.projectCheckedTypeViewRootInner(source, source_names, field.ty, active),
+            };
+        }
+        return out;
+    }
+
+    fn projectCheckedTypeViewDeclaredFields(
+        self: *CheckedTypeProjector,
+        source_names: ?*const canonical.CanonicalNameStore,
+        fields: []const CheckedDeclaredField,
+    ) Allocator.Error![]const CheckedDeclaredField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedDeclaredField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = switch (field) {
+                .named => |name| .{ .named = try self.remapViewRecordField(source_names, name) },
+                .padding => |index| .{ .padding = index },
             };
         }
         return out;
@@ -29286,6 +29850,8 @@ pub const CheckedTypeProjector = struct {
         errdefer self.allocator.free(args);
         const padding_field_types = try self.projectImportedTypeIds(imported, nominal.padding_field_types);
         errdefer self.allocator.free(padding_field_types);
+        const declared_fields = try self.projectImportedDeclaredFields(imported, nominal.declared_fields);
+        errdefer self.allocator.free(declared_fields);
         return .{ .nominal = .{
             .name = try self.remapTypeName(imported, nominal.name),
             .origin_module = try self.remapModuleIdentity(imported, nominal.origin_module),
@@ -29296,6 +29862,7 @@ pub const CheckedTypeProjector = struct {
             .representation = try self.remapImportedNominalRepresentation(imported, nominal),
             .args = args,
             .padding_field_types = padding_field_types,
+            .declared_fields = declared_fields,
         } };
     }
 
@@ -29347,6 +29914,23 @@ pub const CheckedTypeProjector = struct {
             out[i] = .{
                 .name = try self.remapRecordField(imported, field.name),
                 .ty = try self.projectImportedCheckedType(imported, field.ty),
+            };
+        }
+        return out;
+    }
+
+    fn projectImportedDeclaredFields(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        fields: []const CheckedDeclaredField,
+    ) Allocator.Error![]const CheckedDeclaredField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedDeclaredField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = switch (field) {
+                .named => |name| .{ .named = try self.remapRecordField(imported, name) },
+                .padding => |index| .{ .padding = index },
             };
         }
         return out;
@@ -29591,6 +30175,7 @@ const CheckedTypeStoreImportProjector = struct {
                 .representation = try self.remapNominalRepresentation(nominal),
                 .args = try self.projectIds(nominal.args),
                 .padding_field_types = try self.projectIds(nominal.padding_field_types),
+                .declared_fields = try self.projectDeclaredFields(nominal.declared_fields),
             } },
             .function => |function| .{ .function = .{
                 .kind = finalizedFunctionKind(function.kind),
@@ -29663,6 +30248,22 @@ const CheckedTypeStoreImportProjector = struct {
             out[i] = .{
                 .name = try self.remapRecordField(field.name),
                 .ty = try self.project(field.ty),
+            };
+        }
+        return out;
+    }
+
+    fn projectDeclaredFields(
+        self: *CheckedTypeStoreImportProjector,
+        fields: []const CheckedDeclaredField,
+    ) Allocator.Error![]const CheckedDeclaredField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedDeclaredField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = switch (field) {
+                .named => |name| .{ .named = try self.remapRecordField(name) },
+                .padding => |index| .{ .padding = index },
             };
         }
         return out;
@@ -30809,6 +31410,7 @@ pub fn publishFromTypedModule(
         module,
         checked_types,
         &hosted_procs,
+        &checked_procedure_templates,
         &platform_required_declarations,
         &canonical_names,
     );
@@ -32514,6 +33116,10 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     const fa = try store.appendTypeIds(gpa, &.{c});
     const pf = try store.appendTypeIds(gpa, &.{a});
     const field_name: canonical.RecordFieldLabelId = @enumFromInt(4);
+    const df = try store.appendDeclaredFields(gpa, &.{
+        .{ .named = field_name },
+        .{ .padding = 0 },
+    });
     const rf = try store.appendNominalRecordFields(gpa, &.{ .{ .named = field_name }, .{ .padding = a } });
     try store.nominal_declarations.append(gpa, .{
         .id = nominal_declaration_id,
@@ -32525,6 +33131,8 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .fa_len = fa.len,
         .pf_start = pf.start,
         .pf_len = pf.len,
+        .df_start = df.start,
+        .df_len = df.len,
         .rf_start = rf.start,
         .rf_len = rf.len,
     });
@@ -32576,6 +33184,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try std.testing.expectEqualSlices(CheckedTypeId, &.{c}, loaded.nominal_declarations.items[0].formalArgs(&loaded));
     try std.testing.expectEqual(c, loaded.nominal_declarations.items[0].backing);
     try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, loaded.nominal_declarations.items[0].paddingFieldTypes(&loaded));
+    try std.testing.expectEqualSlices(CheckedDeclaredField, &.{ .{ .named = field_name }, .{ .padding = 0 } }, loaded.nominal_declarations.items[0].declaredFields(&loaded));
     const declared_fields = loaded.nominal_declarations.items[0].declaredRecordFields(&loaded);
     try std.testing.expectEqual(@as(usize, 2), declared_fields.len);
     try std.testing.expectEqual(field_name, declared_fields[0].named);
@@ -33016,8 +33625,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x7C, 0xDF, 0x81, 0xF4, 0x6B, 0x45, 0x57, 0x27, 0xEE, 0x7E, 0x2F, 0x8A, 0xE9, 0x9A, 0x28, 0x50,
-        0x4C, 0x76, 0x33, 0x4C, 0xCA, 0x86, 0xAF, 0x6F, 0x41, 0x2D, 0xB2, 0xA9, 0xB5, 0xEE, 0x68, 0x11,
+        0x57, 0xB2, 0x53, 0x2B, 0x91, 0x98, 0xC4, 0xD7, 0x8B, 0x1B, 0xFA, 0x0C, 0xDB, 0x84, 0x19, 0x2A,
+        0x30, 0x45, 0x56, 0x5A, 0x69, 0xC9, 0xAC, 0x85, 0x61, 0x8B, 0xF5, 0x8D, 0x3C, 0x8F, 0xAF, 0x5B,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -33037,9 +33646,9 @@ test "closed direct evidence excludes specialization-dependent nested recipes" {
     const context_anchor = testIndexId(CheckedStatementId, 0);
 
     var refs = [_]static_dispatch.CheckedEvidence{
-        .{ .constraint = .{ .depth = 0, .index = 0 } },
-        .{ .direct = evidence_0 },
-        .{ .direct = evidence_1 },
+        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .constraint = .{ .depth = 0, .index = 0 } } },
+        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .direct = evidence_0 } },
+        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .direct = evidence_1 } },
     };
     const procedure_target = static_dispatch.MethodTarget{
         .module_idx = 0,
