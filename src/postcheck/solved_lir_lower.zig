@@ -3935,6 +3935,19 @@ const Lowerer = struct {
         capture_ty: ?Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
+            const backing_local = try self.addLocalForLayout(backing_layout);
+            const boundary = try self.assignBoxBoundary(target, backing_local, backing_layout, next);
+            return try self.lowerFiniteCallableValueInto(
+                backing_local,
+                variant_index,
+                captures,
+                capture_operands,
+                capture_ty,
+                boundary,
+            );
+        }
+
         if (capture_ty) |payload_ty| {
             if (self.captureSpan(captures).len != capture_operands.len) {
                 Common.invariant("finite callable capture operand count differed from lifted function captures");
