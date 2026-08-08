@@ -3346,8 +3346,9 @@ rigids, the post-body seal rewrite, witness identity across modules) is
 removed with it—nothing about a kind is hidden, so there is nothing to
 seal, write out, or keep coherent across copies.
 
-A record field's presence axis carries its kind, one of exactly three
-states, solved by ordinary unification:
+A record field's presence axis carries a concrete `required`, `optional`,
+or `defaulted` kind, or an undetermined flex presence variable, solved by
+ordinary unification:
 
 - `required` (the `present` state): the field is always there; its slot is a
   plain inline slot. Written `field: T` in annotations. Direct `.field`
@@ -3435,13 +3436,11 @@ The kind rules:
   them, so nested boundaries fired mid-statement never pin an enclosing
   destructure prematurely.
   Nested sub-patterns (`{ x: Ok(y) }`) check against the binder, so on an
-  optional field they see the Try. The exhaustiveness ANALYSIS itself
-  skips a record pattern position whose field kind resolved `optional`
-  (exhaustive.zig's field-type resolution returns no type for it): the
-  sub-pattern space is the judged binder's Try, which the
-  scrutinee-row-driven analysis cannot see—a known diagnostic gap (a
-  non-exhaustive nested pattern over such a field is caught at runtime by
-  the lowered miss, not statically).
+  optional field they see the Try. Exhaustiveness analysis consumes that
+  exact checker-judged sub-pattern type for every record column, rather
+  than looking the field up again on the scrutinee row. Therefore an
+  optional column is analyzed in `Try(payload, [MissingField])` space and
+  a nested pattern that omits either side is diagnosed statically.
 
 The tagged representation (IMPLEMENTED—nothing about optional fields is
 deferred at lowering anymore; the CheckedModule output and lowering are both
@@ -3466,15 +3465,53 @@ complete):
   witness—the kind is in the row (`CheckedRecordField.kind`, written into
   the CheckedModule and keyed byte-identically by the solver-side and
   checked-side type-digest writers, so `roc check` and full compilation
-  agree).
-- Where the type lowers: `Builder.lowerFieldSlotType`/`optionalSlotType`
-  in src/postcheck/monotype/lower.zig, with the instantiation-graph twin
+  agree). A generalized record scheme retains an undetermined kind as its
+  checked presence-variable identity. Instantiation gives that identity a
+  dedicated field-kind cell plus distinct source-value and runtime-slot
+  cells; row unification resolves the kind and relates value-to-value and
+  slot-to-slot. Construction consumes the resolved graph kind, never the
+  generalized scheme or a reconstructed slot shape; when the construction
+  itself is the first required-kind evidence, it explicitly relates that
+  field's runtime-slot cell to its source-value cell at the same time.
+  Every field-kind cell also records that exact source-value/runtime-slot
+  pair when it is instantiated. After all interface and body relations for
+  one Monotype specialization have been produced, relation freeze commits
+  each still-undetermined field-kind class to `required` and unifies its
+  recorded runtime-slot cell with its recorded source-value cell. This is the
+  specialization-time defaulting rule for a generalized scheme with no
+  optional/defaulted evidence in that specialization; it is not recovery from
+  a slot shape, and no unresolved kind or placeholder slot can cross the
+  freeze boundary. Draft specialization lookup may consume the same declared
+  default before freeze only through an immutable specialization-key view, and
+  only when every other cell in the request is already resolved. That view
+  reads an undetermined field's explicit source-value cell as the required
+  slot, without mutating the live kind or slot cell; its digest is only a bucket
+  selector, exact structural equality is the authority, and a match then joins
+  the two live request interfaces through ordinary graph unification. A
+  selected hoisted-const use whose dispatch requires a concrete Monotype may
+  consume the same view as its explicit specialization choice; it immediately
+  relates that chosen type back to the live const-use graph, so the required
+  field-kind commitment is producer-visible before body emission.
+- Where the type lowers: the record arms of `Builder.lowerType` use
+  `optionalSlotType` in src/postcheck/monotype/lower.zig, with the instantiation-graph twin
   `optionalSlotNode` (`instFields`, `fieldAccessTypeNode`) building the
   same node shape so graph-solved and directly-lowered occurrences of one
-  checked row seal to one Monotype. Downstream (LIR layout, ARC, match
+  checked row seal to one Monotype. A Monotype record field retains the
+  optional source-value type as non-layout specialization metadata; this
+  lets a finished Monotype participate in later graph relations without
+  recovering the payload from the tagged slot. An immutable provisional
+  interface-replay view additionally marks an undetermined kind explicitly;
+  because no runtime slot exists yet, its structural `ty` mirrors the source
+  value type and the marker forbids that view from reaching layout or completed
+  Monotype output. Downstream (LIR layout, ARC, match
   compilation, interpreter, backends) the slot is an ORDINARY structural
   tag union—no new concepts anywhere below Monotype lowering.
-- Construction (`lowerRecordExpr`): a SUPPLIED optional field lowers its
+- Construction (`lowerRecordExpr`): graph-owned construction consumes the
+  resolved field-kind cell. Construction from an already-sealed Monotype
+  consumes the target `Type.Field`'s explicit resolved metadata
+  (`value_ty` means optional, `default` means defaulted, otherwise required),
+  never the generalized checked row and never the runtime slot's shape. A
+  SUPPLIED optional field lowers its
   checked value at the Present payload type and wraps it in the `#Present`
   tag; an OMITTED optional field (admitted by width absorption—including
   every field of `{}` against an all-optional row) constructs the
@@ -3504,7 +3541,13 @@ complete):
 - `.?` access: the CheckedModule output is complete—
   `CheckedFieldAccessSegment.mode` records required/optional per segment
   (`serialized_layout_version` 35), and the body copier's former
-  required-only invariant is gone. A
+  required-only invariant is gone. Monotype field-access segment instantiation
+  consumes that mode as field-kind evidence: a required segment commits an undetermined
+  kind to required and relates its runtime slot to its source value; an
+  optional segment commits optional and relates the explicit tagged slot and
+  source-value cells. This happens when the segment's type relation is
+  instantiated, before a callee specialization key can depend on the accessed
+  result. A
   chain containing any optional segment lowers per-CHAIN
   (`lowerOptionalFieldAccessChain`): each `.?` segment is a runtime test
   (a match) on the field's tagged slot—the first `#Missing` slot
@@ -3522,8 +3565,9 @@ complete):
   compiler's—layout stays a function of the annotation alone, which is
   what keeps `?:` legal across the Host Symbol ABI.
 - Inspect rendering reads the reserved slot labels: Monotype `Type.Field`
-  deliberately carries no kind axis—the kind is consumed once, into the
-  slot encoding, by `lowerFieldSlotType`. The slot union's labels are the
+  carries explicit optional source-value metadata for specialization, but
+  runtime consumers still receive the kind consumed into the slot encoding
+  by record-type lowering. The slot union's labels are the
   COMPILER-RESERVED names `#Missing`/`#Present`: `#` starts a comment in
   Roc source (the same reserved namespace as compiler-minted `#interp_0`
   idents), so no user-written tag can ever spell them and the slot union
@@ -3659,13 +3703,15 @@ Restrictions:
   later is future work that needs declaration-aware cycle edges: demand
   edges that follow a value annotation's alias/apply lookups into the
   referenced declarations' defaults.
-- The default's type must be CONCRETE: a default with type variables has
-  no single runtime representation. Judged at finalize, after the
-  defaulting rounds so numeral defaults commit first—a literal (`?? []`)
-  can still be non-concrete, which is why this axis survives the literal
-  restriction. (Purity needs no axis of its own anymore: a literal is
-  never effectful, so the finalize-time `effectful_default_value`
-  judgment remains only as a backstop invariant.)
+- The declared FIELD type of a default must be CONCRETE: the one archived
+  default is materialized at every construction site, so a parametric field
+  has no single runtime representation even when the default literal itself
+  happens to settle concretely in an instantiated check copy. Judged at
+  finalize, after the defaulting rounds so numeral defaults commit first—a
+  literal (`?? []`) can still be non-concrete, which is why this axis survives
+  the literal restriction. (Purity needs no axis of its own anymore: a literal
+  is never effectful, so the finalize-time `effectful_default_value` judgment
+  remains only as a backstop invariant.)
 
 The CheckedModule preserves the kind: a defaulted field serializes as a
 required field CARRYING its default identity (`CheckedFieldDefault`), with
@@ -4127,9 +4173,11 @@ inside its span is the source row position; it is not a runtime discriminant
 or layout slot. Runtime tag discriminants, payload layout, and field offsets are
 not chosen until direct LIR lowering commits layouts.
 
-Monotype IR does not need a separate row-finalization stage. Row closure,
-nominal backing instantiation, and structural child ordering are completed
-while constructing Monotype types from checked types. Numeric defaulting is
+Monotype IR does not need a separate row-closure or row-reconstruction stage.
+Row closure, nominal backing instantiation, and structural child ordering are
+completed while constructing Monotype types from checked types. The explicit
+field-kind commitment described above is part of instantiation-graph relation
+freeze, before any Monotype type is sealed. Numeric defaulting is
 split by the checked `numeric_default_phase` data: checking defaults open
 literals (the first candidate in the numeric default candidate order, `Dec` first, that
 satisfies the literal's dispatch constraints), and Monotype commits only the
@@ -4219,6 +4267,9 @@ produced, explicit evidence from checked data unifies those nodes:
 - call arguments constrain the callee instantiation through the checked formal
   and actual type relation;
 - call results constrain the callee return type and the caller result type;
+- a matched record field in deferred template-interface replay relates its
+  explicit field-kind cell, source-value cell, and runtime-slot cell as three
+  distinct pieces of checked interface evidence;
 - static-dispatch plans constrain dispatcher, callable, operand, and result
   types;
 - numeric literals and checked numeric defaults constrain numeric type cells;
@@ -4243,7 +4294,11 @@ O(1) bucket only; exact evidence equality and exact structural type equality are
 the collision authorities. The first request computes the transitive relation
 closure. Equivalent requests retain independent graph cells while relations
 are still being produced, then independently consume the representative's
-final interface after the whole closure is known. An active exact memo entry is
+final interface after the whole closure is known. A representative interface
+whose checked field-presence cell is still undetermined retains that explicit
+state in the provisional view; each duplicate instantiates it into fresh
+field-kind, source-value, and runtime-slot graph cells rather than sharing the
+representative or committing a slot encoding. An active exact memo entry is
 a recursive edge and joins the active representative. Requests with different
 concrete interfaces, checked source identities, method scopes, or evidence can
 never share an entry. Work is therefore proportional to relation sites plus
@@ -4439,8 +4494,11 @@ with sufficient type evidence.
 During Monotype construction, an open checked variable is an unresolved graph
 node carrying the variable's numeric and row defaults. Unification resolves it
 when call-site arguments, expected lambda types, numeric literals, or checked
-type relations provide concrete evidence; defaults apply only during final
-graph sealing. While solving is still active, users hold instantiation graph
+type relations provide concrete evidence; defaults apply only at the declared
+relation-freeze/final-sealing boundary. A context-free root with no requested
+Monotype type still instantiates its checked type in a fresh graph and crosses
+that boundary; it must not enter the context-free direct-type cache while a
+generalized field kind remains open. While solving is still active, users hold instantiation graph
 nodes rather than final Monotype type ids. Final graph sealing turns solved
 graph nodes into immutable interned Monotype type nodes. Recursive groups may
 reserve their ids inside the type interner while the group is being sealed, but

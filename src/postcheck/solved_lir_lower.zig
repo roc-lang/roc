@@ -1541,7 +1541,12 @@ const Lowerer = struct {
                 const lowered = try self.allocator.alloc(Type.Field, fields.len);
                 defer self.allocator.free(lowered);
                 for (self.solved_types.fieldSpan(fields), 0..) |field, i| {
-                    lowered[i] = .{ .name = field.name, .ty = try self.lowerType(field.ty), .default = field.default };
+                    lowered[i] = .{
+                        .name = field.name,
+                        .ty = try self.lowerType(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty| try self.lowerType(value_ty) else null,
+                        .default = field.default,
+                    };
                 }
                 break :blk .{ .record = try self.types.addFields(lowered) };
             },
@@ -2015,6 +2020,10 @@ const Lowerer = struct {
                     out[i] = .{
                         .name = try self.constRecordFieldName(field.name),
                         .ty = try self.constTypeOfType(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty|
+                            try self.constTypeOfType(value_ty)
+                        else
+                            null,
                         .default = try self.constFieldDefault(field.default),
                     };
                 }
@@ -2150,6 +2159,10 @@ const Lowerer = struct {
                     out[i] = .{
                         .name = try self.constRecordFieldName(field.name),
                         .ty = try self.constTypeOfMonoType(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty|
+                            try self.constTypeOfMonoType(value_ty)
+                        else
+                            null,
                         .default = try self.constFieldDefault(field.default),
                     };
                 }

@@ -130,7 +130,9 @@ pub const Constants = struct {
     ///     `required`), and checked layouts include field kinds and archived
     ///     defaults (design.md "Field Kinds", "Defaulted Fields").
     /// 51: Interned literal entries record maximum runtime backing alignment.
-    pub const CACHE_VERSION = 51;
+    /// 52: Generalized checked record fields retain presence-variable identity,
+    ///     and const record evidence retains optional source-value types.
+    pub const CACHE_VERSION = 52;
 };
 
 /// Configuration for the Roc cache system.

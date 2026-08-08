@@ -38,6 +38,7 @@ pub const Span = extern struct {
 pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeVarId,
+    value_ty: ?TypeVarId = null,
     default: ?MonoType.FieldDefault,
 };
 

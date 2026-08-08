@@ -722,16 +722,14 @@ const Builder = struct {
                         try self.writeVar(unknown.var_);
                     },
                 },
-                // A still-flex kind here is a SCHEME INTERIOR: monomorphic
-                // literal-minted kinds are committed to `required` in the
-                // solved graph by the finalize sweep
-                // (Check.defaultLiteralFieldKinds, design.md "Field Kinds"
-                // kind defaulting), so only a scheme's quantified kind var
-                // (kept flex so instantiations may join `?:` annotations)
-                // still reads flex. Key it required-equivalent, matching
-                // rendering and checked publication.
+                // A still-flex kind is a quantified scheme interior. Its
+                // identity is part of the type: instantiation may later solve
+                // it to required, optional, or defaulted, so collapsing it to
+                // required here would collide distinct specialization
+                // behavior at the checked boundary.
                 .flex => {
-                    self.writeBool(false);
+                    self.writeTag("presence_variable");
+                    try self.writeVar(unknown.presence);
                     try self.writeVar(unknown.var_);
                 },
                 // A poisoned presence var: a presence mismatch merges to err

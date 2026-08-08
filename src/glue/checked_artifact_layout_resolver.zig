@@ -518,6 +518,7 @@ pub const Resolver = struct {
                 build_state.graph.setNode(node_id, .{ .tag_union = span });
                 return .{ .local = node_id };
             },
+            .undetermined => return error.UnresolvedByValue,
         }
     }
 

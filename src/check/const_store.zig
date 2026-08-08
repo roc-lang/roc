@@ -194,6 +194,7 @@ pub const TypeFieldDefault = struct {
 pub const TypeField = struct {
     name: names.RecordFieldNameId,
     ty: ConstTypeId,
+    value_ty: ?ConstTypeId = null,
     default: ?TypeFieldDefault,
 };
 
@@ -565,6 +566,10 @@ pub const ConstTypeStore = struct {
                     cloned_fields[i] = .{
                         .name = try translateRecordFieldName(name_translation, field.name),
                         .ty = try self.cloneTypeFromInner(source, name_translation, field.ty, map),
+                        .value_ty = if (field.value_ty) |value_ty|
+                            try self.cloneTypeFromInner(source, name_translation, value_ty, map)
+                        else
+                            null,
                         .default = try translateFieldDefault(name_translation, field.default),
                     };
                 }

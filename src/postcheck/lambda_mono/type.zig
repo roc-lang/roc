@@ -49,6 +49,7 @@ pub const Span = extern struct {
 pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeId,
+    value_ty: ?TypeId = null,
     default: ?MonoType.FieldDefault,
 };
 
@@ -328,6 +329,12 @@ pub const Store = struct {
                     const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
                     MonoType.writeFieldDefaultDigest(name_store, hasher, field.default);
+                    if (field.value_ty) |value_ty| {
+                        writeBytes(hasher, "field-optional-value");
+                        self.writeTypeDigest(name_store, hasher, value_ty);
+                    } else {
+                        writeBytes(hasher, "field-inline-value");
+                    }
                     self.writeTypeDigest(name_store, hasher, field.ty);
                 }
             },

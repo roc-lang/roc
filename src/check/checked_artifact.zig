@@ -1734,6 +1734,9 @@ fn checkedFieldTypesAreConcreteCompileTimeRoots(
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (fields) |field| {
+        if (field.kind.undeterminedVariable()) |variable| {
+            if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, variable, active)) return false;
+        }
         if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, field.ty, active)) return false;
     }
     return true;
@@ -1826,6 +1829,9 @@ fn checkedFieldsContainError(
     fields: []const CheckedRecordField,
 ) Allocator.Error!bool {
     for (fields) |field| {
+        if (field.kind.undeterminedVariable()) |variable| {
+            if (try traversal.visit(variable)) return true;
+        }
         if (try traversal.visit(field.ty)) return true;
     }
     return false;
@@ -2529,6 +2535,8 @@ pub const OptionalId = checked_ids.OptionalId;
 pub const CheckedVarNameId = checked_ids.CheckedVarNameId;
 /// Inline optional `canonical.ModuleIdentityId`.
 pub const OptionalModuleIdentityId = OptionalId(canonical.ModuleIdentityId);
+/// Inline optional `CheckedTypeId` used by undetermined record-field kinds.
+pub const OptionalCheckedTypeId = OptionalId(CheckedTypeId);
 /// Inline optional `CheckedVarNameId`.
 pub const OptionalVarNameId = OptionalId(CheckedVarNameId);
 
@@ -2649,18 +2657,23 @@ pub const CheckedFieldDefault = extern struct {
 pub const CheckedFieldKind = extern struct {
     tag: Tag = .required,
     default: CheckedFieldDefault = .none,
+    variable: OptionalCheckedTypeId = .none,
 
-    pub const Tag = enum(u32) { required, optional, defaulted };
+    pub const Tag = enum(u32) { required, optional, defaulted, undetermined };
 
     // Inline element of the serialized `record_field_pool`: tag word plus the
     // 8-byte default identity.
     comptime {
-        std.debug.assert(@sizeOf(CheckedFieldKind) == 12);
+        std.debug.assert(@sizeOf(CheckedFieldKind) == 16);
         std.debug.assert(@alignOf(CheckedFieldKind) == 4);
     }
 
     pub const required: CheckedFieldKind = .{};
     pub const optional: CheckedFieldKind = .{ .tag = .optional };
+
+    pub fn undetermined(variable: CheckedTypeId) CheckedFieldKind {
+        return .{ .tag = .undetermined, .variable = .some(variable) };
+    }
 
     pub fn defaultedFromParts(origin_module: canonical.ModuleIdentityId, expr_node: u32) CheckedFieldKind {
         return .{ .tag = .defaulted, .default = CheckedFieldDefault.fromParts(origin_module, expr_node) };
@@ -2669,6 +2682,10 @@ pub const CheckedFieldKind = extern struct {
     /// The default identity carried by a `.defaulted` kind, else null.
     pub fn defaultIdentity(self: CheckedFieldKind) ?CheckedFieldDefault {
         return if (self.tag == .defaulted) self.default else null;
+    }
+
+    pub fn undeterminedVariable(self: CheckedFieldKind) ?CheckedTypeId {
+        return if (self.tag == .undetermined) self.variable.get() else null;
     }
 };
 
@@ -3555,6 +3572,9 @@ fn checkedTypeViewRecordFieldsAreConcreteConstProducerScheme(
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (fields) |field| {
+        if (field.kind.undeterminedVariable()) |variable| {
+            if (!try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, variable, active)) return false;
+        }
         if (!try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, field.ty, active)) return false;
     }
     return true;
@@ -4802,7 +4822,10 @@ pub const CheckedTypeStore = struct {
             out[i] = .{
                 .name = field.name,
                 .ty = try self.cloneCheckedTypeRootSubstituting(allocator, names, field.ty, formals, actuals, active),
-                .kind = field.kind,
+                .kind = if (field.kind.undeterminedVariable()) |variable|
+                    .undetermined(try self.cloneCheckedTypeRootSubstituting(allocator, names, variable, formals, actuals, active))
+                else
+                    field.kind,
             };
         }
         return out;
@@ -6198,12 +6221,18 @@ fn checkedTypePayloadBuildContainsIdentityVariables(
         },
         .record => |record| blk: {
             for (record.fields) |field| {
+                if (field.kind.undeterminedVariable()) |variable| {
+                    if (store.rootContainsIdentityVariables(variable)) break :blk true;
+                }
                 if (store.rootContainsIdentityVariables(field.ty)) break :blk true;
             }
             break :blk store.rootContainsIdentityVariables(record.ext);
         },
         .record_unbound => |fields| blk: {
             for (fields) |field| {
+                if (field.kind.undeterminedVariable()) |variable| {
+                    if (store.rootContainsIdentityVariables(variable)) break :blk true;
+                }
                 if (store.rootContainsIdentityVariables(field.ty)) break :blk true;
             }
             break :blk false;
@@ -6243,7 +6272,7 @@ fn checkedTypePayloadBuildContainsIdentityVariables(
 fn checkedRecordFieldSliceEql(a: []const CheckedRecordField, b: []const CheckedRecordField) bool {
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
-        if (left.name != right.name or left.ty != right.ty) return false;
+        if (left.name != right.name or left.ty != right.ty or !std.meta.eql(left.kind, right.kind)) return false;
     }
     return true;
 }
@@ -6731,7 +6760,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             try fields.append(self.allocator, .{
                 .name = field.name,
                 .ty = self.substitutedRoot(field.ty),
-                .kind = field.kind,
+                .kind = if (field.kind.undeterminedVariable()) |variable|
+                    .undetermined(self.substitutedRoot(variable))
+                else
+                    field.kind,
             });
         }
     }
@@ -6790,7 +6822,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 checkedArtifactInvariant("checked type substitution key row normalization found duplicate record fields", .{});
             }
             self.writeBytes(self.names.recordFieldLabelText(field.name));
-            self.writeCheckedFieldKind(field.kind);
+            try self.writeCheckedFieldKind(field.kind);
             try self.writeType(field.ty);
         }
         if (tail) |tail_id| {
@@ -6860,7 +6892,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 checkedArtifactInvariant("checked type substitution key row normalization found duplicate record fields", .{});
             }
             self.writeBytes(self.names.recordFieldLabelText(field.name));
-            self.writeCheckedFieldKind(field.kind);
+            try self.writeCheckedFieldKind(field.kind);
             try self.writeType(field.ty);
         }
         if (tail) |tail_id| {
@@ -7032,7 +7064,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     fn writeCheckedFieldKind(
         self: *SubstitutedCheckedTypeKeyBuilder,
         kind: CheckedFieldKind,
-    ) void {
+    ) Allocator.Error!void {
         // Byte-for-byte the solver key's `writeFieldPresenceForKey` encoding
         // (canonical_type_keys.zig), so solver-written and checked-written
         // canonical keys for one type agree. A plain required field keeps
@@ -7052,6 +7084,12 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 self.writeTag("field_default");
                 self.writeBytes(self.names.moduleIdentityBytes(origin_module));
                 self.writeU32(kind.default.expr_node);
+            },
+            .undetermined => {
+                const variable = kind.undeterminedVariable() orelse
+                    checkedArtifactInvariant("checked undetermined field kind carried no variable identity", .{});
+                self.writeTag("presence_variable");
+                try self.writeType(variable);
             },
         }
     }
@@ -7364,13 +7402,25 @@ const SourceTypeGraphFactsContext = struct {
                 },
                 .record => |record| {
                     for (types_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
-                        try self.mergeVar(traversal, &facts, presence.typeVar());
+                        switch (presence) {
+                            .required => |type_var| try self.mergeVar(traversal, &facts, type_var),
+                            .unknown => |unknown| {
+                                try self.mergeVar(traversal, &facts, unknown.presence);
+                                try self.mergeVar(traversal, &facts, unknown.var_);
+                            },
+                        }
                     }
                     try self.mergeVar(traversal, &facts, record.ext);
                 },
                 .record_unbound => |fields| {
                     for (types_store.getRecordFieldsSlice(fields).items(.presence)) |presence| {
-                        try self.mergeVar(traversal, &facts, presence.typeVar());
+                        switch (presence) {
+                            .required => |type_var| try self.mergeVar(traversal, &facts, type_var),
+                            .unknown => |unknown| {
+                                try self.mergeVar(traversal, &facts, unknown.presence);
+                                try self.mergeVar(traversal, &facts, unknown.var_);
+                            },
+                        }
                     }
                 },
                 .tag_union => |tag_union| {
@@ -7948,17 +7998,22 @@ fn copyCheckedRecordFields(
                     }
                     break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, unknown.var_);
                 },
-                // A still-flex kind here is a SCHEME INTERIOR: generalized
-                // defs' types are published as schemes, and a scheme's
-                // quantified kind var must stay flex (instantiations may
-                // join a `?:` annotation later). Monomorphic literal-minted
-                // kinds no longer reach publication flex—the finalize
-                // sweep commits them to `required` in the solved graph
-                // (Check.defaultLiteralFieldKinds, design.md "Field Kinds"
-                // kind defaulting). A scheme's flex kind publishes
-                // required-equivalent, matching what any uninstantiated
-                // reading of the scheme renders.
-                .flex => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, unknown.var_),
+                // A still-flex kind here is a SCHEME INTERIOR. Preserve its
+                // checked identity separately from the payload type so each
+                // Monotype instantiation can solve the kind from its concrete
+                // call interface before choosing the slot representation.
+                .flex => blk: {
+                    kind = .undetermined(try appendCheckedTypeRoot(
+                        allocator,
+                        module,
+                        names,
+                        imports,
+                        store,
+                        active,
+                        unknown.presence,
+                    ));
+                    break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, unknown.var_);
+                },
                 // A poisoned presence var (a presence mismatch merges to err,
                 // unify.zig `unifyFieldPresence`) publishes the field through
                 // the established explicit err path: the `.err` payload, the
@@ -25858,11 +25913,17 @@ const LoweringVisibilityBuilder = struct {
                 try self.appendTypeRoots(artifact, nominal.padding_field_types);
             },
             .record => |record| {
-                for (record.fields) |field| try self.appendTypeRoot(artifact, field.ty);
+                for (record.fields) |field| {
+                    if (field.kind.undeterminedVariable()) |variable| try self.appendTypeRoot(artifact, variable);
+                    try self.appendTypeRoot(artifact, field.ty);
+                }
                 try self.appendTypeRoot(artifact, record.ext);
             },
             .record_unbound => |fields| {
-                for (fields) |field| try self.appendTypeRoot(artifact, field.ty);
+                for (fields) |field| {
+                    if (field.kind.undeterminedVariable()) |variable| try self.appendTypeRoot(artifact, variable);
+                    try self.appendTypeRoot(artifact, field.ty);
+                }
             },
             .tuple => |items| try self.appendTypeRoots(artifact, items),
             .function => |function| {
@@ -27971,7 +28032,9 @@ pub const CheckedModuleArtifact = struct {
     // `Type.FieldDefault` axis (design.md "Defaulted Fields").
     // Version 59 combines the optional/defaulted field layouts above with
     // upstream's version-57 artifact change.
-    const serialized_layout_version: u32 = 59;
+    // Version 60 preserves generalized field-kind variable identities and
+    // optional source-value types in stored const evidence.
+    const serialized_layout_version: u32 = 60;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29767,11 +29830,14 @@ pub const CheckedTypeProjector = struct {
             out[i] = .{
                 .name = try self.remapViewRecordField(source_names, field.name),
                 .ty = try self.projectCheckedTypeViewRootInner(source, source_names, field.ty, active),
-                // A defaulted kind's identity remaps to the target name
-                // store; the tag itself crosses unchanged.
+                // Default identities remap across name stores; an
+                // undetermined kind's checked variable is projected through
+                // the same active map as the field payload.
                 .kind = if (field.kind.defaultIdentity()) |default|
                     .defaultedFromParts(try self.remapViewModuleIdentity(source_names, default.origin() orelse
                         checkedArtifactInvariant("checked defaulted field kind carried no default identity", .{})), default.expr_node)
+                else if (field.kind.undeterminedVariable()) |variable|
+                    .undetermined(try self.projectCheckedTypeViewRootInner(source, source_names, variable, active))
                 else
                     field.kind,
             };
@@ -30133,11 +30199,14 @@ pub const CheckedTypeProjector = struct {
             out[i] = .{
                 .name = try self.remapRecordField(imported, field.name),
                 .ty = try self.projectImportedCheckedType(imported, field.ty),
-                // A defaulted kind's identity remaps to the target name
-                // store; the tag itself crosses unchanged.
+                // Default identities remap across name stores; an
+                // undetermined kind's checked variable is projected with the
+                // field payload.
                 .kind = if (field.kind.defaultIdentity()) |default|
                     .defaultedFromParts(try self.remapModuleIdentity(imported, default.origin() orelse
                         checkedArtifactInvariant("checked defaulted field kind carried no default identity", .{})), default.expr_node)
+                else if (field.kind.undeterminedVariable()) |variable|
+                    .undetermined(try self.projectImportedCheckedType(imported, variable))
                 else
                     field.kind,
             };
@@ -30456,11 +30525,14 @@ const CheckedTypeStoreImportProjector = struct {
             out[i] = .{
                 .name = try self.remapRecordField(field.name),
                 .ty = try self.project(field.ty),
-                // A defaulted kind's identity remaps to the target name
-                // store; the tag itself crosses unchanged.
+                // Default identities remap across name stores; an
+                // undetermined kind's checked variable is projected with the
+                // field payload.
                 .kind = if (field.kind.defaultIdentity()) |default|
                     .defaultedFromParts(try self.remapModuleIdentity(default.origin() orelse
                         checkedArtifactInvariant("checked defaulted field kind carried no default identity", .{})), default.expr_node)
+                else if (field.kind.undeterminedVariable()) |variable|
+                    .undetermined(try self.project(variable))
                 else
                     field.kind,
             };
@@ -33916,8 +33988,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xD9, 0x82, 0x0A, 0x3E, 0x45, 0xA3, 0x01, 0x27, 0x9E, 0x44, 0x4E, 0x21, 0xFA, 0xD8, 0xA7, 0xAC,
-        0x1C, 0xF4, 0x70, 0x5D, 0xFB, 0x46, 0x4D, 0xD7, 0x56, 0xEB, 0x6A, 0xDD, 0xD0, 0x22, 0x38, 0xA7,
+        0x53, 0x7C, 0x71, 0x6B, 0xC7, 0x47, 0xE0, 0x56, 0x10, 0xAE, 0x75, 0x81, 0x5D, 0x67, 0x85, 0x0C,
+        0xC0, 0x3B, 0xBB, 0xD0, 0x97, 0x7A, 0x50, 0x5B, 0x9B, 0x6A, 0x61, 0x15, 0x55, 0xB9, 0x70, 0xB7,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

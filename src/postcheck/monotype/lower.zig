@@ -19,6 +19,7 @@ const InstNode = solve.InstNode;
 const NodeId = solve.NodeId;
 const InstTag = solve.InstTag;
 const InstField = solve.InstField;
+const FieldKindId = solve.FieldKindId;
 const InstBacking = solve.InstBacking;
 const InstDeclaredField = solve.InstDeclaredField;
 const InstVariable = solve.InstVariable;
@@ -892,7 +893,14 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                 for (checked_record.fields) |checked_field| {
                     for (request_record.fields) |request_field| {
                         if (!graph.name_store.recordFieldLabelTextEql(checked_field.name, request_field.name)) continue;
-                        try constrainDeferredTemplateTypeArgumentsAt(graph, checked_field.ty, request_field.ty, seen);
+                        graph.relateRecordFieldKind(checked_field, request_field);
+                        try constrainDeferredTemplateArgument(
+                            graph,
+                            checked_field.value_ty orelse checked_field.ty,
+                            request_field.value_ty orelse request_field.ty,
+                            seen,
+                        );
+                        try constrainDeferredTemplateArgument(graph, checked_field.ty, request_field.ty, seen);
                         break;
                     }
                 }
@@ -1249,6 +1257,13 @@ fn relateCheckedMonoRequestNodeAt(
                         if (checked_field.name != request_field.name) break;
                     } else {
                         for (checked_row.fields, request_row.fields) |checked_field, request_field| {
+                            graph.relateRecordFieldKind(checked_field, request_field);
+                            try relateCheckedMonoRequestNodeAt(
+                                graph,
+                                checked_field.value_ty orelse checked_field.ty,
+                                request_field.value_ty orelse request_field.ty,
+                                seen,
+                            );
                             try relateCheckedMonoRequestNodeAt(graph, checked_field.ty, request_field.ty, seen);
                         }
                         try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
@@ -3082,7 +3097,11 @@ const Builder = struct {
         root_evidence: ?checked.CheckedEvidenceSpan,
         root_batch: ?*RootTemplateBatch,
     ) Allocator.Error!Ast.DefId {
-        const fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
+        const fn_ty = try self.lowerContextFreeSpecializationType(
+            source_ty_view,
+            template_ref,
+            source_fn_ty,
+        );
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const fn_template = self.fnDefForTemplate(
             view,
@@ -3712,11 +3731,15 @@ const Builder = struct {
         var selection = DraftOpenCandidateSelection{};
         const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
             try source_ctx.activeTypeFromNode(request_fn_node)
+        else if (try source_ctx.graph.typeIsSpecializationDefaultable(request_fn_node))
+            try source_ctx.graph.specializationTypeViewForNode(request_fn_node)
         else
             null;
-        // Resolved requests key directly on their structural type digest, so a
-        // repeat of an already-answered resolved request skips the graph-native
-        // recursive lookup below.
+        // Closed requests—and requests whose only open cells have the explicit
+        // required field-kind default—key on an immutable structural view, so
+        // a repeat skips the graph-native recursive lookup below. The latter
+        // view does not mutate the live request; a hit joins the live
+        // interfaces below.
         const resolved_lookup_address: ?DraftTemplateLookupAddress = if (resolved_request_ty) |request_fn_ty| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
@@ -3729,8 +3752,8 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
-                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                    if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec.request_fn_node)) continue;
+                    const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec.request_fn_node);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -3787,12 +3810,13 @@ const Builder = struct {
                     }
                 }
             }
-            // Independently instantiated recursive calls do not necessarily share
-            // graph cells with the specialization currently being lowered. Once
-            // both requests are fully resolved, exact structural type equality is
-            // the durable proof that they are the same specialization request.
-            // This scan retains graph-interface identity for active recursive
-            // and partially overlapping requests.
+            // Independently instantiated calls do not necessarily share graph
+            // cells with the specialization currently being lowered. Once both
+            // requests are closed or defaultable only by the declared required
+            // field-kind rule, exact structural type equality proves that they
+            // are the same specialization request. This scan retains graph-
+            // interface identity for active recursive and partially overlapping
+            // requests.
             if (resolved_request_ty) |request_fn_ty| {
                 for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
                     const raw_spec: u32 = @intCast(raw_spec_usize);
@@ -3804,8 +3828,8 @@ const Builder = struct {
                     // that they refer to the same active specialization.
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
-                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                    if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec.request_fn_node)) continue;
+                    const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec.request_fn_node);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, request_fn_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -4209,6 +4233,34 @@ const Builder = struct {
         };
     }
 
+    /// Materialize a context-free Monotype request through the same explicit
+    /// instantiation/freeze boundary as an ordinary requested specialization.
+    /// A generalized checked field kind can therefore default for this one
+    /// root without entering `type_cache` as a context-free required layout
+    /// that would poison a later optional specialization.
+    fn lowerContextFreeSpecializationType(
+        self: *Builder,
+        view: ModuleView,
+        owner_template: names.ProcTemplate,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!Type.TypeId {
+        const graph = try self.createGraph();
+        defer graph.destroy();
+        const saved_graph = self.active_graph;
+        const saved_body_draft = self.active_body_draft;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
+        var body_draft = BodyDraftStore.init(self.allocator);
+        self.active_body_draft = &body_draft;
+        defer self.active_body_draft = saved_body_draft;
+        defer body_draft.deinit();
+        var ctx = try BodyContext.init(self.allocator, self, view, owner_template, graph, &body_draft);
+        defer ctx.deinit();
+        const node = try ctx.instNode(checked_ty);
+        try graph.freezeRelations();
+        return try graph.sealNode(node);
+    }
+
     fn lowerType(self: *Builder, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         const address = checkedTypeAddress(view, checked_ty);
         if (self.type_cache.get(address)) |cached| return cached;
@@ -4595,31 +4647,21 @@ const Builder = struct {
         return self.program.types.span(self.tupleItemSpan(ty));
     }
 
-    fn recordFieldType(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.TypeId {
+    fn recordField(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
         const fields = self.program.types.fieldSpan(self.recordFieldsSpan(ty));
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
-            if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field.ty;
+            if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field;
         }
         Common.invariant("record pattern field was absent from checked record type");
     }
 
-    fn tagPayloadTypes(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
-        return self.program.types.span(self.tagPayloadSpan(ty, name));
+    fn recordFieldType(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.TypeId {
+        return self.recordField(ty, name).ty;
     }
 
-    /// The Monotype slot type of one checked record field (design.md "Field
-    /// Kinds (All-Dynamic Optional Fields)"): `required` and `defaulted`
-    /// kinds are plain inline slots (the field's value type), while an
-    /// `optional` kind erases into the closed structural tagged slot
-    /// `[#Missing, #Present(value)]`. Monotype `Type.Field` has no kind axis—
-    /// the kind is consumed here, once, from the explicit checked row.
-    fn lowerFieldSlotType(self: *Builder, view: ModuleView, field: checked.CheckedRecordField) Allocator.Error!Type.TypeId {
-        const value_ty = try self.lowerType(view, field.ty);
-        return switch (field.kind.tag) {
-            .required, .defaulted => value_ty,
-            .optional => try self.optionalSlotType(value_ty),
-        };
+    fn tagPayloadTypes(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
+        return self.program.types.span(self.tagPayloadSpan(ty, name));
     }
 
     /// The closed structural tagged slot of an optional field:
@@ -4660,14 +4702,14 @@ const Builder = struct {
     }
 
     /// The slot info of an optional field's tagged slot, or null for an
-    /// inline (required/defaulted) slot. Monotype `Type.Field` carries no
-    /// kind axis: `lowerFieldSlotType` consumed the checked row's kind, once,
+    /// inline (required/defaulted) slot. A completed Monotype `Type.Field`
+    /// carries no runtime kind axis: record-type lowering consumed the checked row's kind, once,
     /// into exactly the closed two-variant union
     /// `[#Missing, #Present(payload)]`. Because those labels live in the
     /// compiler-reserved `#` namespace (see `optional_slot_missing_tag`),
     /// matching on them here is EXACT—no user-written type can produce
     /// this union, so recognizing it recovers precisely the kind that
-    /// `lowerFieldSlotType` encoded (design.md "Field Kinds (All-Dynamic
+    /// `optionalSlotType` encoded (design.md "Field Kinds (All-Dynamic
     /// Optional Fields)", "Inspect rendering reads the reserved slot
     /// labels"). Inspect expansion runs over the memoized monotype with no
     /// checked row in hand and consumes the slot through this; consumers
@@ -4700,9 +4742,15 @@ const Builder = struct {
         const lowered = try self.allocator.alloc(Type.Field, fields.len);
         defer self.allocator.free(lowered);
         for (fields, 0..) |field, i| {
+            const value_ty = try self.lowerType(view, field.ty);
             lowered[i] = .{
                 .name = try self.recordFieldName(view, field.name),
-                .ty = try self.lowerFieldSlotType(view, field),
+                .ty = switch (field.kind.tag) {
+                    .required, .defaulted => value_ty,
+                    .optional => try self.optionalSlotType(value_ty),
+                    .undetermined => Common.invariant("undetermined checked field kind reached direct record lowering"),
+                },
+                .value_ty = if (field.kind.tag == .optional) value_ty else null,
                 .default = try self.monoFieldDefault(view, field),
             };
         }
@@ -4771,9 +4819,15 @@ const Builder = struct {
         fields: []const checked.CheckedRecordField,
     ) Allocator.Error!void {
         for (fields) |field| {
+            const value_ty = try self.lowerType(view, field.ty);
             try out.append(self.allocator, .{
                 .name = try self.recordFieldName(view, field.name),
-                .ty = try self.lowerFieldSlotType(view, field),
+                .ty = switch (field.kind.tag) {
+                    .required, .defaulted => value_ty,
+                    .optional => try self.optionalSlotType(value_ty),
+                    .undetermined => Common.invariant("undetermined checked field kind reached direct record-row lowering"),
+                },
+                .value_ty = if (field.kind.tag == .optional) value_ty else null,
                 .default = try self.monoFieldDefault(view, field),
             });
         }
@@ -12764,6 +12818,12 @@ const InterfaceReplayState = struct {
 
 const InstantiationScopeId = enum(u64) { _ };
 
+const InstantiatedFieldKind = struct {
+    id: FieldKindId,
+    slot: NodeId,
+    value: NodeId,
+};
+
 /// The complete mutable state for one checked-type instantiation scope. Body
 /// lowering state remains on `BodyContext`; operations that only need a fresh
 /// type instantiation can swap this small state without constructing another
@@ -12773,9 +12833,11 @@ const TypeInstantiationContext = struct {
     id: InstantiationScopeId,
     module_bytes: [32]u8,
     node_map: collections.DenseMap(checked.CheckedTypeId, NodeId),
+    field_kind_map: collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, NodeId)) = .empty,
+    field_kind_decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
 
     fn init(
         allocator: Allocator,
@@ -12787,12 +12849,15 @@ const TypeInstantiationContext = struct {
             .id = id,
             .module_bytes = module_bytes,
             .node_map = collections.DenseMap(checked.CheckedTypeId, NodeId).init(allocator),
+            .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
         };
     }
 
     fn deinit(self: *TypeInstantiationContext) void {
         self.decl_scopes.deinit(self.allocator);
+        self.field_kind_decl_scopes.deinit(self.allocator);
         self.node_map.deinit();
+        self.field_kind_map.deinit();
     }
 };
 
@@ -15924,6 +15989,28 @@ const BodyContext = struct {
         try self.instantiation.node_map.put(checked_ty, node);
     }
 
+    fn scopedFieldKind(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?InstantiatedFieldKind {
+        var index = self.instantiation.field_kind_decl_scopes.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (self.instantiation.field_kind_decl_scopes.items[index].get(checked_ty)) |existing| return existing;
+        }
+        if (self.instantiation.field_kind_decl_scopes.items.len != 0) return null;
+        return self.instantiation.field_kind_map.get(checked_ty);
+    }
+
+    fn putScopedFieldKind(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        field_kind: InstantiatedFieldKind,
+    ) Allocator.Error!void {
+        if (self.instantiation.field_kind_decl_scopes.items.len != 0) {
+            try self.instantiation.field_kind_decl_scopes.items[self.instantiation.field_kind_decl_scopes.items.len - 1].put(checked_ty, field_kind);
+            return;
+        }
+        try self.instantiation.field_kind_map.put(checked_ty, field_kind);
+    }
+
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
         const out = try self.graph.arena().alloc(NodeId, checked_tys.len);
         for (checked_tys, 0..) |checked_ty, index| {
@@ -15978,13 +16065,53 @@ const BodyContext = struct {
         const out = try self.graph.arena().alloc(InstField, fields.len);
         for (fields, 0..) |field, index| {
             const value_node = try self.instNode(field.ty);
-            out[index] = .{
-                .name = try self.builder.recordFieldName(self.view, field.name),
-                .ty = switch (field.kind.tag) {
-                    .required, .defaulted => value_node,
-                    .optional => try self.optionalSlotNode(value_node),
+            const name = try self.builder.recordFieldName(self.view, field.name);
+            const default = try self.builder.monoFieldDefault(self.view, field);
+            out[index] = switch (field.kind.tag) {
+                .required => .{ .name = name, .ty = value_node, .kind = .required, .default = null },
+                .defaulted => .{
+                    .name = name,
+                    .ty = value_node,
+                    .kind = .{ .defaulted = default orelse Common.invariant("defaulted checked field carried no default identity") },
+                    .default = default,
                 },
-                .default = try self.builder.monoFieldDefault(self.view, field),
+                .optional => .{
+                    .name = name,
+                    .ty = try self.optionalSlotNode(value_node),
+                    .value_ty = value_node,
+                    .kind = .optional,
+                    .default = null,
+                },
+                .undetermined => blk: {
+                    const checked_kind = self.scopedCheckedType(field.kind.undeterminedVariable() orelse
+                        Common.invariant("undetermined checked field kind carried no presence variable"));
+                    if (self.scopedFieldKind(checked_kind)) |existing| {
+                        try self.graph.unify(existing.value, value_node);
+                        break :blk .{
+                            .name = name,
+                            .ty = existing.slot,
+                            .value_ty = existing.value,
+                            .kind = .{ .undetermined = existing.id },
+                            .default = null,
+                        };
+                    }
+                    const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                    const kind = try self.graph.newUndeterminedFieldKind();
+                    self.graph.registerUndeterminedFieldKindCells(kind, slot_node, value_node);
+                    const instantiated = InstantiatedFieldKind{
+                        .id = kind,
+                        .slot = slot_node,
+                        .value = value_node,
+                    };
+                    try self.putScopedFieldKind(checked_kind, instantiated);
+                    break :blk .{
+                        .name = name,
+                        .ty = instantiated.slot,
+                        .value_ty = instantiated.value,
+                        .kind = .{ .undetermined = instantiated.id },
+                        .default = null,
+                    };
+                },
             };
         }
         return out;
@@ -16173,11 +16300,15 @@ const BodyContext = struct {
         }
         var scope = collections.DenseMap(checked.CheckedTypeId, NodeId).init(self.allocator);
         defer scope.deinit();
+        var field_kind_scope = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
+        defer field_kind_scope.deinit();
         for (formal_args, args) |formal, arg| {
             try scope.put(self.scopedCheckedType(formal), arg);
         }
         try self.instantiation.decl_scopes.append(self.allocator, &scope);
         defer _ = self.instantiation.decl_scopes.pop();
+        try self.instantiation.field_kind_decl_scopes.append(self.allocator, &field_kind_scope);
+        defer _ = self.instantiation.field_kind_decl_scopes.pop();
         return try self.instNode(declaration.backing);
     }
 
@@ -16647,7 +16778,7 @@ const BodyContext = struct {
             for (entry.duplicates.items) |duplicate| {
                 try relateFunctionRequestInterface(
                     self.graph,
-                    try self.graph.importMono(final_ty),
+                    try self.graph.instantiateProvisionalTypeView(final_ty),
                     duplicate,
                 );
             }
@@ -17217,7 +17348,13 @@ const BodyContext = struct {
         for (checked_row.fields, produced_row.fields, fields) |checked_field, produced_field, *out| {
             if (checked_field.name != produced_field.name) return null;
             const ty = try self.relateCheckedNodeToProducedValueInner(checked_field.ty, produced_field.ty, visiting);
-            out.* = .{ .name = produced_field.name, .ty = ty, .default = produced_field.default };
+            out.* = .{
+                .name = produced_field.name,
+                .ty = ty,
+                .value_ty = produced_field.value_ty,
+                .kind = produced_field.kind,
+                .default = produced_field.default,
+            };
             changed = changed or !self.graph.sameClass(ty, produced_field.ty);
         }
         if (!changed) return produced_node;
@@ -17981,18 +18118,7 @@ const BodyContext = struct {
                 for (record.fields) |field| {
                     child_exprs[child_index] = field.value;
                     const mono_field_name = try self.builder.recordFieldName(self.view, field.label);
-                    const slot_node = try self.graph.recordConstructionFieldNode(expr_node, mono_field_name);
-                    const field_kind: checked.CheckedFieldKind.Tag =
-                        try self.constructedFieldKindTag(expr.ty, mono_field_name);
-                    child_nodes[child_index] = if (field_kind == .optional) opt: {
-                        // A SUPPLIED OPTIONAL field's child is checked at the
-                        // slot's Present payload type, never the slot union
-                        // (design.md "Field Kinds (All-Dynamic Optional
-                        // Fields)").
-                        const value_node = try self.instNode(self.view.bodies.expr(field.value).ty);
-                        try self.graph.unify(slot_node, try self.optionalSlotNode(value_node));
-                        break :opt value_node;
-                    } else slot_node;
+                    child_nodes[child_index] = try self.graph.recordConstructionFieldValueNode(expr_node, mono_field_name);
                     child_index += 1;
                 }
                 try self.prepareConstructorChildrenAtNodes(child_exprs, child_nodes);
@@ -18011,7 +18137,7 @@ const BodyContext = struct {
                     });
                     child_index += 1;
                 }
-                return try self.lowerRecordExprAtNode(record, expr.ty, expr_node, children.items);
+                return try self.lowerRecordExprAtNode(record, expr_node, children.items);
             },
             .empty_list, .empty_record => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -18025,7 +18151,7 @@ const BodyContext = struct {
                 return try self.lowerRecordExprAtNode(.{
                     .fields = @as([]const checked.CheckedRecordExprField, &.{}),
                     .ext = @as(?checked.CheckedExprId, null),
-                }, expr.ty, expr_node, &.{});
+                }, expr_node, &.{});
             },
             .field_access => |field| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -18232,7 +18358,14 @@ const BodyContext = struct {
         const template = self.view.const_templates.get(entry.const_ref);
         const hoisted_ty = switch (template.state) {
             .stored_const => |stored| try self.storedConstRootMonoType(self.view, stored, entry.checked_type),
-            .eval_template => try self.lowerTypeView(entry.checked_type),
+            // Dispatch requires one concrete specialization type for this
+            // selected const use. A generalized field whose presence has no
+            // other evidence takes the declared required default in an
+            // immutable view; the relation below then applies that exact
+            // choice to the live const-use graph before any body emits.
+            .eval_template => try self.graph.specializationTypeViewForNode(
+                try self.instNode(entry.checked_type),
+            ),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype type selection"),
         };
         try relateCheckedNodeToMono(
@@ -20786,6 +20919,8 @@ const BodyContext = struct {
                     try self.generatedIteratorStepFunctionNode(field.ty, self_node, item_node)
                 else
                     field.ty,
+                .value_ty = field.value_ty,
+                .kind = field.kind,
                 .default = field.default,
             };
         }
@@ -20854,6 +20989,8 @@ const BodyContext = struct {
                     item_node
                 else
                     field.ty,
+                .value_ty = field.value_ty,
+                .kind = field.kind,
                 .default = field.default,
             };
         }
@@ -26924,10 +27061,6 @@ const BodyContext = struct {
         for (access.segments, 0..) |segment, index| {
             const is_last = index + 1 == access.segments.len;
             const mono_field_name = try self.builder.recordFieldName(self.view, segment.field_name);
-            const slot_node = switch (segment.backing_access) {
-                .inspectable => try self.graph.recordFieldNode(field_node, mono_field_name),
-                .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(field_node, mono_field_name),
-            };
             switch (segment.mode) {
                 // A required segment's slot IS the field's value: the chain
                 // continues from the receiver-derived slot node so a
@@ -26938,6 +27071,10 @@ const BodyContext = struct {
                 // final segment's relation is the trailing whole-expression
                 // constraint below.
                 .required => {
+                    const slot_node = switch (segment.backing_access) {
+                        .inspectable => try self.graph.requiredRecordFieldNode(field_node, mono_field_name),
+                        .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(field_node, mono_field_name),
+                    };
                     if (!is_last) {
                         try self.constrainCheckedInterfaceToCell(
                             segment.success_ty,
@@ -26950,9 +27087,14 @@ const BodyContext = struct {
                 // value; the chain continues from the Present payload.
                 .optional => {
                     saw_optional = true;
+                    const field = switch (segment.backing_access) {
+                        .inspectable => try self.graph.optionalRecordFieldNodes(field_node, mono_field_name),
+                        .opaque_definition_private => try self.graph.optionalOpaqueDefinitionFieldNodes(field_node, mono_field_name),
+                    };
                     const value_node = try self.instNode(segment.success_ty);
-                    try self.graph.unify(slot_node, try self.optionalSlotNode(value_node));
-                    field_node = value_node;
+                    try self.graph.unify(field.value, value_node);
+                    try self.graph.unify(field.slot, try self.optionalSlotNode(value_node));
+                    field_node = field.value;
                 },
             }
         }
@@ -29103,6 +29245,10 @@ const BodyContext = struct {
                     out[index] = .{
                         .name = try self.constRecordFieldName(store_view, field.name),
                         .ty = try self.lowerConstCaptureTypeInner(store_view, field.ty, map),
+                        .value_ty = if (field.value_ty) |value_ty|
+                            try self.lowerConstCaptureTypeInner(store_view, value_ty, map)
+                        else
+                            null,
                         .default = try self.constFieldDefault(store_view, field.default),
                     };
                 }
@@ -30507,7 +30653,7 @@ const BodyContext = struct {
             .list => |items| try self.relateListExprAtNode(items, expected_node),
             .empty_list => _ = try self.graph.listElementNode(expected_node),
             .empty_record => _ = try self.graph.recordConstructionNodes(expected_node),
-            .record => |record| try self.relateRecordExprAtNode(record, expr.ty, expected_node),
+            .record => |record| try self.relateRecordExprAtNode(record, expected_node),
             // These forms propagate the exact result cell while their own
             // lowering establishes branch-local binders and statement state.
             // Relating their shared checked result node here would collapse
@@ -30569,25 +30715,15 @@ const BodyContext = struct {
     fn relateRecordExprAtNode(
         self: *BodyContext,
         record: anytype,
-        checked_ty: checked.CheckedTypeId,
         record_node: NodeId,
     ) Allocator.Error!void {
         _ = try self.graph.recordConstructionNodes(record_node);
         for (record.fields) |field| {
             const mono_field_name = try self.builder.recordFieldName(self.view, field.label);
-            const field_node = try self.graph.recordConstructionFieldNode(record_node, mono_field_name);
-            const field_kind: checked.CheckedFieldKind.Tag =
-                try self.constructedFieldKindTag(checked_ty, mono_field_name);
-            if (field_kind == .optional) {
-                // A SUPPLIED OPTIONAL field's child is checked at the slot's
-                // Present payload type; the slot itself is the tagged union
-                // (design.md "Field Kinds (All-Dynamic Optional Fields)").
-                const value_node = try self.instNode(self.view.bodies.expr(field.value).ty);
-                try self.graph.unify(field_node, try self.optionalSlotNode(value_node));
-                try self.relateExprAtNode(field.value, value_node);
-                continue;
-            }
-            try self.relateExprAtNode(field.value, field_node);
+            try self.relateExprAtNode(
+                field.value,
+                try self.graph.recordConstructionFieldValueNode(record_node, mono_field_name),
+            );
         }
     }
 
@@ -31263,8 +31399,8 @@ const BodyContext = struct {
                     .empty_record => break :blk try self.lowerRecordConstructorAtNode(.{
                         .fields = @as([]const checked.CheckedRecordExprField, &.{}),
                         .ext = @as(?checked.CheckedExprId, null),
-                    }, self.view.bodies.expr(checked_expr).ty, expected_node),
-                    .record => |record| break :blk try self.lowerRecordConstructorAtNode(record, self.view.bodies.expr(checked_expr).ty, expected_node),
+                    }, expected_node),
+                    .record => |record| break :blk try self.lowerRecordConstructorAtNode(record, expected_node),
                     .call => break :blk try self.lowerCallExprAtNode(checked_expr, expected_node),
                     .dispatch_call => |plan| {
                         try self.selectExprRepresentationAtNode(checked_expr, expected_node);
@@ -31433,8 +31569,8 @@ const BodyContext = struct {
         for (field.segments) |segment| {
             const field_name = try self.builder.recordFieldName(self.view, segment.field_name);
             prefix_node = switch (segment.backing_access) {
-                .inspectable => try self.graph.recordFieldNode(prefix_node, field_name),
-                .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(prefix_node, field_name),
+                .inspectable => try self.graph.requiredRecordFieldNode(prefix_node, field_name),
+                .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(prefix_node, field_name),
             };
             self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
         }
@@ -31729,7 +31865,12 @@ const BodyContext = struct {
             const expected_field = GuardedList.at(expected_fields, index);
             const actual_field = GuardedList.at(actual_fields, index);
             if (expected_field.name != actual_field.name) return false;
+            if (expected_field.kind_state != actual_field.kind_state) return false;
             if (!self.sameTypeInner(expected_field.ty, actual_field.ty, visiting)) return false;
+            if ((expected_field.value_ty == null) != (actual_field.value_ty == null)) return false;
+            if (expected_field.value_ty) |expected_value_ty| {
+                if (!self.sameTypeInner(expected_value_ty, actual_field.value_ty.?, visiting)) return false;
+            }
         }
         return true;
     }
@@ -31868,24 +32009,24 @@ const BodyContext = struct {
         field_name: names.RecordFieldNameId,
     ) Allocator.Error!?checked.CheckedFieldKind {
         return switch (try self.checkedRecordFieldByName(checked_ty, field_name)) {
-            .found => |found| found.field.kind,
+            .found => |field| field.kind,
             .scheme_interior, .absent => null,
         };
     }
 
-    /// The declared kind tag of a CONSTRUCTED field named `field_name` on the
-    /// checked row behind `checked_ty`; a field absent from the row is a
-    /// plain required field (design.md "Field Kinds").
-    fn constructedFieldKindTag(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        field_name: names.RecordFieldNameId,
-    ) Allocator.Error!checked.CheckedFieldKind.Tag {
-        return switch (try self.checkedRecordFieldByName(checked_ty, field_name)) {
-            .found => |found| found.field.kind.tag,
-            .scheme_interior => .required,
-            .absent => Common.invariant("constructed record field was missing from its checked row"),
-        };
+    /// Read the concrete kind already selected by an immutable Monotype field.
+    /// Construction on this path has no live graph cell and therefore consumes
+    /// the target field's explicit specialization metadata rather than the
+    /// generalized checked scheme or the runtime slot's structural shape.
+    fn monotypeFieldKindTag(_: *BodyContext, field: Type.Field) checked.CheckedFieldKind.Tag {
+        if (field.kind_state != .resolved) {
+            Common.invariant("provisional field kind reached sealed record construction");
+        }
+        if (field.value_ty != null) {
+            if (field.default != null) Common.invariant("optional Monotype field carried a default identity");
+            return .optional;
+        }
+        return if (field.default != null) .defaulted else .required;
     }
 
     /// The declared kind of one record-destructure field, read from the
@@ -31903,7 +32044,7 @@ const BodyContext = struct {
     ) Allocator.Error!checked.CheckedFieldKind.Tag {
         const target = try self.builder.recordFieldName(self.view, destruct.label);
         return switch (try self.checkedRecordFieldByName(record_checked_ty, target)) {
-            .found => |found| found.field.kind.tag,
+            .found => |field| field.kind.tag,
             .scheme_interior, .absent => Common.invariant("record destructure field was missing from its checked row"),
         };
     }
@@ -32208,20 +32349,6 @@ const BodyContext = struct {
         return result;
     }
 
-    /// Find `field_name`'s checked record field on the row behind
-    /// `checked_ty`, walking aliases and the extension chain.
-    /// A checked record field together with the view whose stores its ids
-    /// index into: nominal backing rows live in the DECLARING module's
-    /// store, so a cross-view walk must hand its caller the owning view.
-    /// `crossed_nominal` records that the walk read a declaration's backing
-    /// row, whose field TYPES are argument-unsubstituted (kinds are
-    /// argument-independent; types are not).
-    const CheckedFieldLookup = struct {
-        view: ModuleView,
-        field: checked.CheckedRecordField,
-        crossed_nominal: bool,
-    };
-
     /// How a checked-row field lookup resolved. `scheme_interior` is not a
     /// miss: the walk reached a row that is still a type VARIABLE at
     /// template lowering (a generalized scheme interior, e.g. the result
@@ -32230,7 +32357,7 @@ const BodyContext = struct {
     /// pass". Only `absent`—a concrete row that does not carry the field—
     /// is a genuine miss.
     const CheckedFieldResolution = union(enum) {
-        found: CheckedFieldLookup,
+        found: checked.CheckedRecordField,
         scheme_interior,
         absent,
     };
@@ -32253,7 +32380,6 @@ const BodyContext = struct {
         defer seen.deinit();
         var view = self.view;
         var current = checked_ty;
-        var crossed_nominal = false;
         while (true) {
             const visit = Visited{ .module = view.key.bytes, .ty = current };
             if (seen.contains(visit)) return .absent;
@@ -32263,14 +32389,14 @@ const BodyContext = struct {
                 .record => |record| {
                     for (record.fields) |checked_field| {
                         const lowered_name = try self.builder.recordFieldName(view, checked_field.name);
-                        if (lowered_name == field_name) return .{ .found = .{ .view = view, .field = checked_field, .crossed_nominal = crossed_nominal } };
+                        if (lowered_name == field_name) return .{ .found = checked_field };
                     }
                     current = record.ext;
                 },
                 .record_unbound => |tail_fields| {
                     for (tail_fields) |checked_field| {
                         const lowered_name = try self.builder.recordFieldName(view, checked_field.name);
-                        if (lowered_name == field_name) return .{ .found = .{ .view = view, .field = checked_field, .crossed_nominal = crossed_nominal } };
+                        if (lowered_name == field_name) return .{ .found = checked_field };
                     }
                     // An unbound row has no committed extension: the tail is
                     // still open exactly like a scheme-interior variable.
@@ -32280,35 +32406,11 @@ const BodyContext = struct {
                     const lookup = self.builder.nominalDeclarationFor(view, nominal) orelse return .absent;
                     view = lookup.view;
                     current = lookup.declaration.backing;
-                    crossed_nominal = true;
                 },
                 .flex, .rigid => return .scheme_interior,
                 .pending, .err, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return .absent,
             }
         }
-    }
-
-    /// The Monotype slot type of `field_name` on the checked row behind
-    /// `checked_ty`, derived from checked data alone—safe in graph-node
-    /// contexts where instantiation nodes are not yet resolved.
-    fn checkedFieldSlotMonoType(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        field_name: names.RecordFieldNameId,
-    ) Allocator.Error!?Type.TypeId {
-        const found = switch (try self.checkedRecordFieldByName(checked_ty, field_name)) {
-            .found => |found| found,
-            .scheme_interior, .absent => return null,
-        };
-        if (found.crossed_nominal) {
-            // The declaration's backing row types are argument-unsubstituted.
-            // Lower the nominal itself—`lowerNominalBackingType` performs
-            // the substitution—and read the field's slot off the
-            // substituted backing row.
-            const mono = try self.builder.lowerType(self.view, checked_ty);
-            return self.builder.recordFieldType(mono, field_name);
-        }
-        return try self.builder.lowerFieldSlotType(found.view, found.field);
     }
 
     /// Construct an optional field's tagged Present slot at its graph node
@@ -32461,9 +32563,10 @@ const BodyContext = struct {
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
                 const name = try self.builder.recordFieldName(self.view, field.label);
-                const slot_ty = self.builder.recordFieldType(ty, name);
+                const target_field = self.builder.recordField(ty, name);
+                const slot_ty = target_field.ty;
                 const field_kind: checked.CheckedFieldKind.Tag =
-                    try self.constructedFieldKindTag(checked_ty, name);
+                    self.monotypeFieldKindTag(target_field);
                 fields[index] = .{
                     .name = name,
                     .value = value: {
@@ -32522,7 +32625,7 @@ const BodyContext = struct {
         for (0..target_field_count) |i| {
             const field = target_field_list[i];
             const field_kind: checked.CheckedFieldKind.Tag =
-                try self.constructedFieldKindTag(checked_ty, field.name);
+                self.monotypeFieldKindTag(field);
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| supplied: {
                 // A SUPPLIED OPTIONAL field wraps its value in the slot's
                 // Present tag (design.md "Field Kinds"); the checked field
@@ -32599,7 +32702,6 @@ const BodyContext = struct {
     fn lowerRecordExprAtNode(
         self: *BodyContext,
         record: anytype,
-        checked_ty: checked.CheckedTypeId,
         record_node: NodeId,
         pre_lowered: []const PreLoweredChild,
     ) Allocator.Error!DraftExprId {
@@ -32612,8 +32714,7 @@ const BodyContext = struct {
                 const name = try self.builder.recordFieldName(self.view, field.label);
                 const pre = self.preLoweredChildAt(pre_lowered, field.value) orelse
                     Common.invariant("record graph update lost its pre-lowered field child");
-                const field_kind: checked.CheckedFieldKind.Tag =
-                    try self.constructedFieldKindTag(checked_ty, name);
+                const field_kind = try self.graph.recordConstructionFieldKind(record_node, name);
                 // A SUPPLIED OPTIONAL field's child was lowered at the slot's
                 // Present payload; wrap it into the tagged slot at the slot's
                 // graph node (design.md "Field Kinds (All-Dynamic Optional
@@ -32674,8 +32775,7 @@ const BodyContext = struct {
 
         for (0..target_fields.len) |index| {
             const field = target_fields[index];
-            const field_kind: checked.CheckedFieldKind.Tag =
-                try self.constructedFieldKindTag(checked_ty, field.name);
+            const field_kind = try self.graph.recordConstructionFieldKind(record_node, field.name);
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| blk: {
                 const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
                     Common.invariant("record graph constructor lost its pre-lowered field child");
@@ -32712,7 +32812,13 @@ const BodyContext = struct {
                         distinct_witness_needs_relation = true;
                     }
                 }
-                produced_fields[index] = .{ .name = field.name, .ty = child_node, .default = field.default };
+                produced_fields[index] = .{
+                    .name = field.name,
+                    .ty = child_node,
+                    .value_ty = field.value_ty,
+                    .kind = field.kind,
+                    .default = field.default,
+                };
                 break :blk pre;
             } else if (base_expr) |base_value| blk: {
                 // Record update copies unmentioned slots verbatim—for an
@@ -32727,25 +32833,19 @@ const BodyContext = struct {
                 const read_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), read_cell, null);
                 spread_reads[index] = .{ .local = read_local, .cell = read_cell, .value = read };
                 break :blk try self.addExprWithTypeCell(read_cell, .{ .local = read_local });
-            } else if (try self.checkedFieldSlotMonoType(checked_ty, field.name)) |slot_mono| slot_blk: {
-                // Omitted field with a checked kind: the slot's Monotype is
-                // derived from checked data (graph nodes here are not yet
-                // resolved).
-                if (try self.defaultedFieldValue(checked_ty, field.name, slot_mono)) |default_value| {
-                    // An omitted DEFAULTED field materializes its default into
-                    // the inline slot (design.md "Defaulted Fields").
-                    try relateRequestComponent(self.graph, field.ty, try self.graph.importMono(slot_mono));
-                    produced_fields[index] = field;
-                    break :slot_blk default_value;
-                }
-                if (field_kind == .optional) {
-                    // An OMITTED OPTIONAL field (admitted by width absorption)
-                    // constructs the slot's Missing tag.
-                    produced_fields[index] = field;
-                    break :slot_blk try self.optionalSlotMissingExprAtNode(field.ty);
-                }
-                Common.invariant("closed record graph constructor was missing a checked field value");
-            } else Common.invariant("closed record graph constructor was missing a checked field value");
+            } else omitted: {
+                produced_fields[index] = field;
+                break :omitted switch (field_kind) {
+                    .defaulted => |default| blk: {
+                        const value_node = field.value_ty orelse field.ty;
+                        const value_ty = try self.resolvedTypeViewForNode(value_node);
+                        break :blk (try self.defaultedFieldValueFromMonoDefault(default, value_ty)) orelse
+                            Common.invariant("resolved defaulted field had no archived default value");
+                    },
+                    .optional => try self.optionalSlotMissingExprAtNode(field.ty),
+                    .required => Common.invariant("closed record graph constructor was missing a required field value"),
+                };
+            };
             lowered[index] = .{ .name = field.name, .value = value };
         }
 
@@ -32871,7 +32971,6 @@ const BodyContext = struct {
     fn lowerRecordConstructorAtNode(
         self: *BodyContext,
         record: anytype,
-        checked_ty: checked.CheckedTypeId,
         record_node: NodeId,
     ) Allocator.Error!DraftExprId {
         var children = std.ArrayList(PreLoweredChild).empty;
@@ -32890,17 +32989,7 @@ const BodyContext = struct {
         for (record.fields) |field| {
             child_exprs[child_index] = field.value;
             const mono_field_name = try self.builder.recordFieldName(self.view, field.label);
-            const slot_node = try self.graph.recordConstructionFieldNode(record_node, mono_field_name);
-            const field_kind: checked.CheckedFieldKind.Tag =
-                try self.constructedFieldKindTag(checked_ty, mono_field_name);
-            child_nodes[child_index] = if (field_kind == .optional) opt: {
-                // A SUPPLIED OPTIONAL field's child is checked at the slot's
-                // Present payload type, never the slot union (design.md
-                // "Field Kinds (All-Dynamic Optional Fields)").
-                const value_node = try self.instNode(self.view.bodies.expr(field.value).ty);
-                try self.graph.unify(slot_node, try self.optionalSlotNode(value_node));
-                break :opt value_node;
-            } else slot_node;
+            child_nodes[child_index] = try self.graph.recordConstructionFieldValueNode(record_node, mono_field_name);
             child_index += 1;
         }
         try self.prepareConstructorChildrenAtNodes(child_exprs, child_nodes);
@@ -32919,7 +33008,7 @@ const BodyContext = struct {
             });
             child_index += 1;
         }
-        return try self.lowerRecordExprAtNode(record, checked_ty, record_node, children.items);
+        return try self.lowerRecordExprAtNode(record, record_node, children.items);
     }
 
     fn recordUpdateFieldValue(

@@ -19645,13 +19645,13 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 }
 
 /// Post-settlement restriction on defaults (design.md "Defaulted Fields"):
-/// the default's type must be CONCRETE (it is evaluated once at compile
-/// time and materialized at construction sites, so it must have exactly one
-/// runtime representation—judged after the defaulting rounds so numeral
-/// defaults have committed). A literal can still be non-concrete (`?? []`
-/// with a parametric element type), which is why this judgment survives the
-/// canonicalization-time literal-only restriction: the default's SHAPE is
-/// judged there, its type only settles here.
+/// the reusable field/default pair must be CONCRETE (the default is evaluated
+/// once at compile time and materialized at every construction site, so the
+/// field must have exactly one runtime representation—judged after the
+/// defaulting rounds so numeral defaults have committed). Checking only the
+/// default expression is insufficient: unifying a literal with an instantiated
+/// copy of a parametric field type can make that copy concrete while leaving
+/// the declared field polymorphic.
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     for (self.pending_default_checks.items) |pending| {
         // An erroring default already reported (effectful poisoning above, or
@@ -19659,7 +19659,9 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         // judging concreteness of an err var would cascade a second problem
         // onto the same default.
         if (self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err) continue;
-        if (!try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pending.default_expr))) {
+        const default_is_concrete = try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pending.default_expr));
+        const field_is_concrete = try self.varIsConcreteHoistedConstType(pending.field_type_var);
+        if (!default_is_concrete or !field_is_concrete) {
             _ = try self.problems.appendProblem(self.gpa, .{ .non_concrete_default_value = .{
                 .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
                 .field_name = pending.field_name,
