@@ -2865,6 +2865,12 @@ path; consequently body ABI isolation never clones an ordinary recursive type.
 The active entry is removed when that one named traversal finishes, so two
 independent argument occurrences remain independent. This is part of the
 direct materialization traversal, not a preliminary structure query.
+For a shared exact tag or record row, materialization walks the same explicit
+row chunk and extension on both sides. It does not flatten that shared root and
+then compare the flattened terminal extension with the other side's previously
+read intermediate extension. Distinct row roots may correlate fields or tags by
+their flattened labels, but flattening one shared root cannot manufacture a
+different checked/produced pair.
 Callee specialization starts only after those argument expressions have
 completed, and reuses the already-lowered operands in the emitted call. An
 `exact_graph` procedure signature also

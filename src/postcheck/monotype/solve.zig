@@ -3496,7 +3496,10 @@ pub const InstGraph = struct {
             },
             .tag_union => |row| blk: {
                 if (checked_content != .tag_union) Common.invariant("function request materialization expected a checked tag union");
-                const checked_row = try self.flattenTagRow(checked_node);
+                const checked_row: FlatTagRow = if (checked_node == node)
+                    .{ .tags = row.tags, .ext = row.ext }
+                else
+                    try self.flattenTagRow(checked_node);
                 var changed_tags: ?[]InstTag = null;
                 var changed = false;
                 for (row.tags, 0..) |tag, index| {
@@ -3540,7 +3543,10 @@ pub const InstGraph = struct {
             },
             .record => |row| blk: {
                 if (checked_content != .record) Common.invariant("function request materialization expected a checked record");
-                const checked_row = try self.flattenRecordRow(checked_node);
+                const checked_row: FlatRecordRow = if (checked_node == node)
+                    .{ .fields = row.fields, .ext = row.ext }
+                else
+                    try self.flattenRecordRow(checked_node);
                 var changed_fields: ?[]InstField = null;
                 var changed = false;
                 for (row.fields, 0..) |field, index| {
@@ -8439,6 +8445,63 @@ test "function request follows checked occurrence identity and keeps independent
         try std.testing.expectEqual(@as(usize, 1), tag.payloads.len);
         try std.testing.expect(graph.sameClass(tag.payloads[0], exact));
     }
+}
+
+test "function ABI isolation preserves nested row extensions" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const first_tag = try name_store.internTagLabel("First");
+    const second_tag = try name_store.internTagLabel("Second");
+    const tag_tail = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{
+            .name = second_tag,
+            .checked_name = second_tag,
+            .payloads = &.{},
+        }}),
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+    const tag_root = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{
+            .name = first_tag,
+            .checked_name = first_tag,
+            .payloads = &.{},
+        }}),
+        .ext = tag_tail,
+    } });
+
+    const first_field = try name_store.internRecordFieldLabel("first");
+    const second_field = try name_store.internRecordFieldLabel("second");
+    const value = try graph.newNode(.{ .primitive = .u64 });
+    const record_tail = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{ .name = second_field, .ty = value }}),
+        .ext = try graph.newNode(.empty_record),
+    } });
+    const record_root = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{ .name = first_field, .ty = value }}),
+        .ext = record_tail,
+    } });
+
+    const fn_node = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ tag_root, record_root }),
+        .ret = value,
+    } });
+    const isolated = try graph.isolateFunctionAbi(fn_node);
+    const isolated_fn = try graph.functionNodes(isolated);
+
+    try std.testing.expect(!graph.sameClass(isolated, fn_node));
+    try std.testing.expect(graph.sameClass(isolated_fn.args[0], tag_root));
+    try std.testing.expect(graph.sameClass(isolated_fn.args[1], record_root));
+    try std.testing.expectEqual(@as(usize, 2), (try graph.flattenTagRow(tag_root)).tags.len);
+    try std.testing.expectEqual(@as(usize, 2), (try graph.flattenRecordRow(record_root)).fields.len);
 }
 
 test "checked type mapping preserves forced-dynamic iterator identity" {
