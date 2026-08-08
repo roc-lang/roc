@@ -5773,6 +5773,17 @@ static data export, and glue code need. Later stages consume those explicit
 layouts, schemas, and function result data. They do not rediscover field order,
 tag discriminants, callable member encodings, or erased callable payload shape.
 
+Each layout request commits the complete exact Lambda Mono type graph rooted at
+that request. Cross-root reuse of an already committed equivalent named layout
+may happen before that graph construction starts, but graph construction itself
+does not search for equivalent named roots. Replacing a node while an exact
+recursive graph is being built cuts its back-edge: the result is a finite
+unrolling followed by the older cycle, whose size depends on how many partial
+roots happened to be committed already. Besides doing unnecessary work, that
+produces incompatible layouts for the same recursive value. Exact-id memo hits
+and graph-local back-edges are the only reuse inside an active layout graph;
+structural interning occurs when the completed graph is committed.
+
 When layout commitment assigns a runtime discriminant or field offset to a
 generated function tag, the builder outputs the mapping from the stage-local
 `FnVariantId`/`FnMember` to the runtime encoding in direct-builder result data

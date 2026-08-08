@@ -8838,11 +8838,10 @@ const Lowerer = struct {
         fn inputForType(self: *LayoutGraphBuilder, ty: Type.TypeId) Common.LowerError!layout.GraphInput {
             const index = @intFromEnum(ty);
             if (self.lowerer.knownLayoutForType(ty)) |layout_idx| return layout.committedGraphInput(layout_idx);
-            if (try self.lowerer.knownLayoutForEquivalentNamedType(ty)) |layout_idx| {
-                try self.lowerer.rememberLayoutForType(ty, layout_idx.layout_idx);
-                try self.lowerer.layout_owner_types.put(ty, layout_idx.ty);
-                return layout.committedGraphInput(layout_idx.layout_idx);
-            }
+            // Cross-root named-layout reuse belongs at layoutOfType's entry.
+            // Consulting it here can replace one edge of an active recursive
+            // graph with a committed equivalent root, finitely unrolling the
+            // cycle and producing a different layout at every such cut.
             if (self.local_nodes[index]) |node| return layout.localGraphInput(node);
 
             switch (self.lowerer.types.get(ty)) {
