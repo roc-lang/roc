@@ -15712,10 +15712,6 @@ const BodyContext = struct {
         return try self.resolvedTypeViewForNode(node);
     }
 
-    fn resolvedCheckedTypeView(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        return try self.resolvedTypeViewForNode(try self.lowerTypeNode(checked_ty));
-    }
-
     fn lowerTypeView(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         return try self.activeTypeFromCell(try self.lowerTypeCell(checked_ty));
     }
@@ -16816,21 +16812,6 @@ const BodyContext = struct {
             try self.graph.registerRequestCheckedSource(completed_fn, checked_source);
         }
         return completed_fn;
-    }
-
-    fn lowerLambdaTemplateAtNode(
-        self: *BodyContext,
-        lambda_id: checked.CheckedExprId,
-        lambda: anytype,
-        fn_node: NodeId,
-    ) Allocator.Error!LoweredTemplateBody {
-        return try self.lowerLambdaTemplateAtNodeWithReturnRelation(
-            lambda_id,
-            lambda,
-            fn_node,
-            self.graph.requestCheckedSource(fn_node) orelse fn_node,
-            try self.functionRequestReturnRelation(fn_node),
-        );
     }
 
     fn lowerLambdaTemplateAtNodeWithReturnRelation(
@@ -25947,24 +25928,6 @@ const BodyContext = struct {
         }
         try self.graph.registerRequestCheckedSource(request_fn, source_fn);
         return request_fn;
-    }
-
-    fn instantiateCallableDispatchPlanCallNodeFromCaller(
-        self: *BodyContext,
-        callable_plan: CallableDispatchPlan,
-        caller: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        expected_ret_ty: ?Type.TypeId,
-        result_may_produce_exact_graph: bool,
-    ) Allocator.Error!NodeId {
-        return (try self.instantiateCallableDispatchPlanRequestFromCallerAtNode(
-            callable_plan,
-            caller,
-            checked_ret_ty,
-            if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
-            result_may_produce_exact_graph,
-            .expression_lowering,
-        )).callable;
     }
 
     fn instantiateCallableDispatchPlanCallNodeFromCallerAtNode(

@@ -3675,35 +3675,6 @@ pub const InstGraph = struct {
         return .{ .node = self.find(materialized.node), .changed = materialized.changed };
     }
 
-    fn materializeFunctionRequestNodes(
-        self: *InstGraph,
-        checked_nodes: []const NodeId,
-        nodes: []const NodeId,
-        substitution: *FunctionRequestSubstitution,
-    ) Allocator.Error!?[]NodeId {
-        return self.materializeFunctionRequestNodesMode(
-            checked_nodes,
-            nodes,
-            substitution,
-            .request,
-        );
-    }
-
-    fn materializeFunctionRequestNodesMode(
-        self: *InstGraph,
-        checked_nodes: []const NodeId,
-        nodes: []const NodeId,
-        substitution: *FunctionRequestSubstitution,
-        mode: FunctionRequestMaterializationMode,
-    ) Allocator.Error!?[]NodeId {
-        return (try self.materializeFunctionRequestNodesResult(
-            checked_nodes,
-            nodes,
-            substitution,
-            mode,
-        )).nodes;
-    }
-
     fn materializeFunctionRequestNodesResult(
         self: *InstGraph,
         checked_nodes: []const NodeId,

@@ -2720,10 +2720,10 @@ representation-sensitive low-level procedure therefore lowers through
 `ProducedTypeFlow` immediately from its independently completed operands; it
 does not first specialize the source-level declaration as an ordinary
 procedure. This matters for operations such as list insertion: the existing
-list may still have a public element cell because it is empty, while the
+list may still have a public item cell because it is empty, while the
 inserted item already has an exact generated representation. The storage
 operation, not a shared checked type variable in a wrapper signature, selects
-the resulting list element representation.
+the resulting list item representation.
 
 Representation-determining input cells are producer provenance in the active
 Monotype graph, not nominal type arguments. A generated `Iter(item)` has exactly

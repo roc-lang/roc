@@ -965,7 +965,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
     const inspect_source = sourceSliceBetween(
         lower_source,
         "fn lowerStrInspectIntrinsicAtNode(",
-        "fn lowerLambdaTemplateAtNode(",
+        "fn lowerLambdaTemplateAtNodeWithReturnRelation(",
     );
     try expectContains(inspect_source, "try self.graph.typeIsResolved(arg_node)");
     try expectContains(inspect_source, "try self.deferInspectAtNode(local_expr, arg_node, ret_ty)");
