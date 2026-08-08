@@ -26,7 +26,7 @@ POLYMORPHIC VALUE - nested_list_scoping.md:1:1:5:2
 
     The value's type, which does not have a method named `times`, is:
 
-        List(_a)
+        List(a) where [a.minus : a, a -> a, a.plus : a, a -> a]
 
     Hint: The `*` operator calls a method named `times` on the value preceding
     it, passing the value after the operator as the one argument.
@@ -115,7 +115,7 @@ match nestedList {
 									(patterns
 										(p-assign (ident "y"))))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 221)
+					(e-dispatch-call (method "plus") (constraint-fn-var 222)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -132,7 +132,7 @@ match nestedList {
 										(p-assign (ident "x"))
 										(p-assign (ident "y"))))))))
 				(value
-					(e-dispatch-call (method "minus") (constraint-fn-var 223)
+					(e-dispatch-call (method "minus") (constraint-fn-var 224)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
