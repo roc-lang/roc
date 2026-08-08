@@ -30,6 +30,23 @@ MISSING METHOD - nested_list_scoping.md:4:17:4:22
     Hint: The `*` operator calls a method named `times` on the value preceding
     it, passing the value after the operator as the one argument.
 
+
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  match nestedList {                                                        │
+ │      [[x], [y]] => x + y                                                   │
+ │      [[x, y]] => x - y                                                     │
+ │      [x, [y]] => x * y                                                     │
+ │  }                                                                         │
+ │                                                                            │
+ └──────────────────────────────────────────────── nested_list_scoping.md:1:1 ┘
+
+    Its type is:
+    a where [a.minus : a, a -> a, a.plus : a, a -> a]
+    Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -139,5 +156,5 @@ match nestedList {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "a where [a.minus : a, a -> a, a.plus : a, a -> a]"))
 ~~~
