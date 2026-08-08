@@ -315,6 +315,32 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "29" },
     },
     .{
+        .name = "optional record field: generalized constructor adopts optional slot layout",
+        .source_kind = .module,
+        .source =
+        \\make = |value| { a: value }
+        \\
+        \\record : { a ?: U8 }
+        \\record = make(5)
+        \\
+        \\main = record.?a ?? 0
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "optional record field: generalized update adopts optional slot layout",
+        .source_kind = .module,
+        .source =
+        \\set_a = |record| { ..record, a: 5 }
+        \\
+        \\record : { a ?: U64 }
+        \\record = {}
+        \\
+        \\main = set_a(record).?a ?? 0
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
         .name = "optional record field: runtime miss takes the Err(MissingField) match branch",
         .source_kind = .module,
         .source =

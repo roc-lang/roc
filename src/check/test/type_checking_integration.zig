@@ -750,6 +750,18 @@ test "check type - record - opt - destructure with nested Ok pattern binds the p
     );
 }
 
+test "check type - record - opt - nested pattern over optional field must be exhaustive" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\check : { age ?: U8 } -> U8
+        \\check = |record| match record {
+        \\    { age: Ok(value) } => value
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Non Exhaustive Match");
+}
+
 test "check type - record - opt - destructure in a parameter pattern binds Try" {
     const source =
         \\main! = |_| {}
@@ -1288,6 +1300,18 @@ test "check type - record - default - parametric default rejected (review H6)" {
     // Fields"). `[]` IS a literal—it passes the canonicalization literal
     // judgment (pinned in optional_field_test.zig)—so concreteness must
     // stay a separate finalize-time judgment.
+    try checkTypesModule(source, .fail_first, "Default Value Not Concrete");
+}
+
+test "check type - record - default - concrete literal cannot default a parametric field" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config(a) : { value: a ?? 0 }
+        \\
+        \\config : Config(Str)
+        \\config = {}
+    ;
     try checkTypesModule(source, .fail_first, "Default Value Not Concrete");
 }
 
