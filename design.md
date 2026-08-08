@@ -1842,7 +1842,7 @@ bytes; `ModuleEnv` bytes alone cannot stand in for the retained `Check` data.
 
 A relation-less platform output preserves its complete `provides` metadata for
 glue and interface consumers. If it also declares app requirements, it does not
-publish provided runtime roots and cannot enter post-check runtime lowering;
+output provided runtime roots and cannot enter Monotype;
 runtime commands reject it until an app relation exists. This decision depends
 only on the explicit relation state and requirement surface, never on scanning
 provided bodies to guess whether the missing requirements happen to be used.
